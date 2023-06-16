@@ -1,0 +1,16 @@
+{
+  "name": "grits-proxy",
+  "version": "0.0.1",
+  "description": "Peer-to-peer caching proxy",
+  "main": "getting-started.ts",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc"
+  },
+  "author": "Andrew Moise <andrew.moise@gmail.com>",
+  "license": "AGPL-3.0",
+  "devDependencies": {
+    "@types/node": "^20.3.1",
+    "typescript": "^5.1.3"
+  }
+}
