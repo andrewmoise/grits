@@ -78,63 +78,6 @@ abstract class ProxyManagerBase {
     }
 }
 
-class RootProxyManager extends ProxyManagerBase {
-    rootProxy: PeerProxy;
-    heartbeatIndex: number;
-    heartbeatIntervalId?: NodeJS.Timeout;
-
-    constructor(config: Config, networkingManager: NetworkingManager) {
-        super(config, networkingManager);
-
-        let rootProxy = new PeerProxy(
-            networkingManager.config.thisHost,
-            networkingManager.config.thisPort);
-        this.rootProxy = rootProxy;
-
-        this.heartbeatIndex = 0;
-    }
-
-    start() {
-        this.networkingManager.start();
-
-        this.networkingManager.registerRequestHandler(
-            MessageType.ROOT_HEARTBEAT, this.handleWrongMessage.bind(this));
-        this.networkingManager.registerRequestHandler(
-            MessageType.PROXY_HEARTBEAT, this.handleProxyHeartbeat.bind(this));
-
-        this.heartbeatIntervalId = setInterval(
-            this.heartbeat.bind(this), this.config.rootHeartbeatPeriod * 1000);
-    }
-
-    stop() {
-        clearInterval(this.heartbeatIntervalId!);
-
-        this.networkingManager.unregisterRequestHandler(
-            MessageType.PROXY_HEARTBEAT);
-        this.networkingManager.unregisterRequestHandler(
-            MessageType.ROOT_HEARTBEAT);
-
-        this.networkingManager.stop();
-    }
-
-    handleProxyHeartbeat(senderIp: string, senderPort: number, message: any) {
-        console.log("We got a heartbeat.");
-
-        let peerProxy = this.getPeerProxy(senderIp, senderPort);
-        if (!peerProxy) {
-            peerProxy = this.addPeerProxy(senderIp, senderPort);
-            console.log("Adding");
-        }
-        console.log("About to update " + peerProxy);
-
-        peerProxy.updateLastSeen();
-    }
-
-    heartbeat() {
-        //...
-    }
-}
-
 class ProxyManager extends ProxyManagerBase {
     rootProxy: PeerProxy;
     sendProxyHeartbeatIntervalId?: NodeJS.Timeout;
@@ -185,6 +128,81 @@ class ProxyManager extends ProxyManagerBase {
         this.networkingManager.send(heartbeatMessage,
             this.rootProxy.ip,
             this.rootProxy.port);
+    }
+}
+
+class RootProxyManager extends ProxyManagerBase {
+    rootProxy: PeerProxy;
+    heartbeatIndex: number;
+    heartbeatIntervalId?: NodeJS.Timeout;
+    proxyMapBuffer: Buffer;
+
+    constructor(config: Config, networkingManager: NetworkingManager) {
+        super(config, networkingManager);
+
+        let rootProxy = new PeerProxy(
+            networkingManager.config.thisHost,
+            networkingManager.config.thisPort);
+        this.rootProxy = rootProxy;
+
+        this.heartbeatIndex = 0;
+
+        this.proxyMapBuffer = Buffer.alloc(0);
+    }
+
+    start() {
+        this.networkingManager.start();
+
+        this.networkingManager.registerRequestHandler(
+            MessageType.ROOT_HEARTBEAT, this.handleWrongMessage.bind(this));
+        this.networkingManager.registerRequestHandler(
+            MessageType.PROXY_HEARTBEAT, this.handleProxyHeartbeat.bind(this));
+
+        this.heartbeatIntervalId = setInterval(
+            this.updatePeerList.bind(this), this.config.rootHeartbeatPeriod * 1000);
+    }
+
+    stop() {
+        clearInterval(this.heartbeatIntervalId!);
+
+        this.networkingManager.unregisterRequestHandler(
+            MessageType.PROXY_HEARTBEAT);
+        this.networkingManager.unregisterRequestHandler(
+            MessageType.ROOT_HEARTBEAT);
+
+        this.networkingManager.stop();
+    }
+
+    handleProxyHeartbeat(senderIp: string, senderPort: number, message: any)
+        : void {
+        console.log("We got a heartbeat.");
+
+        let peerProxy = this.getPeerProxy(senderIp, senderPort);
+        if (!peerProxy) {
+            peerProxy = this.addPeerProxy(senderIp, senderPort);
+            console.log("Adding");
+        }
+        console.log("About to update " + peerProxy);
+
+        peerProxy.updateLastSeen();
+    }
+
+    createProxyMapBuffer(): void {
+        const peerList = Array.from(this.peerProxies.values()).map(peerProxy =>
+        ({
+            ip: peerProxy.ip,
+            port: peerProxy.port,
+        }));
+        const peerListJson = JSON.stringify(peerList);
+        this.proxyMapBuffer = Buffer.from(peerListJson, 'utf-8');
+    }
+
+    updatePeerList(): void {
+        for (const [key, proxy] of this.peerProxies.entries())
+            if (proxy.timeSinceSeen() > this.config.rootProxyDropTimeout)
+                this.peerProxies.delete(key);
+
+        this.createProxyMapBuffer();
     }
 }
 

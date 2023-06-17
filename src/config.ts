@@ -1,21 +1,32 @@
 export class Config {
+    // General proxy configuration
     thisHost: string;
     thisPort: number;
     isRootNode: boolean;
-    rootHeartbeatPeriod: number; // In seconds
     proxyHeartbeatPeriod: number; // In seconds
     rootHost: string | null;
     rootPort: number | null;
-    proxyLastSeenDropLimit: number;
+
+    // Root proxy configuration
+    rootHeartbeatPeriod: number; // In seconds
+    rootProxyDropTimeout: number;
+
+    // Storage configuration
+    storageDirectory: string;
+    storageSize: number; // in bytes
 
     constructor() {
         this.thisHost = '127.0.0.1';
         this.thisPort = 1787;
         this.isRootNode = false;
-        this.rootHeartbeatPeriod = 5; // In seconds
         this.proxyHeartbeatPeriod = 5; // In seconds
         this.rootHost = null;
         this.rootPort = null;
-        this.proxyLastSeenDropLimit = 30;
+
+        this.rootHeartbeatPeriod = 5; // In seconds
+        this.rootProxyDropTimeout = 30;
+
+        this.storageDirectory = 'cache';
+        this.storageSize = 20;
     }
 }
