@@ -1,8 +1,16 @@
 import {
-    MessageType, RootHeartbeatMessage, ProxyHeartbeatMessage
+    MessageType,
+    Message,
+    RootHeartbeatMessage,
+    ProxyHeartbeatMessage,
+    DataRequestMessage,
+    DataResponseOkMessage,
+    DataResponseElsewhereMessage,
+    DataResponseUnknownMessage,
 } from './messages';
 
 import { Config } from './config';
+import { FileCache } from './filecache';
 import { NetworkingManager } from './network';
 
 class PeerProxy {
@@ -34,11 +42,14 @@ abstract class ProxyManagerBase {
     config: Config;
     networkingManager: NetworkingManager;
     peerProxies: Map<string, PeerProxy>;
+    fileCache: FileCache;
 
-    constructor(config: Config, networkingManager: NetworkingManager) {
+    constructor(config: Config, networkingManager: NetworkingManager,
+        fileCache: FileCache) {
         this.config = config;
         this.networkingManager = networkingManager;
         this.peerProxies = new Map();
+        this.fileCache = fileCache;
     }
 
     generateProxyKey(ip: string, port: number): string {
@@ -69,8 +80,39 @@ abstract class ProxyManagerBase {
             this.peerProxies.delete(key);
     }
 
-    abstract start(): void;
-    abstract stop(): void;
+    start(): void {
+        this.networkingManager.start();
+
+        this.networkingManager.registerRequestHandler(
+            MessageType.DATA_REQUEST, this.handleDataRequest.bind(this));
+    }
+
+    stop(): void {
+        this.networkingManager.unregisterRequestHandler(
+            MessageType.DATA_REQUEST);
+
+        this.networkingManager.stop();
+    }
+
+    async handleDataRequest(senderIp: string, senderPort: number,
+        message: Message): Promise<void> {
+        if (!(message instanceof DataRequestMessage))
+            throw new Error("Data request of wrong TS type!");
+        const dataRequestMessage = message as DataRequestMessage;
+
+        const data = await this.fileCache.readFile(
+            dataRequestMessage.dataHash, 0, dataRequestMessage.length);
+        if (data !== null) {
+            const responseMessage = new DataResponseOkMessage(
+                dataRequestMessage.dataHash, dataRequestMessage.offset,
+                dataRequestMessage.length, data);
+            this.networkingManager.send(responseMessage, senderIp, senderPort);
+        } else {
+            const responseMessage = new DataResponseUnknownMessage(
+                dataRequestMessage.dataHash);
+            this.networkingManager.send(responseMessage, senderIp, senderPort);
+        }
+    }
 
     handleWrongMessage(senderIp: string, senderPort: number, message: any) {
         throw new Error("Received wrong message! Code " + message + " from "
@@ -82,8 +124,9 @@ class ProxyManager extends ProxyManagerBase {
     rootProxy: PeerProxy;
     sendProxyHeartbeatIntervalId?: NodeJS.Timeout;
 
-    constructor(config: Config, networkingManager: NetworkingManager) {
-        super(config, networkingManager);
+    constructor(config: Config, networkingManager: NetworkingManager,
+        fileCache: FileCache) {
+        super(config, networkingManager, fileCache);
 
         if (!config.rootHost || !config.rootPort)
             throw new Error("Must define root host and port!");
@@ -93,7 +136,9 @@ class ProxyManager extends ProxyManagerBase {
     }
 
     start() {
-        this.networkingManager.start();
+        console.log("Set up proxy + start");
+
+        super.start();
 
         this.networkingManager.registerRequestHandler(
             MessageType.PROXY_HEARTBEAT, this.handleWrongMessage.bind(this));
@@ -102,10 +147,13 @@ class ProxyManager extends ProxyManagerBase {
 
         // Send proxy heartbeat to root every 60 seconds
         this.sendProxyHeartbeatIntervalId = setInterval(
-            this.sendProxyHeartbeat.bind(this), 10000);
+            this.sendProxyHeartbeat.bind(this),
+            this.config.proxyHeartbeatPeriod * 1000);
     }
 
     stop() {
+        console.log("Close down proxy + end");
+
         // Clear the interval for sending proxy heartbeats
         clearInterval(this.sendProxyHeartbeatIntervalId!);
 
@@ -114,10 +162,21 @@ class ProxyManager extends ProxyManagerBase {
         this.networkingManager.unregisterRequestHandler(
             MessageType.ROOT_HEARTBEAT);
 
-        this.networkingManager.stop();
+        super.stop();
     }
 
-    handleRootHeartbeat(senderIp: string, senderPort: number, message: any) {
+    handleRootHeartbeat(senderIp: string, senderPort: number,
+        message: Message) {
+        // Validate the sender
+        if (senderIp !== this.rootProxy.ip
+            || senderPort !== this.rootProxy.port) {
+            console.warn(`Received root heartbeat from unknown source ${senderIp}:${senderPort}.`);
+            return;
+        }
+
+        // Update the lastSeen time of the root proxy
+        this.rootProxy.updateLastSeen();
+
         console.log("Got root heartbeat.");
     }
 
@@ -133,25 +192,23 @@ class ProxyManager extends ProxyManagerBase {
 
 class RootProxyManager extends ProxyManagerBase {
     rootProxy: PeerProxy;
-    heartbeatIndex: number;
     heartbeatIntervalId?: NodeJS.Timeout;
     proxyMapBuffer: Buffer;
 
-    constructor(config: Config, networkingManager: NetworkingManager) {
-        super(config, networkingManager);
+    constructor(config: Config, networkingManager: NetworkingManager,
+        fileCache: FileCache) {
+        super(config, networkingManager, fileCache);
 
         let rootProxy = new PeerProxy(
             networkingManager.config.thisHost,
             networkingManager.config.thisPort);
         this.rootProxy = rootProxy;
 
-        this.heartbeatIndex = 0;
-
         this.proxyMapBuffer = Buffer.alloc(0);
     }
 
     start() {
-        this.networkingManager.start();
+        super.start();
 
         this.networkingManager.registerRequestHandler(
             MessageType.ROOT_HEARTBEAT, this.handleWrongMessage.bind(this));
@@ -159,7 +216,8 @@ class RootProxyManager extends ProxyManagerBase {
             MessageType.PROXY_HEARTBEAT, this.handleProxyHeartbeat.bind(this));
 
         this.heartbeatIntervalId = setInterval(
-            this.updatePeerList.bind(this), this.config.rootHeartbeatPeriod * 1000);
+            this.updatePeerList.bind(this),
+            this.config.rootHeartbeatPeriod * 1000);
     }
 
     stop() {
@@ -170,11 +228,11 @@ class RootProxyManager extends ProxyManagerBase {
         this.networkingManager.unregisterRequestHandler(
             MessageType.ROOT_HEARTBEAT);
 
-        this.networkingManager.stop();
+        super.stop();
     }
 
-    handleProxyHeartbeat(senderIp: string, senderPort: number, message: any)
-        : void {
+    handleProxyHeartbeat(senderIp: string, senderPort: number,
+        message: Message): void {
         console.log("We got a heartbeat.");
 
         let peerProxy = this.getPeerProxy(senderIp, senderPort);
@@ -185,6 +243,11 @@ class RootProxyManager extends ProxyManagerBase {
         console.log("About to update " + peerProxy);
 
         peerProxy.updateLastSeen();
+
+        // Send root heartbeat back to the proxy
+        const heartbeatMessage = new RootHeartbeatMessage(
+            this.proxyMapBuffer);
+        this.networkingManager.send(heartbeatMessage, senderIp, senderPort);
     }
 
     createProxyMapBuffer(): void {

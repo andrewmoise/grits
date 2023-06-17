@@ -27,22 +27,16 @@ export class RootHeartbeatMessage extends Message {
         MessageType.ROOT_HEARTBEAT,
     ]);
 
-    heartbeatIndex: number;
     nodeMapHash: Buffer | null;
 
-    constructor(heartbeatIndex = -1, nodeMapHash: Buffer | null = null) {
+    constructor(nodeMapHash: Buffer | null = null) {
         super(MessageType.ROOT_HEARTBEAT);
-        this.heartbeatIndex = heartbeatIndex;
         this.nodeMapHash = nodeMapHash;
     }
 
     encode(): Buffer {
-        const heartbeatIndexBuffer = Buffer.alloc(4);
-        heartbeatIndexBuffer.writeInt32BE(this.heartbeatIndex, 0);
-
         const encodedMessage = Buffer.concat([
             RootHeartbeatMessage.headerBuffer,
-            heartbeatIndexBuffer,
             this.nodeMapHash!,
         ])
 
@@ -50,10 +44,7 @@ export class RootHeartbeatMessage extends Message {
     }
 
     decode(encodedMessage: Buffer): void {
-        const heartbeatIndex = encodedMessage.readUInt32BE(3);
         const nodeMapHash = encodedMessage.slice(7, 39);
-
-        this.heartbeatIndex = heartbeatIndex;
         this.nodeMapHash = nodeMapHash;
     }
 }
@@ -90,125 +81,98 @@ export class ProxyHeartbeatMessage extends Message {
 }
 
 export class DataRequestMessage extends Message {
-    sequenceNumber: number;
     dataHash: string;
     offset: number;
     length: number;
 
-    constructor(sequenceNumber: number, dataHash: string, offset: number, length: number) {
+    constructor(dataHash: string, offset: number, length: number) {
         super(MessageType.DATA_REQUEST);
-        this.sequenceNumber = sequenceNumber;
         this.dataHash = dataHash;
         this.offset = offset;
         this.length = length;
     }
 
     encode(): Buffer {
-        const buffer = Buffer.allocUnsafe(38); // 2 bytes sequenceNumber, 32 bytes dataHash, 2 bytes offset, 2 bytes length
-        buffer.writeUInt16BE(this.sequenceNumber, 0);
-        buffer.write(this.dataHash, 2);
-        buffer.writeUInt16BE(this.offset, 34);
-        buffer.writeUInt16BE(this.length, 36);
+        const buffer = Buffer.allocUnsafe(40);
+        // (32 bytes dataHash, 4 bytes offset, 4 bytes length)
+        buffer.write(this.dataHash, 0);
+        buffer.writeInt32BE(this.offset, 32);
+        buffer.writeInt32BE(this.length, 36);
         return buffer;
     }
 
     decode(bytes: Buffer): void {
-        this.sequenceNumber = bytes.readUInt16BE(0);
-        this.dataHash = bytes.toString('utf-8', 2, 34);
-        this.offset = bytes.readUInt16BE(34);
-        this.length = bytes.readUInt16BE(36);
+        this.dataHash = bytes.toString('utf-8', 0, 32);
+        this.offset = bytes.readInt32BE(32);
+        this.length = bytes.readInt32BE(36);
     }
 }
 
 export class DataResponseOkMessage extends Message {
-    sequenceNumber: number;
+    dataHash: string;
     offset: number;
+    length: number;
     data: Buffer;
 
-    constructor(sequenceNumber: number, offset: number, data: Buffer) {
+    constructor(dataHash: string, offset: number, length: number, data: Buffer) {
         super(MessageType.DATA_RESPONSE_OK);
-        this.sequenceNumber = sequenceNumber;
+        this.dataHash = dataHash;
         this.offset = offset;
+        this.length = length;
         this.data = data;
     }
 
     encode(): Buffer {
-        const headerBuffer =
-            Buffer.allocUnsafe(4); // 2 bytes sequenceNumber, 2 bytes offset
-        headerBuffer.writeUInt16BE(this.sequenceNumber, 0);
-        headerBuffer.writeUInt16BE(this.offset, 2);
+        const headerBuffer = Buffer.allocUnsafe(40);
+        // (32 bytes dataHash, 4 bytes offset, 4 bytes length)
+
+        headerBuffer.write(this.dataHash, 0);
+        headerBuffer.writeInt32BE(this.offset, 32);
+        headerBuffer.writeInt32BE(this.length, 36);
         return Buffer.concat([headerBuffer, this.data]);
     }
 
     decode(bytes: Buffer): void {
-        this.sequenceNumber = bytes.readUInt16BE(0);
-        this.offset = bytes.readUInt16BE(2);
-        this.data = bytes.slice(4);
+        this.dataHash = bytes.toString('utf-8', 0, 32);
+        this.offset = bytes.readInt32BE(32);
+        this.length = bytes.readInt32BE(36);
+        this.data = bytes.slice(40);
     }
 }
 
 export class DataResponseElsewhereMessage extends Message {
-    sequenceNumber: number;
-    nodeCount: number;
-    nodeAddresses: string[];
+    dataHash: string;
 
-    constructor(sequenceNumber: number, nodeCount: number,
-        nodeAddresses: string[]) {
+    constructor(dataHash: string) {
         super(MessageType.DATA_RESPONSE_ELSEWHERE);
-        this.sequenceNumber = sequenceNumber;
-        this.nodeCount = nodeCount;
-        this.nodeAddresses = nodeAddresses;
+        this.dataHash = dataHash;
     }
 
     encode(): Buffer {
-        // each IP address will take 4 bytes
-        const addressBuffer = Buffer.allocUnsafe(this.nodeAddresses.length * 4);
-
-        this.nodeAddresses.forEach((address, index) => {
-            const [part1, part2, part3, part4] = address.split('.').map(Number);
-            addressBuffer[index * 4] = part1;
-            addressBuffer[index * 4 + 1] = part2;
-            addressBuffer[index * 4 + 2] = part3;
-            addressBuffer[index * 4 + 3] = part4;
-        });
-        const headerBuffer =
-            Buffer.allocUnsafe(4); // 2 bytes sequenceNumber, 2 bytes nodeCount
-        headerBuffer.writeUInt16BE(this.sequenceNumber, 0);
-        headerBuffer.writeUInt16BE(this.nodeCount, 2);
-        return Buffer.concat([headerBuffer, addressBuffer]);
-    }
-
-    decode(bytes: Buffer): void {
-        this.sequenceNumber = bytes.readUInt16BE(0);
-        this.nodeCount = bytes.readUInt16BE(2);
-        this.nodeAddresses = [];
-        for (let i = 4; i < bytes.length; i += 4) {
-            const part1 = bytes[i].toString();
-            const part2 = bytes[i + 1].toString();
-            const part3 = bytes[i + 2].toString();
-            const part4 = bytes[i + 3].toString();
-            const address = `${part1}.${part2}.${part3}.${part4}`;
-            this.nodeAddresses.push(address);
-        }
-    }
-}
-
-export class DataResponseUnknownMessage extends Message {
-    sequenceNumber: number;
-
-    constructor(sequenceNumber: number) {
-        super(MessageType.DATA_RESPONSE_UNKNOWN);
-        this.sequenceNumber = sequenceNumber;
-    }
-
-    encode(): Buffer {
-        const buffer = Buffer.allocUnsafe(2); // 2 bytes sequenceNumber
-        buffer.writeUInt16BE(this.sequenceNumber, 0);
+        const buffer = Buffer.from(this.dataHash);
         return buffer;
     }
 
     decode(bytes: Buffer): void {
-        this.sequenceNumber = bytes.readUInt16BE(0);
+        this.dataHash = bytes.toString('utf-8', 0, 32);
+    }
+}
+
+export class DataResponseUnknownMessage extends Message {
+    dataHash: string;
+
+    constructor(dataHash: string) {
+        super(MessageType.DATA_RESPONSE_UNKNOWN);
+        this.dataHash = dataHash;
+    }
+
+    encode(): Buffer {
+        const buffer = Buffer.from(this.dataHash);
+        return buffer;
+    }
+
+    decode(bytes: Buffer): void {
+        this.dataHash = bytes.toString('utf-8', 0, 32);
     }
 }
 
@@ -217,4 +181,8 @@ module.exports = {
     Message,
     RootHeartbeatMessage,
     ProxyHeartbeatMessage,
+    DataRequestMessage,
+    DataResponseOkMessage,
+    DataResponseElsewhereMessage,
+    DataResponseUnknownMessage,
 };

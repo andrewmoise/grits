@@ -1,4 +1,5 @@
-import { FileCache } from '../src/cache'; // replace with your actual file path
+import { Config } from '../src/config';
+import { FileCache } from '../src/filecache';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -7,7 +8,10 @@ import * as crypto from 'crypto';
 test('add a file and read from the cache', async () => {
     // Arrange
     const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cache-'));
-    const fileCache = new FileCache(cacheDir, 5000000); // 5MB cache size
+    const config = new Config();
+    config.storageDirectory = cacheDir;
+    config.storageSize = 5000000; // 5MB cache size
+    const fileCache = new FileCache(config);
 
     const testFileContent = 'Hello, World!';
     const testFilePath = path.join(cacheDir, 'testFile');
@@ -35,7 +39,12 @@ test('add files to overflow the cache and verify the cache behaves correctly',
     async () => {
         // Arrange
         const cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cache-'));
-        const fileCache = new FileCache(cacheDir, 1000000); // 1MB cache size
+
+        const config = new Config();
+        config.storageDirectory = cacheDir;
+        config.storageSize = 1000000; // 1MB cache size
+
+        const fileCache = new FileCache(config);
         const numberOfFiles = 20;
         const fileSize = 100000; // 100kB
         const fileHashes = [];

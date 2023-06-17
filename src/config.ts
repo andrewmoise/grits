@@ -15,6 +15,10 @@ export class Config {
     storageDirectory: string;
     storageSize: number; // in bytes
 
+    // Traffic configuration
+    maxUpstreamSpeed: number;   // bytes per second
+    maxDownstreamSpeed: number; // bytes per second
+
     constructor() {
         this.thisHost = '127.0.0.1';
         this.thisPort = 1787;
@@ -28,5 +32,8 @@ export class Config {
 
         this.storageDirectory = 'cache';
         this.storageSize = 20;
+
+        this.maxUpstreamSpeed = 100000;   // 100 kb/s
+        this.maxDownstreamSpeed = 100000; // 100 kb/s
     }
 }

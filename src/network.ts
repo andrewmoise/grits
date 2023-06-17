@@ -8,10 +8,10 @@ import {
     Message,
     RootHeartbeatMessage,
     ProxyHeartbeatMessage,
-    //DataRequestMessage,
-    //DataResponseOkMessage,
-    //DataResponseElsewhereMessage,
-    //DataResponseUnknownMessage,
+    DataRequestMessage,
+    DataResponseOkMessage,
+    DataResponseElsewhereMessage,
+    DataResponseUnknownMessage,
 } from './messages';
 
 function getLocalIPAddresses(): string[] {
@@ -31,13 +31,11 @@ function getLocalIPAddresses(): string[] {
     return addresses;
 }
 
-type RequestHandler = (address: string, port: number, bytes: Uint8Array)
+type RequestHandler = (address: string, port: number, message: Message)
     => void;
-type MessageCallback = (message: Message) => void;
 
 class NetworkingManager {
     config: Config;
-    messageCallbacks: Map<number, MessageCallback>;
     requestHandlers: Map<number, RequestHandler>;
     socket: dgram.Socket | null;
 
@@ -52,7 +50,6 @@ class NetworkingManager {
         }
 
         this.config = config;
-        this.messageCallbacks = new Map();
         this.requestHandlers = new Map();
         this.socket = null;
     }
@@ -75,8 +72,7 @@ class NetworkingManager {
         }
     }
 
-    send(message: Message, ipAddress: string, port: number,
-        callback?: MessageCallback): void {
+    send(message: Message, ipAddress: string, port: number): void {
         const encodedMessage = message.encode();
 
         if (!this.socket) {
@@ -90,10 +86,6 @@ class NetworkingManager {
                     console.error('Error sending message:', error);
                     return;
                 }
-
-                if (callback && message.hasOwnProperty('index')) {
-                    this.messageCallbacks.set((message as any).index, callback);
-                }
             });
     }
 
@@ -105,14 +97,7 @@ class NetworkingManager {
 
         if (this.requestHandlers.has(message.type)) {
             const handler = this.requestHandlers.get(message.type);
-            handler && handler(address, port, data);
-            return;
-        }
-
-        if (message.hasOwnProperty('index') && this.messageCallbacks.has((message as any).index)) {
-            const callback = this.messageCallbacks.get((message as any).index);
-            callback && callback(message);
-            this.messageCallbacks.delete((message as any).index);
+            handler && handler(address, port, message);
             return;
         }
     }

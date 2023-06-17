@@ -21,9 +21,9 @@ class FileCache {
     private files: Map<string, File>;
     private mutex: Mutex;
 
-    constructor(cacheDir: string, maxSize: number) {
-        this.cacheDir = cacheDir;
-        this.maxSize = maxSize;
+    constructor(config: Config) {
+        this.cacheDir = config.storageDirectory;
+        this.maxSize = config.storageSize;
         this.currentSize = 0;
         this.lru = [];
         this.files = new Map<string, File>();
