@@ -44,12 +44,11 @@ abstract class ProxyManagerBase {
     peerProxies: Map<string, PeerProxy>;
     fileCache: FileCache;
 
-    constructor(config: Config, networkingManager: NetworkingManager,
-        fileCache: FileCache) {
+    constructor(config: Config) {
         this.config = config;
-        this.networkingManager = networkingManager;
+        this.networkingManager = new NetworkingManager(config);
         this.peerProxies = new Map();
-        this.fileCache = fileCache;
+        this.fileCache = new FileCache(config);
     }
 
     generateProxyKey(ip: string, port: number): string {
@@ -124,9 +123,8 @@ class ProxyManager extends ProxyManagerBase {
     rootProxy: PeerProxy;
     sendProxyHeartbeatIntervalId?: NodeJS.Timeout;
 
-    constructor(config: Config, networkingManager: NetworkingManager,
-        fileCache: FileCache) {
-        super(config, networkingManager, fileCache);
+    constructor(config: Config) {
+        super(config);
 
         if (!config.rootHost || !config.rootPort)
             throw new Error("Must define root host and port!");
@@ -195,13 +193,12 @@ class RootProxyManager extends ProxyManagerBase {
     heartbeatIntervalId?: NodeJS.Timeout;
     proxyMapBuffer: Buffer;
 
-    constructor(config: Config, networkingManager: NetworkingManager,
-        fileCache: FileCache) {
-        super(config, networkingManager, fileCache);
+    constructor(config: Config) {
+        super(config);
 
         let rootProxy = new PeerProxy(
-            networkingManager.config.thisHost,
-            networkingManager.config.thisPort);
+            this.networkingManager.config.thisHost,
+            this.networkingManager.config.thisPort);
         this.rootProxy = rootProxy;
 
         this.proxyMapBuffer = Buffer.alloc(0);

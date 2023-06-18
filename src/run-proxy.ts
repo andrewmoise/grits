@@ -1,7 +1,5 @@
 import { Config } from './config';
 
-import { NetworkingManager } from './network';
-import { FileCache } from './filecache';
 import { ProxyManager, RootProxyManager } from './proxy';
 
 const config = new Config();
@@ -19,16 +17,14 @@ process.argv.slice(2).forEach((arg, index, array) => {
     }
 });
 
-// Create instances of the necessary classes
-const networkingManager = new NetworkingManager(config);
-
-const fileCache = new FileCache(config);
-
+// Create the proxy manager
 const proxyManager = config.isRootNode
-    ? new RootProxyManager(config, networkingManager, fileCache)
+    ? new RootProxyManager(config)
     : config.rootHost === null
-        ? (() => { throw new Error("Must specify -r for root proxy location"); })()
-        : new ProxyManager(config, networkingManager, fileCache);
+        ? (() => {
+            throw new Error("Must specify -r for root proxy location");
+        })()
+        : new ProxyManager(config);
 
 // Start
 
