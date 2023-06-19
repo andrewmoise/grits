@@ -10,6 +10,7 @@ import {
 } from './messages';
 
 import { Config } from './config';
+import { DownloadManager } from './download';
 import { FileCache } from './filecache';
 import { NetworkingManager } from './network';
 
@@ -43,12 +44,14 @@ abstract class ProxyManagerBase {
     networkingManager: NetworkingManager;
     peerProxies: Map<string, PeerProxy>;
     fileCache: FileCache;
+    downloadManager: DownloadManager;
 
     constructor(config: Config) {
         this.config = config;
         this.networkingManager = new NetworkingManager(config);
         this.peerProxies = new Map();
         this.fileCache = new FileCache(config);
+        this.downloadManager = new DownloadManager(this);
     }
 
     generateProxyKey(ip: string, port: number): string {
@@ -65,7 +68,6 @@ abstract class ProxyManagerBase {
         if (!this.peerProxies.has(key)) {
             const peerProxy = new PeerProxy(ip, port);
             this.peerProxies.set(key, peerProxy);
-            console.log("About to return peer: " + peerProxy);
             return peerProxy;
         } else {
             throw new Error(
@@ -84,11 +86,23 @@ abstract class ProxyManagerBase {
 
         this.networkingManager.registerRequestHandler(
             MessageType.DATA_REQUEST, this.handleDataRequest.bind(this));
+        this.networkingManager.registerRequestHandler(
+            MessageType.DATA_RESPONSE_OK,
+            this.downloadManager.handleDataResponseOk.bind(
+                this.downloadManager));
+        this.networkingManager.registerRequestHandler(
+            MessageType.DATA_RESPONSE_UNKNOWN,
+            this.downloadManager.handleDataResponseUnknown.bind(
+                this.downloadManager));
     }
 
     stop(): void {
         this.networkingManager.unregisterRequestHandler(
             MessageType.DATA_REQUEST);
+        this.networkingManager.unregisterRequestHandler(
+            MessageType.DATA_RESPONSE_OK);
+        this.networkingManager.unregisterRequestHandler(
+            MessageType.DATA_RESPONSE_UNKNOWN);
 
         this.networkingManager.stop();
     }
@@ -99,8 +113,10 @@ abstract class ProxyManagerBase {
             throw new Error("Data request of wrong TS type!");
         const dataRequestMessage = message as DataRequestMessage;
 
+        const hexHash = dataRequestMessage.dataHash.toString('hex');
+
         const data = await this.fileCache.readFile(
-            dataRequestMessage.dataHash, 0, dataRequestMessage.length);
+            hexHash, 0, dataRequestMessage.length);
         if (data !== null) {
             const responseMessage = new DataResponseOkMessage(
                 dataRequestMessage.dataHash, dataRequestMessage.offset,
@@ -179,7 +195,7 @@ class ProxyManager extends ProxyManagerBase {
     }
 
     sendProxyHeartbeat() {
-        console.log("Send proxy heartbeat");
+        //console.log("Send proxy heartbeat");
 
         const heartbeatMessage = new ProxyHeartbeatMessage();
         this.networkingManager.send(heartbeatMessage,
@@ -229,15 +245,15 @@ class RootProxyManager extends ProxyManagerBase {
     }
 
     handleProxyHeartbeat(senderIp: string, senderPort: number,
-        message: Message): void {
+                         message: Message): void
+    {
         console.log("We got a heartbeat.");
 
         let peerProxy = this.getPeerProxy(senderIp, senderPort);
         if (!peerProxy) {
             peerProxy = this.addPeerProxy(senderIp, senderPort);
-            console.log("Adding");
+            console.log(`Adding ${senderIp}:${senderPort}`);
         }
-        console.log("About to update " + peerProxy);
 
         peerProxy.updateLastSeen();
 
@@ -267,6 +283,7 @@ class RootProxyManager extends ProxyManagerBase {
 }
 
 export {
+    ProxyManagerBase,
     ProxyManager,
     RootProxyManager,
 };

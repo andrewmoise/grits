@@ -2,6 +2,7 @@ import * as dgram from 'dgram';
 import * as os from 'os';
 
 import { Config } from './config';
+import { TrafficManager } from "./traffic";
 
 import {
     MessageType,
@@ -13,6 +14,8 @@ import {
     DataResponseElsewhereMessage,
     DataResponseUnknownMessage,
 } from './messages';
+
+const MAGIC_BYTES = Buffer.from([140, 98]);
 
 function getLocalIPAddresses(): string[] {
     const interfaces = os.networkInterfaces();
@@ -38,6 +41,7 @@ class NetworkingManager {
     config: Config;
     requestHandlers: Map<number, RequestHandler>;
     socket: dgram.Socket | null;
+    trafficManager: TrafficManager;
 
     constructor(config: Config) {
         if (config.thisHost === null) {
@@ -52,6 +56,7 @@ class NetworkingManager {
         this.config = config;
         this.requestHandlers = new Map();
         this.socket = null;
+        this.trafficManager = new TrafficManager(config);
     }
 
     start(): void {
@@ -73,7 +78,12 @@ class NetworkingManager {
     }
 
     send(message: Message, ipAddress: string, port: number): void {
-        const encodedMessage = message.encode();
+        const encodedContent = message.encode();
+        const header = Buffer.concat([
+            MAGIC_BYTES,
+            Buffer.from([message.type])
+        ]);
+        const encodedMessage = Buffer.concat([header, encodedContent]);
 
         if (!this.socket) {
             console.error('Socket is not initialized');
@@ -90,10 +100,36 @@ class NetworkingManager {
     }
 
     handleIncomingMessage(data: Buffer, rinfo: dgram.RemoteInfo): void {
-        const message = this.decodeMessage(data);
         const { address, port } = rinfo;
+        const messageType = data.readUInt8(2);
+        const messageData = data.slice(3);
 
-        console.log("Received message - port " + port + ", type " + message.type);
+        let message;
+        switch (messageType) {
+            case MessageType.PROXY_HEARTBEAT:
+                message = ProxyHeartbeatMessage.fromBuffer(messageData);
+                break;
+            case MessageType.ROOT_HEARTBEAT:
+                message = RootHeartbeatMessage.fromBuffer(messageData);
+                break;
+            case MessageType.DATA_REQUEST:
+                message = DataRequestMessage.fromBuffer(messageData);
+                break;
+            case MessageType.DATA_RESPONSE_OK:
+                message = DataResponseOkMessage.fromBuffer(messageData);
+                break;
+            case MessageType.DATA_RESPONSE_ELSEWHERE:
+                message = DataResponseElsewhereMessage.fromBuffer(messageData);
+                break;
+            case MessageType.DATA_RESPONSE_UNKNOWN:
+                message = DataResponseUnknownMessage.fromBuffer(messageData);
+                break;
+            default:
+                throw new Error('Unknown message type: ' + messageType);
+        }
+
+        console.log("Received message - port " + port + ", type "
+            + message.type);
 
         if (this.requestHandlers.has(message.type)) {
             const handler = this.requestHandlers.get(message.type);
@@ -101,44 +137,13 @@ class NetworkingManager {
             return;
         }
     }
-
+    
     registerRequestHandler(type: number, handler: RequestHandler): void {
         this.requestHandlers.set(type, handler);
     }
 
     unregisterRequestHandler(type: number): void {
         this.requestHandlers.delete(type);
-    }
-
-    decodeMessage(data: Buffer): Message {
-        const messageType = data.readUInt8(2);
-        let message;
-
-        switch (messageType) {
-            case MessageType.PROXY_HEARTBEAT:
-                message = new ProxyHeartbeatMessage();
-                break;
-            case MessageType.ROOT_HEARTBEAT:
-                message = new RootHeartbeatMessage();
-                break;
-            //case MessageType.DATA_REQUEST:
-            //    message = new DataRequestMessage();
-            //    break;
-            //case MessageType.DATA_RESPONSE_OK:
-            //    message = new DataResponseOkMessage();
-            //    break;
-            //case MessageType.DATA_RESPONSE_ELSEWHERE:
-            //    message = new DataResponseElsewhereMessage();
-            //    break;
-            //case MessageType.DATA_RESPONSE_UNKNOWN:
-            //    message = new DataResponseUnknownMessage();
-            //    break;
-            default:
-                throw new Error('Unknown message type: ' + messageType);
-        }
-
-        message.decode(data);
-        return message;
     }
 }
 

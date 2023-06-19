@@ -14,6 +14,7 @@ export class Config {
     // Storage configuration
     storageDirectory: string;
     storageSize: number; // in bytes
+    tempDownloadDirectory: string;
 
     // Traffic configuration
     maxUpstreamSpeed: number;   // bytes per second
@@ -32,6 +33,7 @@ export class Config {
 
         this.storageDirectory = 'cache';
         this.storageSize = 20;
+        this.tempDownloadDirectory = 'tmp-download';
 
         this.maxUpstreamSpeed = 100000;   // 100 kb/s
         this.maxDownstreamSpeed = 100000; // 100 kb/s

@@ -7,7 +7,7 @@ import { Config } from './config';
 
 import { Mutex } from 'async-mutex';
 
-interface File {
+interface CachedFile {
     path: string;
     size: number;
     refCount: number;
@@ -18,7 +18,7 @@ class FileCache {
     private maxSize: number;
     private currentSize: number;
     private lru: string[];
-    private files: Map<string, File>;
+    private files: Map<string, CachedFile>;
     private mutex: Mutex;
 
     constructor(config: Config) {
@@ -26,7 +26,7 @@ class FileCache {
         this.maxSize = config.storageSize;
         this.currentSize = 0;
         this.lru = [];
-        this.files = new Map<string, File>();
+        this.files = new Map<string, CachedFile>();
         this.mutex = new Mutex();
     }
 
@@ -57,14 +57,20 @@ class FileCache {
         }
     }
 
-    public async addFile(inFilename: string, inHash: string): Promise<void> {
-        const newFilePath = path.join(this.cacheDir, inHash);
+    public async addFile(inFilename: string, inHexHash: string): Promise<CachedFile> {
+        const newFilePath = path.join(this.cacheDir, inHexHash);
         await fs.rename(inFilename, newFilePath);
         const fileStats = await fs.stat(newFilePath);
         await this._ensureSpaceFor(fileStats.size);
-        this.files.set(inHash, { path: newFilePath, size: fileStats.size, refCount: 0 });
-        this.lru.unshift(inHash);
+        const newFile: CachedFile = {
+            path: newFilePath,
+            size: fileStats.size,
+            refCount: 0
+        };
+        this.files.set(inHexHash, newFile);
+        this.lru.unshift(inHexHash);
         this.currentSize += fileStats.size;
+        return newFile;
     }
 
     public async touch(hash: string): Promise<void> {
@@ -104,4 +110,4 @@ class FileCache {
     }
 }
 
-export { FileCache };
+export { CachedFile, FileCache };
