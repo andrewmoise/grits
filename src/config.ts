@@ -32,10 +32,10 @@ export class Config {
         this.rootProxyDropTimeout = 30;
 
         this.storageDirectory = 'cache';
-        this.storageSize = 20;
+        this.storageSize = 20 * 1024 * 1024;
         this.tempDownloadDirectory = 'tmp-download';
 
-        this.maxUpstreamSpeed = 100000;   // 100 kb/s
-        this.maxDownstreamSpeed = 100000; // 100 kb/s
+        this.maxUpstreamSpeed = 100 * 1024;   // 100 kb/s
+        this.maxDownstreamSpeed = 100 * 1024; // 100 kb/s
     }
 }

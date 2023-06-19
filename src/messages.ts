@@ -18,23 +18,27 @@ export abstract class Message {
 }
 
 export class RootHeartbeatMessage extends Message {
-    nodeMapHash: Buffer;
+    nodeMapHash: string | null;
 
-    constructor(nodeMapHash: Buffer) {
+    static zeroBuffer = Buffer.alloc(32, 0);
+    
+    constructor(nodeMapHash: string | null) {
         super(MessageType.ROOT_HEARTBEAT);
         this.nodeMapHash = nodeMapHash;
     }
 
     static fromBuffer(buffer: Buffer): RootHeartbeatMessage {
-        return new RootHeartbeatMessage(buffer);
+        if (buffer.equals(this.zeroBuffer))
+            return new RootHeartbeatMessage(null);
+        else
+            return new RootHeartbeatMessage(buffer.toString('hex'));
     }
 
     encode(): Buffer {
-        const encodedMessage = Buffer.concat([
-            this.nodeMapHash!,
-        ])
-
-        return encodedMessage;
+        if (this.nodeMapHash === null)
+            return RootHeartbeatMessage.zeroBuffer;
+        else
+            return Buffer.from(this.nodeMapHash, 'hex');
     }
 }
 

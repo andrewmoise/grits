@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import * as path from 'path';
+
 import {
     MessageType,
     Message,
@@ -11,7 +14,7 @@ import {
 
 import { Config } from './config';
 import { DownloadManager } from './download';
-import { FileCache } from './filecache';
+import { FileCache, CachedFile } from './filecache';
 import { NetworkingManager } from './network';
 
 class PeerProxy {
@@ -86,10 +89,12 @@ abstract class ProxyManagerBase {
 
         this.networkingManager.registerRequestHandler(
             MessageType.DATA_REQUEST, this.handleDataRequest.bind(this));
+
         this.networkingManager.registerRequestHandler(
             MessageType.DATA_RESPONSE_OK,
             this.downloadManager.handleDataResponseOk.bind(
                 this.downloadManager));
+
         this.networkingManager.registerRequestHandler(
             MessageType.DATA_RESPONSE_UNKNOWN,
             this.downloadManager.handleDataResponseUnknown.bind(
@@ -207,7 +212,7 @@ class ProxyManager extends ProxyManagerBase {
 class RootProxyManager extends ProxyManagerBase {
     rootProxy: PeerProxy;
     heartbeatIntervalId?: NodeJS.Timeout;
-    proxyMapBuffer: Buffer;
+    proxyMapHash: string | null;
 
     constructor(config: Config) {
         super(config);
@@ -217,7 +222,7 @@ class RootProxyManager extends ProxyManagerBase {
             this.networkingManager.config.thisPort);
         this.rootProxy = rootProxy;
 
-        this.proxyMapBuffer = Buffer.alloc(0);
+        this.proxyMapHash = null;
     }
 
     start() {
@@ -259,26 +264,31 @@ class RootProxyManager extends ProxyManagerBase {
 
         // Send root heartbeat back to the proxy
         const heartbeatMessage = new RootHeartbeatMessage(
-            this.proxyMapBuffer);
+            this.proxyMapHash);
         this.networkingManager.send(heartbeatMessage, senderIp, senderPort);
     }
 
-    createProxyMapBuffer(): void {
+    async createProxyMapBuffer(): Promise<void> {
         const peerList = Array.from(this.peerProxies.values()).map(peerProxy =>
         ({
             ip: peerProxy.ip,
             port: peerProxy.port,
         }));
-        const peerListJson = JSON.stringify(peerList);
-        this.proxyMapBuffer = Buffer.from(peerListJson, 'utf-8');
+
+        const filePath = path.join(this.config.tempDownloadDirectory,
+                                   `proxies-${this.config.thisPort}`);
+        await fs.promises.writeFile(filePath, JSON.stringify(peerList, null, 4),
+                                    'utf-8');
+        const file: CachedFile = await this.fileCache.addFile(filePath);
+        this.proxyMapHash = file.hexHash;
     }
 
-    updatePeerList(): void {
+    async updatePeerList(): Promise<void> {
         for (const [key, proxy] of this.peerProxies.entries())
             if (proxy.timeSinceSeen() > this.config.rootProxyDropTimeout)
                 this.peerProxies.delete(key);
 
-        this.createProxyMapBuffer();
+        await this.createProxyMapBuffer();
     }
 }
 
