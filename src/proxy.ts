@@ -113,27 +113,28 @@ abstract class ProxyManagerBase {
     }
 
     async handleDataRequest(senderIp: string, senderPort: number,
-        message: Message): Promise<void> {
+                            message: Message): Promise<void>
+    {
         if (!(message instanceof DataRequestMessage))
             throw new Error("Data request of wrong TS type!");
         const dataRequestMessage = message as DataRequestMessage;
 
-        const hexHash = dataRequestMessage.dataHash.toString('hex');
+        const fileAddr = dataRequestMessage.fileAddr;
 
         const data = await this.fileCache.readFile(
-            hexHash, 0, dataRequestMessage.length);
+            fileAddr, dataRequestMessage.offset, dataRequestMessage.length);
         if (data !== null) {
             const responseMessage = new DataResponseOkMessage(
-                dataRequestMessage.dataHash, dataRequestMessage.offset,
+                fileAddr, dataRequestMessage.offset,
                 dataRequestMessage.length, data);
             this.networkingManager.send(responseMessage, senderIp, senderPort);
         } else {
             const responseMessage = new DataResponseUnknownMessage(
-                dataRequestMessage.dataHash);
+                fileAddr);
             this.networkingManager.send(responseMessage, senderIp, senderPort);
         }
     }
-
+    
     handleWrongMessage(senderIp: string, senderPort: number, message: any) {
         throw new Error("Received wrong message! Code " + message + " from "
             + senderIp);
@@ -184,11 +185,17 @@ class ProxyManager extends ProxyManagerBase {
         super.stop();
     }
 
-    handleRootHeartbeat(senderIp: string, senderPort: number,
-        message: Message) {
+    async handleRootHeartbeat(senderIp: string, senderPort: number,
+                              message: Message)
+    {
+        if (!(message instanceof RootHeartbeatMessage))
+            throw new Error("Data request of wrong TS type!");
+        const rootHeartbeatMessage = message as RootHeartbeatMessage;
+
         // Validate the sender
         if (senderIp !== this.rootProxy.ip
-            || senderPort !== this.rootProxy.port) {
+            || senderPort !== this.rootProxy.port)
+        {
             console.warn(`Received root heartbeat from unknown source ${senderIp}:${senderPort}.`);
             return;
         }
@@ -197,6 +204,15 @@ class ProxyManager extends ProxyManagerBase {
         this.rootProxy.updateLastSeen();
 
         console.log("Got root heartbeat.");
+
+        const nodeMapFileAddr = rootHeartbeatMessage.nodeMapFileAddr;
+        if (nodeMapFileAddr) {
+            const nodeMapFile = await this.downloadManager.download(
+                nodeMapFileAddr);
+            console.log(`Successful download: ${nodeMapFile.path}`);
+        } else {
+            console.log("Root heartbeat, but no map.");
+        }
     }
 
     sendProxyHeartbeat() {
@@ -280,7 +296,7 @@ class RootProxyManager extends ProxyManagerBase {
         await fs.promises.writeFile(filePath, JSON.stringify(peerList, null, 4),
                                     'utf-8');
         const file: CachedFile = await this.fileCache.addFile(filePath);
-        this.proxyMapHash = file.hexHash;
+        this.proxyMapHash = file.fileAddr;
     }
 
     async updatePeerList(): Promise<void> {

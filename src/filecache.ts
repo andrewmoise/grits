@@ -12,7 +12,7 @@ interface CachedFile {
     path: string;
     size: number;
     refCount: number;
-    hexHash: string;
+    fileAddr: string;
 }
 
 class FileCache {
@@ -60,58 +60,77 @@ class FileCache {
         }
     }
 
-    public async addFile(inFilename: string, inHexHash: string|null = null)
+    public async addFile(inFilename: string, inFileAddr: string|null = null)
         : Promise<CachedFile>
     {
         console.log(`addFile(${inFilename})`);
-        
-        if (!inHexHash) {
-            const hash = crypto.createHash('sha256');
-            const input = fs.createReadStream(inFilename);
 
-            for await (const chunk of input) {
-                hash.update(chunk);
+        const fileStats = await fsPromises.stat(inFilename);
+        
+        const hash = crypto.createHash('sha256');
+        const input = fs.createReadStream(inFilename);
+
+        for await (const chunk of input)
+            hash.update(chunk);
+
+        const computedHexHash = hash.digest('hex');
+        const computedSize = fileStats.size;
+
+        let inFileHash, inFileSize;
+        if (!inFileAddr) {
+            inFileHash = computedHexHash;
+            inFileSize = computedSize;
+        } else {
+            console.log(inFileAddr);
+            
+            [inFileHash, inFileSize] = inFileAddr.split(':');
+            inFileSize = Number(inFileSize);
+
+            console.log(`Verify hash: ${inFileHash} <-> ${computedHexHash} and ${inFileSize} <-> ${computedSize}`);
+            
+            if (inFileHash !== computedHexHash || inFileSize !== computedSize) {
+                throw new Error('Hash or size does not match the provided file address');
             }
-        
-            inHexHash = hash.digest('hex');
         }
+
+        const finalFileAddr = `${inFileHash}:${inFileSize}`;
+        const newFilePath = path.join(this.cacheDir, inFileHash);
         
-        const newFilePath = path.join(this.cacheDir, inHexHash);
         await fsPromises.rename(inFilename, newFilePath);
-        const fileStats = await fsPromises.stat(newFilePath);
-        await this._ensureSpaceFor(fileStats.size);
+        await this._ensureSpaceFor(computedSize);
         const newFile: CachedFile = {
             path: newFilePath,
-            size: fileStats.size,
+            size: computedSize,
             refCount: 0,
-            hexHash: inHexHash,
+            fileAddr: finalFileAddr,
         };
-        this.files.set(inHexHash, newFile);
-        this.lru.unshift(inHexHash);
-        this.currentSize += fileStats.size;
+        this.files.set(finalFileAddr, newFile);
+        this.lru.unshift(finalFileAddr);
+        this.currentSize += computedSize;
 
         console.log(`  Returning added file ${newFilePath}`);
         return newFile;
     }
 
-    public async touch(hash: string): Promise<void> {
+    public async touch(fileAddr: string): Promise<void> {
         const release = await this.mutex.acquire();
         try {
-            const index = this.lru.indexOf(hash);
+            const index = this.lru.indexOf(fileAddr);
             assert(index != -1);
 
             this.lru.splice(index, 1);
-            this.lru.unshift(hash);
+            this.lru.unshift(fileAddr);
         } finally {
             release();
         }
     }
 
-    public async readFile(hash: string, offset: number, length: number)
+    public async readFile(fileAddr: string, offset: number, length: number)
         : Promise<Buffer | null>
     {
+        const [hash] = fileAddr.split(':');
         console.log(`Finding file for ${hash}`);
-        const file = this.files.get(hash);
+        const file = this.files.get(fileAddr);
         if (file) {
             file.refCount += 1;
             const buffer = Buffer.allocUnsafe(length);
@@ -125,7 +144,7 @@ class FileCache {
             } finally {
                 file.refCount -= 1;
             }
-            await this.touch(hash);
+            await this.touch(fileAddr);
             console.log(`  Found ${file.path}, returning`);
             return buffer;
         } else {
