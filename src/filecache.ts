@@ -3,16 +3,38 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 import * as path from 'path';
+import { Mutex } from 'async-mutex';
 
 import { Config } from './config';
 
-import { Mutex } from 'async-mutex';
+class CachedFile {
+    public path: string;
+    public size: number;
+    public refCount: number;
+    public fileAddr: string;
 
-interface CachedFile {
-    path: string;
-    size: number;
-    refCount: number;
-    fileAddr: string;
+    constructor(path: string, size: number, refCount: number, fileAddr: string)
+    {
+        this.path = path;
+        this.size = size;
+        this.refCount = refCount;
+        this.fileAddr = fileAddr;
+    }
+
+    public async read(offset: number, length: number): Promise<Buffer> {
+        const buffer = Buffer.allocUnsafe(length);
+        const fd = await fsPromises.open(this.path, 'r');
+        try {
+            await fd.read(buffer, 0, length, offset);
+        } finally {
+            await fd.close();
+        }
+        return buffer;
+    }
+
+    public release(): void {
+        this.refCount -= 1;
+    }
 }
 
 class FileCache {
@@ -60,7 +82,9 @@ class FileCache {
         }
     }
 
-    public async addFile(inFilename: string, inFileAddr: string|null = null)
+    public async addFile(inFilename: string, inFileAddr: string|null = null,
+                         moveFile: boolean = false,
+                         takeReference: boolean = false)
         : Promise<CachedFile>
     {
         console.log(`addFile(${inFilename})`);
@@ -95,15 +119,24 @@ class FileCache {
 
         const finalFileAddr = `${inFileHash}:${inFileSize}`;
         const newFilePath = path.join(this.cacheDir, inFileHash);
+
+        // Check if the file already exists in the cache
+        const existingFile = this.files.get(finalFileAddr);
+        if (existingFile) {
+            existingFile.refCount++;
+            return existingFile;
+        }
+
+        if (moveFile) {
+            await fsPromises.rename(inFilename, newFilePath);
+        } else {
+            await fsPromises.copyFile(inFilename, newFilePath);
+        }
         
-        await fsPromises.rename(inFilename, newFilePath);
         await this._ensureSpaceFor(computedSize);
-        const newFile: CachedFile = {
-            path: newFilePath,
-            size: computedSize,
-            refCount: 0,
-            fileAddr: finalFileAddr,
-        };
+        const newFile = new CachedFile(newFilePath, computedSize, takeReference ? 1 : 0,
+                                       finalFileAddr);
+
         this.files.set(finalFileAddr, newFile);
         this.lru.unshift(finalFileAddr);
         this.currentSize += computedSize;
@@ -112,6 +145,31 @@ class FileCache {
         return newFile;
     }
 
+    public async addDirectory(directoryPath: string, moveFiles: boolean = false)
+        : Promise<Array<CachedFile>>
+    {
+        const addedFiles: Array<CachedFile> = [];
+
+        // Read the content of the directory
+        const directoryContent = await fsPromises.readdir(directoryPath, { withFileTypes: true });
+
+        for (const dirent of directoryContent) {
+            const fullPath = path.join(directoryPath, dirent.name);
+
+            if (dirent.isFile()) {
+                // If it's a file, add it to the cache
+                const cachedFile = await this.addFile(fullPath, null, moveFiles);
+                addedFiles.push(cachedFile);
+            } else if (dirent.isDirectory()) {
+                // If it's a directory, recursively add its content to the cache
+                const cachedFilesFromDir = await this.addDirectory(fullPath, moveFiles);
+                addedFiles.push(...cachedFilesFromDir);
+            }
+        }
+
+        return addedFiles;
+    }
+    
     public async touch(fileAddr: string): Promise<void> {
         const release = await this.mutex.acquire();
         try {
@@ -125,28 +183,15 @@ class FileCache {
         }
     }
 
-    public async readFile(fileAddr: string, offset: number, length: number)
-        : Promise<Buffer | null>
+    public async readFile(fileAddr: string)
+        : Promise<CachedFile | null>
     {
-        const [hash] = fileAddr.split(':');
-        console.log(`Finding file for ${hash}`);
+        console.log(`Finding file for ${fileAddr}`);
         const file = this.files.get(fileAddr);
         if (file) {
             file.refCount += 1;
-            const buffer = Buffer.allocUnsafe(length);
-            try {
-                const fd = await fsPromises.open(file.path, 'r');
-                try {
-                    await fd.read(buffer, 0, length, offset);
-                } finally {
-                    await fd.close();
-                }
-            } finally {
-                file.refCount -= 1;
-            }
-            await this.touch(fileAddr);
-            console.log(`  Found ${file.path}, returning`);
-            return buffer;
+            await this.touch(file.fileAddr);
+            return file;
         } else {
             return null;
         }

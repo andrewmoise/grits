@@ -5,6 +5,7 @@ export enum MessageType {
     DATA_RESPONSE_OK = 3,
     DATA_RESPONSE_ELSEWHERE = 4,
     DATA_RESPONSE_UNKNOWN = 5,
+    DATA_IS_HERE = 6,
 }
 
 export abstract class Message {
@@ -206,6 +207,35 @@ export class DataResponseUnknownMessage extends Message {
     }
 }
 
+export class DataIsHereMessage extends Message {
+    fileAddr: string;
+
+    constructor(fileAddr: string) {
+        super(MessageType.DATA_IS_HERE);
+        this.fileAddr = fileAddr;
+    }
+
+    static fromBuffer(buffer: Buffer): DataIsHereMessage {
+        const hash = buffer.slice(0, 32).toString('hex');
+        const size = buffer.readBigUInt64BE(32).toString();
+        const fileAddr = `${hash}:${size}`;
+        return new DataIsHereMessage(fileAddr);
+    }
+
+    encode(): Buffer {
+        const buffer = Buffer.allocUnsafe(40);
+        const [hash, size] = this.fileAddr.split(':');
+        const hashBuffer = Buffer.from(hash, 'hex');
+        hashBuffer.copy(buffer, 0);
+
+        const sizeBuffer = Buffer.alloc(8);
+        sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
+        sizeBuffer.copy(buffer, 32);
+        return buffer;
+    }
+}
+
+
 module.exports = {
     MessageType,
     Message,
@@ -215,4 +245,5 @@ module.exports = {
     DataResponseOkMessage,
     DataResponseElsewhereMessage,
     DataResponseUnknownMessage,
+    DataIsHereMessage,
 };

@@ -10,6 +10,7 @@ import {
     DataResponseOkMessage,
     DataResponseElsewhereMessage,
     DataResponseUnknownMessage,
+    DataIsHereMessage,
 } from './messages';
 
 import { Config } from './config';
@@ -42,19 +43,64 @@ class PeerProxy {
     }
 }
 
+// ProxyDataMap class to track the most recent proxies where a file has been
+// seen.
+class ProxyDataMap {
+    fileAddrToProxy: Map<
+        string, { timestamp: Date, proxies: Array<PeerProxy> }>;
+
+    constructor() {
+        this.fileAddrToProxy = new Map();
+    }
+
+    // Adds a new fileAddr - proxy mapping.
+    updateData(fileAddr: string, proxy: PeerProxy) {
+        const proxyData = this.fileAddrToProxy.get(fileAddr);
+
+        if (proxyData) {
+            proxyData.timestamp = new Date();
+
+            // Check if the proxy is already in the array.
+            const existingProxy = proxyData.proxies.find(
+                p => p.ip === proxy.ip && p.port === proxy.port);
+
+            if (!existingProxy)
+                proxyData.proxies.push(proxy);
+        } else {
+            this.fileAddrToProxy.set(
+                fileAddr, { timestamp: new Date(), proxies: [proxy] });
+        }
+    }
+
+    // Removes expired entries (i.e., entries older than 24 hours).
+    cleanup(maxAge: number) {
+        const currentTime = new Date();
+        this.fileAddrToProxy.forEach((value, key) => {
+            if (Math.floor((currentTime.getTime() - value.timestamp.getTime())
+                / 1000) >= maxAge) // maxAge is seconds
+            {
+                this.fileAddrToProxy.delete(key);
+            }
+        });
+    }
+}
+
 abstract class ProxyManagerBase {
     config: Config;
     networkingManager: NetworkingManager;
     peerProxies: Map<string, PeerProxy>;
     fileCache: FileCache;
     downloadManager: DownloadManager;
-
+    proxyDataMap: ProxyDataMap;
+    cleanupIntervalId?: number;
+    
     constructor(config: Config) {
         this.config = config;
         this.networkingManager = new NetworkingManager(config);
         this.peerProxies = new Map();
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
+        this.proxyDataMap = new ProxyDataMap();
     }
 
     generateProxyKey(ip: string, port: number): string {
@@ -99,9 +145,21 @@ abstract class ProxyManagerBase {
             MessageType.DATA_RESPONSE_UNKNOWN,
             this.downloadManager.handleDataResponseUnknown.bind(
                 this.downloadManager));
+
+        this.networkingManager.registerRequestHandler(
+            MessageType.DATA_IS_HERE, this.handleDataIsHereMessage.bind(this));
+        
+        this.cleanupIntervalId = setInterval(
+            this.proxyDataMap.cleanup.bind(this.proxyDataMap),
+            this.config.proxyMapCleanupPeriod);
+    
     }
 
     stop(): void {
+        clearInterval(this.cleanupIntervalId);
+
+        this.networkingManager.unregisterRequestHandler(
+            MessageType.DATA_IS_HERE);
         this.networkingManager.unregisterRequestHandler(
             MessageType.DATA_REQUEST);
         this.networkingManager.unregisterRequestHandler(
@@ -120,18 +178,40 @@ abstract class ProxyManagerBase {
         const dataRequestMessage = message as DataRequestMessage;
 
         const fileAddr = dataRequestMessage.fileAddr;
+        const file = await this.fileCache.readFile(fileAddr);
 
-        const data = await this.fileCache.readFile(
-            fileAddr, dataRequestMessage.offset, dataRequestMessage.length);
-        if (data !== null) {
+        if (!file) {
+            const responseMessage = new DataResponseUnknownMessage(
+                fileAddr);
+            this.networkingManager.send(responseMessage, senderIp, senderPort);
+            return;
+        }
+        
+        try {
+            const data = await file.read(
+                dataRequestMessage.offset, dataRequestMessage.length);
+
             const responseMessage = new DataResponseOkMessage(
                 fileAddr, dataRequestMessage.offset,
                 dataRequestMessage.length, data);
             this.networkingManager.send(responseMessage, senderIp, senderPort);
-        } else {
-            const responseMessage = new DataResponseUnknownMessage(
-                fileAddr);
-            this.networkingManager.send(responseMessage, senderIp, senderPort);
+        } finally {
+            file.release();
+        }
+    }
+
+    async handleDataIsHereMessage(senderIp: string, senderPort: number,
+                                  message: Message): Promise<void>
+    {
+        if (!(message instanceof DataIsHereMessage))
+            throw new Error("Received wrong message type!");
+
+        const dataIsHereMessage = message as DataIsHereMessage;
+
+        const senderProxy = this.getPeerProxy(senderIp, senderPort);
+        if (senderProxy) {
+            this.proxyDataMap.updateData(dataIsHereMessage.fileAddr,
+                                         senderProxy);
         }
     }
     
@@ -210,6 +290,42 @@ class ProxyManager extends ProxyManagerBase {
             const nodeMapFile = await this.downloadManager.download(
                 nodeMapFileAddr);
             console.log(`Successful download: ${nodeMapFile.path}`);
+
+            // Read the downloaded file and update local peerProxies
+            const data = await fs.promises.readFile(nodeMapFile.path, 'utf-8');
+            const newPeers = JSON.parse(data);
+            
+            // Create a temporary set for easy lookup
+            const newPeersSet = new Set();
+            newPeers.forEach((peer: { ip: string; port: number; }) => {
+                newPeersSet.add(this.generateProxyKey(peer.ip, peer.port));
+            });
+
+            // Update existing and add new peers
+            for (let newPeer of newPeers) {
+                const { ip, port } = newPeer;
+                if (!this.peerProxies.has(this.generateProxyKey(ip, port))) {
+                    const peerProxy = new PeerProxy(ip, port);
+                    this.peerProxies.set(this.generateProxyKey(ip, port),
+                                         peerProxy);
+                } else {
+                    // update lastSeen timestamp for the existing peer
+                    this.peerProxies.get(
+                        this.generateProxyKey(ip, port))!.updateLastSeen();
+                }
+            }
+
+            // Remove peers not present in the new list
+            for (let [key, proxy] of this.peerProxies.entries()) {
+                if (!newPeersSet.has(key)) {
+                    this.peerProxies.delete(key);
+                } else {
+                    //console.log(
+                    //    `  have peer: ${this.peerProxies.get(key)!.port}`);
+                }
+            }
+
+            //console.log(`Updated local peerProxies.`);
         } else {
             console.log("Root heartbeat, but no map.");
         }
@@ -228,7 +344,7 @@ class ProxyManager extends ProxyManagerBase {
 class RootProxyManager extends ProxyManagerBase {
     rootProxy: PeerProxy;
     heartbeatIntervalId?: NodeJS.Timeout;
-    proxyMapHash: string | null;
+    proxyMapFile: CachedFile | null;
 
     constructor(config: Config) {
         super(config);
@@ -238,7 +354,7 @@ class RootProxyManager extends ProxyManagerBase {
             this.networkingManager.config.thisPort);
         this.rootProxy = rootProxy;
 
-        this.proxyMapHash = null;
+        this.proxyMapFile = null;
     }
 
     start() {
@@ -280,7 +396,7 @@ class RootProxyManager extends ProxyManagerBase {
 
         // Send root heartbeat back to the proxy
         const heartbeatMessage = new RootHeartbeatMessage(
-            this.proxyMapHash);
+            this.proxyMapFile ? this.proxyMapFile.fileAddr : null);
         this.networkingManager.send(heartbeatMessage, senderIp, senderPort);
     }
 
@@ -295,8 +411,15 @@ class RootProxyManager extends ProxyManagerBase {
                                    `proxies-${this.config.thisPort}`);
         await fs.promises.writeFile(filePath, JSON.stringify(peerList, null, 4),
                                     'utf-8');
-        const file: CachedFile = await this.fileCache.addFile(filePath);
-        this.proxyMapHash = file.fileAddr;
+        const file: CachedFile = await this.fileCache.addFile(
+            filePath, null, true, true);
+        if (file !== this.proxyMapFile) {
+            if (this.proxyMapFile)
+                this.proxyMapFile.release();
+            this.proxyMapFile = file;
+        } else {
+            file.release();
+        }
     }
 
     async updatePeerList(): Promise<void> {

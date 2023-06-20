@@ -3,13 +3,8 @@ export class Config {
     thisHost: string;
     thisPort: number;
     isRootNode: boolean;
-    proxyHeartbeatPeriod: number; // In seconds
     rootHost: string | null;
     rootPort: number | null;
-
-    // Root proxy configuration
-    rootHeartbeatPeriod: number; // In seconds
-    rootProxyDropTimeout: number;
 
     // Storage configuration
     storageDirectory: string;
@@ -20,15 +15,24 @@ export class Config {
     maxUpstreamSpeed: number;   // bytes per second
     maxDownstreamSpeed: number; // bytes per second
 
+    // Various less-relevant params
+    maxProxyMapAge: number; // In seconds
+    proxyMapCleanupPeriod: number; // In seconds
+    proxyHeartbeatPeriod: number; // In seconds
+    rootHeartbeatPeriod: number; // In seconds
+    rootProxyDropTimeout: number; // In seconds
+    
     constructor() {
         this.thisHost = '127.0.0.1';
         this.thisPort = 1787;
         this.isRootNode = false;
-        this.proxyHeartbeatPeriod = 5; // In seconds
         this.rootHost = null;
         this.rootPort = null;
-
-        this.rootHeartbeatPeriod = 5; // In seconds
+        
+        this.maxProxyMapAge = 24 * 60 * 60;
+        this.proxyMapCleanupPeriod = 60 * 60;
+        this.proxyHeartbeatPeriod = 5;
+        this.rootHeartbeatPeriod = 5;
         this.rootProxyDropTimeout = 30;
 
         this.storageDirectory = 'cache';
