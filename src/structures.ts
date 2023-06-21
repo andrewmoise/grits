@@ -1,3 +1,6 @@
+import * as fs from 'fs';
+import { promises as fsPromises } from 'fs';
+
 class PeerProxy {
     ip: string;
     port: number;
