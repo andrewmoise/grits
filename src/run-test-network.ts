@@ -5,16 +5,16 @@ import { Config } from './config';
 import { ProxyManager, RootProxyManager } from './proxy';
 import { HttpServer } from './web';
 
-// Create a directory, blowing it away if it already exists.
+// Create a test data directory, DELETING IT RECURSIVELY if it already exists.
 const dirPath = 'grits-test-run';
-const subdirs = ['root', '1', '2', '3', '4', '5'];
-
-if (fs.existsSync(dirPath)) {
+if (fs.existsSync(dirPath))
     fs.rmSync(dirPath, { recursive: true, force: true });
-}
-
 fs.mkdirSync(dirPath);
-subdirs.forEach(subdir => fs.mkdirSync(path.join(dirPath, subdir)));
+fs.mkdirSync(path.join(dirPath, 'root'));
+
+// Load the list of image files
+const imageDir = 'test-images';
+const allImages = fs.readdirSync(imageDir);
 
 // Create ProxyManagers with their unique configs
 const proxyManagers: (ProxyManager | RootProxyManager)[] = [];
@@ -41,6 +41,13 @@ for (let i = 0; i < 50; i++) {
     const proxyManager = new ProxyManager(config);
     proxyManagers.push(proxyManager);
 
+    // Choose 10 random images to add to this node's cache
+    for (let j = 0; j < 10; j++) {
+        const randomImageIndex = Math.floor(Math.random() * allImages.length);
+        const imageFilename = allImages[randomImageIndex];
+        proxyManager.fileCache.addFile(path.join(imageDir, imageFilename), null, false, true);
+    }
+
     if (i == 0) {
         const httpServer = new HttpServer(proxyManager.fileCache, 1234);
         httpServer.start();
@@ -52,4 +59,3 @@ proxyManagers.forEach(proxyManager => {
     proxyManager.start();
     console.log(`Starting event loop for proxy on port ${proxyManager.config.thisPort}...`);
 });
-

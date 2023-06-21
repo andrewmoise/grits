@@ -13,6 +13,7 @@ import {
     DataResponseOkMessage,
     DataResponseElsewhereMessage,
     DataResponseUnknownMessage,
+    DataIsHereMessage,
 } from './messages';
 
 const MAGIC_BYTES = Buffer.from([140, 98]);
@@ -123,6 +124,9 @@ class NetworkingManager {
                 break;
             case MessageType.DATA_RESPONSE_UNKNOWN:
                 message = DataResponseUnknownMessage.fromBuffer(messageData);
+                break;
+            case MessageType.DATA_IS_HERE:
+                message = DataIsHereMessage.fromBuffer(messageData);
                 break;
             default:
                 throw new Error('Unknown message type: ' + messageType);

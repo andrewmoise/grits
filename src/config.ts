@@ -11,6 +11,10 @@ export class Config {
     storageSize: number; // in bytes
     tempDownloadDirectory: string;
 
+    // File-sharing params
+    dhtNotifyNumber: number;
+    dhtNotifyPeriod: number; // In seconds
+    
     // Traffic configuration
     maxUpstreamSpeed: number;   // bytes per second
     maxDownstreamSpeed: number; // bytes per second
@@ -39,6 +43,9 @@ export class Config {
         this.storageSize = 20 * 1024 * 1024;
         this.tempDownloadDirectory = 'tmp-download';
 
+        this.dhtNotifyNumber = 5;
+        this.dhtNotifyPeriod = 30;
+        
         this.maxUpstreamSpeed = 100 * 1024;   // 100 kb/s
         this.maxDownstreamSpeed = 100 * 1024; // 100 kb/s
     }

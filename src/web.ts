@@ -1,7 +1,9 @@
 import * as fs from 'fs';
 import * as express from 'express';
 import { Server } from 'http';
-import { FileCache, CachedFile } from './filecache';
+
+import { FileCache } from "./filecache";
+import { CachedFile } from "./structures";
 
 class HttpServer {
     private app: express.Express;

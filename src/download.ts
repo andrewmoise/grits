@@ -6,7 +6,8 @@ import * as timers from 'timers';
 import * as events from "events";
 
 import { Config } from "./config";
-import { CachedFile, FileCache } from "./filecache";
+import { FileCache } from "./filecache";
+import { CachedFile } from "./structures";
 import {
     DataRequestMessage, DataResponseOkMessage, DataResponseUnknownMessage,
     Message

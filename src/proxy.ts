@@ -15,33 +15,10 @@ import {
 
 import { Config } from './config';
 import { DownloadManager } from './download';
-import { FileCache, CachedFile } from './filecache';
+import { FileCache } from "./filecache";
+import { CachedFile, PeerProxy } from "./structures";
 import { NetworkingManager } from './network';
-
-class PeerProxy {
-    ip: string;
-    port: number;
-    lastSeen: Date | null;
-
-    constructor(ip: string, port: number) {
-        this.ip = ip;
-        this.port = port;
-        this.lastSeen = null;
-    }
-
-    updateLastSeen() {
-        this.lastSeen = new Date();
-    }
-
-    // Returns seconds
-    timeSinceSeen() {
-        if (this.lastSeen === null)
-            return -1;
-        const currentTime = new Date();
-        return Math.floor(
-            (currentTime.getTime() - this.lastSeen.getTime()) / 1000);
-    }
-}
+import { BlobFinder } from './dht';
 
 // ProxyDataMap class to track the most recent proxies where a file has been
 // seen.
@@ -92,7 +69,10 @@ abstract class ProxyManagerBase {
     fileCache: FileCache;
     downloadManager: DownloadManager;
     proxyDataMap: ProxyDataMap;
+    blobFinder: BlobFinder;
     cleanupIntervalId?: number;
+    dhtNotifyIntervalId?: NodeJS.Timeout;
+    printStateIntervalId?: NodeJS.Timeout;
     
     constructor(config: Config) {
         this.config = config;
@@ -101,6 +81,7 @@ abstract class ProxyManagerBase {
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
         this.proxyDataMap = new ProxyDataMap();
+        this.blobFinder = new BlobFinder();
     }
 
     generateProxyKey(ip: string, port: number): string {
@@ -152,10 +133,19 @@ abstract class ProxyManagerBase {
         this.cleanupIntervalId = setInterval(
             this.proxyDataMap.cleanup.bind(this.proxyDataMap),
             this.config.proxyMapCleanupPeriod);
-    
+
+        this.dhtNotifyIntervalId = setInterval(
+            this.dhtNotifyTask.bind(this),
+            this.config.dhtNotifyPeriod * 1000);
+
+        this.printStateIntervalId = setInterval(
+            this.printState.bind(this),
+            15000);
     }
 
     stop(): void {
+        clearInterval(this.printStateIntervalId);
+        clearInterval(this.dhtNotifyIntervalId);
         clearInterval(this.cleanupIntervalId);
 
         this.networkingManager.unregisterRequestHandler(
@@ -205,7 +195,6 @@ abstract class ProxyManagerBase {
     {
         if (!(message instanceof DataIsHereMessage))
             throw new Error("Received wrong message type!");
-
         const dataIsHereMessage = message as DataIsHereMessage;
 
         const senderProxy = this.getPeerProxy(senderIp, senderPort);
@@ -218,6 +207,45 @@ abstract class ProxyManagerBase {
     handleWrongMessage(senderIp: string, senderPort: number, message: any) {
         throw new Error("Received wrong message! Code " + message + " from "
             + senderIp);
+    }
+
+    async dhtNotifyTask(): Promise<void> {
+        console.log(`DHT Notify for ${this.config.thisHost}:${this.config.thisPort}`);
+        
+        for (const cachedFile of this.fileCache.getFiles()) {
+            console.log(`  ${cachedFile.path}`);
+            const closestNodes = await this.blobFinder.getClosestProxies(
+                cachedFile.fileAddr, this.config.dhtNotifyNumber);
+            
+            for (const node of closestNodes) {
+                console.log(`    Notify ${node.ip}:${node.port}`);
+                const message = new DataIsHereMessage(cachedFile.fileAddr);
+                this.networkingManager.send(message, node.ip, node.port);
+            }
+        }
+    }
+
+    async printState(): Promise<void> {
+        console.log("---------- State of Proxy Manager " + this.config.thisHost
+            + ":" + this.config.thisPort + " ----------");
+        console.log("Number of peer proxies: " + this.peerProxies.size);
+
+        let fileCount = 0;
+        let pinnedCount = 0;
+        for (const file of this.fileCache.getFiles()) {
+            fileCount++;
+            if (file.refCount !== 0)
+                pinnedCount++;
+        }
+
+        console.log("Number of files in cache: " + fileCount.toString());
+        console.log("  " + this.fileCache.currentSize + " / "
+            + this.fileCache.maxSize + " bytes");
+        console.log("  " + pinnedCount.toString() + " pinned or in use");
+        
+        console.log("Number of files known in network: "
+            + this.proxyDataMap.fileAddrToProxy.size);
+        console.log("------------------------------------------------");
     }
 }
 
@@ -294,7 +322,7 @@ class ProxyManager extends ProxyManagerBase {
             // Read the downloaded file and update local peerProxies
             const data = await fs.promises.readFile(nodeMapFile.path, 'utf-8');
             const newPeers = JSON.parse(data);
-            
+
             // Create a temporary set for easy lookup
             const newPeersSet = new Set();
             newPeers.forEach((peer: { ip: string; port: number; }) => {
@@ -325,6 +353,8 @@ class ProxyManager extends ProxyManagerBase {
                 }
             }
 
+            this.blobFinder.updateProxies(this.peerProxies);
+            
             //console.log(`Updated local peerProxies.`);
         } else {
             console.log("Root heartbeat, but no map.");
@@ -401,16 +431,21 @@ class RootProxyManager extends ProxyManagerBase {
     }
 
     async createProxyMapBuffer(): Promise<void> {
+        this.blobFinder.updateProxies(this.peerProxies);
+        
         const peerList = Array.from(this.peerProxies.values()).map(peerProxy =>
         ({
             ip: peerProxy.ip,
             port: peerProxy.port,
         }));
 
+        const randomSuffix = Math.floor(Math.random() * 1000000).toString()
+        
         const filePath = path.join(this.config.tempDownloadDirectory,
-                                   `proxies-${this.config.thisPort}`);
+                                   `proxies-${randomSuffix}`);
         await fs.promises.writeFile(filePath, JSON.stringify(peerList, null, 4),
                                     'utf-8');
+
         const file: CachedFile = await this.fileCache.addFile(
             filePath, null, true, true);
         if (file !== this.proxyMapFile) {

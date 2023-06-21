@@ -6,41 +6,12 @@ import * as path from 'path';
 import { Mutex } from 'async-mutex';
 
 import { Config } from './config';
-
-class CachedFile {
-    public path: string;
-    public size: number;
-    public refCount: number;
-    public fileAddr: string;
-
-    constructor(path: string, size: number, refCount: number, fileAddr: string)
-    {
-        this.path = path;
-        this.size = size;
-        this.refCount = refCount;
-        this.fileAddr = fileAddr;
-    }
-
-    public async read(offset: number, length: number): Promise<Buffer> {
-        const buffer = Buffer.allocUnsafe(length);
-        const fd = await fsPromises.open(this.path, 'r');
-        try {
-            await fd.read(buffer, 0, length, offset);
-        } finally {
-            await fd.close();
-        }
-        return buffer;
-    }
-
-    public release(): void {
-        this.refCount -= 1;
-    }
-}
+import { PeerProxy, CachedFile } from './structures';
 
 class FileCache {
     private cacheDir: string;
-    private maxSize: number;
-    private currentSize: number;
+    /*private*/ maxSize: number;
+    /*private*/ currentSize: number;
     private lru: string[];
     private files: Map<string, CachedFile>;
     private mutex: Mutex;
@@ -82,6 +53,10 @@ class FileCache {
         }
     }
 
+    public getFiles(): IterableIterator<CachedFile> {
+        return this.files.values();
+    }
+    
     public async addFile(inFilename: string, inFileAddr: string|null = null,
                          moveFile: boolean = false,
                          takeReference: boolean = false)
@@ -128,13 +103,19 @@ class FileCache {
         }
 
         if (moveFile) {
-            await fsPromises.rename(inFilename, newFilePath);
+            try {
+                await fsPromises.rename(inFilename, newFilePath);
+            } catch (err) {
+                console.error(`Failed to rename file: ${err}`);
+                throw err; // You can rethrow the error to stop execution if required
+            }
         } else {
             await fsPromises.copyFile(inFilename, newFilePath);
         }
         
         await this._ensureSpaceFor(computedSize);
-        const newFile = new CachedFile(newFilePath, computedSize, takeReference ? 1 : 0,
+        const newFile = new CachedFile(newFilePath, computedSize,
+                                       takeReference ? 1 : 0,
                                        finalFileAddr);
 
         this.files.set(finalFileAddr, newFile);
@@ -198,4 +179,4 @@ class FileCache {
     }
 }
 
-export { CachedFile, FileCache };
+export { FileCache };
