@@ -58,4 +58,11 @@ class CachedFile {
     }
 }
 
-export { PeerProxy, CachedFile };
+class FileRetrievalError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "FileRetrievalError";
+    }
+}
+
+export { PeerProxy, CachedFile, FileRetrievalError };

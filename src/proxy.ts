@@ -16,7 +16,7 @@ import {
 import { Config } from './config';
 import { DownloadManager } from './download';
 import { FileCache } from "./filecache";
-import { CachedFile, PeerProxy } from "./structures";
+import { CachedFile, PeerProxy, FileRetrievalError } from "./structures";
 import { NetworkingManager } from './network';
 import { BlobFinder } from './dht';
 
@@ -25,8 +25,10 @@ import { BlobFinder } from './dht';
 class ProxyDataMap {
     fileAddrToProxy: Map<
         string, { timestamp: Date, proxies: Array<PeerProxy> }>;
-
-    constructor() {
+    config: Config;
+    
+    constructor(config: Config) {
+        this.config = config;
         this.fileAddrToProxy = new Map();
     }
 
@@ -50,8 +52,10 @@ class ProxyDataMap {
     }
 
     // Removes expired entries (i.e., entries older than 24 hours).
-    cleanup(maxAge: number) {
+    cleanup() {
         const currentTime = new Date();
+        const maxAge = this.config.maxProxyMapAge;
+
         this.fileAddrToProxy.forEach((value, key) => {
             if (Math.floor((currentTime.getTime() - value.timestamp.getTime())
                 / 1000) >= maxAge) // maxAge is seconds
@@ -70,7 +74,7 @@ abstract class ProxyManagerBase {
     downloadManager: DownloadManager;
     proxyDataMap: ProxyDataMap;
     blobFinder: BlobFinder;
-    cleanupIntervalId?: number;
+    cleanupIntervalId?: NodeJS.Timeout;
     dhtNotifyIntervalId?: NodeJS.Timeout;
     printStateIntervalId?: NodeJS.Timeout;
     
@@ -80,7 +84,7 @@ abstract class ProxyManagerBase {
         this.peerProxies = new Map();
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
-        this.proxyDataMap = new ProxyDataMap();
+        this.proxyDataMap = new ProxyDataMap(config);
         this.blobFinder = new BlobFinder();
     }
 
@@ -168,28 +172,51 @@ abstract class ProxyManagerBase {
         const dataRequestMessage = message as DataRequestMessage;
 
         const fileAddr = dataRequestMessage.fileAddr;
-        const file = await this.fileCache.readFile(fileAddr);
 
-        if (!file) {
-            const responseMessage = new DataResponseUnknownMessage(
-                fileAddr);
-            this.networkingManager.send(responseMessage, senderIp, senderPort);
+        // Try to find in local storage.
+        const file = await this.fileCache.readFile(fileAddr);
+        if (file) {
+            try {
+                const data = await file.read(
+                    dataRequestMessage.offset, dataRequestMessage.length);
+
+                const responseMessage = new DataResponseOkMessage(
+                    fileAddr, dataRequestMessage.offset,
+                    dataRequestMessage.length, data);
+
+                this.networkingManager.send(responseMessage, senderIp,
+                                            senderPort);
+            } finally {
+                file.release();
+            }
+
             return;
         }
-        
-        try {
-            const data = await file.read(
-                dataRequestMessage.offset, dataRequestMessage.length);
 
-            const responseMessage = new DataResponseOkMessage(
-                fileAddr, dataRequestMessage.offset,
-                dataRequestMessage.length, data);
-            this.networkingManager.send(responseMessage, senderIp, senderPort);
-        } finally {
-            file.release();
+        // Try to find in other nodes.
+        const fileProxies = this.proxyDataMap.fileAddrToProxy.get(
+            fileAddr);
+        if (fileProxies) {
+            const recentProxies = fileProxies.proxies.slice(
+                -this.config.dhtMaxResponseNodes);
+                
+            const nodeInfo = recentProxies.map(
+                proxy => ({ ip: proxy.ip, port: proxy.port }));
+                
+            const responseMessage = new DataResponseElsewhereMessage(
+                fileAddr, nodeInfo);
+
+            this.networkingManager.send(
+                responseMessage, senderIp, senderPort);
+            return;
         }
-    }
 
+        // Return failure, since we can't find it here or elsewhere.
+        const responseMessage = new DataResponseUnknownMessage(fileAddr);
+        this.networkingManager.send(responseMessage, senderIp, senderPort);
+        return;
+    }
+    
     async handleDataIsHereMessage(senderIp: string, senderPort: number,
                                   message: Message): Promise<void>
     {
@@ -223,6 +250,17 @@ abstract class ProxyManagerBase {
                 this.networkingManager.send(message, node.ip, node.port);
             }
         }
+    }
+
+    async retrieveFile(fileAddr: string): Promise<CachedFile> {
+        // Try to find in local storage.
+        const file = await this.fileCache.readFile(fileAddr);
+        if (file)
+            return file;
+        
+        // If the file isn't in the cache, attempt to download it
+        const downloadedFile = await this.downloadManager.download(fileAddr);
+        return downloadedFile;
     }
 
     async printState(): Promise<void> {
@@ -414,7 +452,7 @@ class RootProxyManager extends ProxyManagerBase {
     handleProxyHeartbeat(senderIp: string, senderPort: number,
                          message: Message): void
     {
-        console.log("We got a heartbeat.");
+        //console.log("We got a heartbeat.");
 
         let peerProxy = this.getPeerProxy(senderIp, senderPort);
         if (!peerProxy) {

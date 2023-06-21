@@ -7,7 +7,7 @@ import * as events from "events";
 
 import { Config } from "./config";
 import { FileCache } from "./filecache";
-import { CachedFile } from "./structures";
+import { CachedFile, FileRetrievalError } from "./structures";
 import {
     DataRequestMessage, DataResponseOkMessage, DataResponseUnknownMessage,
     Message
@@ -44,8 +44,9 @@ class DownloadInProgress {
         const hash: Buffer = Buffer.from(hexHash, 'hex');
         
         if (config.thisHost === config.rootHost
-            && config.thisPort === config.rootPort) {
-            throw new Error("Cannot download on root proxy yet!");
+            && config.thisPort === config.rootPort)
+        {
+            throw new FileRetrievalError("Cannot download on root proxy yet!");
         }
 
         const networkingManager = this.proxyManager.networkingManager;
@@ -81,7 +82,7 @@ class DownloadInProgress {
                             await this.requestMissingChunks(
                                 fileAddr, chunksReceived, size);
                         } else {
-                            throw new Error(
+                            throw new FileRetrievalError(
                                 "No packets received for 600ms, aborting.");
                         }
                     } else {

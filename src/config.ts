@@ -14,6 +14,7 @@ export class Config {
     // File-sharing params
     dhtNotifyNumber: number;
     dhtNotifyPeriod: number; // In seconds
+    dhtMaxResponseNodes: number;
     
     // Traffic configuration
     maxUpstreamSpeed: number;   // bytes per second
@@ -45,6 +46,7 @@ export class Config {
 
         this.dhtNotifyNumber = 5;
         this.dhtNotifyPeriod = 30;
+        this.dhtMaxResponseNodes = 10;
         
         this.maxUpstreamSpeed = 100 * 1024;   // 100 kb/s
         this.maxDownstreamSpeed = 100 * 1024; // 100 kb/s

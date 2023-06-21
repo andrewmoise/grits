@@ -1,3 +1,5 @@
+import { PeerProxy } from "./structures";
+
 export enum MessageType {
     ROOT_HEARTBEAT = 0,
     PROXY_HEARTBEAT = 1,
@@ -153,29 +155,87 @@ export class DataResponseOkMessage extends Message {
 
 export class DataResponseElsewhereMessage extends Message {
     fileAddr: string;
+    nodeInfo: Array<{ ip: string, port: number }>; 
 
-    constructor(fileAddr: string) {
+    constructor(fileAddr: string, nodeInfo: Array<{ ip: string, port: number }>)
+    {
         super(MessageType.DATA_RESPONSE_ELSEWHERE);
         this.fileAddr = fileAddr;
+        this.nodeInfo = nodeInfo;
     }
 
     static fromBuffer(buffer: Buffer): DataResponseElsewhereMessage {
         const hash = buffer.slice(0, 32).toString('hex');
         const size = buffer.readBigUInt64BE(32).toString();
         const fileAddr = `${hash}:${size}`;
-        return new DataResponseElsewhereMessage(fileAddr);
+
+        let offset = 40;
+        const nodeInfo = [];
+        while (true) {
+            const protocolType = buffer.readUInt8(offset);
+            offset += 1;
+            
+            if (protocolType === 97) { // end signal
+                if (offset !== buffer.length) { // should be at the last byte
+                    throw new Error("Malformed DataResponseElsewhereMessage");
+                }
+                break;
+            } else if (protocolType !== 98) {
+                console.log(`Unknown protocol type: ${protocolType}`);
+                const nodeSize = buffer.readUInt8(offset);
+                offset += nodeSize;
+                continue;
+            }
+            
+            const nodeSize = buffer.readUInt8(offset);
+            offset += 1;
+            if (nodeSize !== 6) {
+                throw new Error(
+                    "Malformed nodeInfo in DataResponseElsewhereMessage");
+                continue;
+            }
+            
+            const ipBytes = [buffer.readUInt8(offset),
+                             buffer.readUInt8(offset + 1),
+                             buffer.readUInt8(offset + 2),
+                             buffer.readUInt8(offset + 3)];
+            const ip = ipBytes.join('.'); // convert to string
+            offset += 4;
+            const port = buffer.readUInt16BE(offset);
+            offset += 2;
+            nodeInfo.push({ ip, port });
+        }
+
+        return new DataResponseElsewhereMessage(fileAddr, nodeInfo);
     }
 
     encode(): Buffer {
-        const buffer = Buffer.allocUnsafe(40);
+        const headerBuffer = Buffer.allocUnsafe(42);
         const [hash, size] = this.fileAddr.split(':');
         const hashBuffer = Buffer.from(hash, 'hex');
-        hashBuffer.copy(buffer, 0);
+        hashBuffer.copy(headerBuffer, 0);
 
         const sizeBuffer = Buffer.alloc(8);
         sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
-        sizeBuffer.copy(buffer, 32);
-        return buffer;
+        sizeBuffer.copy(headerBuffer, 32);
+
+        const nodeInfoBufferParts = this.nodeInfo.map(({ ip, port }) => {
+            const nodeBuffer = Buffer.allocUnsafe(
+                8); // 1 byte for protocol, 1 for size, 4 for IP, 2 for port
+            nodeBuffer.writeUInt8(98, 0); // protocol type == 98
+            nodeBuffer.writeUInt8(6, 1); // size of the rest of the
+                                         // info (4 bytes IP + 2 bytes port)
+            const ipBytes = ip.split('.').map(byte => parseInt(byte));
+            for (let i = 0; i < 4; i++)
+                nodeBuffer.writeUInt8(ipBytes[i], 2 + i);
+            nodeBuffer.writeUInt16BE(port, 6);
+            return nodeBuffer;
+        });
+
+        const endSignal = Buffer.alloc(1);
+        endSignal.writeUInt8(97, 0); // signal the end of the nodeInfo section
+
+        return Buffer.concat([headerBuffer, ...nodeInfoBufferParts, endSignal]);
     }
 }
 

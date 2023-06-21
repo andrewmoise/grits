@@ -49,7 +49,7 @@ for (let i = 0; i < 50; i++) {
     }
 
     if (i == 0) {
-        const httpServer = new HttpServer(proxyManager.fileCache, 1234);
+        const httpServer = new HttpServer(proxyManager, 1234);
         httpServer.start();
     }   
 }

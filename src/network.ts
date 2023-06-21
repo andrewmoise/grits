@@ -132,8 +132,8 @@ class NetworkingManager {
                 throw new Error('Unknown message type: ' + messageType);
         }
 
-        console.log("Received message - port " + port + ", type "
-            + message.type);
+        //console.log("Received message - port " + port + ", type "
+        //    + message.type);
 
         if (this.requestHandlers.has(message.type)) {
             const handler = this.requestHandlers.get(message.type);
