@@ -12,7 +12,7 @@ In the current state, you can start a test network and watch it send messages to
 
 === Prerequisites
 
-To try it out, you'll need:
+The project is Typescript running on Node.JS. To try it out, you'll need:
 
 * Node.js
 * npm
@@ -20,7 +20,7 @@ To try it out, you'll need:
 
 === How To
 
-Again, it doesn't do much yet. But, if you want to examine the code or run the test network, definitely check it out and play with it! It's based on Typescript and Node.JS. You can clone the repo and do:
+Again, it doesn't do much yet. But, if you want to examine the code or run the test network, definitely check it out and play with it! You can clone the repo and do:
 
 ```
 npm install
