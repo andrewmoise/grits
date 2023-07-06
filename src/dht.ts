@@ -31,15 +31,20 @@ class BlobFinder {
     }
     
     getClosestProxies(fileAddr: string, n: number): Array<PeerProxy> {
-        console.log(`    GCP ${fileAddr}`);
+        //console.log(`    GCP ${fileAddr}`);
+
+        if (this.sortedProxies.length <= 0) {
+            console.log('      Early bail, no proxies');
+            return [];
+        }
         
         const target = convertFileAddrToInteger(fileAddr);
-        console.log(`      Searching for ${target}`);
+        //console.log(`      Searching for ${target}`);
             
         let left = 0;
         let right = this.sortedProxies.length - 1;
         while (right - left > 1) {
-            console.log(`        [${left}: ${this.sortedProxies[left][0]}] - [${right}: ${this.sortedProxies[right][0]}]`);
+            //console.log(`        [${left}: ${this.sortedProxies[left][0]}] - [${right}: ${this.sortedProxies[right][0]}]`);
             const mid = Math.floor((right + left) / 2);
             if (this.sortedProxies[mid][0] <= target)
                 left = mid;
@@ -47,7 +52,7 @@ class BlobFinder {
                 right = mid;
         }
 
-        console.log(`      ${target} -> ${left}: ${this.sortedProxies[left][0]}`);
+        //console.log(`      ${target} -> ${left}: ${this.sortedProxies[left][0]}`);
 
         // Apply wrapping logic if required
         const range = left + n <= this.sortedProxies.length

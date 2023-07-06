@@ -6,10 +6,18 @@ class PeerProxy {
     port: number;
     lastSeen: Date | null;
 
+    latency: number | null;
+    bytesPerSecond: number | null;
+    packetLoss: number | null;
+    
     constructor(ip: string, port: number) {
         this.ip = ip;
         this.port = port;
         this.lastSeen = null;
+
+        this.latency = null;
+        this.bytesPerSecond = null;
+        this.packetLoss = null;
     }
 
     updateLastSeen() {

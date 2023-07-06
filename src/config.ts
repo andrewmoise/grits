@@ -16,10 +16,17 @@ export class Config {
     dhtNotifyPeriod: number; // In seconds
     dhtMaxResponseNodes: number;
     
+    // Download params
+    maxBursts: number;
+    defaultBandwidth: number; // assumed bandwidth in bytes/s when no info
+    downloadTickPeriod: number; // in ms
+    burstTimeout: number; // in ms
+    
     // Traffic configuration
     maxUpstreamSpeed: number;   // bytes per second
     maxDownstreamSpeed: number; // bytes per second
-
+    maxDownloadStreams: number;
+    
     // Various less-relevant params
     maxProxyMapAge: number; // In seconds
     proxyMapCleanupPeriod: number; // In seconds
@@ -34,21 +41,27 @@ export class Config {
         this.rootHost = null;
         this.rootPort = null;
         
-        this.maxProxyMapAge = 24 * 60 * 60;
-        this.proxyMapCleanupPeriod = 60 * 60;
-        this.proxyHeartbeatPeriod = 5;
-        this.rootHeartbeatPeriod = 5;
-        this.rootProxyDropTimeout = 30;
-
         this.storageDirectory = 'cache';
         this.storageSize = 20 * 1024 * 1024;
         this.tempDownloadDirectory = 'tmp-download';
 
         this.dhtNotifyNumber = 5;
-        this.dhtNotifyPeriod = 30;
+        this.dhtNotifyPeriod = 5;
         this.dhtMaxResponseNodes = 10;
+
+        this.maxBursts = 5;
+        this.defaultBandwidth = 100 * 1024;
+        this.downloadTickPeriod = 100;
+        this.burstTimeout = 500;
         
         this.maxUpstreamSpeed = 100 * 1024;   // 100 kb/s
         this.maxDownstreamSpeed = 100 * 1024; // 100 kb/s
+        this.maxDownloadStreams = 10;
+
+        this.maxProxyMapAge = 24 * 60 * 60;
+        this.proxyMapCleanupPeriod = 60 * 60;
+        this.proxyHeartbeatPeriod = 20;
+        this.rootHeartbeatPeriod = 20;
+        this.rootProxyDropTimeout = 180;
     }
 }

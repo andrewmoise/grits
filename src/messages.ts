@@ -75,51 +75,59 @@ export class ProxyHeartbeatMessage extends Message {
 }
 
 export class DataRequestMessage extends Message {
+    burstId: number;
     fileAddr: string;
     offset: number;
     length: number;
 
-    constructor(fileAddr: string, offset: number, length: number) {
+    constructor(burstId: number, fileAddr: string, offset: number,
+                length: number)
+    {
         super(MessageType.DATA_REQUEST);
+        this.burstId = burstId;
         this.fileAddr = fileAddr;
         this.offset = offset;
         this.length = length;
     }
 
     static fromBuffer(buffer: Buffer): DataRequestMessage {
-        const hash = buffer.slice(0, 32).toString('hex');
-        const size = buffer.readBigUInt64BE(32).toString();
+        const burstId = buffer.readUInt16BE(0);
+        const hash = buffer.slice(2, 34).toString('hex');
+        const size = buffer.readBigUInt64BE(34).toString();
         const fileAddr = `${hash}:${size}`;
-        const offset = buffer.readInt32BE(40);
-        const length = buffer.readInt32BE(44);
-        return new DataRequestMessage(fileAddr, offset, length);
+        const offset = buffer.readInt32BE(42);
+        const length = buffer.readInt32BE(46);
+        return new DataRequestMessage(burstId, fileAddr, offset, length);
     }
 
     encode(): Buffer {
-        const buffer = Buffer.allocUnsafe(48);
-        // (32 bytes hash, 8 bytes size, 4 bytes offset, 4 bytes length)
+        const buffer = Buffer.allocUnsafe(50); 
+        buffer.writeUInt16BE(this.burstId, 0);
+
         const [hash, size] = this.fileAddr.split(':');
         const hashBuffer = Buffer.from(hash, 'hex');
-        hashBuffer.copy(buffer, 0);
+        hashBuffer.copy(buffer, 2);
 
         const sizeBuffer = Buffer.alloc(8);
         sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
-        sizeBuffer.copy(buffer, 32);
+        sizeBuffer.copy(buffer, 34);
 
-        buffer.writeInt32BE(this.offset, 40);
-        buffer.writeInt32BE(this.length, 44);
+        buffer.writeInt32BE(this.offset, 42);
+        buffer.writeInt32BE(this.length, 46);
         return buffer;
     }
 }
 
 export class DataResponseOkMessage extends Message {
+    burstId: number;
     fileAddr: string;
     offset: number;
     length: number;
     data: Buffer;
 
-    constructor(fileAddr: string, offset: number, length: number, data: Buffer) {
+    constructor(burstId: number, fileAddr: string, offset: number, length: number, data: Buffer) {
         super(MessageType.DATA_RESPONSE_OK);
+        this.burstId = burstId;
         this.fileAddr = fileAddr;
         this.offset = offset;
         this.length = length;
@@ -127,56 +135,63 @@ export class DataResponseOkMessage extends Message {
     }
 
     static fromBuffer(buffer: Buffer): DataResponseOkMessage {
-        const hash = buffer.slice(0, 32).toString('hex');
-        const size = buffer.readBigUInt64BE(32).toString();
+        const burstId = buffer.readUInt16BE(0);
+        const hash = buffer.slice(2, 34).toString('hex');
+        const size = buffer.readBigUInt64BE(34).toString();
         const fileAddr = `${hash}:${size}`;
-        const offset = buffer.readInt32BE(40);
-        const length = buffer.readInt32BE(44);
-        const data = buffer.slice(48);
-        return new DataResponseOkMessage(fileAddr, offset, length, data);
+        const offset = buffer.readInt32BE(42);
+        const length = buffer.readInt32BE(46);
+        const data = buffer.slice(50);
+        return new DataResponseOkMessage(burstId, fileAddr, offset, length,
+                                         data);
     }
 
     encode(): Buffer {
-        const headerBuffer = Buffer.allocUnsafe(48);
-        // (32 bytes hash, 8 bytes size, 4 bytes offset, 4 bytes length)
+        const headerBuffer = Buffer.allocUnsafe(50);
+        headerBuffer.writeUInt16BE(this.burstId, 0);
+
         const [hash, size] = this.fileAddr.split(':');
         const hashBuffer = Buffer.from(hash, 'hex');
-        hashBuffer.copy(headerBuffer, 0);
+        hashBuffer.copy(headerBuffer, 2);
 
         const sizeBuffer = Buffer.alloc(8);
         sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
-        sizeBuffer.copy(headerBuffer, 32);
+        sizeBuffer.copy(headerBuffer, 34);
 
-        headerBuffer.writeInt32BE(this.offset, 40);
-        headerBuffer.writeInt32BE(this.length, 44);
+        headerBuffer.writeInt32BE(this.offset, 42);
+        headerBuffer.writeInt32BE(this.length, 46);
         return Buffer.concat([headerBuffer, this.data]);
     }
 }
 
 export class DataResponseElsewhereMessage extends Message {
+    burstId: number;
     fileAddr: string;
     nodeInfo: Array<{ ip: string, port: number }>; 
 
-    constructor(fileAddr: string, nodeInfo: Array<{ ip: string, port: number }>)
+    constructor(burstId: number, fileAddr: string,
+                nodeInfo: Array<{ ip: string, port: number }>)
     {
         super(MessageType.DATA_RESPONSE_ELSEWHERE);
+        this.burstId = burstId;
         this.fileAddr = fileAddr;
         this.nodeInfo = nodeInfo;
     }
 
     static fromBuffer(buffer: Buffer): DataResponseElsewhereMessage {
-        const hash = buffer.slice(0, 32).toString('hex');
-        const size = buffer.readBigUInt64BE(32).toString();
+        const burstId = buffer.readUInt16BE(0);
+        const hash = buffer.slice(2, 34).toString('hex');
+        const size = buffer.readBigUInt64BE(34).toString();
         const fileAddr = `${hash}:${size}`;
 
-        let offset = 40;
+        let offset = 42;
         const nodeInfo = [];
         while (true) {
             const protocolType = buffer.readUInt8(offset);
             offset += 1;
             
-            if (protocolType === 97) { // end signal
-                if (offset !== buffer.length) { // should be at the last byte
+            if (protocolType === 97) {
+                if (offset !== buffer.length) { 
                     throw new Error("Malformed DataResponseElsewhereMessage");
                 }
                 break;
@@ -190,8 +205,7 @@ export class DataResponseElsewhereMessage extends Message {
             const nodeSize = buffer.readUInt8(offset);
             offset += 1;
             if (nodeSize !== 6) {
-                throw new Error(
-                    "Malformed nodeInfo in DataResponseElsewhereMessage");
+                throw new Error("Malformed nodeInfo in DataResponseElsewhereMessage");
                 continue;
             }
             
@@ -199,32 +213,32 @@ export class DataResponseElsewhereMessage extends Message {
                              buffer.readUInt8(offset + 1),
                              buffer.readUInt8(offset + 2),
                              buffer.readUInt8(offset + 3)];
-            const ip = ipBytes.join('.'); // convert to string
+            const ip = ipBytes.join('.'); 
             offset += 4;
             const port = buffer.readUInt16BE(offset);
             offset += 2;
             nodeInfo.push({ ip, port });
         }
 
-        return new DataResponseElsewhereMessage(fileAddr, nodeInfo);
+        return new DataResponseElsewhereMessage(burstId, fileAddr, nodeInfo);
     }
 
     encode(): Buffer {
-        const headerBuffer = Buffer.allocUnsafe(42);
+        const headerBuffer = Buffer.allocUnsafe(44);
+        headerBuffer.writeUInt16BE(this.burstId, 0);
+
         const [hash, size] = this.fileAddr.split(':');
         const hashBuffer = Buffer.from(hash, 'hex');
-        hashBuffer.copy(headerBuffer, 0);
+        hashBuffer.copy(headerBuffer, 2);
 
         const sizeBuffer = Buffer.alloc(8);
         sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
-        sizeBuffer.copy(headerBuffer, 32);
+        sizeBuffer.copy(headerBuffer, 34);
 
         const nodeInfoBufferParts = this.nodeInfo.map(({ ip, port }) => {
-            const nodeBuffer = Buffer.allocUnsafe(
-                8); // 1 byte for protocol, 1 for size, 4 for IP, 2 for port
-            nodeBuffer.writeUInt8(98, 0); // protocol type == 98
-            nodeBuffer.writeUInt8(6, 1); // size of the rest of the
-                                         // info (4 bytes IP + 2 bytes port)
+            const nodeBuffer = Buffer.allocUnsafe(8);
+            nodeBuffer.writeUInt8(98, 0);
+            nodeBuffer.writeUInt8(6, 1);
             const ipBytes = ip.split('.').map(byte => parseInt(byte));
             for (let i = 0; i < 4; i++)
                 nodeBuffer.writeUInt8(ipBytes[i], 2 + i);
@@ -233,64 +247,41 @@ export class DataResponseElsewhereMessage extends Message {
         });
 
         const endSignal = Buffer.alloc(1);
-        endSignal.writeUInt8(97, 0); // signal the end of the nodeInfo section
+        endSignal.writeUInt8(97, 0); 
 
         return Buffer.concat([headerBuffer, ...nodeInfoBufferParts, endSignal]);
     }
 }
 
 export class DataResponseUnknownMessage extends Message {
+    burstId: number;
     fileAddr: string;
 
-    constructor(fileAddr: string) {
+    constructor(burstId: number, fileAddr: string) {
         super(MessageType.DATA_RESPONSE_UNKNOWN);
+        this.burstId = burstId;
         this.fileAddr = fileAddr;
     }
 
     static fromBuffer(buffer: Buffer): DataResponseUnknownMessage {
-        const hash = buffer.slice(0, 32).toString('hex');
-        const size = buffer.readBigUInt64BE(32).toString();
+        const burstId = buffer.readUInt16BE(0);
+        const hash = buffer.slice(2, 34).toString('hex');
+        const size = buffer.readBigUInt64BE(34).toString();
         const fileAddr = `${hash}:${size}`;
-        return new DataResponseUnknownMessage(fileAddr);
+        return new DataResponseUnknownMessage(burstId, fileAddr);
     }
 
     encode(): Buffer {
-        const buffer = Buffer.allocUnsafe(40);
+        const buffer = Buffer.allocUnsafe(42);
+        buffer.writeUInt16BE(this.burstId, 0);
+
         const [hash, size] = this.fileAddr.split(':');
         const hashBuffer = Buffer.from(hash, 'hex');
-        hashBuffer.copy(buffer, 0);
+        hashBuffer.copy(buffer, 2);
 
         const sizeBuffer = Buffer.alloc(8);
         sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
-        sizeBuffer.copy(buffer, 32);
-        return buffer;
-    }
-}
-
-export class DataIsHereMessage extends Message {
-    fileAddr: string;
-
-    constructor(fileAddr: string) {
-        super(MessageType.DATA_IS_HERE);
-        this.fileAddr = fileAddr;
-    }
-
-    static fromBuffer(buffer: Buffer): DataIsHereMessage {
-        const hash = buffer.slice(0, 32).toString('hex');
-        const size = buffer.readBigUInt64BE(32).toString();
-        const fileAddr = `${hash}:${size}`;
-        return new DataIsHereMessage(fileAddr);
-    }
-
-    encode(): Buffer {
-        const buffer = Buffer.allocUnsafe(40);
-        const [hash, size] = this.fileAddr.split(':');
-        const hashBuffer = Buffer.from(hash, 'hex');
-        hashBuffer.copy(buffer, 0);
-
-        const sizeBuffer = Buffer.alloc(8);
-        sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
-        sizeBuffer.copy(buffer, 32);
+        sizeBuffer.copy(buffer, 34);
         return buffer;
     }
 }

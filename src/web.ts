@@ -23,6 +23,7 @@ class HttpServer {
             console.log("Web request: " + fileAddr);
 
             try {
+                console.log(`Trying to serve ${fileAddr}`);
                 file = await this.proxyManagerBase.retrieveFile(fileAddr);
                 res.setHeader('Content-Type', 'application/octet-stream');
                 const readStream = fs.createReadStream(file.path);

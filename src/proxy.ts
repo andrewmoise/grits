@@ -237,15 +237,15 @@ abstract class ProxyManagerBase {
     }
 
     async dhtNotifyTask(): Promise<void> {
-        console.log(`DHT Notify for ${this.config.thisHost}:${this.config.thisPort}`);
+        //console.log(`DHT Notify for ${this.config.thisHost}:${this.config.thisPort}`);
         
         for (const cachedFile of this.fileCache.getFiles()) {
-            console.log(`  ${cachedFile.path}`);
+            //console.log(`  ${cachedFile.path}`);
             const closestNodes = await this.blobFinder.getClosestProxies(
                 cachedFile.fileAddr, this.config.dhtNotifyNumber);
             
             for (const node of closestNodes) {
-                console.log(`    Notify ${node.ip}:${node.port}`);
+                //console.log(`    Notify ${node.ip}:${node.port}`);
                 const message = new DataIsHereMessage(cachedFile.fileAddr);
                 this.networkingManager.send(message, node.ip, node.port);
             }
@@ -253,10 +253,14 @@ abstract class ProxyManagerBase {
     }
 
     async retrieveFile(fileAddr: string): Promise<CachedFile> {
+        console.log(`Retrieve file: ${fileAddr}`);
+
         // Try to find in local storage.
         const file = await this.fileCache.readFile(fileAddr);
         if (file)
             return file;
+
+        console.log("  Not in storage.");
         
         // If the file isn't in the cache, attempt to download it
         const downloadedFile = await this.downloadManager.download(fileAddr);
@@ -349,13 +353,13 @@ class ProxyManager extends ProxyManagerBase {
         // Update the lastSeen time of the root proxy
         this.rootProxy.updateLastSeen();
 
-        console.log("Got root heartbeat.");
+        //console.log("Got root heartbeat.");
 
         const nodeMapFileAddr = rootHeartbeatMessage.nodeMapFileAddr;
         if (nodeMapFileAddr) {
             const nodeMapFile = await this.downloadManager.download(
                 nodeMapFileAddr);
-            console.log(`Successful download: ${nodeMapFile.path}`);
+            //console.log(`Successful download: ${nodeMapFile.path}`);
 
             // Read the downloaded file and update local peerProxies
             const data = await fs.promises.readFile(nodeMapFile.path, 'utf-8');
@@ -457,7 +461,7 @@ class RootProxyManager extends ProxyManagerBase {
         let peerProxy = this.getPeerProxy(senderIp, senderPort);
         if (!peerProxy) {
             peerProxy = this.addPeerProxy(senderIp, senderPort);
-            console.log(`Adding ${senderIp}:${senderPort}`);
+            //console.log(`Adding ${senderIp}:${senderPort}`);
         }
 
         peerProxy.updateLastSeen();

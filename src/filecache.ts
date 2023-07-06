@@ -26,7 +26,7 @@ class FileCache {
     }
 
     private async _ensureSpaceFor(size: number) {
-        console.log(`Trying to make space for ${size} / ${this.maxSize}`);
+        //console.log(`Trying to make space for ${size} / ${this.maxSize}`);
         assert(size <= this.maxSize);
 
         const release = await this.mutex.acquire();
@@ -62,7 +62,7 @@ class FileCache {
                          takeReference: boolean = false)
         : Promise<CachedFile>
     {
-        console.log(`addFile(${inFilename})`);
+        //console.log(`addFile(${inFilename})`);
 
         const fileStats = await fsPromises.stat(inFilename);
         
@@ -80,12 +80,12 @@ class FileCache {
             inFileHash = computedHexHash;
             inFileSize = computedSize;
         } else {
-            console.log(inFileAddr);
+            //console.log(inFileAddr);
             
             [inFileHash, inFileSize] = inFileAddr.split(':');
             inFileSize = Number(inFileSize);
 
-            console.log(`Verify hash: ${inFileHash} <-> ${computedHexHash} and ${inFileSize} <-> ${computedSize}`);
+            //console.log(`Verify hash: ${inFileHash} <-> ${computedHexHash} and ${inFileSize} <-> ${computedSize}`);
             
             if (inFileHash !== computedHexHash || inFileSize !== computedSize) {
                 throw new Error('Hash or size does not match the provided file address');
@@ -122,7 +122,7 @@ class FileCache {
         this.lru.unshift(finalFileAddr);
         this.currentSize += computedSize;
 
-        console.log(`  Returning added file ${newFilePath}`);
+        //console.log(`  Returning added file ${newFilePath}`);
         return newFile;
     }
 
