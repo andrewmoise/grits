@@ -2,7 +2,7 @@ import * as dgram from 'dgram';
 import * as os from 'os';
 
 import { Config } from './config';
-import { TrafficManager } from "./traffic";
+import { UpstreamManager } from "./traffic";
 
 import {
     MessageType,
@@ -42,7 +42,7 @@ class NetworkingManager {
     config: Config;
     requestHandlers: Map<number, RequestHandler>;
     socket: dgram.Socket | null;
-    trafficManager: TrafficManager;
+    trafficManager: UpstreamManager;
 
     constructor(config: Config) {
         if (config.thisHost === null) {
@@ -57,7 +57,7 @@ class NetworkingManager {
         this.config = config;
         this.requestHandlers = new Map();
         this.socket = null;
-        this.trafficManager = new TrafficManager(config);
+        this.trafficManager = new UpstreamManager(config);
     }
 
     start(): void {

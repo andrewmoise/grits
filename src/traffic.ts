@@ -4,7 +4,7 @@ const sleep = promisify(setTimeout);
 
 import { Config } from './config';
 
-class TrafficManager {
+class UpstreamManager {
     private maxUpstream: number;
     private maxDownstream: number;
     private upstreamBudget: number;

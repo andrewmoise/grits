@@ -9,6 +9,8 @@ class PeerProxy {
     latency: number | null;
     bytesPerSecond: number | null;
     packetLoss: number | null;
+
+    bytesThisTick: number | null;
     
     constructor(ip: string, port: number) {
         this.ip = ip;
@@ -65,6 +67,7 @@ class CachedFile {
         this.refCount -= 1;
     }
 }
+
 
 class FileRetrievalError extends Error {
     constructor(message: string) {
