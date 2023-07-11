@@ -19,6 +19,7 @@ import { FileCache } from "./filecache";
 import { CachedFile, PeerProxy, FileRetrievalError } from "./structures";
 import { NetworkingManager } from './network';
 import { BlobFinder } from './dht';
+import { Logger } from './logger';
 
 // ProxyDataMap class to track the most recent proxies where a file has been
 // seen.
@@ -69,9 +70,14 @@ class ProxyDataMap {
 abstract class ProxyManagerBase {
     config: Config;
     networkingManager: NetworkingManager;
-    peerProxies: Map<string, PeerProxy>;
     fileCache: FileCache;
     downloadManager: DownloadManager;
+    logger: Logger;
+    
+    peerProxies: Map<string, PeerProxy>;
+    rootProxy: PeerProxy;
+    thisProxy: PeerProxy;
+    
     proxyDataMap: ProxyDataMap;
     blobFinder: BlobFinder;
     cleanupIntervalId?: NodeJS.Timeout;
@@ -81,11 +87,27 @@ abstract class ProxyManagerBase {
     constructor(config: Config) {
         this.config = config;
         this.networkingManager = new NetworkingManager(config);
-        this.peerProxies = new Map();
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
+        this.logger = new Logger(config);
+
+        this.peerProxies = new Map();
+        this.rootProxy = this.addPeerProxy(
+            this.config.rootHost, this.config.rootPort);
+
+        const thisProxy = this.getPeerProxy(
+            this.config.thisHost, this.config.thisPort);
+
+        if (thisProxy)
+            this.thisProxy = thisProxy;
+        else
+            this.thisProxy = this.addPeerProxy(
+                this.config.thisHost, this.config.thisPort);
+        
         this.proxyDataMap = new ProxyDataMap(config);
+
         this.blobFinder = new BlobFinder();
+        this.blobFinder.updateProxies(this.peerProxies);
     }
 
     generateProxyKey(ip: string, port: number): string {
@@ -115,7 +137,14 @@ abstract class ProxyManagerBase {
             this.peerProxies.delete(key);
     }
 
-    start(): void {
+    async start(): Promise<void> {
+        await this.logger.start();
+
+        this.logger.log(new Date(), 'proxies',
+                        `Init with ${this.peerProxies.size} proxies`);
+        
+        console.log("Set up proxy + start");
+
         this.networkingManager.start();
 
         this.networkingManager.registerRequestHandler(
@@ -162,6 +191,8 @@ abstract class ProxyManagerBase {
             MessageType.DATA_RESPONSE_UNKNOWN);
 
         this.networkingManager.stop();
+
+        this.logger.stop();
     }
 
     async handleDataRequest(senderIp: string, senderPort: number,
@@ -181,6 +212,7 @@ abstract class ProxyManagerBase {
                     dataRequestMessage.offset, dataRequestMessage.length);
 
                 const responseMessage = new DataResponseOkMessage(
+                    dataRequestMessage.burstId,
                     fileAddr, dataRequestMessage.offset,
                     dataRequestMessage.length, data);
 
@@ -204,6 +236,7 @@ abstract class ProxyManagerBase {
                 proxy => ({ ip: proxy.ip, port: proxy.port }));
                 
             const responseMessage = new DataResponseElsewhereMessage(
+                dataRequestMessage.burstId,
                 fileAddr, nodeInfo);
 
             this.networkingManager.send(
@@ -212,7 +245,8 @@ abstract class ProxyManagerBase {
         }
 
         // Return failure, since we can't find it here or elsewhere.
-        const responseMessage = new DataResponseUnknownMessage(fileAddr);
+        const responseMessage = new DataResponseUnknownMessage(
+            dataRequestMessage.burstId, fileAddr);
         this.networkingManager.send(responseMessage, senderIp, senderPort);
         return;
     }
@@ -292,30 +326,62 @@ abstract class ProxyManagerBase {
 }
 
 class ProxyManager extends ProxyManagerBase {
-    rootProxy: PeerProxy;
     sendProxyHeartbeatIntervalId?: NodeJS.Timeout;
 
+    // added these to track the promise
+    resolveFirstHeartbeatPromise: (() => void) | null = null;
+    rejectFirstHeartbeatPromise: ((reason?: any) => void) | null = null;
+    
     constructor(config: Config) {
         super(config);
-
-        if (!config.rootHost || !config.rootPort)
-            throw new Error("Must define root host and port!");
-
-        let rootProxy = new PeerProxy(config.rootHost, config.rootPort);
-        this.rootProxy = rootProxy;
     }
 
-    start() {
-        console.log("Set up proxy + start");
-
-        super.start();
+    async start() {
+        await super.start();
 
         this.networkingManager.registerRequestHandler(
             MessageType.PROXY_HEARTBEAT, this.handleWrongMessage.bind(this));
         this.networkingManager.registerRequestHandler(
             MessageType.ROOT_HEARTBEAT, this.handleRootHeartbeat.bind(this));
 
-        // Send proxy heartbeat to root every 60 seconds
+        // Do an initial heartbeat to get things set up
+        let retryCount = 0;
+        const maxRetries = 3;
+
+        while (retryCount < maxRetries) {
+            await new Promise((resolve: ((value?: unknown) => void) | null,
+                               reject: ((reason?: any) => void) | null) =>
+                {
+                    this.resolveFirstHeartbeatPromise = resolve;
+                    this.rejectFirstHeartbeatPromise = reject;
+                    this.sendProxyHeartbeat();
+                    // set a timeout for the promise
+                    setTimeout(() => {
+                        if (this.rejectFirstHeartbeatPromise) {
+                            this.rejectFirstHeartbeatPromise(
+                                "Heartbeat timeout");
+                        }
+                    }, 500);
+                }).catch((err) => {
+                    this.logger.log(
+                        new Date(), 'heartbeat',
+                        `Error: ${err}`);
+
+                    retryCount++;
+                    if (retryCount === maxRetries) {
+                        throw new Error(
+                            "Failed to establish connection after "
+                                + maxRetries + " attempts");
+                    }
+                });
+
+            // break if the promise was resolved
+            if (!this.rejectFirstHeartbeatPromise) {
+                break;
+            }
+        }
+
+        // And keep doing it periodically after that
         this.sendProxyHeartbeatIntervalId = setInterval(
             this.sendProxyHeartbeat.bind(this),
             this.config.proxyHeartbeatPeriod * 1000);
@@ -338,6 +404,16 @@ class ProxyManager extends ProxyManagerBase {
     async handleRootHeartbeat(senderIp: string, senderPort: number,
                               message: Message)
     {
+        this.logger.log(
+            new Date(), 'heartbeat',
+            `Got root heartbeat, ${this.peerProxies.size} proxies`);
+
+        const resolvePromise = this.resolveFirstHeartbeatPromise;
+        if (resolvePromise) {
+            this.resolveFirstHeartbeatPromise = null;
+            this.rejectFirstHeartbeatPromise = null;
+        }
+        
         if (!(message instanceof RootHeartbeatMessage))
             throw new Error("Data request of wrong TS type!");
         const rootHeartbeatMessage = message as RootHeartbeatMessage;
@@ -399,12 +475,17 @@ class ProxyManager extends ProxyManagerBase {
             
             //console.log(`Updated local peerProxies.`);
         } else {
-            console.log("Root heartbeat, but no map.");
+            this.logger.log(
+                new Date(), 'heartbeat',
+                'Root heartbeat, but no map.');
         }
+
+        if (resolvePromise)
+            resolvePromise();
     }
 
     sendProxyHeartbeat() {
-        //console.log("Send proxy heartbeat");
+        this.logger.log(new Date(), 'heartbeat', 'Sending proxy heartbeat');
 
         const heartbeatMessage = new ProxyHeartbeatMessage();
         this.networkingManager.send(heartbeatMessage,
@@ -414,23 +495,17 @@ class ProxyManager extends ProxyManagerBase {
 }
 
 class RootProxyManager extends ProxyManagerBase {
-    rootProxy: PeerProxy;
     heartbeatIntervalId?: NodeJS.Timeout;
-    proxyMapFile: CachedFile | null;
+    proxyMapFile: CachedFile | null = null;
 
     constructor(config: Config) {
         super(config);
-
-        let rootProxy = new PeerProxy(
-            this.networkingManager.config.thisHost,
-            this.networkingManager.config.thisPort);
-        this.rootProxy = rootProxy;
-
-        this.proxyMapFile = null;
     }
 
-    start() {
-        super.start();
+    async start() {
+        await this.createProxyMapBuffer();
+        
+        await super.start();
 
         this.networkingManager.registerRequestHandler(
             MessageType.ROOT_HEARTBEAT, this.handleWrongMessage.bind(this));
@@ -439,7 +514,7 @@ class RootProxyManager extends ProxyManagerBase {
 
         this.heartbeatIntervalId = setInterval(
             this.updatePeerList.bind(this),
-            this.config.rootHeartbeatPeriod * 1000);
+            this.config.rootUpdatePeerListPeriod * 1000);
     }
 
     stop() {
@@ -456,24 +531,26 @@ class RootProxyManager extends ProxyManagerBase {
     handleProxyHeartbeat(senderIp: string, senderPort: number,
                          message: Message): void
     {
-        //console.log("We got a heartbeat.");
+        this.logger.log(new Date(), 'heartbeat',
+                        `Got proxy heartbeat from ${senderIp}:${senderPort}`);
 
         let peerProxy = this.getPeerProxy(senderIp, senderPort);
         if (!peerProxy) {
             peerProxy = this.addPeerProxy(senderIp, senderPort);
-            //console.log(`Adding ${senderIp}:${senderPort}`);
         }
 
         peerProxy.updateLastSeen();
 
-        // Send root heartbeat back to the proxy
+        this.logger.log(new Date(), 'heartbeat',
+                        `Send root heartbeat to ${senderIp}:${senderPort}`);
+
         const heartbeatMessage = new RootHeartbeatMessage(
             this.proxyMapFile ? this.proxyMapFile.fileAddr : null);
         this.networkingManager.send(heartbeatMessage, senderIp, senderPort);
     }
 
     async createProxyMapBuffer(): Promise<void> {
-        this.blobFinder.updateProxies(this.peerProxies);
+        //this.blobFinder.updateProxies(this.peerProxies);
         
         const peerList = Array.from(this.peerProxies.values()).map(peerProxy =>
         ({
@@ -504,6 +581,7 @@ class RootProxyManager extends ProxyManagerBase {
             if (proxy.timeSinceSeen() > this.config.rootProxyDropTimeout)
                 this.peerProxies.delete(key);
 
+        this.blobFinder.updateProxies(this.peerProxies);
         await this.createProxyMapBuffer();
     }
 }

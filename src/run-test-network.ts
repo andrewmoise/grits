@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as process from 'process';
 
 import { Config } from './config';
 import { ProxyManager, RootProxyManager } from './proxy';
@@ -20,24 +21,25 @@ const allImages = fs.readdirSync(imageDir);
 const proxyManagers: (ProxyManager | RootProxyManager)[] = [];
 
 // Create config for root
-const rootConfig = new Config();
+const rootConfig = new Config('127.0.0.1', 1787);
 rootConfig.thisPort = 1787;
 rootConfig.isRootNode = true;
 rootConfig.storageDirectory = path.join(dirPath, 'root');
+rootConfig.logFile = path.join(rootConfig.storageDirectory, 'grits.log');
 proxyManagers.push(new RootProxyManager(rootConfig));
 
 // Create configs for other nodes
-for (let i = 0; i < 50; i++) {
-    const config = new Config();
+for (let i = 0; i < 5; i++) {
+    const config = new Config('127.0.0.1', 1787);
     config.thisPort = 1800 + i;
-    config.rootHost = '127.0.0.1';
-    config.rootPort = 1787;
     
     config.storageDirectory = path.join(dirPath, (i + 1).toString());
     if (!fs.existsSync(config.storageDirectory)) {
         fs.mkdirSync(config.storageDirectory);
     }
 
+    config.logFile = path.join(config.storageDirectory, 'grits.log');
+    
     const proxyManager = new ProxyManager(config);
     proxyManagers.push(proxyManager);
 
@@ -58,4 +60,26 @@ for (let i = 0; i < 50; i++) {
 proxyManagers.forEach(proxyManager => {
     proxyManager.start();
     console.log(`Starting event loop for proxy on port ${proxyManager.config.thisPort}...`);
+});
+
+process.on('SIGINT', async () => {
+    console.log('\nCaught interrupt signal, shutting down loggers...');
+    const stopPromises = proxyManagers.map(proxyManager => {
+        return proxyManager.logger.stop();
+    });
+    await Promise.all(stopPromises);
+
+    console.log('All loggers have shut down, exiting.');
+    process.exit();
+});
+
+process.on('SIGTERM', async () => {
+    console.log('\nCaught terminate signal, shutting down loggers...');
+    const stopPromises = proxyManagers.map(proxyManager => {
+        return proxyManager.logger.stop();
+    });
+    await Promise.all(stopPromises);
+
+    console.log('All loggers have shut down, exiting.');
+    process.exit();
 });

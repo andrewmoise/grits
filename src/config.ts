@@ -3,9 +3,10 @@ export class Config {
     thisHost: string;
     thisPort: number;
     isRootNode: boolean;
-    rootHost: string | null;
-    rootPort: number | null;
-
+    rootHost: string;
+    rootPort: number;
+    logFile: string;
+    
     // Storage configuration
     storageDirectory: string;
     storageSize: number; // in bytes
@@ -31,15 +32,17 @@ export class Config {
     maxProxyMapAge: number; // In seconds
     proxyMapCleanupPeriod: number; // In seconds
     proxyHeartbeatPeriod: number; // In seconds
-    rootHeartbeatPeriod: number; // In seconds
+    rootUpdatePeerListPeriod: number; // In seconds
     rootProxyDropTimeout: number; // In seconds
     
-    constructor() {
+    constructor(rootHost: string, rootPort: number) {
         this.thisHost = '127.0.0.1';
         this.thisPort = 1787;
         this.isRootNode = false;
-        this.rootHost = null;
-        this.rootPort = null;
+        this.rootHost = rootHost;
+        this.rootPort = rootPort;
+
+        this.logFile = 'grits.log';
         
         this.storageDirectory = 'cache';
         this.storageSize = 20 * 1024 * 1024;
@@ -61,7 +64,7 @@ export class Config {
         this.maxProxyMapAge = 24 * 60 * 60;
         this.proxyMapCleanupPeriod = 60 * 60;
         this.proxyHeartbeatPeriod = 20;
-        this.rootHeartbeatPeriod = 20;
+        this.rootUpdatePeerListPeriod = 5;
         this.rootProxyDropTimeout = 180;
     }
 }

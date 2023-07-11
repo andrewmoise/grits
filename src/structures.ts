@@ -20,6 +20,8 @@ class PeerProxy {
         this.latency = null;
         this.bytesPerSecond = null;
         this.packetLoss = null;
+
+        this.bytesThisTick = null;
     }
 
     updateLastSeen() {

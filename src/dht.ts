@@ -34,6 +34,7 @@ class BlobFinder {
         //console.log(`    GCP ${fileAddr}`);
 
         if (this.sortedProxies.length <= 0) {
+            throw new Error('No proxies');
             console.log('      Early bail, no proxies');
             return [];
         }

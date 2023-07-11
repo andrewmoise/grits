@@ -49,4 +49,4 @@ class UpstreamManager {
     }
 }
 
-export { TrafficManager };
+export { UpstreamManager };
