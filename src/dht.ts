@@ -31,7 +31,7 @@ class BlobFinder {
     }
     
     getClosestProxies(fileAddr: string, n: number): Array<PeerProxy> {
-        //console.log(`    GCP ${fileAddr}`);
+        console.log(`    GCP ${fileAddr} from ${this.sortedProxies.length}`);
 
         if (this.sortedProxies.length <= 0) {
             throw new Error('No proxies');
@@ -53,15 +53,25 @@ class BlobFinder {
                 right = mid;
         }
 
-        //console.log(`      ${target} -> ${left}: ${this.sortedProxies[left][0]}`);
-
-        // Apply wrapping logic if required
-        const range = left + n <= this.sortedProxies.length
-            ? this.sortedProxies.slice(left, left + n)
-            : this.sortedProxies.slice(left).concat(this.sortedProxies.slice(
-                0, n + left - this.sortedProxies.length));
-
-        return range.map(([, proxy]) => proxy);
+        const result: PeerProxy[] = [];
+        let i = left;
+        let j = 0; // Count of added elements
+        while (j < n) {
+            // Use modulo to wrap around if we reach the end of the array
+            let index = i % this.sortedProxies.length;
+            
+            // Add to result if this proxy is not already included
+            if (!result.includes(this.sortedProxies[index][1]))
+                result.push(this.sortedProxies[index][1]);
+            else
+                break;
+            
+            i++;
+            j++;
+        }
+        
+        console.log(`Returning GCP: ${result.length}`);
+        return result;
     }
 }
 
