@@ -3,12 +3,13 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as timers from 'timers';
-import * as events from "events";
+import * as events from 'events';
 
 import { assert } from 'console';
 
-import { Config } from "./config";
-import { FileCache } from "./filecache";
+import { Config } from './config';
+import { FileCache } from './filecache';
+import { PotentialDownloadBurst, DownstreamManager } from './traffic';
 
 import {
     CachedFile, FileRetrievalError, PeerProxy, DOWNLOAD_CHUNK_SIZE
@@ -26,11 +27,6 @@ import { UpstreamManager } from "./traffic";
 
 const TRANSFER_ID_CHARACTERS =
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-
-interface PotentialDownloadBurst {
-    source: PeerProxy;
-    bytesAllowed: number;
-}
 
 class DownloadBurst {
     burstId: number;
@@ -60,108 +56,6 @@ class DownloadBurst {
         this.requestTimestamp = Date.now();
     }
 }
-
-
-class DownstreamManager {
-    private downloadManager: DownloadManager;
-    private config: Config;
-    
-    private bytesRequestedThisTick: number;
-    private bytesReceivedThisTick: number;
-    
-    private downloadQueue: {
-        resolve: Function,
-        peerProxies: PeerProxy[],
-        bytesRequested: number,
-    }[];
-
-    constructor(downloadManager: DownloadManager, config: Config) {
-        this.downloadManager = downloadManager;
-        this.config = config;
-
-        this.bytesRequestedThisTick = 0;
-        this.bytesReceivedThisTick = 0;
-        this.downloadQueue = [];
-
-        setInterval(() => this.tick(), config.downloadTickPeriod);
-    }
-
-    requestDownload(
-        peerProxies: PeerProxy[],
-        bytesRequested: number, queueOnFailure=true)
-    : Promise<PotentialDownloadBurst[] | null>
-    {
-        console.log(`requestDownload() for ${bytesRequested}`);
-        
-        let bytesBudget = this.config.maxDownstreamSpeed / 1000
-            * this.config.downloadTickPeriod;
-        bytesBudget -= this.bytesRequestedThisTick;
-
-        if (bytesBudget > 0) {
-            if (bytesRequested > bytesBudget)
-                bytesRequested = bytesBudget;
-
-            this.bytesRequestedThisTick += bytesRequested;
-
-            const burstsPerPeer = Math.ceil(
-                bytesRequested / DOWNLOAD_CHUNK_SIZE / peerProxies.length);
-            
-            const downloadBursts: PotentialDownloadBurst[] = [];
-            
-            for (let i = 0; i < peerProxies.length; i++) {
-                downloadBursts.push({
-                    source: peerProxies[i],
-                    bytesAllowed: burstsPerPeer * DOWNLOAD_CHUNK_SIZE
-                });
-            }
-
-            console.log(`  Return right away, ${downloadBursts.length} bursts`);
-            
-            return Promise.resolve(downloadBursts);
-        } else if (queueOnFailure) {
-            console.log(`  Queue up for later`);
-            
-            // Too many bytes requested this tick, queue up the request
-            // and return a promise.
-            return new Promise((resolve) => {
-                this.downloadQueue.push({
-                    resolve, peerProxies, bytesRequested });
-            });
-        } else {
-            console.log('  Return null');
-            
-            return Promise.resolve(null);
-        }
-    }
-
-    private async tick(): Promise<void> {
-        // Reset byte count for this tick.
-        this.bytesRequestedThisTick = 0;
-        this.bytesReceivedThisTick = 0;
-
-        // Process queued downloads.
-        while (this.downloadQueue.length > 0) {
-            console.log('Process from queue');
-
-            const queuedDownload = this.downloadQueue[0];
-            this.downloadQueue.shift();
-            const { resolve, peerProxies, bytesRequested } = queuedDownload;
-            
-            const bursts = await this.requestDownload(
-                peerProxies, bytesRequested, false);
-
-            if (bursts !== null) {
-                console.log('  Non null, resolve');
-                resolve(bursts);
-            } else {
-                console.log('  Null - all done for now');
-                this.downloadQueue.unshift(queuedDownload);
-                break;
-            }
-        }
-    }
-}
-
 
 class DownloadInProgress {
     downloadManager: DownloadManager;
@@ -529,8 +423,7 @@ class DownloadManager {
 
     constructor(proxyManager: ProxyManagerBase) {
         this.proxyManager = proxyManager;
-        this.downstreamManager = new DownstreamManager(
-            this, proxyManager.config);
+        this.downstreamManager = new DownstreamManager(proxyManager.config);
         this.nextBurstId = 0;
         this.activeDownloads = new Map();
     }
