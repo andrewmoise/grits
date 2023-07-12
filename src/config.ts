@@ -49,7 +49,7 @@ export class Config {
         this.tempDownloadDirectory = 'tmp-download';
 
         this.dhtNotifyNumber = 5;
-        this.dhtNotifyPeriod = 5;
+        this.dhtNotifyPeriod = 30;
         this.dhtMaxResponseNodes = 10;
 
         this.maxBursts = 5;
@@ -63,8 +63,8 @@ export class Config {
         
         this.maxProxyMapAge = 24 * 60 * 60;
         this.proxyMapCleanupPeriod = 60 * 60;
-        this.proxyHeartbeatPeriod = 20;
-        this.rootUpdatePeerListPeriod = 5;
+        this.proxyHeartbeatPeriod = 10;
+        this.rootUpdatePeerListPeriod = 8;
         this.rootProxyDropTimeout = 180;
     }
 }

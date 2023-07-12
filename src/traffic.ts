@@ -5,14 +5,12 @@ const sleep = promisify(setTimeout);
 import { Config } from './config';
 
 class UpstreamManager {
-    private maxUpstream: number;
     private upstreamBudget: number;
     private lastUpdate: number;
 
     private config: Config;
     
     constructor(config: Config) {
-        this.maxUpstream = Math.floor(config.maxUpstreamSpeed / 1000);
         this.upstreamBudget = 0;
         this.lastUpdate = performance.now();
 
@@ -21,30 +19,27 @@ class UpstreamManager {
 
     private updateBudgets() {
         const now = performance.now();
-        const deltaTime = now - this.lastUpdate;
+        const deltaTime = (now - this.lastUpdate) / 1000;
         this.lastUpdate = now;
 
         this.upstreamBudget = Math.max(
-            0, this.upstreamBudget - this.maxUpstream * deltaTime);
+            0, this.upstreamBudget - this.config.maxUpstreamSpeed * deltaTime);
     }
 
     public async requestUpload(bytes: number): Promise<number> {
         this.updateBudgets();
 
-        if (this.upstreamBudget < this.config.maxUpstreamQueue) {
-            const result = Math.min(
-                bytes, this.config.maxUpstreamQueue - this.upstreamBudget);
-            this.upstreamBudget += result;
-            return result;
-        } else {
+        const maxBytes = Math.min(bytes, this.config.maxUpstreamQueue);
+        this.upstreamBudget += maxBytes;
+
+        if (this.upstreamBudget >= this.config.maxUpstreamQueue+1) {
             const waitTime =
-                (this.upstreamBudget - this.config.maxUpstreamQueue)
-                / this.maxUpstream * 1000;
-            const result = Math.min(bytes, this.config.maxUpstreamQueue);
-            this.upstreamBudget += result;
+                (this.upstreamBudget - this.config.maxUpstreamQueue / 2)
+                / this.config.maxUpstreamSpeed * 1000;
             await sleep(waitTime);
-            return result;
         }
+
+        return maxBytes;
     }   
 }
 

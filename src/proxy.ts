@@ -92,11 +92,12 @@ abstract class ProxyManagerBase {
     
     constructor(config: Config) {
         this.config = config;
-        this.networkingManager = new NetworkingManager(config);
+        this.logger = new Logger(config);
+
+        this.networkingManager = new NetworkingManager(this.logger, config);
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
         this.upstreamManager = new UpstreamManager(config);
-        this.logger = new Logger(config);
 
         this.peerProxies = new Map();
         this.rootProxy = this.addPeerProxy(
@@ -163,6 +164,11 @@ abstract class ProxyManagerBase {
                 this.downloadManager));
 
         this.networkingManager.registerRequestHandler(
+            MessageType.DATA_RESPONSE_ELSEWHERE,
+            this.downloadManager.handleDataResponseElsewhere.bind(
+                this.downloadManager));
+
+        this.networkingManager.registerRequestHandler(
             MessageType.DATA_RESPONSE_UNKNOWN,
             this.downloadManager.handleDataResponseUnknown.bind(
                 this.downloadManager));
@@ -211,6 +217,12 @@ abstract class ProxyManagerBase {
 
         const fileAddr = dataRequestMessage.fileAddr;
 
+        if (!message.transferId.match("^[A-Za-z0-9]{8}$"))
+            throw new Error(`Malformed transfer ID! ${message.transferId}`);
+        
+        this.logger.log(new Date(), message.transferId,
+                        `Data request for ${fileAddr}`);
+        
         // Try to find in local storage.
         const file = await this.fileCache.readFile(fileAddr);
         if (file) {
@@ -220,13 +232,21 @@ abstract class ProxyManagerBase {
                 let budget = 0;
                 
                 while (length > 0) {
+                    this.logger.log(new Date(), message.transferId,
+                                    `Request budget ${length-budget}`);
                     budget += await this.upstreamManager.requestUpload(
                         length - budget);
-                    while(budget >= Math.min(length, DOWNLOAD_CHUNK_SIZE)) {
+                    
+                    while(budget >= Math.min(length, DOWNLOAD_CHUNK_SIZE)
+                        && length > 0)
+                    {
                         const packetLen = Math.min(length, DOWNLOAD_CHUNK_SIZE);
 
                         const data = await file.read(offset, packetLen);
                         
+                        this.logger.log(new Date(), message.transferId,
+                                        `Send data response ${packetLen}`);
+
                         const responseMessage = new DataResponseOkMessage(
                             dataRequestMessage.burstId,
                             fileAddr, offset,
@@ -251,6 +271,9 @@ abstract class ProxyManagerBase {
         const fileProxies = this.proxyDataMap.fileAddrToProxy.get(
             fileAddr);
         if (fileProxies) {
+            this.logger.log(new Date(), message.transferId,
+                            `Send elsewhere, ${fileProxies.proxies.length} hosts`);
+
             const recentProxies = fileProxies.proxies.slice(
                 -this.config.dhtMaxResponseNodes);
                 
@@ -267,6 +290,9 @@ abstract class ProxyManagerBase {
         }
 
         // Return failure, since we can't find it here or elsewhere.
+        this.logger.log(new Date(), message.transferId,
+                        `fileAddr is unknown`);
+
         const responseMessage = new DataResponseUnknownMessage(
             dataRequestMessage.burstId, fileAddr);
         this.networkingManager.send(responseMessage, senderIp, senderPort);
@@ -309,14 +335,14 @@ abstract class ProxyManagerBase {
     }
 
     async retrieveFile(fileAddr: string): Promise<CachedFile> {
-        console.log(`Retrieve file: ${fileAddr}`);
+        this.logger.log(new Date(), 'proxy', `Retrieve file: ${fileAddr}`);
 
         // Try to find in local storage.
         const file = await this.fileCache.readFile(fileAddr);
         if (file)
             return file;
 
-        console.log("  Not in storage.");
+        this.logger.log(new Date(), 'proxy', "  Not in storage.");
         
         // If the file isn't in the cache, attempt to download it
         const downloadedFile = await this.downloadManager.download(fileAddr);

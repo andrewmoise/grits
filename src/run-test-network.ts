@@ -49,18 +49,18 @@ for (let i = 0; i < 50; i++) {
         const imageFilename = allImages[randomImageIndex];
         proxyManager.fileCache.addFile(path.join(imageDir, imageFilename), null, false, true);
     }
-
-    if (i == 0) {
-        const httpServer = new HttpServer(proxyManager, 1234);
-        httpServer.start();
-    }   
 }
 
-// Start the proxy managers
-proxyManagers.forEach(proxyManager => {
-    proxyManager.start();
-    console.log(`Starting event loop for proxy on port ${proxyManager.config.thisPort}...`);
-});
+(async () => {
+    // Start the proxy managers
+    await Promise.all(proxyManagers.map(proxyManager => {
+        return proxyManager.start();
+    }));
+
+    // Start the http service
+    const httpServer = new HttpServer(proxyManagers[1], 1234);
+    httpServer.start();
+})();
 
 process.on('SIGINT', async () => {
     console.log('\nCaught interrupt signal, shutting down loggers...');

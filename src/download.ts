@@ -24,6 +24,9 @@ import { NetworkingManager } from "./network";
 import { ProxyManagerBase } from "./proxy";
 import { UpstreamManager } from "./traffic";
 
+const TRANSFER_ID_CHARACTERS =
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+
 interface PotentialDownloadBurst {
     source: PeerProxy;
     bytesAllowed: number;
@@ -83,11 +86,13 @@ class DownstreamManager {
         setInterval(() => this.tick(), config.downloadTickPeriod);
     }
 
-    async requestDownload(
+    requestDownload(
         peerProxies: PeerProxy[],
         bytesRequested: number, queueOnFailure=true)
     : Promise<PotentialDownloadBurst[] | null>
     {
+        console.log(`requestDownload() for ${bytesRequested}`);
+        
         let bytesBudget = this.config.maxDownstreamSpeed / 1000
             * this.config.downloadTickPeriod;
         bytesBudget -= this.bytesRequestedThisTick;
@@ -110,8 +115,12 @@ class DownstreamManager {
                 });
             }
 
-            return downloadBursts;
+            console.log(`  Return right away, ${downloadBursts.length} bursts`);
+            
+            return Promise.resolve(downloadBursts);
         } else if (queueOnFailure) {
+            console.log(`  Queue up for later`);
+            
             // Too many bytes requested this tick, queue up the request
             // and return a promise.
             return new Promise((resolve) => {
@@ -119,27 +128,34 @@ class DownstreamManager {
                     resolve, peerProxies, bytesRequested });
             });
         } else {
-            return null;
+            console.log('  Return null');
+            
+            return Promise.resolve(null);
         }
     }
 
-    private tick() {
+    private async tick(): Promise<void> {
         // Reset byte count for this tick.
         this.bytesRequestedThisTick = 0;
         this.bytesReceivedThisTick = 0;
 
         // Process queued downloads.
         while (this.downloadQueue.length > 0) {
-            const { resolve, peerProxies, bytesRequested } =
-                this.downloadQueue[0];
+            console.log('Process from queue');
 
-            const bursts = this.requestDownload(peerProxies, bytesRequested,
-                                                false);
+            const queuedDownload = this.downloadQueue[0];
+            this.downloadQueue.shift();
+            const { resolve, peerProxies, bytesRequested } = queuedDownload;
+            
+            const bursts = await this.requestDownload(
+                peerProxies, bytesRequested, false);
 
             if (bursts !== null) {
-                this.downloadQueue.shift();
+                console.log('  Non null, resolve');
                 resolve(bursts);
             } else {
+                console.log('  Null - all done for now');
+                this.downloadQueue.unshift(queuedDownload);
                 break;
             }
         }
@@ -152,6 +168,7 @@ class DownloadInProgress {
     
     fileAddr: string;
     size: number;
+    transferId: string;
     
     completionPromise: Promise<CachedFile>;
     resolveCompletion!: (value: CachedFile | PromiseLike<CachedFile>) => void;
@@ -164,7 +181,7 @@ class DownloadInProgress {
     activeBursts: DownloadBurst[];
     availHosts: Set<PeerProxy>;
     rejectedHosts: Set<PeerProxy>;
-    dhtHosts: Set<PeerProxy>;
+    //dhtHosts: Set<PeerProxy>;
     
     unreceivedOffsets: Set<number>;
     downloadOffset: number;
@@ -175,6 +192,11 @@ class DownloadInProgress {
         const [hexHash, sizeStr] = fileAddr.split(':');
         this.size = parseInt(sizeStr);
 
+        this.transferId = '';
+        for (let i = 0; i < 8; i++)
+            this.transferId += TRANSFER_ID_CHARACTERS.charAt(
+                Math.floor(Math.random() * TRANSFER_ID_CHARACTERS.length));
+            
         this.completionPromise = new Promise((resolve, reject) => {
             this.resolveCompletion = resolve;
             this.rejectCompletion = reject;
@@ -195,13 +217,15 @@ class DownloadInProgress {
         
         this.availHosts = new Set();
         this.rejectedHosts = new Set();
-        this.dhtHosts = new Set();
+        //this.dhtHosts = new Set();
     }
 
+    log(msg: string) {
+        this.downloadManager.proxyManager.logger.log(new Date(), this.transferId, msg);
+    }        
+    
     async run(seedProxies: PeerProxy[]) {
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'download',
-            `Run download for ${this.fileAddr}`);
+        this.log(`Run download for ${this.fileAddr}`);
 
         const randomSuffix = Math.floor(Math.random() * 1000000).toString();
         this.tempDownloadFile = `${this.downloadManager.proxyManager.config.tempDownloadDirectory}/${this.fileAddr}-${randomSuffix}`;
@@ -215,38 +239,29 @@ class DownloadInProgress {
             if (proxy === this.downloadManager.proxyManager.thisProxy)
                 this.rejectedHosts.add(proxy);
             else
-                this.dhtHosts.add(proxy);
+                this.availHosts.add(proxy);
         }
 
-        console.log(`Ready; avail is ${this.availHosts.size}, dht is ${this.dhtHosts.size}`);
+        //this.log(`Ready; avail is ${this.availHosts.size}, dht is ${this.dhtHosts.size}`);
         
         while (this.outputFile && this.downloadOffset < this.size) {
-            const hosts = 
-                this.availHosts.size ? this.availHosts : this.dhtHosts;
+            //const hosts = this.availHosts;
+                //this.availHosts.size ? this.availHosts : this.dhtHosts;
 
-            console.log(`Actual hosts is ${hosts.size}`);
+            this.log(`Actual hosts is ${this.availHosts.size}`);
 
-            this.downloadManager.proxyManager.logger.log(
-                new Date(), 'download',
-                'download() -> downloadFrom()');
-            await this.downloadFrom(hosts);
+            this.log('download() -> downloadFrom()');
+            await this.downloadFrom(this.availHosts);
         }
 
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'download',
-            '  All initiated');
+        this.log('  All initiated');
     }
 
     async downloadFrom(hosts: Set<PeerProxy>): Promise<void> {
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'download',
-            `  Iter downloadFrom() from ${hosts.size} hosts`);
-        //console.log(`  Iter downloadFrom() from ${hosts.size} hosts`);
+        this.log(`  Iter downloadFrom() from ${hosts.size} hosts`);
         
         if (this.downloadOffset >= this.size || !this.outputFile) {
-            this.downloadManager.proxyManager.logger.log(
-                new Date(), 'download',
-                '    Early bail 1');
+            this.log('    Early bail 1');
             return;
         }
 
@@ -255,9 +270,7 @@ class DownloadInProgress {
                 Array.from(hosts), this.size - this.downloadOffset);
 
         if (this.downloadOffset >= this.size || !this.outputFile) {
-            this.downloadManager.proxyManager.logger.log(
-                new Date(), 'download',
-                '    Early bail 2');
+            this.log('    Early bail 2');
             return;
         }
         assert(bursts !== null, 'Null from queued requestDownload()');
@@ -266,9 +279,7 @@ class DownloadInProgress {
             return;
         }
         
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'download',
-            `    We have ${bursts!.length} potential bursts`);
+        this.log(`    We have ${bursts!.length} potential bursts`);
         
         for (let potentialBurst of bursts!) {            
             if (this.downloadOffset >= this.size)
@@ -281,9 +292,7 @@ class DownloadInProgress {
             if (burstLength > this.size - this.downloadOffset)
                 burstLength = this.size - this.downloadOffset;
 
-            this.downloadManager.proxyManager.logger.log(
-                new Date(), 'download',
-                `      We create burst for ${this.downloadOffset}[${burstLength}] from ${potentialBurst.source.ip}:${potentialBurst.source.port}`);
+            this.log(`      We create burst for ${this.downloadOffset}[${burstLength}] from ${potentialBurst.source.ip}:${potentialBurst.source.port}`);
             
             let burst = new DownloadBurst(
                 this.downloadManager,
@@ -300,14 +309,12 @@ class DownloadInProgress {
             this.activeBursts.push(burst);
         }
 
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'download',
-            '    Done creating real bursts.');
+        this.log('    Done creating real bursts.');
     }
     
     handlePossibleFailure() {
         if (this.outputFile)
-            if (this.availHosts.size === 0 && this.dhtHosts.size === 0)
+            if (this.availHosts.size === 0) // && this.dhtHosts.size === 0)
                 this.stop('No available or DHT hosts remaining.');
     }
     
@@ -344,6 +351,8 @@ class DownloadInProgress {
 
         assert(this.tempDownloadFile,
                'checkBurstTimeouts() when burst finished');
+
+        let burstsToRemove: DownloadBurst[] = [];
         
         for (let burst of this.activeBursts) {
             // Check if burst has timed out
@@ -359,63 +368,65 @@ class DownloadInProgress {
             // re-request missing offsets
             
             if (isTimedOut || isBurstComplete) {
-                this.downloadManager.proxyManager.logger.log(
-                    new Date(), 'transfer',
-                    `  Finish ${this.fileAddr}@${burst.offset}[${burst.length}]`);
+                this.log(`  Finish ${this.fileAddr}@${burst.offset}[${burst.length}]`);
                 if (isTimedOut)
-                    this.downloadManager.proxyManager.logger.log(
-                        new Date(), 'transfer',
-                        `    Timeout!`);
-                
-                let missingOffsets = [];
-                for (let i = burst.offset;
-                     i < burst.offset + burst.length;
-                     i += DOWNLOAD_CHUNK_SIZE)
-                {
-                    if (this.unreceivedOffsets.has(i))
-                        missingOffsets.push(i);
-                }
+                    this.log(`    Timeout!`);
 
-                for (const offset of missingOffsets) {
-                    const length = Math.min(DOWNLOAD_CHUNK_SIZE,
-                                            this.size - offset);
-
-                    const potentialBursts = await
-                        this.downloadManager.downstreamManager.requestDownload(
-                            Array.from(this.availHosts), length);
-                    assert(potentialBursts !== null,
-                           'Null from queued requestDownload()');
-
-                    for (let potentialBurst of potentialBursts!) {
-                        const newBurst: DownloadBurst = new DownloadBurst(
-                            this.downloadManager,
-                            potentialBurst.source,
-                            potentialBurst.bytesAllowed,
-                            this.fileAddr,
-                            offset,
-                            length);
-                        
-                        this.requestBurst(newBurst);
-                        this.activeBursts.push(newBurst);
-                        break;
-                    }
-                }
-
-                // TODO: We should report metrics to the
-                // DownstreamManager for the completed burst, so it can make
-                // good decisions about where to request more bursts from
-
-                this.activeBursts = this.activeBursts.filter(b => b !== burst);
+                burstsToRemove.push(burst);
             }
         }
+
+        this.activeBursts = this.activeBursts.filter(
+            burst => !burstsToRemove.includes(burst));
+
+        for(let burst of burstsToRemove) {                
+            let missingOffsets = [];
+            for (let i = burst.offset;
+                 i < burst.offset + burst.length;
+                 i += DOWNLOAD_CHUNK_SIZE)
+            {
+                if (this.unreceivedOffsets.has(i))
+                    missingOffsets.push(i);
+            }
+
+            for (const offset of missingOffsets) {
+                const length = Math.min(DOWNLOAD_CHUNK_SIZE,
+                                        this.size - offset);
+
+                const potentialBursts = await
+                    this.downloadManager.downstreamManager.requestDownload(
+                        Array.from(this.availHosts), length);
+                
+                assert(potentialBursts !== null,
+                       'Null from queued requestDownload()');
+
+                for (let potentialBurst of potentialBursts!) {
+                    const newBurst: DownloadBurst = new DownloadBurst(
+                        this.downloadManager,
+                        potentialBurst.source,
+                        potentialBurst.bytesAllowed,
+                        this.fileAddr,
+                        offset,
+                        length);
+                    
+                    this.requestBurst(newBurst);
+                    this.activeBursts.push(newBurst);
+                    break;
+                }
+            }
+        }
+
+        // TODO: We should report metrics to the
+        // DownstreamManager for the completed burst, so it can make
+        // good decisions about where to request more bursts from
     }
     
     requestBurst(burst: DownloadBurst) {
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'transfer', `Requesting ${this.fileAddr}@${burst.offset}[${burst.length}] from ${burst.source.ip}:${burst.source.port}`);
+        console.log(`Requesting ${this.fileAddr}@${burst.offset}[${burst.length}] from ${burst.source.ip}:${burst.source.port} ${this.transferId}`);
         
         const packet = new DataRequestMessage(
-            burst.burstId, burst.fileAddr, burst.offset, burst.length);
+            burst.burstId, burst.fileAddr, burst.offset, burst.length,
+            this.transferId);
 
         this.downloadManager.proxyManager.networkingManager.send(
             packet, burst.source.ip, burst.source.port);
@@ -427,9 +438,7 @@ class DownloadInProgress {
         if (!this.outputFile)
             return;
 
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'transfer',
-            `Got OK ${this.fileAddr}@${message.offset}[${message.length}] from ${source.ip}:${source.port}`);
+        this.log(`Got OK ${this.fileAddr}@${message.offset}[${message.length}] from ${source.ip}:${source.port}`);
         
         if (this.unreceivedOffsets.has(message.offset)) {
             assert(message.offset + message.length <= this.size, 
@@ -457,13 +466,13 @@ class DownloadInProgress {
     async handleDataResponseUnknown(source: PeerProxy,
                                     message: DataResponseUnknownMessage)
     {
-        if (!this.outputFile)
-            return;
-
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'transfer',
-            `Got Unk ${this.fileAddr} from ${source.ip}:${source.port}`);
+        this.log(`Got Unk ${this.fileAddr} from ${source.ip}:${source.port}`);
         
+        if (!this.outputFile) {
+            this.log('Bail early');
+            return;
+        }
+            
         this.availHosts.delete(source);
         this.rejectedHosts.add(source);
         this.handlePossibleFailure();
@@ -472,15 +481,15 @@ class DownloadInProgress {
     async handleDataResponseElsewhere(source: PeerProxy,
                                       message: DataResponseElsewhereMessage)
     {
-        if (!this.outputFile)
-            return;
-
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'transfer',
-            `Got elsewhere ${this.fileAddr} from ${source.ip}:${source.port}`);
+        this.log(`Got elsewhere ${this.fileAddr} from ${source.ip}:${source.port}`);
         
+        if (!this.outputFile) {
+            this.log('  Bail early');
+            return;
+        }
+
         this.availHosts.delete(source);
-        this.dhtHosts.delete(source);
+        //this.dhtHosts.delete(source);
         this.rejectedHosts.add(source);
 
         const newHosts = new Set<PeerProxy>();
@@ -488,9 +497,7 @@ class DownloadInProgress {
             const newHost = this.downloadManager.proxyManager.getPeerProxy(
                 ip, port);
             if(!newHost) {
-                this.downloadManager.proxyManager.logger.log(
-                    new Date(), 'download',
-                    `Unknown proxy: ${ip}:${port}`);
+                this.log(`Unknown proxy: ${ip}:${port}`);
                 continue;
             }
 
@@ -498,26 +505,17 @@ class DownloadInProgress {
                 && !this.rejectedHosts.has(newHost)
                 && newHost != this.downloadManager.proxyManager.thisProxy)
             {
-                this.downloadManager.proxyManager.logger.log(
-                    new Date(), 'transfer',
-                    `  Adding ${newHost.ip}:${newHost.port}`);
-
+                this.log(`  Adding ${newHost.ip}:${newHost.port}`);
+                this.availHosts.add(newHost);
                 newHosts.add(newHost);
             } else {
-                this.downloadManager.proxyManager.logger.log(
-                    new Date(), 'transfer',
-                    `  Skipping ${newHost.ip}:${newHost.port}`);
+                this.log(`  Skipping ${newHost.ip}:${newHost.port}`);
             }
         }
 
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'download',
-            'Data response elsewhere; downloadFrom()');
-        await this.downloadFrom(newHosts);
-        
-        for(const newHost of newHosts)
-            if (!this.rejectedHosts.has(newHost))
-                this.availHosts.add(newHost);
+        this.log('Data response elsewhere; downloadFrom()');
+        if (newHosts.size > 0)
+            await this.downloadFrom(newHosts);
     }
 }
 
@@ -550,21 +548,15 @@ class DownloadManager {
         }
 
         // Otherwise, create a new DownloadInProgress and return its promise.
-        this.proxyManager.logger.log(
-            new Date(), 'download',
-            `Starting new download for ${fileAddr}`);
         downloadInProgress = new DownloadInProgress(this, fileAddr);
+        downloadInProgress.log(`Starting new download for ${fileAddr}`);
         this.activeDownloads.set(fileAddr, downloadInProgress);
 
         const seedProxies = this.proxyManager.blobFinder.getClosestProxies(
             fileAddr, this.proxyManager.config.dhtNotifyNumber);
-        console.log(`Got ${seedProxies.length} seed proxies`);
+        downloadInProgress.log(`Got ${seedProxies.length} seed proxies`);
         downloadInProgress.run(seedProxies);
 
-        this.proxyManager.logger.log(
-            new Date(), 'download',
-            '  Return promise')
-        
         return downloadInProgress.completionPromise;
     }
 
@@ -634,6 +626,9 @@ class DownloadManager {
         }
         
         if (download) {
+            this.proxyManager.logger.log(
+                new Date(), 'download', 'Dispatch elsewhere msg');
+            
             download.handleDataResponseElsewhere(source, message);
         } else {
             this.proxyManager.logger.log(

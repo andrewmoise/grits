@@ -2,6 +2,7 @@ import * as dgram from 'dgram';
 import * as os from 'os';
 
 import { Config } from './config';
+import { Logger } from './logger';
 import { UpstreamManager } from "./traffic";
 
 import {
@@ -39,12 +40,14 @@ type RequestHandler = (address: string, port: number, message: Message)
     => void;
 
 class NetworkingManager {
+    logger: Logger;
     config: Config;
+    
     requestHandlers: Map<number, RequestHandler>;
     socket: dgram.Socket | null;
     trafficManager: UpstreamManager;
 
-    constructor(config: Config) {
+    constructor(logger: Logger, config: Config) {
         if (config.thisHost === null) {
             let addresses = getLocalIPAddresses();
             if (addresses.length !== 1) {
@@ -54,7 +57,9 @@ class NetworkingManager {
             config.thisHost = addresses[0];
         }
 
+        this.logger = logger;
         this.config = config;
+
         this.requestHandlers = new Map();
         this.socket = null;
         this.trafficManager = new UpstreamManager(config);
@@ -139,6 +144,10 @@ class NetworkingManager {
             const handler = this.requestHandlers.get(message.type);
             handler && handler(address, port, message);
             return;
+        } else {
+            this.logger.log(
+                new Date(), 'network',
+                `Unhandled message, type ${message.type}`);
         }
     }
     

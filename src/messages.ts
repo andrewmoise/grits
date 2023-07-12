@@ -1,3 +1,5 @@
+import { assert } from 'console';
+
 import { PeerProxy } from "./structures";
 
 export enum MessageType {
@@ -79,15 +81,18 @@ export class DataRequestMessage extends Message {
     fileAddr: string;
     offset: number;
     length: number;
-
+    transferId: string;
+    
     constructor(burstId: number, fileAddr: string, offset: number,
-                length: number)
+                length: number, transferId: string)
     {
         super(MessageType.DATA_REQUEST);
+        
         this.burstId = burstId;
         this.fileAddr = fileAddr;
         this.offset = offset;
         this.length = length;
+        this.transferId = transferId;
     }
 
     static fromBuffer(buffer: Buffer): DataRequestMessage {
@@ -97,11 +102,16 @@ export class DataRequestMessage extends Message {
         const fileAddr = `${hash}:${size}`;
         const offset = buffer.readInt32BE(42);
         const length = buffer.readInt32BE(46);
-        return new DataRequestMessage(burstId, fileAddr, offset, length);
+        const transferId = buffer.slice(50, 58).toString('binary');
+
+        //console.log(`Decoded transfer ID: ${transferId}`);
+        
+        return new DataRequestMessage(burstId, fileAddr, offset, length,
+                                      transferId);
     }
 
     encode(): Buffer {
-        const buffer = Buffer.allocUnsafe(50); 
+        const buffer = Buffer.allocUnsafe(58); 
         buffer.writeUInt16BE(this.burstId, 0);
 
         const [hash, size] = this.fileAddr.split(':');
@@ -114,6 +124,12 @@ export class DataRequestMessage extends Message {
 
         buffer.writeInt32BE(this.offset, 42);
         buffer.writeInt32BE(this.length, 46);
+
+        //console.log(`Encoding transfer ID: ${this.transferId}`);
+        
+        assert(this.transferId.length == 8, 'Malformed transfer ID!');
+        buffer.write(this.transferId, 50, 'binary');
+        
         return buffer;
     }
 }
@@ -186,40 +202,47 @@ export class DataResponseElsewhereMessage extends Message {
         const size = buffer.readBigUInt64BE(34).toString();
         const fileAddr = `${hash}:${size}`;
 
-        let offset = 42;
+        let offset = 44;
         const nodeInfo = [];
         while (true) {
             const protocolType = buffer.readUInt8(offset);
             offset += 1;
+
+            console.log(`Protocol type: ${protocolType}`);
             
             if (protocolType === 97) {
+                // Ending sentinel
                 if (offset !== buffer.length) { 
                     throw new Error("Malformed DataResponseElsewhereMessage");
                 }
                 break;
-            } else if (protocolType !== 98) {
+            } else if (protocolType === 98) {
+                // Normal where-data-can-be-found packet
+                const nodeSize = buffer.readUInt8(offset);
+                offset += 1;
+                if (nodeSize !== 6) {
+                    throw new Error(
+                        "Malformed nodeInfo in DataResponseElsewhereMessage");
+                    continue;
+                }
+                console.log(`Node size: ${nodeSize}`);
+                
+                const ipBytes = [buffer.readUInt8(offset),
+                                 buffer.readUInt8(offset + 1),
+                                 buffer.readUInt8(offset + 2),
+                                 buffer.readUInt8(offset + 3)];
+                const ip = ipBytes.join('.'); 
+                offset += 4;
+                const port = buffer.readUInt16BE(offset);
+                offset += 2;
+                nodeInfo.push({ ip, port });
+            } else {
+                // Unknown (maybe future) protocol
                 console.log(`Unknown protocol type: ${protocolType}`);
                 const nodeSize = buffer.readUInt8(offset);
                 offset += nodeSize;
-                continue;
             }
             
-            const nodeSize = buffer.readUInt8(offset);
-            offset += 1;
-            if (nodeSize !== 6) {
-                throw new Error("Malformed nodeInfo in DataResponseElsewhereMessage");
-                continue;
-            }
-            
-            const ipBytes = [buffer.readUInt8(offset),
-                             buffer.readUInt8(offset + 1),
-                             buffer.readUInt8(offset + 2),
-                             buffer.readUInt8(offset + 3)];
-            const ip = ipBytes.join('.'); 
-            offset += 4;
-            const port = buffer.readUInt16BE(offset);
-            offset += 2;
-            nodeInfo.push({ ip, port });
         }
 
         return new DataResponseElsewhereMessage(burstId, fileAddr, nodeInfo);
