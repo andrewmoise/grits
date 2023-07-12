@@ -26,7 +26,7 @@ export class Config {
     // Traffic configuration
     maxUpstreamSpeed: number;   // bytes per second
     maxDownstreamSpeed: number; // bytes per second
-    maxDownloadStreams: number;
+    maxUpstreamQueue: number; // bytes
     
     // Various less-relevant params
     maxProxyMapAge: number; // In seconds
@@ -59,8 +59,8 @@ export class Config {
         
         this.maxUpstreamSpeed = 100 * 1024;   // 100 kb/s
         this.maxDownstreamSpeed = 100 * 1024; // 100 kb/s
-        this.maxDownloadStreams = 10;
-
+        this.maxUpstreamQueue = 10 * 1024;
+        
         this.maxProxyMapAge = 24 * 60 * 60;
         this.proxyMapCleanupPeriod = 60 * 60;
         this.proxyHeartbeatPeriod = 20;

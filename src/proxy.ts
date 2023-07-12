@@ -16,10 +16,15 @@ import {
 import { Config } from './config';
 import { DownloadManager } from './download';
 import { FileCache } from "./filecache";
-import { CachedFile, PeerProxy, FileRetrievalError } from "./structures";
+
+import {
+    CachedFile, PeerProxy, FileRetrievalError, DOWNLOAD_CHUNK_SIZE
+} from "./structures";
+
 import { NetworkingManager } from './network';
 import { BlobFinder } from './dht';
 import { Logger } from './logger';
+import { UpstreamManager } from './traffic';
 
 // ProxyDataMap class to track the most recent proxies where a file has been
 // seen.
@@ -72,6 +77,7 @@ abstract class ProxyManagerBase {
     networkingManager: NetworkingManager;
     fileCache: FileCache;
     downloadManager: DownloadManager;
+    upstreamManager: UpstreamManager;
     logger: Logger;
     
     peerProxies: Map<string, PeerProxy>;
@@ -89,6 +95,7 @@ abstract class ProxyManagerBase {
         this.networkingManager = new NetworkingManager(config);
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
+        this.upstreamManager = new UpstreamManager(config);
         this.logger = new Logger(config);
 
         this.peerProxies = new Map();
@@ -208,16 +215,31 @@ abstract class ProxyManagerBase {
         const file = await this.fileCache.readFile(fileAddr);
         if (file) {
             try {
-                const data = await file.read(
-                    dataRequestMessage.offset, dataRequestMessage.length);
+                let offset = dataRequestMessage.offset;
+                let length = dataRequestMessage.length;
+                let budget = 0;
+                
+                while (length > 0) {
+                    budget += await this.upstreamManager.requestUpload(
+                        length - budget);
+                    while(budget >= Math.min(length, DOWNLOAD_CHUNK_SIZE)) {
+                        const packetLen = Math.min(length, DOWNLOAD_CHUNK_SIZE);
 
-                const responseMessage = new DataResponseOkMessage(
-                    dataRequestMessage.burstId,
-                    fileAddr, dataRequestMessage.offset,
-                    dataRequestMessage.length, data);
-
-                this.networkingManager.send(responseMessage, senderIp,
-                                            senderPort);
+                        const data = await file.read(offset, packetLen);
+                        
+                        const responseMessage = new DataResponseOkMessage(
+                            dataRequestMessage.burstId,
+                            fileAddr, offset,
+                            packetLen, data);
+                        
+                        this.networkingManager.send(responseMessage, senderIp,
+                                                    senderPort);
+                        
+                        offset += packetLen;
+                        budget -= packetLen;
+                        length -= packetLen;
+                    }
+                }
             } finally {
                 file.release();
             }
@@ -346,7 +368,7 @@ class ProxyManager extends ProxyManagerBase {
 
         // Do an initial heartbeat to get things set up
         let retryCount = 0;
-        const maxRetries = 3;
+        const maxRetries = 10;
 
         while (retryCount < maxRetries) {
             await new Promise((resolve: ((value?: unknown) => void) | null,

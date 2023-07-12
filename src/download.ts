@@ -9,24 +9,20 @@ import { assert } from 'console';
 
 import { Config } from "./config";
 import { FileCache } from "./filecache";
-import { CachedFile, FileRetrievalError, PeerProxy } from "./structures";
+
+import {
+    CachedFile, FileRetrievalError, PeerProxy, DOWNLOAD_CHUNK_SIZE
+} from "./structures";
+
 import {
     DataRequestMessage, DataResponseElsewhereMessage, DataResponseOkMessage,
     DataResponseUnknownMessage,
     Message
 } from "./messages";
+
 import { NetworkingManager } from "./network";
 import { ProxyManagerBase } from "./proxy";
 import { UpstreamManager } from "./traffic";
-
-const DOWNLOAD_CHUNK_SIZE = 1400;
-
-class TimeoutError extends Error {
-    constructor() {
-        super("Timeout");
-        this.name = "TimeoutError";
-    }
-}
 
 interface PotentialDownloadBurst {
     source: PeerProxy;
@@ -152,6 +148,8 @@ class DownstreamManager {
 
 
 class DownloadInProgress {
+    downloadManager: DownloadManager;
+    
     fileAddr: string;
     size: number;
     
@@ -170,10 +168,6 @@ class DownloadInProgress {
     
     unreceivedOffsets: Set<number>;
     downloadOffset: number;
-    
-    downloadManager: DownloadManager;
-
-    shouldContinue: boolean;
     
     constructor(downloadManager: DownloadManager, fileAddr: string) {
         this.downloadManager = downloadManager;
@@ -202,24 +196,17 @@ class DownloadInProgress {
         this.availHosts = new Set();
         this.rejectedHosts = new Set();
         this.dhtHosts = new Set();
-
-        this.shouldContinue = true;
     }
 
-    async createTempFile() {
-        const randomSuffix = Math.floor(Math.random() * 1000000).toString();
-        const tempFilePath = `${this.downloadManager.proxyManager.config.tempDownloadDirectory}/${this.fileAddr}-${randomSuffix}`;
-        this.outputFile = await fs.promises.open(tempFilePath, 'w');
-        return tempFilePath;
-    }
-
-    async download(seedProxies: PeerProxy[]) {
+    async run(seedProxies: PeerProxy[]) {
         this.downloadManager.proxyManager.logger.log(
             new Date(), 'download',
             `Run download for ${this.fileAddr}`);
 
-        this.tempDownloadFile = await this.createTempFile();
-        
+        const randomSuffix = Math.floor(Math.random() * 1000000).toString();
+        this.tempDownloadFile = `${this.downloadManager.proxyManager.config.tempDownloadDirectory}/${this.fileAddr}-${randomSuffix}`;
+        this.outputFile = await fs.promises.open(this.tempDownloadFile, 'w');
+
         this.timerId = setInterval(
             () => this.checkBurstTimeouts(),
             this.downloadManager.proxyManager.config.downloadTickPeriod);
@@ -233,7 +220,7 @@ class DownloadInProgress {
 
         console.log(`Ready; avail is ${this.availHosts.size}, dht is ${this.dhtHosts.size}`);
         
-        while (this.shouldContinue && this.downloadOffset < this.size) {
+        while (this.outputFile && this.downloadOffset < this.size) {
             const hosts = 
                 this.availHosts.size ? this.availHosts : this.dhtHosts;
 
@@ -247,20 +234,19 @@ class DownloadInProgress {
 
         this.downloadManager.proxyManager.logger.log(
             new Date(), 'download',
-            '  All done');
+            '  All initiated');
     }
 
-    async downloadFrom(hosts: Set<PeerProxy>) {
+    async downloadFrom(hosts: Set<PeerProxy>): Promise<void> {
         this.downloadManager.proxyManager.logger.log(
             new Date(), 'download',
             `  Iter downloadFrom() from ${hosts.size} hosts`);
-        console.log(            `  Iter downloadFrom() from ${hosts.size} hosts`);
-
+        //console.log(`  Iter downloadFrom() from ${hosts.size} hosts`);
         
-        if (this.downloadOffset >= this.size || !this.shouldContinue) {
+        if (this.downloadOffset >= this.size || !this.outputFile) {
             this.downloadManager.proxyManager.logger.log(
                 new Date(), 'download',
-                '    Early bail tho');
+                '    Early bail 1');
             return;
         }
 
@@ -268,25 +254,26 @@ class DownloadInProgress {
             await this.downloadManager.downstreamManager.requestDownload(
                 Array.from(hosts), this.size - this.downloadOffset);
 
+        if (this.downloadOffset >= this.size || !this.outputFile) {
+            this.downloadManager.proxyManager.logger.log(
+                new Date(), 'download',
+                '    Early bail 2');
+            return;
+        }
         assert(bursts !== null, 'Null from queued requestDownload()');
         if (bursts!.length <= 0) {
-            this.shouldContinue = false;
-            this.rejectCompletion('No available hosts from downstreamManager');
+            this.stop('No available hosts from downstreamManager');
             return;
         }
         
-        if (!this.shouldContinue) {
-            this.downloadManager.proxyManager.logger.log(
-                new Date(), 'download',
-                '    Secondary early bail');
-            return;
-        }
-
         this.downloadManager.proxyManager.logger.log(
             new Date(), 'download',
             `    We have ${bursts!.length} potential bursts`);
         
-        for (let potentialBurst of bursts!) {
+        for (let potentialBurst of bursts!) {            
+            if (this.downloadOffset >= this.size)
+                break;
+
             let burstLength = potentialBurst.bytesAllowed;
             burstLength = DOWNLOAD_CHUNK_SIZE * Math.ceil(
                 burstLength / DOWNLOAD_CHUNK_SIZE);
@@ -294,9 +281,9 @@ class DownloadInProgress {
             if (burstLength > this.size - this.downloadOffset)
                 burstLength = this.size - this.downloadOffset;
 
-        this.downloadManager.proxyManager.logger.log(
-            new Date(), 'download',
-            `      We create burst for ${this.downloadOffset}[${burstLength}] from ${potentialBurst.source.ip}:${potentialBurst.source.port}`);
+            this.downloadManager.proxyManager.logger.log(
+                new Date(), 'download',
+                `      We create burst for ${this.downloadOffset}[${burstLength}] from ${potentialBurst.source.ip}:${potentialBurst.source.port}`);
             
             let burst = new DownloadBurst(
                 this.downloadManager,
@@ -311,9 +298,6 @@ class DownloadInProgress {
             
             this.requestBurst(burst);
             this.activeBursts.push(burst);
-
-            if (this.downloadOffset >= this.size)
-                break;
         }
 
         this.downloadManager.proxyManager.logger.log(
@@ -322,26 +306,45 @@ class DownloadInProgress {
     }
     
     handlePossibleFailure() {
-        if (this.shouldContinue) {
-            if (this.availHosts.size === 0 && this.dhtHosts.size === 0) {
-                this.stopDownload();
-                this.rejectCompletion('No available or DHT hosts remaining.');
-            }
-        }
+        if (this.outputFile)
+            if (this.availHosts.size === 0 && this.dhtHosts.size === 0)
+                this.stop('No available or DHT hosts remaining.');
     }
     
-    stopDownload() {
-        this.shouldContinue = false;
+    async stop(failureMessage: string | null = null): Promise<void> {
+        if (!this.outputFile)
+            return; // Already stopped
 
         if (this.timerId) {
             clearInterval(this.timerId);
             this.timerId = null;
+        }
+
+        try {
+            const outputFile = this.outputFile;
+            this.outputFile = null;
+            await outputFile.close();
+            
+            if (failureMessage) {
+                this.rejectCompletion(failureMessage);
+            } else {
+                const cachedFile =
+                    await this.downloadManager.proxyManager.fileCache.addFile(
+                        this.tempDownloadFile!,
+                        this.fileAddr, true, false);
+                this.resolveCompletion(cachedFile);
+            }
+        } catch(err) {
+            this.rejectCompletion(err);
         }
     }
     
     async checkBurstTimeouts() {
         let currentTime = Date.now();
 
+        assert(this.tempDownloadFile,
+               'checkBurstTimeouts() when burst finished');
+        
         for (let burst of this.activeBursts) {
             // Check if burst has timed out
             const isTimedOut = burst.requestTimestamp
@@ -363,8 +366,6 @@ class DownloadInProgress {
                     this.downloadManager.proxyManager.logger.log(
                         new Date(), 'transfer',
                         `    Timeout!`);
-                    
-
                 
                 let missingOffsets = [];
                 for (let i = burst.offset;
@@ -411,7 +412,7 @@ class DownloadInProgress {
     
     requestBurst(burst: DownloadBurst) {
         this.downloadManager.proxyManager.logger.log(
-            new Date(), 'transfer', `Requesting ${this.fileAddr}@${burst.offset}[${burst.length} from ${burst.source.ip}:${burst.source.port}`);
+            new Date(), 'transfer', `Requesting ${this.fileAddr}@${burst.offset}[${burst.length}] from ${burst.source.ip}:${burst.source.port}`);
         
         const packet = new DataRequestMessage(
             burst.burstId, burst.fileAddr, burst.offset, burst.length);
@@ -423,44 +424,42 @@ class DownloadInProgress {
     async handleDataResponseOk(source: PeerProxy,
                                message: DataResponseOkMessage)
     {
-        if (!this.shouldContinue)
+        if (!this.outputFile)
             return;
 
         this.downloadManager.proxyManager.logger.log(
             new Date(), 'transfer',
-            `Got OK ${this.fileAddr}@${message.offset}[${message.length} from ${source.ip}:${source.port}`);
-        
-        assert(this.outputFile, 'Output file undefined');
+            `Got OK ${this.fileAddr}@${message.offset}[${message.length}] from ${source.ip}:${source.port}`);
         
         if (this.unreceivedOffsets.has(message.offset)) {
             assert(message.offset + message.length <= this.size, 
                    'Received offset + length is greater than the file size');
             assert(message.length <= DOWNLOAD_CHUNK_SIZE,
-                   'Received chunk size is greater than DOWNLOAD_CHUNK_SIZE');
+                   `Received chunk size ${message.length} is greater than DOWNLOAD_CHUNK_SIZE`);
+
+            try {
+                await this.outputFile!.write(
+                    message.data,
+                    0, message.length, message.offset);
+            } catch(err) {
+                this.stop(`${err}`);
+            }
             
-            await this.outputFile!.write(
-                message.data,
-                0, message.length, message.offset);
-        
             this.unreceivedOffsets.delete(message.offset);
         }
         
         // If all chunks have been received, close the file, add it
         // to the cache, and resolve the promise
-        if (this.unreceivedOffsets.size === 0) {
-            await this.outputFile!.close();
-            this.outputFile = null;
-            const cachedFile =
-                await this.downloadManager.proxyManager.fileCache.addFile(
-                    this.tempDownloadFile!,
-                    this.fileAddr, true, false);
-            this.resolveCompletion(cachedFile);
-        }
+        if (this.unreceivedOffsets.size === 0)
+            this.stop();
     }
 
     async handleDataResponseUnknown(source: PeerProxy,
                                     message: DataResponseUnknownMessage)
     {
+        if (!this.outputFile)
+            return;
+
         this.downloadManager.proxyManager.logger.log(
             new Date(), 'transfer',
             `Got Unk ${this.fileAddr} from ${source.ip}:${source.port}`);
@@ -473,6 +472,9 @@ class DownloadInProgress {
     async handleDataResponseElsewhere(source: PeerProxy,
                                       message: DataResponseElsewhereMessage)
     {
+        if (!this.outputFile)
+            return;
+
         this.downloadManager.proxyManager.logger.log(
             new Date(), 'transfer',
             `Got elsewhere ${this.fileAddr} from ${source.ip}:${source.port}`);
@@ -557,7 +559,7 @@ class DownloadManager {
         const seedProxies = this.proxyManager.blobFinder.getClosestProxies(
             fileAddr, this.proxyManager.config.dhtNotifyNumber);
         console.log(`Got ${seedProxies.length} seed proxies`);
-        downloadInProgress.download(seedProxies);
+        downloadInProgress.run(seedProxies);
 
         this.proxyManager.logger.log(
             new Date(), 'download',

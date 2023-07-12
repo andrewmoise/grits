@@ -70,7 +70,6 @@ class CachedFile {
     }
 }
 
-
 class FileRetrievalError extends Error {
     constructor(message: string) {
         super(message);
@@ -78,4 +77,6 @@ class FileRetrievalError extends Error {
     }
 }
 
-export { PeerProxy, CachedFile, FileRetrievalError };
+const DOWNLOAD_CHUNK_SIZE = 1400;
+
+export { PeerProxy, CachedFile, FileRetrievalError, DOWNLOAD_CHUNK_SIZE };
