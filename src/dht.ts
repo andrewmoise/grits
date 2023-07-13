@@ -31,11 +31,11 @@ class BlobFinder {
     }
     
     getClosestProxies(fileAddr: string, n: number): Array<PeerProxy> {
-        console.log(`    GCP ${fileAddr} from ${this.sortedProxies.length}`);
+        //console.log(`    GCP ${fileAddr} from ${this.sortedProxies.length}`);
 
         if (this.sortedProxies.length <= 0) {
             throw new Error('No proxies');
-            console.log('      Early bail, no proxies');
+            //console.log('      Early bail, no proxies');
             return [];
         }
         
@@ -70,7 +70,7 @@ class BlobFinder {
             j++;
         }
         
-        console.log(`Returning GCP: ${result.length}`);
+        //console.log(`Returning GCP: ${result.length}`);
         return result;
     }
 }

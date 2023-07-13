@@ -21,7 +21,7 @@ import {
     CachedFile, PeerProxy, FileRetrievalError, DOWNLOAD_CHUNK_SIZE
 } from "./structures";
 
-import { NetworkingManager } from './network';
+import { NetworkManager, UdpNetworkManager } from './network';
 import { BlobFinder } from './dht';
 import { Logger } from './logger';
 import { UpstreamManager } from './traffic';
@@ -74,7 +74,7 @@ class ProxyDataMap {
 
 abstract class ProxyManagerBase {
     config: Config;
-    networkingManager: NetworkingManager;
+    networkManager: NetworkManager;
     fileCache: FileCache;
     downloadManager: DownloadManager;
     upstreamManager: UpstreamManager;
@@ -94,7 +94,7 @@ abstract class ProxyManagerBase {
         this.config = config;
         this.logger = new Logger(config);
 
-        this.networkingManager = new NetworkingManager(this.logger, config);
+        this.networkManager = new UdpNetworkManager(this.logger, config);
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
         this.upstreamManager = new UpstreamManager(config);
@@ -151,29 +151,29 @@ abstract class ProxyManagerBase {
         this.logger.log(new Date(), 'proxies',
                         `Init with ${this.peerProxies.size} proxies`);
         
-        console.log("Set up proxy + start");
+        //console.log("Set up proxy + start");
 
-        this.networkingManager.start();
+        this.networkManager.start();
 
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.DATA_REQUEST, this.handleDataRequest.bind(this));
 
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.DATA_RESPONSE_OK,
             this.downloadManager.handleDataResponseOk.bind(
                 this.downloadManager));
 
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.DATA_RESPONSE_ELSEWHERE,
             this.downloadManager.handleDataResponseElsewhere.bind(
                 this.downloadManager));
 
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.DATA_RESPONSE_UNKNOWN,
             this.downloadManager.handleDataResponseUnknown.bind(
                 this.downloadManager));
 
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.DATA_IS_HERE, this.handleDataIsHereMessage.bind(this));
         
         this.cleanupIntervalId = setInterval(
@@ -194,16 +194,16 @@ abstract class ProxyManagerBase {
         clearInterval(this.dhtNotifyIntervalId);
         clearInterval(this.cleanupIntervalId);
 
-        this.networkingManager.unregisterRequestHandler(
+        this.networkManager.unregisterRequestHandler(
             MessageType.DATA_IS_HERE);
-        this.networkingManager.unregisterRequestHandler(
+        this.networkManager.unregisterRequestHandler(
             MessageType.DATA_REQUEST);
-        this.networkingManager.unregisterRequestHandler(
+        this.networkManager.unregisterRequestHandler(
             MessageType.DATA_RESPONSE_OK);
-        this.networkingManager.unregisterRequestHandler(
+        this.networkManager.unregisterRequestHandler(
             MessageType.DATA_RESPONSE_UNKNOWN);
 
-        this.networkingManager.stop();
+        this.networkManager.stop();
 
         this.logger.stop();
     }
@@ -252,7 +252,7 @@ abstract class ProxyManagerBase {
                             fileAddr, offset,
                             packetLen, data);
                         
-                        this.networkingManager.send(responseMessage, senderIp,
+                        this.networkManager.send(responseMessage, senderIp,
                                                     senderPort);
                         
                         offset += packetLen;
@@ -284,7 +284,7 @@ abstract class ProxyManagerBase {
                 dataRequestMessage.burstId,
                 fileAddr, nodeInfo);
 
-            this.networkingManager.send(
+            this.networkManager.send(
                 responseMessage, senderIp, senderPort);
             return;
         }
@@ -295,7 +295,7 @@ abstract class ProxyManagerBase {
 
         const responseMessage = new DataResponseUnknownMessage(
             dataRequestMessage.burstId, fileAddr);
-        this.networkingManager.send(responseMessage, senderIp, senderPort);
+        this.networkManager.send(responseMessage, senderIp, senderPort);
         return;
     }
     
@@ -329,7 +329,7 @@ abstract class ProxyManagerBase {
             for (const node of closestNodes) {
                 //console.log(`    Notify ${node.ip}:${node.port}`);
                 const message = new DataIsHereMessage(cachedFile.fileAddr);
-                this.networkingManager.send(message, node.ip, node.port);
+                this.networkManager.send(message, node.ip, node.port);
             }
         }
     }
@@ -387,9 +387,9 @@ class ProxyManager extends ProxyManagerBase {
     async start() {
         await super.start();
 
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.PROXY_HEARTBEAT, this.handleWrongMessage.bind(this));
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.ROOT_HEARTBEAT, this.handleRootHeartbeat.bind(this));
 
         // Do an initial heartbeat to get things set up
@@ -436,14 +436,14 @@ class ProxyManager extends ProxyManagerBase {
     }
 
     stop() {
-        console.log("Close down proxy + end");
+        //console.log("Close down proxy + end");
 
         // Clear the interval for sending proxy heartbeats
         clearInterval(this.sendProxyHeartbeatIntervalId!);
 
-        this.networkingManager.unregisterRequestHandler(
+        this.networkManager.unregisterRequestHandler(
             MessageType.PROXY_HEARTBEAT);
-        this.networkingManager.unregisterRequestHandler(
+        this.networkManager.unregisterRequestHandler(
             MessageType.ROOT_HEARTBEAT);
 
         super.stop();
@@ -536,7 +536,7 @@ class ProxyManager extends ProxyManagerBase {
         this.logger.log(new Date(), 'heartbeat', 'Sending proxy heartbeat');
 
         const heartbeatMessage = new ProxyHeartbeatMessage();
-        this.networkingManager.send(heartbeatMessage,
+        this.networkManager.send(heartbeatMessage,
             this.rootProxy.ip,
             this.rootProxy.port);
     }
@@ -555,9 +555,9 @@ class RootProxyManager extends ProxyManagerBase {
         
         await super.start();
 
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.ROOT_HEARTBEAT, this.handleWrongMessage.bind(this));
-        this.networkingManager.registerRequestHandler(
+        this.networkManager.registerRequestHandler(
             MessageType.PROXY_HEARTBEAT, this.handleProxyHeartbeat.bind(this));
 
         this.heartbeatIntervalId = setInterval(
@@ -568,9 +568,9 @@ class RootProxyManager extends ProxyManagerBase {
     stop() {
         clearInterval(this.heartbeatIntervalId!);
 
-        this.networkingManager.unregisterRequestHandler(
+        this.networkManager.unregisterRequestHandler(
             MessageType.PROXY_HEARTBEAT);
-        this.networkingManager.unregisterRequestHandler(
+        this.networkManager.unregisterRequestHandler(
             MessageType.ROOT_HEARTBEAT);
 
         super.stop();
@@ -594,7 +594,7 @@ class RootProxyManager extends ProxyManagerBase {
 
         const heartbeatMessage = new RootHeartbeatMessage(
             this.proxyMapFile ? this.proxyMapFile.fileAddr : null);
-        this.networkingManager.send(heartbeatMessage, senderIp, senderPort);
+        this.networkManager.send(heartbeatMessage, senderIp, senderPort);
     }
 
     async createProxyMapBuffer(): Promise<void> {

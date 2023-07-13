@@ -17,7 +17,26 @@ import {
     DataIsHereMessage,
 } from './messages';
 
+type RequestHandler = (address: string, port: number, message: Message) => void;
+
 const MAGIC_BYTES = Buffer.from([140, 98]);
+
+interface NetworkManager {
+    start(overrideHandler?: (data: Buffer,
+                             rinfo: dgram.RemoteInfo) => void)
+    : void;
+    stop(): void;
+
+    send(message: Message, ipAddress: string, port: number): void;
+
+    registerRequestHandler(
+        type: number,
+        handler: (address: string, port: number, message: Message) => void)
+    : void;
+    unregisterRequestHandler(type: number): void;
+
+    handleIncomingMessage(data: Buffer, rinfo: dgram.RemoteInfo): void;
+}
 
 function getLocalIPAddresses(): string[] {
     const interfaces = os.networkInterfaces();
@@ -36,10 +55,7 @@ function getLocalIPAddresses(): string[] {
     return addresses;
 }
 
-type RequestHandler = (address: string, port: number, message: Message)
-    => void;
-
-class NetworkingManager {
+class UdpNetworkManager {
     logger: Logger;
     config: Config;
     
@@ -65,7 +81,8 @@ class NetworkingManager {
         this.trafficManager = new UpstreamManager(config);
     }
 
-    start(): void {
+    start(overrideHandler?: (data: Buffer, rinfo: dgram.RemoteInfo) => void)
+    : void {
         const socketOptions: dgram.SocketOptions = {
             type: 'udp4',
             reuseAddr: true,
@@ -73,7 +90,10 @@ class NetworkingManager {
 
         this.socket = dgram.createSocket(socketOptions);
         this.socket.bind(this.config.thisPort, this.config.thisHost);
-        this.socket.on('message', this.handleIncomingMessage.bind(this));
+
+        this.socket.on(
+            'message',
+            overrideHandler || this.handleIncomingMessage.bind(this));
     }
 
     stop(): void {
@@ -161,5 +181,5 @@ class NetworkingManager {
 }
 
 export {
-    NetworkingManager,
+    RequestHandler, NetworkManager, UdpNetworkManager
 };

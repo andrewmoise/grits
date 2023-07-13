@@ -21,7 +21,7 @@ import {
     Message
 } from "./messages";
 
-import { NetworkingManager } from "./network";
+import { NetworkManager } from "./network";
 import { ProxyManagerBase } from "./proxy";
 import { UpstreamManager } from "./traffic";
 
@@ -316,13 +316,13 @@ class DownloadInProgress {
     }
     
     requestBurst(burst: DownloadBurst) {
-        console.log(`Requesting ${this.fileAddr}@${burst.offset}[${burst.length}] from ${burst.source.ip}:${burst.source.port} ${this.transferId}`);
+        //console.log(`Requesting ${this.fileAddr}@${burst.offset}[${burst.length}] from ${burst.source.ip}:${burst.source.port} ${this.transferId}`);
         
         const packet = new DataRequestMessage(
             burst.burstId, burst.fileAddr, burst.offset, burst.length,
             this.transferId);
 
-        this.downloadManager.proxyManager.networkingManager.send(
+        this.downloadManager.proxyManager.networkManager.send(
             packet, burst.source.ip, burst.source.port);
     }
 

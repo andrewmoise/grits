@@ -37,7 +37,7 @@ class DownstreamManager {
         bytesRequested: number, queueOnFailure=true)
     : Promise<PotentialDownloadBurst[] | null>
     {
-        console.log(`requestDownload() for ${bytesRequested}`);
+        //console.log(`requestDownload() for ${bytesRequested}`);
         
         let bytesBudget = this.config.maxDownstreamSpeed / 1000
             * this.config.downloadTickPeriod;
@@ -61,11 +61,11 @@ class DownstreamManager {
                 });
             }
 
-            console.log(`  Return right away, ${downloadBursts.length} bursts`);
+            //console.log(`  Return right away, ${downloadBursts.length} bursts`);
             
             return Promise.resolve(downloadBursts);
         } else if (queueOnFailure) {
-            console.log(`  Queue up for later`);
+            //console.log(`  Queue up for later`);
             
             // Too many bytes requested this tick, queue up the request
             // and return a promise.
@@ -74,7 +74,7 @@ class DownstreamManager {
                     resolve, peerProxies, bytesRequested });
             });
         } else {
-            console.log('  Return null');
+            //console.log('  Return null');
             
             return Promise.resolve(null);
         }
@@ -87,7 +87,7 @@ class DownstreamManager {
 
         // Process queued downloads.
         while (this.downloadQueue.length > 0) {
-            console.log('Process from queue');
+            //console.log('Process from queue');
 
             const queuedDownload = this.downloadQueue[0];
             this.downloadQueue.shift();
@@ -97,10 +97,10 @@ class DownstreamManager {
                 peerProxies, bytesRequested, false);
 
             if (bursts !== null) {
-                console.log('  Non null, resolve');
+                //console.log('  Non null, resolve');
                 resolve(bursts);
             } else {
-                console.log('  Null - all done for now');
+                //console.log('  Null - all done for now');
                 this.downloadQueue.unshift(queuedDownload);
                 break;
             }

@@ -137,6 +137,8 @@ class FileCache {
         for (const dirent of directoryContent) {
             const fullPath = path.join(directoryPath, dirent.name);
 
+            console.log(`Adding ${fullPath}`);
+            
             if (dirent.isFile()) {
                 // If it's a file, add it to the cache
                 const cachedFile = await this.addFile(fullPath, null, moveFiles);
