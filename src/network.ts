@@ -8,13 +8,14 @@ import { UpstreamManager } from "./traffic";
 import {
     MessageType,
     Message,
-    RootHeartbeatMessage,
-    ProxyHeartbeatMessage,
+    HeartbeatResponse,
+    HeartbeatMessage,
     DataRequestMessage,
-    DataResponseOkMessage,
-    DataResponseElsewhereMessage,
-    DataResponseUnknownMessage,
-    DataIsHereMessage,
+    DataResponseOk,
+    DataResponseElsewhere,
+    DataResponseUnknown,
+    DhtLocationMessage,
+    DhtLocationResponse,
 } from './messages';
 
 type RequestHandler = (address: string, port: number, message: Message) => void;
@@ -132,33 +133,33 @@ class UdpNetworkManager {
 
         let message;
         switch (messageType) {
-            case MessageType.PROXY_HEARTBEAT:
-                message = ProxyHeartbeatMessage.fromBuffer(messageData);
+            case MessageType.HEARTBEAT_MESSAGE:
+                message = HeartbeatMessage.fromBuffer(messageData);
                 break;
-            case MessageType.ROOT_HEARTBEAT:
-                message = RootHeartbeatMessage.fromBuffer(messageData);
+            case MessageType.HEARTBEAT_RESPONSE:
+                message = HeartbeatResponse.fromBuffer(messageData);
                 break;
-            case MessageType.DATA_REQUEST:
+            case MessageType.DATA_REQUEST_MESSAGE:
                 message = DataRequestMessage.fromBuffer(messageData);
                 break;
             case MessageType.DATA_RESPONSE_OK:
-                message = DataResponseOkMessage.fromBuffer(messageData);
+                message = DataResponseOk.fromBuffer(messageData);
                 break;
             case MessageType.DATA_RESPONSE_ELSEWHERE:
-                message = DataResponseElsewhereMessage.fromBuffer(messageData);
+                message = DataResponseElsewhere.fromBuffer(messageData);
                 break;
             case MessageType.DATA_RESPONSE_UNKNOWN:
-                message = DataResponseUnknownMessage.fromBuffer(messageData);
+                message = DataResponseUnknown.fromBuffer(messageData);
                 break;
-            case MessageType.DATA_IS_HERE:
-                message = DataIsHereMessage.fromBuffer(messageData);
+            case MessageType.DHT_LOCATION_MESSAGE:
+                message = DhtLocationMessage.fromBuffer(messageData);
+                break;
+            case MessageType.DHT_LOCATION_RESPONSE:
+                message = DhtLocationResponse.fromBuffer(messageData);
                 break;
             default:
                 throw new Error('Unknown message type: ' + messageType);
         }
-
-        //console.log("Received message - port " + port + ", type "
-        //    + message.type);
 
         if (this.requestHandlers.has(message.type)) {
             const handler = this.requestHandlers.get(message.type);

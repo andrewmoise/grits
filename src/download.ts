@@ -16,8 +16,8 @@ import {
 } from "./structures";
 
 import {
-    DataRequestMessage, DataResponseElsewhereMessage, DataResponseOkMessage,
-    DataResponseUnknownMessage,
+    DataRequestMessage, DataResponseElsewhere, DataResponseOk,
+    DataResponseUnknown,
     Message
 } from "./messages";
 
@@ -327,7 +327,7 @@ class DownloadInProgress {
     }
 
     async handleDataResponseOk(source: PeerProxy,
-                               message: DataResponseOkMessage)
+                               message: DataResponseOk)
     {
         if (!this.outputFile)
             return;
@@ -358,7 +358,7 @@ class DownloadInProgress {
     }
 
     async handleDataResponseUnknown(source: PeerProxy,
-                                    message: DataResponseUnknownMessage)
+                                    message: DataResponseUnknown)
     {
         this.log(`Got Unk ${this.fileAddr} from ${source.ip}:${source.port}`);
         
@@ -373,7 +373,7 @@ class DownloadInProgress {
     }
 
     async handleDataResponseElsewhere(source: PeerProxy,
-                                      message: DataResponseElsewhereMessage)
+                                      message: DataResponseElsewhere)
     {
         this.log(`Got elsewhere ${this.fileAddr} from ${source.ip}:${source.port}`);
         
@@ -454,10 +454,10 @@ class DownloadManager {
     }
 
     handleDataResponseOk(host: string, port: number, rawMessage: Message) {
-        if (!(rawMessage instanceof DataResponseOkMessage))
+        if (!(rawMessage instanceof DataResponseOk))
             throw new Error("Data request of wrong TS type!");
         const message =
-            rawMessage as DataResponseOkMessage;
+            rawMessage as DataResponseOk;
         const download = this.activeDownloads.get(message.fileAddr);
 
         const source = this.proxyManager.getPeerProxy(host, port);
@@ -478,10 +478,10 @@ class DownloadManager {
     }
 
     handleDataResponseUnknown(host: string, port: number, rawMessage: Message) {
-        if (!(rawMessage instanceof DataResponseUnknownMessage))
+        if (!(rawMessage instanceof DataResponseUnknown))
             throw new Error("Data request of wrong TS type!");
         const message =
-            rawMessage as DataResponseUnknownMessage;
+            rawMessage as DataResponseUnknown;
         const download = this.activeDownloads.get(message.fileAddr);
 
         const source = this.proxyManager.getPeerProxy(host, port);
@@ -504,10 +504,10 @@ class DownloadManager {
     handleDataResponseElsewhere(host: string, port: number,
                                 rawMessage: Message)
     {
-        if (!(rawMessage instanceof DataResponseElsewhereMessage))
+        if (!(rawMessage instanceof DataResponseElsewhere))
             throw new Error("Data request of wrong TS type!");
         const message =
-            rawMessage as DataResponseElsewhereMessage;
+            rawMessage as DataResponseElsewhere;
         const download = this.activeDownloads.get(message.fileAddr);
 
         const source = this.proxyManager.getPeerProxy(host, port);

@@ -3,13 +3,16 @@ import { assert } from 'console';
 import { PeerProxy } from "./structures";
 
 export enum MessageType {
-    ROOT_HEARTBEAT = 0,
-    PROXY_HEARTBEAT = 1,
-    DATA_REQUEST = 2,
+    HEARTBEAT_MESSAGE = 0,
+    HEARTBEAT_RESPONSE = 1,
+    
+    DATA_REQUEST_MESSAGE = 2,
     DATA_RESPONSE_OK = 3,
     DATA_RESPONSE_ELSEWHERE = 4,
     DATA_RESPONSE_UNKNOWN = 5,
-    DATA_IS_HERE = 6,
+
+    DHT_LOCATION_MESSAGE = 6,
+    DHT_LOCATION_RESPONSE = 7,
 }
 
 export abstract class Message {
@@ -22,30 +25,30 @@ export abstract class Message {
     abstract encode(): Uint8Array;
 }
 
-export class RootHeartbeatMessage extends Message {
+export class HeartbeatResponse extends Message {
     nodeMapFileAddr: string | null;
     
     static zeroBuffer = Buffer.alloc(38, 0);
     
     constructor(nodeMapFileAddr: string | null) {
-        super(MessageType.ROOT_HEARTBEAT);
+        super(MessageType.HEARTBEAT_RESPONSE);
         this.nodeMapFileAddr = nodeMapFileAddr;
     }
 
-    static fromBuffer(buffer: Buffer): RootHeartbeatMessage {
+    static fromBuffer(buffer: Buffer): HeartbeatResponse {
         if (buffer.slice(0, 38).equals(this.zeroBuffer)) {
-            return new RootHeartbeatMessage(null);
+            return new HeartbeatResponse(null);
         } else {
             const hash = buffer.slice(0, 32).toString('hex');
             const size = buffer.readBigUInt64BE(32).toString();
-            return new RootHeartbeatMessage(`${hash}:${size}`);
+            return new HeartbeatResponse(`${hash}:${size}`);
         }
     }
 
     encode(): Buffer {
         let buffer = Buffer.alloc(40);
         if (this.nodeMapFileAddr === null) {
-            RootHeartbeatMessage.zeroBuffer.copy(buffer, 0, 0, 40);
+            HeartbeatResponse.zeroBuffer.copy(buffer, 0, 0, 40);
         } else {
             const [hash, size] = this.nodeMapFileAddr.split(':');
             const hashBuffer = Buffer.from(hash, 'hex');
@@ -59,13 +62,13 @@ export class RootHeartbeatMessage extends Message {
     }
 }
 
-export class ProxyHeartbeatMessage extends Message {
+export class HeartbeatMessage extends Message {
     constructor() {
-        super(MessageType.PROXY_HEARTBEAT);
+        super(MessageType.HEARTBEAT_MESSAGE);
     }
 
-    static fromBuffer(buffer: Buffer): ProxyHeartbeatMessage {
-        return new ProxyHeartbeatMessage();
+    static fromBuffer(buffer: Buffer): HeartbeatMessage {
+        return new HeartbeatMessage();
     }
 
     encode(): Buffer {
@@ -86,7 +89,7 @@ export class DataRequestMessage extends Message {
     constructor(burstId: number, fileAddr: string, offset: number,
                 length: number, transferId: string)
     {
-        super(MessageType.DATA_REQUEST);
+        super(MessageType.DATA_REQUEST_MESSAGE);
         
         this.burstId = burstId;
         this.fileAddr = fileAddr;
@@ -134,7 +137,7 @@ export class DataRequestMessage extends Message {
     }
 }
 
-export class DataResponseOkMessage extends Message {
+export class DataResponseOk extends Message {
     burstId: number;
     fileAddr: string;
     offset: number;
@@ -152,7 +155,7 @@ export class DataResponseOkMessage extends Message {
         this.data = data;
     }
 
-    static fromBuffer(buffer: Buffer): DataResponseOkMessage {
+    static fromBuffer(buffer: Buffer): DataResponseOk {
         const burstId = buffer.readUInt16BE(0);
         const hash = buffer.slice(2, 34).toString('hex');
         const size = buffer.readBigUInt64BE(34).toString();
@@ -160,7 +163,7 @@ export class DataResponseOkMessage extends Message {
         const offset = buffer.readInt32BE(42);
         const length = buffer.readInt32BE(46);
         const data = buffer.slice(50);
-        return new DataResponseOkMessage(burstId, fileAddr, offset, length,
+        return new DataResponseOk(burstId, fileAddr, offset, length,
                                          data);
     }
 
@@ -182,7 +185,7 @@ export class DataResponseOkMessage extends Message {
     }
 }
 
-export class DataResponseElsewhereMessage extends Message {
+export class DataResponseElsewhere extends Message {
     burstId: number;
     fileAddr: string;
     nodeInfo: Array<{ ip: string, port: number }>; 
@@ -196,7 +199,7 @@ export class DataResponseElsewhereMessage extends Message {
         this.nodeInfo = nodeInfo;
     }
 
-    static fromBuffer(buffer: Buffer): DataResponseElsewhereMessage {
+    static fromBuffer(buffer: Buffer): DataResponseElsewhere {
         const burstId = buffer.readUInt16BE(0);
         const hash = buffer.slice(2, 34).toString('hex');
         const size = buffer.readBigUInt64BE(34).toString();
@@ -208,12 +211,12 @@ export class DataResponseElsewhereMessage extends Message {
             const protocolType = buffer.readUInt8(offset);
             offset += 1;
 
-            console.log(`Protocol type: ${protocolType}`);
+            //console.log(`Protocol type: ${protocolType}`);
             
             if (protocolType === 97) {
                 // Ending sentinel
                 if (offset !== buffer.length) { 
-                    throw new Error("Malformed DataResponseElsewhereMessage");
+                    throw new Error("Malformed DataResponseElsewhere");
                 }
                 break;
             } else if (protocolType === 98) {
@@ -222,10 +225,10 @@ export class DataResponseElsewhereMessage extends Message {
                 offset += 1;
                 if (nodeSize !== 6) {
                     throw new Error(
-                        "Malformed nodeInfo in DataResponseElsewhereMessage");
+                        "Malformed nodeInfo in DataResponseElsewhere");
                     continue;
                 }
-                console.log(`Node size: ${nodeSize}`);
+                //console.log(`Node size: ${nodeSize}`);
                 
                 const ipBytes = [buffer.readUInt8(offset),
                                  buffer.readUInt8(offset + 1),
@@ -245,7 +248,7 @@ export class DataResponseElsewhereMessage extends Message {
             
         }
 
-        return new DataResponseElsewhereMessage(burstId, fileAddr, nodeInfo);
+        return new DataResponseElsewhere(burstId, fileAddr, nodeInfo);
     }
 
     encode(): Buffer {
@@ -278,7 +281,7 @@ export class DataResponseElsewhereMessage extends Message {
     }
 }
 
-export class DataResponseUnknownMessage extends Message {
+export class DataResponseUnknown extends Message {
     burstId: number;
     fileAddr: string;
 
@@ -288,12 +291,12 @@ export class DataResponseUnknownMessage extends Message {
         this.fileAddr = fileAddr;
     }
 
-    static fromBuffer(buffer: Buffer): DataResponseUnknownMessage {
+    static fromBuffer(buffer: Buffer): DataResponseUnknown {
         const burstId = buffer.readUInt16BE(0);
         const hash = buffer.slice(2, 34).toString('hex');
         const size = buffer.readBigUInt64BE(34).toString();
         const fileAddr = `${hash}:${size}`;
-        return new DataResponseUnknownMessage(burstId, fileAddr);
+        return new DataResponseUnknown(burstId, fileAddr);
     }
 
     encode(): Buffer {
@@ -311,19 +314,49 @@ export class DataResponseUnknownMessage extends Message {
     }
 }
 
-export class DataIsHereMessage extends Message {
+export class DhtLocationMessage extends Message {
     fileAddr: string;
 
     constructor(fileAddr: string) {
-        super(MessageType.DATA_IS_HERE);
+        super(MessageType.DHT_LOCATION_MESSAGE);
         this.fileAddr = fileAddr;
     }
 
-    static fromBuffer(buffer: Buffer): DataIsHereMessage {
+    static fromBuffer(buffer: Buffer): DhtLocationMessage {
         const hash = buffer.slice(0, 32).toString('hex');
         const size = buffer.readBigUInt64BE(32).toString();
         const fileAddr = `${hash}:${size}`;
-        return new DataIsHereMessage(fileAddr);
+        return new DhtLocationMessage(fileAddr);
+    }
+
+    encode(): Buffer {
+        const buffer = Buffer.allocUnsafe(40);
+        
+        const [hash, size] = this.fileAddr.split(':');
+        const hashBuffer = Buffer.from(hash, 'hex');
+        hashBuffer.copy(buffer, 0);
+
+        const sizeBuffer = Buffer.alloc(8);
+        sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
+        sizeBuffer.copy(buffer, 32);
+        
+        return buffer;
+    }
+}
+
+export class DhtLocationResponse extends Message {
+    fileAddr: string;
+
+    constructor(fileAddr: string) {
+        super(MessageType.DHT_LOCATION_RESPONSE);
+        this.fileAddr = fileAddr;
+    }
+
+    static fromBuffer(buffer: Buffer): DhtLocationResponse {
+        const hash = buffer.slice(0, 32).toString('hex');
+        const size = buffer.readBigUInt64BE(32).toString();
+        const fileAddr = `${hash}:${size}`;
+        return new DhtLocationResponse(fileAddr);
     }
 
     encode(): Buffer {
@@ -342,15 +375,18 @@ export class DataIsHereMessage extends Message {
 }
 
 
-
 module.exports = {
     MessageType,
     Message,
-    RootHeartbeatMessage,
-    ProxyHeartbeatMessage,
+    
+    HeartbeatMessage,
+    HeartbeatResponse,
+
     DataRequestMessage,
-    DataResponseOkMessage,
-    DataResponseElsewhereMessage,
-    DataResponseUnknownMessage,
-    DataIsHereMessage,
+    DataResponseOk,
+    DataResponseElsewhere,
+    DataResponseUnknown,
+
+    DhtLocationMessage,
+    DhtLocationResponse,
 };

@@ -4,13 +4,14 @@ import * as path from 'path';
 import {
     MessageType,
     Message,
-    RootHeartbeatMessage,
-    ProxyHeartbeatMessage,
+    HeartbeatResponse,
+    HeartbeatMessage,
     DataRequestMessage,
-    DataResponseOkMessage,
-    DataResponseElsewhereMessage,
-    DataResponseUnknownMessage,
-    DataIsHereMessage,
+    DataResponseOk,
+    DataResponseElsewhere,
+    DataResponseUnknown,
+    DhtLocationMessage,
+    DhtLocationResponse,
 } from './messages';
 
 import { Config } from './config';
@@ -156,7 +157,7 @@ abstract class ProxyManagerBase {
         this.networkManager.start();
 
         this.networkManager.registerRequestHandler(
-            MessageType.DATA_REQUEST, this.handleDataRequest.bind(this));
+            MessageType.DATA_REQUEST_MESSAGE, this.handleDataRequest.bind(this));
 
         this.networkManager.registerRequestHandler(
             MessageType.DATA_RESPONSE_OK,
@@ -174,7 +175,13 @@ abstract class ProxyManagerBase {
                 this.downloadManager));
 
         this.networkManager.registerRequestHandler(
-            MessageType.DATA_IS_HERE, this.handleDataIsHereMessage.bind(this));
+            MessageType.DHT_LOCATION_MESSAGE,
+            this.handleDhtLocationMessage.bind(this));
+
+        this.networkManager.registerRequestHandler(
+            MessageType.DHT_LOCATION_RESPONSE,
+            this.handleDhtResponse.bind(this));
+
         
         this.cleanupIntervalId = setInterval(
             this.proxyDataMap.cleanup.bind(this.proxyDataMap),
@@ -184,20 +191,22 @@ abstract class ProxyManagerBase {
             this.dhtNotifyTask.bind(this),
             this.config.dhtNotifyPeriod * 1000);
 
-        this.printStateIntervalId = setInterval(
-            this.printState.bind(this),
-            15000);
+        //this.printStateIntervalId = setInterval(
+        //    this.printState.bind(this),
+        //    15000);
     }
 
     stop(): void {
-        clearInterval(this.printStateIntervalId);
+        //clearInterval(this.printStateIntervalId);
         clearInterval(this.dhtNotifyIntervalId);
         clearInterval(this.cleanupIntervalId);
 
         this.networkManager.unregisterRequestHandler(
-            MessageType.DATA_IS_HERE);
+            MessageType.DHT_LOCATION_RESPONSE);
         this.networkManager.unregisterRequestHandler(
-            MessageType.DATA_REQUEST);
+            MessageType.DHT_LOCATION_MESSAGE);
+        this.networkManager.unregisterRequestHandler(
+            MessageType.DATA_REQUEST_MESSAGE);
         this.networkManager.unregisterRequestHandler(
             MessageType.DATA_RESPONSE_OK);
         this.networkManager.unregisterRequestHandler(
@@ -247,7 +256,7 @@ abstract class ProxyManagerBase {
                         this.logger.log(new Date(), message.transferId,
                                         `Send data response ${packetLen}`);
 
-                        const responseMessage = new DataResponseOkMessage(
+                        const responseMessage = new DataResponseOk(
                             dataRequestMessage.burstId,
                             fileAddr, offset,
                             packetLen, data);
@@ -280,7 +289,7 @@ abstract class ProxyManagerBase {
             const nodeInfo = recentProxies.map(
                 proxy => ({ ip: proxy.ip, port: proxy.port }));
                 
-            const responseMessage = new DataResponseElsewhereMessage(
+            const responseMessage = new DataResponseElsewhere(
                 dataRequestMessage.burstId,
                 fileAddr, nodeInfo);
 
@@ -293,18 +302,18 @@ abstract class ProxyManagerBase {
         this.logger.log(new Date(), message.transferId,
                         `fileAddr is unknown`);
 
-        const responseMessage = new DataResponseUnknownMessage(
+        const responseMessage = new DataResponseUnknown(
             dataRequestMessage.burstId, fileAddr);
         this.networkManager.send(responseMessage, senderIp, senderPort);
         return;
     }
     
-    async handleDataIsHereMessage(senderIp: string, senderPort: number,
+    async handleDhtLocationMessage(senderIp: string, senderPort: number,
                                   message: Message): Promise<void>
     {
-        if (!(message instanceof DataIsHereMessage))
+        if (!(message instanceof DhtLocationMessage))
             throw new Error("Received wrong message type!");
-        const dataIsHereMessage = message as DataIsHereMessage;
+        const dataIsHereMessage = message as DhtLocationMessage;
 
         const senderProxy = this.getPeerProxy(senderIp, senderPort);
         if (senderProxy) {
@@ -328,12 +337,18 @@ abstract class ProxyManagerBase {
             
             for (const node of closestNodes) {
                 //console.log(`    Notify ${node.ip}:${node.port}`);
-                const message = new DataIsHereMessage(cachedFile.fileAddr);
+                const message = new DhtLocationMessage(cachedFile.fileAddr);
                 this.networkManager.send(message, node.ip, node.port);
             }
         }
     }
 
+    handleDhtResponse(senderIp: string, senderPort: number, message: Message) {
+        if (!(message instanceof DhtLocationResponse))
+            throw new Error("Data request of wrong TS type!");
+        const dataRequestMessage = message as DhtLocationResponse;
+    }
+    
     async retrieveFile(fileAddr: string): Promise<CachedFile> {
         this.logger.log(new Date(), 'proxy', `Retrieve file: ${fileAddr}`);
 
@@ -388,15 +403,15 @@ class ProxyManager extends ProxyManagerBase {
         await super.start();
 
         this.networkManager.registerRequestHandler(
-            MessageType.PROXY_HEARTBEAT, this.handleWrongMessage.bind(this));
+            MessageType.HEARTBEAT_MESSAGE, this.handleWrongMessage.bind(this));
         this.networkManager.registerRequestHandler(
-            MessageType.ROOT_HEARTBEAT, this.handleRootHeartbeat.bind(this));
+            MessageType.HEARTBEAT_RESPONSE, this.handleRootHeartbeat.bind(this));
 
         // Do an initial heartbeat to get things set up
-        let retryCount = 0;
-        const maxRetries = 10;
+        //let retryCount = 0;
+        //const maxRetries = 10;
 
-        while (retryCount < maxRetries) {
+        while (true) {//retryCount < maxRetries) {
             await new Promise((resolve: ((value?: unknown) => void) | null,
                                reject: ((reason?: any) => void) | null) =>
                 {
@@ -415,12 +430,12 @@ class ProxyManager extends ProxyManagerBase {
                         new Date(), 'heartbeat',
                         `Error: ${err}`);
 
-                    retryCount++;
-                    if (retryCount === maxRetries) {
-                        throw new Error(
-                            "Failed to establish connection after "
-                                + maxRetries + " attempts");
-                    }
+                    //retryCount++;
+                    //if (retryCount === maxRetries) {
+                    //    throw new Error(
+                    //        "Failed to establish connection after "
+                    //            + maxRetries + " attempts");
+                    //}
                 });
 
             // break if the promise was resolved
@@ -442,9 +457,9 @@ class ProxyManager extends ProxyManagerBase {
         clearInterval(this.sendProxyHeartbeatIntervalId!);
 
         this.networkManager.unregisterRequestHandler(
-            MessageType.PROXY_HEARTBEAT);
+            MessageType.HEARTBEAT_MESSAGE);
         this.networkManager.unregisterRequestHandler(
-            MessageType.ROOT_HEARTBEAT);
+            MessageType.HEARTBEAT_RESPONSE);
 
         super.stop();
     }
@@ -462,9 +477,9 @@ class ProxyManager extends ProxyManagerBase {
             this.rejectFirstHeartbeatPromise = null;
         }
         
-        if (!(message instanceof RootHeartbeatMessage))
+        if (!(message instanceof HeartbeatResponse))
             throw new Error("Data request of wrong TS type!");
-        const rootHeartbeatMessage = message as RootHeartbeatMessage;
+        const rootHeartbeatMessage = message as HeartbeatResponse;
 
         // Validate the sender
         if (senderIp !== this.rootProxy.ip
@@ -535,7 +550,7 @@ class ProxyManager extends ProxyManagerBase {
     sendProxyHeartbeat() {
         this.logger.log(new Date(), 'heartbeat', 'Sending proxy heartbeat');
 
-        const heartbeatMessage = new ProxyHeartbeatMessage();
+        const heartbeatMessage = new HeartbeatMessage();
         this.networkManager.send(heartbeatMessage,
             this.rootProxy.ip,
             this.rootProxy.port);
@@ -556,9 +571,9 @@ class RootProxyManager extends ProxyManagerBase {
         await super.start();
 
         this.networkManager.registerRequestHandler(
-            MessageType.ROOT_HEARTBEAT, this.handleWrongMessage.bind(this));
+            MessageType.HEARTBEAT_RESPONSE, this.handleWrongMessage.bind(this));
         this.networkManager.registerRequestHandler(
-            MessageType.PROXY_HEARTBEAT, this.handleProxyHeartbeat.bind(this));
+            MessageType.HEARTBEAT_MESSAGE, this.handleProxyHeartbeat.bind(this));
 
         this.heartbeatIntervalId = setInterval(
             this.updatePeerList.bind(this),
@@ -569,9 +584,9 @@ class RootProxyManager extends ProxyManagerBase {
         clearInterval(this.heartbeatIntervalId!);
 
         this.networkManager.unregisterRequestHandler(
-            MessageType.PROXY_HEARTBEAT);
+            MessageType.HEARTBEAT_MESSAGE);
         this.networkManager.unregisterRequestHandler(
-            MessageType.ROOT_HEARTBEAT);
+            MessageType.HEARTBEAT_RESPONSE);
 
         super.stop();
     }
@@ -592,7 +607,7 @@ class RootProxyManager extends ProxyManagerBase {
         this.logger.log(new Date(), 'heartbeat',
                         `Send root heartbeat to ${senderIp}:${senderPort}`);
 
-        const heartbeatMessage = new RootHeartbeatMessage(
+        const heartbeatMessage = new HeartbeatResponse(
             this.proxyMapFile ? this.proxyMapFile.fileAddr : null);
         this.networkManager.send(heartbeatMessage, senderIp, senderPort);
     }
