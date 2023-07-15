@@ -44,6 +44,15 @@ class FileCache {
                 this.currentSize -= removeFile.size;
                 this.lru.splice(removeIndex, 1);
                 this.files.delete(removeHash);
+
+                const relativePath = path.relative(
+                    this.cacheDir, removeFile.path);
+                if (relativePath.startsWith('..')
+                    || path.isAbsolute(relativePath))
+                {
+                    throw new Error(`Attempting to remove a file outside of the mutable cache directory: ${removeFile.path}`);
+                }
+                
                 await fsPromises.unlink(removeFile.path);
 
                 removeIndex--;
@@ -52,14 +61,21 @@ class FileCache {
             release();
         }
     }
-
+        
     public getFiles(): IterableIterator<CachedFile> {
         return this.files.values();
     }
+
+    // FIXME - This interface, and the whole thing of handling refCount from
+    // the outside, has gotten unwieldy. This should be replaced with
+    // a withFile() function that takes a callback which gets called with
+    // the refCount held during execution.
     
     public async addFile(inFilename: string, inFileAddr: string|null = null,
                          moveFile: boolean = false,
-                         takeReference: boolean = false)
+                         takeReference: boolean = false,
+                         addInPlace: boolean = false,
+                         addSize: boolean = true)
         : Promise<CachedFile>
     {
         //console.log(`addFile(${inFilename})`);
@@ -93,14 +109,21 @@ class FileCache {
         }
 
         const finalFileAddr = `${inFileHash}:${inFileSize}`;
-        const newFilePath = path.join(this.cacheDir, inFileHash);
-
+        
         // Check if the file already exists in the cache
         const existingFile = this.files.get(finalFileAddr);
         if (existingFile) {
-            existingFile.refCount++;
+            if (takeReference)
+                existingFile.refCount++;
             return existingFile;
         }
+
+        // Put the file in the mutable cache, if necessary
+        let newFilePath;
+        if (addInPlace)
+            newFilePath = inFilename;
+        else
+            newFilePath = path.join(this.cacheDir, inFileHash);
 
         if (moveFile) {
             try {
@@ -120,7 +143,9 @@ class FileCache {
 
         this.files.set(finalFileAddr, newFile);
         this.lru.unshift(finalFileAddr);
-        this.currentSize += computedSize;
+
+        if (addSize)
+            this.currentSize += computedSize;
 
         //console.log(`  Returning added file ${newFilePath}`);
         return newFile;
@@ -169,7 +194,7 @@ class FileCache {
     public async readFile(fileAddr: string)
         : Promise<CachedFile | null>
     {
-        console.log(`Finding file for ${fileAddr}`);
+        //console.log(`Finding file for ${fileAddr}`);
         const file = this.files.get(fileAddr);
         if (file) {
             file.refCount += 1;
