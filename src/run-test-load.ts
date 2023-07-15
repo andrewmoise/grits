@@ -124,25 +124,42 @@ setTimeout(() => {
         }
 
         // Pick a random proxy from the network
-        const randomProxyIndex = Math.floor(Math.random() * proxyManagers.length);
+        const randomProxyIndex =
+            Math.floor(Math.random() * proxyManagers.length);
         const randomProxy = proxyManagers[randomProxyIndex];
 
-        // Pick a random file from the root proxy's fileCache
-        const randomFileIndex = Math.floor(Math.random() * allFiles.length);
-        const randomFileAddr = allFiles[randomFileIndex];
+        // Our pretend client is browsing images. We select what topic
+        // they are browsing somewhat at random:
 
-        console.log(`  Request ${randomFileAddr}`);
-        
-        // Request the file and measure the time it takes
-        try {
-            const startTime = performance.now();
-            const file = await randomProxy.retrieveFile(randomFileAddr);
-            const endTime = performance.now();
-            console.log(`    File size: ${file.size}, Fetch time: ${endTime - startTime}ms`);
-        } catch (err) {
-            console.log(`Error retrieving file: ${err}`);
+        let randomFileIndex = 0;
+        while(randomFileIndex + 100 < allFiles.length
+            && Math.floor(Math.random() * 5) != 0)
+        {
+            randomFileIndex += 100;
         }
-    }, 15000);
+
+        console.log();
+        console.log();
+        console.log(`  Request starting at ${randomFileIndex}`);
+
+        do {
+            for(let i=0; i<10; i++) {
+                const randomFileAddr = allFiles[randomFileIndex + i];
+                console.log(`  Request ${randomFileAddr}`);
+        
+                // Request the file and measure the time it takes
+                try {
+                    const startTime = performance.now();
+                    const file = await randomProxy.retrieveFile(randomFileAddr);
+                    const endTime = performance.now();
+                    console.log(`    File size: ${file.size}, Fetch time: ${endTime - startTime}ms`);
+                } catch (err) {
+                    console.log(`Error retrieving file: ${err}`);
+                }
+            }
+            randomFileIndex += 10;
+        } while(Math.floor(Math.random() * 2) != 0);
+    }, 30000);
 }, 45000);  // Wait 30 seconds before starting
 
 console.log('  Init done, event loop starts');
