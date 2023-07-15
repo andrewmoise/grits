@@ -49,13 +49,13 @@ export class Config {
         this.tempDownloadDirectory = 'tmp-download';
 
         this.dhtNotifyNumber = 5;
-        this.dhtNotifyPeriod = 30;
+        this.dhtNotifyPeriod = 20;
         this.dhtMaxResponseNodes = 10;
 
         this.maxBursts = 5;
         this.defaultBandwidth = 100 * 1024;
         this.downloadTickPeriod = 100;
-        this.burstTimeout = 500;
+        this.burstTimeout = 1000;
         
         this.maxUpstreamSpeed = 100 * 1024;   // 100 kb/s
         this.maxDownstreamSpeed = 100 * 1024; // 100 kb/s
