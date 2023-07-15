@@ -188,7 +188,7 @@ abstract class ProxyManagerBase {
             this.config.proxyMapCleanupPeriod);
 
         this.dhtNotifyIntervalId = setInterval(
-            this.dhtNotifyTask.bind(this),
+            this.dhtNotifyAll.bind(this),
             this.config.dhtNotifyPeriod * 1000);
 
         //this.printStateIntervalId = setInterval(
@@ -309,44 +309,104 @@ abstract class ProxyManagerBase {
     }
     
     async handleDhtLocationMessage(senderIp: string, senderPort: number,
-                                  message: Message): Promise<void>
-    {
-        if (!(message instanceof DhtLocationMessage))
+                                   rawMessage: Message)
+    : Promise<void> {
+        if (!(rawMessage instanceof DhtLocationMessage))
             throw new Error("Received wrong message type!");
-        const dataIsHereMessage = message as DhtLocationMessage;
+        const message = rawMessage as DhtLocationMessage;
 
+        this.logger.log(new Date(), 'dht', `Got location ${message.fileAddr} at ${senderIp}:${senderPort}`);
+        
         const senderProxy = this.getPeerProxy(senderIp, senderPort);
         if (senderProxy) {
-            this.proxyDataMap.updateData(dataIsHereMessage.fileAddr,
+            this.proxyDataMap.updateData(message.fileAddr,
                                          senderProxy);
+        } else {
+            this.logger.log(new Date(), 'dht', '  But no proxy found!');
         }
+
+        this.upstreamManager.requestUpload(40); // FIXME
+        this.logger.log(new Date(), 'dht', `Sending location response for ${message.fileAddr} to ${senderIp}:${senderPort}`);
+        
+        const response = new DhtLocationResponse(message.fileAddr);
+        this.networkManager.send(response, senderIp, senderPort);
     }
     
-    handleWrongMessage(senderIp: string, senderPort: number, message: any) {
+    async handleWrongMessage(senderIp: string, senderPort: number, message: any)
+    : Promise<void> {
         throw new Error("Received wrong message! Code " + message + " from "
             + senderIp);
     }
 
-    async dhtNotifyTask(): Promise<void> {
-        //console.log(`DHT Notify for ${this.config.thisHost}:${this.config.thisPort}`);
+    async dhtNotify(cachedFile: CachedFile): Promise<void> {
+        this.logger.log(new Date(), 'dht', `DHT Notify ${cachedFile.fileAddr}`);
+
+        const closestNodes = await this.blobFinder.getClosestProxies(
+            cachedFile.fileAddr, this.config.dhtNotifyNumber);
+        const refreshAge = this.config.dhtRefreshTime;
         
-        for (const cachedFile of this.fileCache.getFiles()) {
-            //console.log(`  ${cachedFile.path}`);
-            const closestNodes = await this.blobFinder.getClosestProxies(
-                cachedFile.fileAddr, this.config.dhtNotifyNumber);
+        for (const node of closestNodes) {
+            // Don't process if we have a recent refresh timestamp
+            const lastRefresh: Date|undefined =
+                node.dhtStoredData.get(cachedFile);
             
-            for (const node of closestNodes) {
-                //console.log(`    Notify ${node.ip}:${node.port}`);
-                const message = new DhtLocationMessage(cachedFile.fileAddr);
-                this.networkManager.send(message, node.ip, node.port);
+            if (lastRefresh) {
+                if (new Date().getTime() - lastRefresh.getTime() < refreshAge)
+                    continue;
             }
+
+            // We have no refresh timestamp, or an old one - send notification
+
+            // FIXME - maybe this should be in the network manager:
+            await this.upstreamManager.requestUpload(40);
+
+            this.logger.log(
+                new Date(), 'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);
+            
+            const message = new DhtLocationMessage(cachedFile.fileAddr);
+            this.networkManager.send(message, node.ip, node.port);
         }
     }
 
-    handleDhtResponse(senderIp: string, senderPort: number, message: Message) {
-        if (!(message instanceof DhtLocationResponse))
+    notifyAllRunning: boolean = false;
+    
+    async dhtNotifyAll(): Promise<void> {
+        this.logger.log(new Date(), 'dht', 'DHT notify loop');
+
+        if (this.notifyAllRunning) {
+            this.logger.log(new Date(), 'dht', '  early return');
+            return;
+        }
+        
+        this.notifyAllRunning = true;
+        for (const cachedFile of this.fileCache.getFiles())
+            await this.dhtNotify(cachedFile);
+        this.notifyAllRunning = false;
+    }
+
+    async handleDhtResponse(senderIp: string, senderPort: number,
+                            rawMessage: Message): Promise<void>
+    {
+        if (!(rawMessage instanceof DhtLocationResponse))
             throw new Error("Data request of wrong TS type!");
-        const dataRequestMessage = message as DhtLocationResponse;
+        const message = rawMessage as DhtLocationResponse;
+
+        this.logger.log(new Date(), 'dht', `DHT ack from ${senderIp}:${senderPort} for ${message.fileAddr}`);
+        
+        const node = this.getPeerProxy(senderIp, senderPort);
+        if (!node) {
+            this.logger.log(new Date(), 'dht', '  No peer found');
+            return;
+        }
+
+        const cachedFile = await this.fileCache.readFile(message.fileAddr);
+        if (!cachedFile) {
+            this.logger.log(new Date(), 'dht', '  No file found');
+            return;
+        }
+
+        node.dhtStoredData.set(cachedFile, new Date());
+        cachedFile.release(); // FIXME - needs new API
     }
     
     async retrieveFile(fileAddr: string): Promise<CachedFile> {

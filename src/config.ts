@@ -12,10 +12,12 @@ export class Config {
     storageSize: number; // in bytes
     tempDownloadDirectory: string;
 
-    // File-sharing params
+    // DHT params
     dhtNotifyNumber: number;
     dhtNotifyPeriod: number; // In seconds
     dhtMaxResponseNodes: number;
+    dhtRefreshTime: number; // Seconds
+    dhtExpiryTime: number; // Seconds
     
     // Download params
     maxBursts: number;
@@ -51,7 +53,9 @@ export class Config {
         this.dhtNotifyNumber = 5;
         this.dhtNotifyPeriod = 20;
         this.dhtMaxResponseNodes = 10;
-
+        this.dhtRefreshTime = 8 * 60 * 60; // 8 hours
+        this.dhtExpiryTime = 24 * 60 * 60; // 24 hours
+        
         this.maxBursts = 5;
         this.defaultBandwidth = 100 * 1024;
         this.downloadTickPeriod = 100;

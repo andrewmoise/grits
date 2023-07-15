@@ -11,6 +11,7 @@ class PeerProxy {
     packetLoss: number | null;
 
     bytesThisTick: number | null;
+    dhtStoredData: WeakMap<CachedFile, Date>;
     
     constructor(ip: string, port: number) {
         this.ip = ip;
@@ -22,6 +23,7 @@ class PeerProxy {
         this.packetLoss = null;
 
         this.bytesThisTick = null;
+        this.dhtStoredData = new WeakMap();
     }
 
     updateLastSeen() {
@@ -43,7 +45,6 @@ class CachedFile {
     public size: number;
     public refCount: number;
     public fileAddr: string;
-    public awarePeers: Map<PeerProxy, Date>;
 
     constructor(path: string, size: number, refCount: number, fileAddr: string)
     {
@@ -51,7 +52,6 @@ class CachedFile {
         this.size = size;
         this.refCount = refCount;
         this.fileAddr = fileAddr;
-        this.awarePeers = new Map<PeerProxy, Date>();
     }
     
     public async read(offset: number, length: number): Promise<Buffer> {
