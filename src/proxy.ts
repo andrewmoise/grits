@@ -257,7 +257,6 @@ abstract class ProxyManagerBase {
                                         `Send data response ${packetLen}`);
 
                         const responseMessage = new DataResponseOk(
-                            dataRequestMessage.burstId,
                             fileAddr, offset,
                             packetLen, data);
                         
@@ -290,7 +289,6 @@ abstract class ProxyManagerBase {
                 proxy => ({ ip: proxy.ip, port: proxy.port }));
                 
             const responseMessage = new DataResponseElsewhere(
-                dataRequestMessage.burstId,
                 fileAddr, nodeInfo);
 
             this.networkManager.send(
@@ -303,7 +301,7 @@ abstract class ProxyManagerBase {
                         `fileAddr is unknown`);
 
         const responseMessage = new DataResponseUnknown(
-            dataRequestMessage.burstId, fileAddr);
+            fileAddr);
         this.networkManager.send(responseMessage, senderIp, senderPort);
         return;
     }
@@ -351,8 +349,12 @@ abstract class ProxyManagerBase {
                 node.dhtStoredData.get(cachedFile);
             
             if (lastRefresh) {
-                if (new Date().getTime() - lastRefresh.getTime() < refreshAge)
+                if (new Date().getTime() - lastRefresh.getTime() < refreshAge) {
+                    this.logger.log(new Date(), 'dht', `Too recent for refresh: ${new Date()} <-> ${lastRefresh}`);
                     continue;
+                } else {
+                    this.logger.log(new Date(), 'dht', `Too old, we refresh: ${new Date()} <-> ${lastRefresh}`);
+                }                    
             }
 
             // We have no refresh timestamp, or an old one - send notification

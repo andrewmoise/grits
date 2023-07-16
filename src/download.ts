@@ -29,7 +29,6 @@ const TRANSFER_ID_CHARACTERS =
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
 
 class DownloadBurst {
-    burstId: number;
     source: PeerProxy;
     bytesAllowed: number;
     
@@ -47,7 +46,6 @@ class DownloadBurst {
                 bytesAllowed: number,
                 fileAddr: string, offset: number, length: number)
     {
-        this.burstId = downloadManager.nextBurstId++;
         this.source = source;
         this.bytesAllowed = bytesAllowed;
         this.fileAddr = fileAddr;
@@ -319,7 +317,7 @@ class DownloadInProgress {
         //console.log(`Requesting ${this.fileAddr}@${burst.offset}[${burst.length}] from ${burst.source.ip}:${burst.source.port} ${this.transferId}`);
         
         const packet = new DataRequestMessage(
-            burst.burstId, burst.fileAddr, burst.offset, burst.length,
+            burst.fileAddr, burst.offset, burst.length,
             this.transferId);
 
         this.downloadManager.proxyManager.networkManager.send(
@@ -388,6 +386,8 @@ class DownloadInProgress {
 
         const newHosts = new Set<PeerProxy>();
         for (const {ip, port} of message.nodeInfo) {
+            this.log(`Elsewhere ${ip}:${port}`);
+            
             const newHost = this.downloadManager.proxyManager.getPeerProxy(
                 ip, port);
             if(!newHost) {
