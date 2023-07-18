@@ -8,7 +8,7 @@ The way that happens is that when you request e.g. a Mastadon page, the server g
 
 ## Current Status and Roadmap
 
-This software is in very early stage at this point. At present, the proxies can talk to one another and exchange files in a testbed, and that's about it. Making it work on the actual real-world internet is another story; the work currently in progress is to handle congestion and packet loss, switching to a new proxy smoothly if one is performing badly, etc, work well. That's not working yet but seems likely within the somewhat-near future.
+This software is in very early stage at this point. At present, the proxies can talk to one another and exchange files in a testbed, and that's about it. Making it work on the actual real-world internet is another story; the work currently in progress is to handle congestion and packet loss, switch to a new proxy smoothly if one is performing badly, etc. That's not working yet but seems likely within the somewhat-near future.
 
 Note that I'm reimplementing the transport layer, instead of using e.g. IPFS or Hypercore, which adds a ton of work and risk. I talk a little more on Lemmy about the reasons for this surprising decision; we'll see if it turns out to have been a good idea.
 
