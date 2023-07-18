@@ -4,7 +4,7 @@ Grits is load-sharing software, designed to allow a community-supported web site
 
 You can read more about the motivations behind the software, and future directions it might take after this stage, [on the Lemmy post](https://lemmy.world/post/62323). The short summary is that for at least 20 years, people have been talking about switching to a more peer-to-peer vision of the internet, but the actual success that's been demonstrated has always been pretty limited in scope compared to the non-peer-to-peer options. Bittorrent is great, ActivityPub is great but has caveats, but Wikipedia still runs on fairly expensive centrally-served hosting. My vision would be that it becomes realistic to run a busy Mastadon node, or a site like Wikipedia, and have a substantial amount of the hosting being done by the users.
 
-The way that happens is that when you request e.g. a Mastadon page, the server gives you a little snippet of Javascript that establishes connections to some nodes in a content-addressable store operated by the community, and it can request from those nodes a lot of the data that the web app needs (verifying the hashes). Thus the central server has a lot less load.
+The way that happens is that when you request e.g. a Mastadon page, the server gives you a little snippet of Javascript that establishes connections to some nodes in a content-addressable store operated by the community, and it can request from those nodes a lot of the data that the web app needs (verifying the hashes). Thus the central server has a lot less load. Thus, whoever operates the central instance has lower hosting bills, their company has less pressure to create a profit or solicit donations, and the internet gets better.
 
 ## Current Status and Roadmap
 
