@@ -6,9 +6,9 @@ In its current imagined incarnation, it's a network of peer-to-peer caching prox
 
 You can read more about the motivations behind the software, and future directions it might take after this stage, [on the Lemmy post](https://lemmy.world/post/62323).
 
-## Current State
+## Current Status
 
-In the current state, you can start a test network and watch it send messages to itself, and that's about it. The current milestone is to aim for the network being able to find content over the DHT and serve it, and with some prototypical version of fast fetching of content. That milestone should be possible in a week or two. Once that's working then the next step will be robustness, security, and general work that's needed for it to be operational in the real world, and then some real world testing.
+At present, the proxies can talk to one another and exchange files. Making it work on the actual real-world internet is another story; the work currently in progress is to handle congestion and packet loss and switching to a new proxy, etc, work well. That's not working yet but seems likely within the somewhat-near future.
 
 ## Prerequisites
 
@@ -26,10 +26,38 @@ Again, it doesn't do much yet. But, if you want to examine the code or run the t
 npm install
 cp -r (some large collection of dummy files) test-images/
 mkdir tmp-download
-./run-test-network.sh
+npx ts-node src/run-test-0.ts
 ```
 
-That'll start a test network of 50 nodes, distribute files from the dummy file folder among the proxies, and send heartbeats around. As of this writing, it's not able to actually find the content or serve it quite yet.
+That'll start up a little network of 50 nodes, with 10 random files from `test-images/` populated into each one of them. Once they've had a little bit of time to communicate with one another, you should be able to run a command similar to:
+
+```
+wget http://localhost:1234/blob/1cbff4192356c731e2e75dc26dd124170523abd99f15d8902938a9cefe5ec4a0:594725
+```
+
+And get back a file which was shared and then downloaded over the network. You'll have to replace that sha-256 hash and length with an actual one; you can pick some random file out of `grits-test-run/2` and paste in its filename and size in order for the `wget` call to actually work.
+
+The next step forward -- working on a degraded network, with bandwidth limits and packet loss and etc -- is going to be when `src/run-test-1.ts` starts working.
+
+## Code structure
+
+The main structure of classes and how they collaborate with one another is:
+
+* ProxyManager (from `proxy.ts`) is the top level class for a host within the network
+  * FileCache (from `filecache.ts`) is where it keeps its data on the local storage
+  * Config (from `config.ts`) defines top-level parameters for the host
+  * RootProxyManager, also from `proxy.ts`, defines special functionality for the trusted "root" proxy within the network
+
+* `structures.ts` defines some data classes
+  * PeerProxy is an abstraction for some other host within the network
+  * CachedFile is an abstraction for a file in our local storage
+
+* NetworkManager (from `network.ts`) operates the UDP sockets
+* Message and its subclasses (from `messages.ts`) represent messages and define their serialization and deserialization
+* DownloadManager (from `download.ts`) operates any downloads in progress
+* UpstreamManager and DownstreamManager (from `traffic.ts`) handle traffic shaping and congestion management
+* HttpServer (from `web.ts`) runs the web server
+* BlobFinder (from `dht.ts`) defines the logic for locating files within the DHT
 
 ## Enjoy!
 
