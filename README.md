@@ -1,26 +1,40 @@
 # grits
 
-Grits is load-sharing software, designed to allow a community-supported web site to operate based on contributions of resources by the members of the web site. A site using grits proxies should be able to shift a lot of the load of operating the site onto the members of the community by having them run fairly simple software, while still operating in a fast and secure manner.
+Grits is load-sharing software, designed to allow a community-supported web site to operate based on direct contributions of resources by the members of the web site. A site using grits proxies should be able to shift a lot of the load of operating the site onto the members of the community by having them run fairly simple software, while still operating in a fast and secure manner.
 
-In its current imagined incarnation, it's a network of peer-to-peer caching proxies that serve a content-addressable data store on behalf of the central server. Clients can read data from proxies operated by members of the community, as opposed to placing load on the central server, enabling people to host a community web site without taking on as much of a financial and technological burden.
+You can read more about the motivations behind the software, and future directions it might take after this stage, [on the Lemmy post](https://lemmy.world/post/62323). The short summary is that for at least 20 years, people have been talking about switching to a more peer-to-peer vision of the internet, but the actual success that's been demonstrated has always been pretty limited in scope compared to the non-peer-to-peer options. Bittorrent is great, ActivityPub is great but has caveats, but Wikipedia still runs on fairly expensive centrally-served hosting. My vision would be that it becomes realistic to run a busy Mastadon node, or a site like Wikipedia, and have a substantial amount of the hosting being done by the users.
 
-You can read more about the motivations behind the software, and future directions it might take after this stage, [on the Lemmy post](https://lemmy.world/post/62323).
+## Current Status and Roadmap
 
-## Current Status
+This software is in very early stage at this point. At present, the proxies can talk to one another and exchange files in a testbed, and that's about it. Making it work on the actual real-world internet is another story; the work currently in progress is to handle congestion and packet loss, switching to a new proxy smoothly if one is performing badly, etc, work well. That's not working yet but seems likely within the somewhat-near future.
 
-At present, the proxies can talk to one another and exchange files. Making it work on the actual real-world internet is another story; the work currently in progress is to handle congestion and packet loss and switching to a new proxy, etc, work well. That's not working yet but seems likely within the somewhat-near future.
+Note that I'm reimplementing the transport layer, instead of using e.g. IPFS or Hypercore, which adds a ton of work and risk. I talk a little more on Lemmy about the reasons for this surprising decision; we'll see if it turns out to have been a good idea.
 
-## Prerequisites
+The roadmap in order indicating the early stage we're currently at, is:
 
-The project is Typescript running on Node.JS. To try it out, you'll need:
+* Basic peer communication
+* DHT and file finding / sending / receiving
+* Coping with congestion and real-world internet constraints (WE ARE HERE)
+* Real internet testing, NAT traversal, security
+* Integrate with a real web app and test serving real content via the network
+* Real load testing, probing for places where the scalability can be improved
+* Encryption and real security for the served content
+
+We'll probably reevaluate a lot once it gets to that point, but there are also some more pie-in-the-sky features planned some time after that. Some of them include:
+
+* Better support for database-like content in the shared store (better support for tiny data, maybe something like Holepunch's B-tree shared filesystem, support for indexing and searching)
+* Support in a secure fashion for writes to the shared store from non-central nodes
+* Support for trusted content, PKI, signing and encrypting data in the network
+
+## Contributing
+
+If you're interested to be part of the real-internet test network once things get to that stage, drop me a line. Also, obviously if you're interested in be involved in the code side of things, definitely drop me a line as I'd love the help. Prerequisities at present are:
 
 * Node.js
 * npm
 * A collection of dummy files to populate the test network's storage with (around 1000 is probably good -- they can be literally any random files)
 
-## How To
-
-Again, it doesn't do much yet. But, if you want to examine the code or run the test network, definitely check it out and play with it! You can clone the repo and do:
+To test out the current (early!) stage of the code, clone the repo, and then:
 
 ```
 npm install
@@ -29,15 +43,15 @@ mkdir tmp-download
 npx ts-node src/run-test-0.ts
 ```
 
-That'll start up a little network of 50 nodes, with 10 random files from `test-images/` populated into each one of them. Once they've had a little bit of time to communicate with one another, you should be able to run a command similar to:
+That'll start up a little network of 50 nodes, with 10 random files from `test-images/` populated into each one of them. Once they've had 30-40 seconds to sort themselves out, you should be able to run a command similar to:
 
 ```
 wget http://localhost:1234/blob/1cbff4192356c731e2e75dc26dd124170523abd99f15d8902938a9cefe5ec4a0:594725
 ```
 
-And get back a file which was shared and then downloaded over the network. You'll have to replace that sha-256 hash and length with an actual one; you can pick some random file out of `grits-test-run/2` and paste in its filename and size in order for the `wget` call to actually work.
+wget should successfully download a file which was shared and then transferred over the grits network. You'll have to replace that sha-256 hash and length with an actual one; you can pick some random file out of `grits-test-run/2` and, with its filename and size, run `wget http://localhost:1234/blob/$sha:$size`.
 
-The next step forward -- working on a degraded network, with bandwidth limits and packet loss and etc -- is going to be when `src/run-test-1.ts` starts working.
+The next step forward -- success on a degraded network, with bandwidth limits and packet loss and etc -- is going to be when `src/run-test-1.ts` starts working.
 
 ## Code structure
 
