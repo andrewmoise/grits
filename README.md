@@ -59,21 +59,22 @@ The next step forward -- success on a degraded network, with bandwidth limits an
 
 The main structure of classes and how they collaborate with one another is:
 
+* `structures.ts` defines some data classes 
+  * PeerProxy is an abstraction for some other host within the network 
+  * CachedFile is an abstraction for a file in our local storage 
+
 * ProxyManager (from `proxy.ts`) is the top level class for a host within the network
   * FileCache (from `filecache.ts`) is where it keeps its data on the local storage
   * Config (from `config.ts`) defines top-level parameters for the host
-  * RootProxyManager, also from `proxy.ts`, defines special functionality for the trusted "root" proxy within the network
+  * NetworkManager (from `network.ts`) operates the UDP sockets
+  * DownloadManager (from `download.ts`) operates any downloads in progress 
+  * UpstreamManager and DownstreamManager (from `traffic.ts`) handle traffic shaping and congestion management
+  * BlobFinder (from `dht.ts`) defines the logic for locating files within the DHT
+  
+* RootProxyManager, also from `proxy.ts`, defines special functionality for the trusted "root" proxy within the network
 
-* `structures.ts` defines some data classes
-  * PeerProxy is an abstraction for some other host within the network
-  * CachedFile is an abstraction for a file in our local storage
-
-* NetworkManager (from `network.ts`) operates the UDP sockets
 * Message and its subclasses (from `messages.ts`) represent messages and define their serialization and deserialization
-* DownloadManager (from `download.ts`) operates any downloads in progress
-* UpstreamManager and DownstreamManager (from `traffic.ts`) handle traffic shaping and congestion management
-* HttpServer (from `web.ts`) runs the web server
-* BlobFinder (from `dht.ts`) defines the logic for locating files within the DHT
+* HttpServer (from `web.ts`) runs a web server, if you want to serve content-addressable content from one of the proxies
 
 ## Enjoy!
 
