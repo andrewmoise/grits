@@ -22,7 +22,10 @@ import {
     CachedFile, PeerProxy, FileRetrievalError, DOWNLOAD_CHUNK_SIZE
 } from "./structures";
 
-import { NetworkManager, UdpNetworkManager } from './network';
+import {
+    InRequest, OutRequest, NetworkManager, UdpNetworkManager
+} from './network';
+
 import { BlobFinder } from './dht';
 import { Logger } from './logger';
 import { UpstreamManager } from './traffic';
@@ -152,37 +155,16 @@ abstract class ProxyManagerBase {
         this.logger.log(new Date(), 'proxies',
                         `Init with ${this.peerProxies.size} proxies`);
         
-        //console.log("Set up proxy + start");
-
         this.networkManager.start();
 
         this.networkManager.registerRequestHandler(
-            MessageType.DATA_REQUEST_MESSAGE, this.handleDataRequest.bind(this));
-
-        this.networkManager.registerRequestHandler(
-            MessageType.DATA_RESPONSE_OK,
-            this.downloadManager.handleDataResponseOk.bind(
-                this.downloadManager));
-
-        this.networkManager.registerRequestHandler(
-            MessageType.DATA_RESPONSE_ELSEWHERE,
-            this.downloadManager.handleDataResponseElsewhere.bind(
-                this.downloadManager));
-
-        this.networkManager.registerRequestHandler(
-            MessageType.DATA_RESPONSE_UNKNOWN,
-            this.downloadManager.handleDataResponseUnknown.bind(
-                this.downloadManager));
+            MessageType.DATA_REQUEST_MESSAGE,
+            this.handleDataRequest.bind(this));
 
         this.networkManager.registerRequestHandler(
             MessageType.DHT_LOCATION_MESSAGE,
             this.handleDhtLocationMessage.bind(this));
 
-        this.networkManager.registerRequestHandler(
-            MessageType.DHT_LOCATION_RESPONSE,
-            this.handleDhtResponse.bind(this));
-
-        
         this.cleanupIntervalId = setInterval(
             this.proxyDataMap.cleanup.bind(this.proxyDataMap),
             this.config.proxyMapCleanupPeriod);
@@ -202,24 +184,17 @@ abstract class ProxyManagerBase {
         clearInterval(this.cleanupIntervalId);
 
         this.networkManager.unregisterRequestHandler(
-            MessageType.DHT_LOCATION_RESPONSE);
-        this.networkManager.unregisterRequestHandler(
             MessageType.DHT_LOCATION_MESSAGE);
         this.networkManager.unregisterRequestHandler(
             MessageType.DATA_REQUEST_MESSAGE);
-        this.networkManager.unregisterRequestHandler(
-            MessageType.DATA_RESPONSE_OK);
-        this.networkManager.unregisterRequestHandler(
-            MessageType.DATA_RESPONSE_UNKNOWN);
 
         this.networkManager.stop();
 
         this.logger.stop();
     }
 
-    async handleDataRequest(senderIp: string, senderPort: number,
-                            message: Message): Promise<void>
-    {
+    async handleDataRequest(request: InRequest, message: Message)
+    : Promise<void> {
         if (!(message instanceof DataRequestMessage))
             throw new Error("Data request of wrong TS type!");
         const dataRequestMessage = message as DataRequestMessage;
@@ -242,9 +217,12 @@ abstract class ProxyManagerBase {
                 
                 while (length > 0) {
                     this.logger.log(new Date(), message.transferId,
-                                    `Request budget ${length-budget}`);
+                                    `Have ${budget}, requesting budget ${length-budget}`);
                     budget += await this.upstreamManager.requestUpload(
                         length - budget);
+
+                    this.logger.log(new Date(), message.transferId,
+                                    `Got total budget ${budget}`);
                     
                     while(budget >= Math.min(length, DOWNLOAD_CHUNK_SIZE)
                         && length > 0)
@@ -259,15 +237,17 @@ abstract class ProxyManagerBase {
                         const responseMessage = new DataResponseOk(
                             fileAddr, offset,
                             packetLen, data);
-                        
-                        this.networkManager.send(responseMessage, senderIp,
-                                                    senderPort);
+
+                        request.sendResponse(responseMessage);
                         
                         offset += packetLen;
                         budget -= packetLen;
                         length -= packetLen;
                     }
                 }
+
+                this.logger.log(new Date(), message.transferId,
+                                `All done with upload`);
             } finally {
                 file.release();
             }
@@ -291,8 +271,8 @@ abstract class ProxyManagerBase {
             const responseMessage = new DataResponseElsewhere(
                 fileAddr, nodeInfo);
 
-            this.networkManager.send(
-                responseMessage, senderIp, senderPort);
+            request.sendResponse(responseMessage);
+
             return;
         }
 
@@ -302,20 +282,19 @@ abstract class ProxyManagerBase {
 
         const responseMessage = new DataResponseUnknown(
             fileAddr);
-        this.networkManager.send(responseMessage, senderIp, senderPort);
+        request.sendResponse(responseMessage);
         return;
     }
     
-    async handleDhtLocationMessage(senderIp: string, senderPort: number,
-                                   rawMessage: Message)
+    async handleDhtLocationMessage(request: InRequest, rawMessage: Message)
     : Promise<void> {
         if (!(rawMessage instanceof DhtLocationMessage))
             throw new Error("Received wrong message type!");
         const message = rawMessage as DhtLocationMessage;
 
-        this.logger.log(new Date(), 'dht', `Got location ${message.fileAddr} at ${senderIp}:${senderPort}`);
+        this.logger.log(new Date(), 'dht', `Got location ${message.fileAddr} at ${request.ip}:${request.port}`);
         
-        const senderProxy = this.getPeerProxy(senderIp, senderPort);
+        const senderProxy = this.getPeerProxy(request.ip, request.port);
         if (senderProxy) {
             this.proxyDataMap.updateData(message.fileAddr,
                                          senderProxy);
@@ -324,18 +303,13 @@ abstract class ProxyManagerBase {
         }
 
         this.upstreamManager.requestUpload(40); // FIXME
-        this.logger.log(new Date(), 'dht', `Sending location response for ${message.fileAddr} to ${senderIp}:${senderPort}`);
+        this.logger.log(new Date(), 'dht', `Sending location response for ${message.fileAddr} to ${request.ip}:${request.port}`);
         
         const response = new DhtLocationResponse(message.fileAddr);
-        this.networkManager.send(response, senderIp, senderPort);
+        request.sendResponse(response);
+        //this.networkManager.send(response, request.ip, request.port);
     }
     
-    async handleWrongMessage(senderIp: string, senderPort: number, message: any)
-    : Promise<void> {
-        throw new Error("Received wrong message! Code " + message + " from "
-            + senderIp);
-    }
-
     async dhtNotify(cachedFile: CachedFile): Promise<void> {
         this.logger.log(new Date(), 'dht', `DHT Notify ${cachedFile.fileAddr}`);
 
@@ -366,7 +340,12 @@ abstract class ProxyManagerBase {
                 new Date(), 'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);
             
             const message = new DhtLocationMessage(cachedFile.fileAddr);
-            this.networkManager.send(message, node.ip, node.port);
+            const request = this.networkManager.newRequest(
+                node.ip, node.port, message);
+            const response = await request.getResponse();
+            if (response)
+                this.handleDhtResponse(node.ip, node.port, response);
+            request.close();
         }
     }
 
@@ -452,10 +431,6 @@ abstract class ProxyManagerBase {
 
 class ProxyManager extends ProxyManagerBase {
     sendProxyHeartbeatIntervalId?: NodeJS.Timeout;
-
-    // added these to track the promise
-    resolveFirstHeartbeatPromise: (() => void) | null = null;
-    rejectFirstHeartbeatPromise: ((reason?: any) => void) | null = null;
     
     constructor(config: Config) {
         super(config);
@@ -464,48 +439,6 @@ class ProxyManager extends ProxyManagerBase {
     async start() {
         await super.start();
 
-        this.networkManager.registerRequestHandler(
-            MessageType.HEARTBEAT_MESSAGE, this.handleWrongMessage.bind(this));
-        this.networkManager.registerRequestHandler(
-            MessageType.HEARTBEAT_RESPONSE, this.handleRootHeartbeat.bind(this));
-
-        // Do an initial heartbeat to get things set up
-        //let retryCount = 0;
-        //const maxRetries = 10;
-
-        while (true) {//retryCount < maxRetries) {
-            await new Promise((resolve: ((value?: unknown) => void) | null,
-                               reject: ((reason?: any) => void) | null) =>
-                {
-                    this.resolveFirstHeartbeatPromise = resolve;
-                    this.rejectFirstHeartbeatPromise = reject;
-                    this.sendProxyHeartbeat();
-                    // set a timeout for the promise
-                    setTimeout(() => {
-                        if (this.rejectFirstHeartbeatPromise) {
-                            this.rejectFirstHeartbeatPromise(
-                                "Heartbeat timeout");
-                        }
-                    }, 500);
-                }).catch((err) => {
-                    this.logger.log(
-                        new Date(), 'heartbeat',
-                        `Error: ${err}`);
-
-                    //retryCount++;
-                    //if (retryCount === maxRetries) {
-                    //    throw new Error(
-                    //        "Failed to establish connection after "
-                    //            + maxRetries + " attempts");
-                    //}
-                });
-
-            // break if the promise was resolved
-            if (!this.rejectFirstHeartbeatPromise) {
-                break;
-            }
-        }
-
         // And keep doing it periodically after that
         this.sendProxyHeartbeatIntervalId = setInterval(
             this.sendProxyHeartbeat.bind(this),
@@ -513,34 +446,46 @@ class ProxyManager extends ProxyManagerBase {
     }
 
     stop() {
-        //console.log("Close down proxy + end");
-
         // Clear the interval for sending proxy heartbeats
         clearInterval(this.sendProxyHeartbeatIntervalId!);
-
-        this.networkManager.unregisterRequestHandler(
-            MessageType.HEARTBEAT_MESSAGE);
-        this.networkManager.unregisterRequestHandler(
-            MessageType.HEARTBEAT_RESPONSE);
-
         super.stop();
     }
 
+    async sendProxyHeartbeat() {
+        this.logger.log(new Date(), 'heartbeat', 'Sending proxy heartbeat');
+
+        const heartbeatMessage = new HeartbeatMessage();
+
+        const request = this.networkManager.newRequest(
+            this.rootProxy.ip,
+            this.rootProxy.port,
+            heartbeatMessage);
+
+        try {
+            const responseMessage = await request.getResponse();
+            await this.handleRootHeartbeat(
+                this.rootProxy.ip,
+                this.rootProxy.port,
+                responseMessage);
+        } catch (err) {
+            this.logger.log(
+                new Date(), 'heartbeat',
+                `Error: ${err}`);
+        } finally {
+            request.close();
+        }
+    }
+
     async handleRootHeartbeat(senderIp: string, senderPort: number,
-                              message: Message)
-    {
+                              message: Message | null)
+    : Promise<void> {
         this.logger.log(
             new Date(), 'heartbeat',
             `Got root heartbeat, ${this.peerProxies.size} proxies`);
 
-        const resolvePromise = this.resolveFirstHeartbeatPromise;
-        if (resolvePromise) {
-            this.resolveFirstHeartbeatPromise = null;
-            this.rejectFirstHeartbeatPromise = null;
-        }
-        
         if (!(message instanceof HeartbeatResponse))
-            throw new Error("Data request of wrong TS type!");
+            throw new Error("Data request of wrong type or no response!");
+        
         const rootHeartbeatMessage = message as HeartbeatResponse;
 
         // Validate the sender
@@ -604,18 +549,6 @@ class ProxyManager extends ProxyManagerBase {
                 new Date(), 'heartbeat',
                 'Root heartbeat, but no map.');
         }
-
-        if (resolvePromise)
-            resolvePromise();
-    }
-
-    sendProxyHeartbeat() {
-        this.logger.log(new Date(), 'heartbeat', 'Sending proxy heartbeat');
-
-        const heartbeatMessage = new HeartbeatMessage();
-        this.networkManager.send(heartbeatMessage,
-            this.rootProxy.ip,
-            this.rootProxy.port);
     }
 }
 
@@ -633,8 +566,6 @@ class RootProxyManager extends ProxyManagerBase {
         await super.start();
 
         this.networkManager.registerRequestHandler(
-            MessageType.HEARTBEAT_RESPONSE, this.handleWrongMessage.bind(this));
-        this.networkManager.registerRequestHandler(
             MessageType.HEARTBEAT_MESSAGE, this.handleProxyHeartbeat.bind(this));
 
         this.heartbeatIntervalId = setInterval(
@@ -647,31 +578,30 @@ class RootProxyManager extends ProxyManagerBase {
 
         this.networkManager.unregisterRequestHandler(
             MessageType.HEARTBEAT_MESSAGE);
-        this.networkManager.unregisterRequestHandler(
-            MessageType.HEARTBEAT_RESPONSE);
 
         super.stop();
     }
 
-    handleProxyHeartbeat(senderIp: string, senderPort: number,
-                         message: Message): void
+    handleProxyHeartbeat(request: InRequest, message: Message): void
     {
-        this.logger.log(new Date(), 'heartbeat',
-                        `Got proxy heartbeat from ${senderIp}:${senderPort}`);
+        this.logger.log(
+            new Date(), 'heartbeat',
+            `Got proxy heartbeat from ${request.ip}:${request.port}`);
 
-        let peerProxy = this.getPeerProxy(senderIp, senderPort);
+        let peerProxy = this.getPeerProxy(request.ip, request.port);
         if (!peerProxy) {
-            peerProxy = this.addPeerProxy(senderIp, senderPort);
+            peerProxy = this.addPeerProxy(request.ip, request.port);
         }
 
         peerProxy.updateLastSeen();
 
         this.logger.log(new Date(), 'heartbeat',
-                        `Send root heartbeat to ${senderIp}:${senderPort}`);
+                        `Send root heartbeat to ${request.ip}:${request.port}`);
 
         const heartbeatMessage = new HeartbeatResponse(
             this.proxyMapFile ? this.proxyMapFile.fileAddr : null);
-        this.networkManager.send(heartbeatMessage, senderIp, senderPort);
+
+        request.sendResponse(heartbeatMessage);
     }
 
     async createProxyMapBuffer(): Promise<void> {

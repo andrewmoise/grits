@@ -1,5 +1,6 @@
 import * as dgram from 'dgram';
 import * as os from 'os';
+import { performance } from 'perf_hooks';
 
 import { Config } from './config';
 import { Logger } from './logger';
@@ -8,35 +9,144 @@ import { UpstreamManager } from "./traffic";
 import {
     MessageType,
     Message,
-    HeartbeatResponse,
+    
     HeartbeatMessage,
+    HeartbeatResponse,
+
     DataRequestMessage,
     DataResponseOk,
     DataResponseElsewhere,
     DataResponseUnknown,
+
     DhtLocationMessage,
     DhtLocationResponse,
 } from './messages';
 
-type RequestHandler = (address: string, port: number, message: Message) => void;
-
 const MAGIC_BYTES = Buffer.from([140, 98]);
+const DEFAULT_TIMEOUT: number = 500;
+
+type RequestHandler = (request: InRequest, message: Message) => void;
 
 interface NetworkManager {
-    start(overrideHandler?: (data: Buffer,
-                             rinfo: dgram.RemoteInfo) => void)
-    : void;
+    start(): void;
     stop(): void;
 
-    send(message: Message, ipAddress: string, port: number): void;
-
+    newRequest(ipAddress: string, port: number, message: Message): OutRequest;
+    
     registerRequestHandler(
         type: number,
-        handler: (address: string, port: number, message: Message) => void)
-    : void;
+        handler: RequestHandler,
+    ): void;
     unregisterRequestHandler(type: number): void;
+}
 
-    handleIncomingMessage(data: Buffer, rinfo: dgram.RemoteInfo): void;
+class InRequest {
+    manager: UdpNetworkManager;
+    requestId: number;
+    ip: string;
+    port: number;
+    message: Message;
+    
+    constructor(manager: UdpNetworkManager,
+                ip: string, port: number,
+                id: number, message: Message)
+    {
+        this.manager = manager;
+        this.requestId = id;
+        this.ip = ip;
+        this.port = port;
+        this.message = message;
+    }
+    
+    sendResponse(message: Message): void {
+        this.manager.send(message, this.requestId, this.ip, this.port);
+    }
+}
+
+class OutRequest {
+    manager: UdpNetworkManager;
+    requestId: number;
+    ip: string;
+    port: number;
+
+    timeoutTimeout: NodeJS.Timeout | null;
+    
+    messageQueue: Message[] = [];
+    resolverQueue: ((msg: Message | null) => void)[] = [];
+
+    constructor(manager: UdpNetworkManager, id: number,
+                ip: string, port: number)
+    {
+        this.manager = manager;
+        this.requestId = id;
+        this.ip = ip;
+        this.port = port;
+        
+        this.timeoutTimeout = setTimeout(
+            this.timeoutFn.bind(this), DEFAULT_TIMEOUT);
+        
+        this.manager.outRequests.set(this.requestId, this);
+    }
+    
+    sendRequest(message: Message): void {
+        this.manager.send(message, this.requestId, this.ip, this.port);
+    }
+
+    getResponse(): Promise<Message | null> {
+        if (this.messageQueue.length > 0) {
+            return Promise.resolve(this.messageQueue.shift()!);
+        } else {
+            return new Promise(resolve => {
+                this.resolverQueue.push(resolve);
+            });
+        }
+    }
+    
+    handleMessage(message: Message): void {
+        // Restart the timeout timer
+        if (this.timeoutTimeout) {
+            clearTimeout(this.timeoutTimeout);
+            this.timeoutTimeout = setTimeout(
+                this.timeoutFn.bind(this), DEFAULT_TIMEOUT);
+        }
+
+        // Handle the message
+        if (this.resolverQueue.length > 0) {
+            const resolve = this.resolverQueue.shift();
+            if (resolve) {
+                resolve(message);
+            }
+        } else {
+            this.messageQueue.push(message);
+        }
+    }
+    
+    close(): void {
+        // Clear the timeout
+        if (this.timeoutTimeout) {
+            clearTimeout(this.timeoutTimeout);
+            this.timeoutTimeout = null;
+        }
+
+        // Clear the resolver queue
+        const resolverQueue = this.resolverQueue;
+        this.resolverQueue = [];
+        for (let resolve of resolverQueue)
+            resolve(null);
+
+        this.manager.outRequests.delete(this.requestId);
+    }
+
+    private timeoutFn() {
+        this.timeoutTimeout = null;
+        
+        if (this.resolverQueue.length > 0) {
+            const resolve = this.resolverQueue.shift();
+            if (resolve) {
+                resolve(null);
+            }
+        }
+    }
 }
 
 function getLocalIPAddresses(): string[] {
@@ -59,6 +169,9 @@ function getLocalIPAddresses(): string[] {
 class UdpNetworkManager {
     logger: Logger;
     config: Config;
+
+    outRequests: Map<number, OutRequest>;
+    nextRequestId: number;
     
     requestHandlers: Map<number, RequestHandler>;
     socket: dgram.Socket | null;
@@ -77,13 +190,15 @@ class UdpNetworkManager {
         this.logger = logger;
         this.config = config;
 
+        this.outRequests = new Map();
+        this.nextRequestId = 0;
+        
         this.requestHandlers = new Map();
         this.socket = null;
         this.trafficManager = new UpstreamManager(config);
     }
 
-    start(overrideHandler?: (data: Buffer, rinfo: dgram.RemoteInfo) => void)
-    : void {
+    start(): void {
         const socketOptions: dgram.SocketOptions = {
             type: 'udp4',
             reuseAddr: true,
@@ -94,7 +209,7 @@ class UdpNetworkManager {
 
         this.socket.on(
             'message',
-            overrideHandler || this.handleIncomingMessage.bind(this));
+            this.handleIncomingMessage.bind(this));
     }
 
     stop(): void {
@@ -104,23 +219,41 @@ class UdpNetworkManager {
         }
     }
 
-    send(message: Message, ipAddress: string, port: number): void {
+    newRequest(ipAddress: string, port: number, message: Message)
+    : OutRequest {
+        const requestId = this.nextRequestId++;
+
+        const request = new OutRequest(this, requestId, ipAddress, port);
+        this.outRequests.set(requestId, request);
+        request.sendRequest(message);
+
+        return request;
+    }
+    
+    send(message: Message, requestId: number, ipAddress: string, port: number)
+    : void {
         const encodedContent = message.encode();
+
+        const requestIdBuffer = Buffer.alloc(4);
+        requestIdBuffer.writeInt32BE(requestId, 0);
+        
         const header = Buffer.concat([
             MAGIC_BYTES,
+            requestIdBuffer,
             Buffer.from([message.type])
         ]);
         const encodedMessage = Buffer.concat([header, encodedContent]);
 
         if (!this.socket) {
-            console.error('Socket is not initialized');
+            this.logger.log(new Date(), 'network', 'Socket is not initialized');
             return;
         }
 
         this.socket.send(encodedMessage, 0, encodedMessage.length, port,
             ipAddress, (error) => {
                 if (error) {
-                    console.error('Error sending message:', error);
+                    this.logger.log(new Date(), 'network',
+                                    `Error sending message: ${error}`);
                     return;
                 }
             });
@@ -128,48 +261,83 @@ class UdpNetworkManager {
 
     handleIncomingMessage(data: Buffer, rinfo: dgram.RemoteInfo): void {
         const { address, port } = rinfo;
-        const messageType = data.readUInt8(2);
-        const messageData = data.slice(3);
 
+        const magicNumber = data.slice(0, MAGIC_BYTES.length);
+        if (!magicNumber.equals(MAGIC_BYTES))
+            throw new Error('Invalid magic number');
+
+        const requestId = data.readInt32BE(MAGIC_BYTES.length);
+        const messageType = data.readUInt8(MAGIC_BYTES.length + 4);
+        const messageData = data.slice(MAGIC_BYTES.length + 5);
+
+        let isInRequest: boolean;
+        
         let message;
         switch (messageType) {
             case MessageType.HEARTBEAT_MESSAGE:
                 message = HeartbeatMessage.fromBuffer(messageData);
+                isInRequest = true;
                 break;
             case MessageType.HEARTBEAT_RESPONSE:
                 message = HeartbeatResponse.fromBuffer(messageData);
+                isInRequest = false;
                 break;
             case MessageType.DATA_REQUEST_MESSAGE:
                 message = DataRequestMessage.fromBuffer(messageData);
+                isInRequest = true;
                 break;
             case MessageType.DATA_RESPONSE_OK:
                 message = DataResponseOk.fromBuffer(messageData);
+                isInRequest = false;
                 break;
             case MessageType.DATA_RESPONSE_ELSEWHERE:
                 message = DataResponseElsewhere.fromBuffer(messageData);
+                isInRequest = false;
                 break;
             case MessageType.DATA_RESPONSE_UNKNOWN:
                 message = DataResponseUnknown.fromBuffer(messageData);
+                isInRequest = false;
                 break;
             case MessageType.DHT_LOCATION_MESSAGE:
                 message = DhtLocationMessage.fromBuffer(messageData);
+                isInRequest = true;
                 break;
             case MessageType.DHT_LOCATION_RESPONSE:
                 message = DhtLocationResponse.fromBuffer(messageData);
+                isInRequest = false;
                 break;
             default:
                 throw new Error('Unknown message type: ' + messageType);
         }
 
-        if (this.requestHandlers.has(message.type)) {
-            const handler = this.requestHandlers.get(message.type);
-            handler && handler(address, port, message);
-            return;
+        if (isInRequest) {
+            if (this.requestHandlers.has(message.type)) {
+                const handler = this.requestHandlers.get(message.type);
+                if (handler) {
+                    const request = new InRequest(this, address, port,
+                                                  requestId, message);
+                    handler(request, message);
+                } else {
+                    this.logger.log(new Date(), 'network',
+                                    `No handler for ${message.type}`);
+                }
+                return;
+            }
         } else {
-            this.logger.log(
-                new Date(), 'network',
-                `Unhandled message, type ${message.type}`);
+            const request = this.outRequests.get(requestId);
+            if (request === undefined) {
+                this.logger.log(new Date(), 'network',
+                                `Unknown request ID ${requestId}`);
+                return;
+            }
+            request.handleMessage(message);
+
+            return;
         }
+
+        this.logger.log(
+            new Date(), 'network',
+            `Unhandled message, type ${message.type}`);
     }
     
     registerRequestHandler(type: number, handler: RequestHandler): void {
@@ -182,5 +350,5 @@ class UdpNetworkManager {
 }
 
 export {
-    RequestHandler, NetworkManager, UdpNetworkManager
+    InRequest, OutRequest, RequestHandler, NetworkManager, UdpNetworkManager
 };

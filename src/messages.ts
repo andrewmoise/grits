@@ -17,7 +17,7 @@ export enum MessageType {
 
 export abstract class Message {
     type: MessageType;
-
+    
     constructor(type: MessageType) {
         this.type = type;
     }
