@@ -176,7 +176,7 @@ class DownloadInProgress {
     maybeRequeueDownload(needDownloads: number[][], offset: number,
                          length: number): void
     {
-        this.log(`Maybe requeue [${offset}+${length}]`);
+        this.log(`Maybe requeue ${offset}+${length}`);
         let currentChunk = null;
 
         for(let i=offset;
@@ -196,7 +196,7 @@ class DownloadInProgress {
 
             if (needThisOne && !needNextOne) {
                 let realLength = Math.min(offset+length, nextI) - currentChunk;
-                this.log(`  Do requeue [${currentChunk}+${realLength]`);
+                this.log(`  Do requeue ${currentChunk}+${realLength}`);
                 needDownloads.push([currentChunk, realLength]);
                 currentChunk = null;
             }
@@ -209,7 +209,7 @@ class DownloadInProgress {
         let [offset, length] = needDownloads.pop()!;
 
         this.log(`Do queue download [${offset}+${length}]`);
-        this.log(`  Avail hosts x${this.availHosts.size}`);
+        this.log(`  Avail hosts ${this.availHosts.size}`);
         
         const potentialBursts =
             await this.downloadManager.downstreamManager.requestDownload(
