@@ -15,11 +15,13 @@ import {
 
     DataRequestMessage,
     DataResponseOk,
-    DataResponseElsewhere,
     DataResponseUnknown,
 
-    DhtLocationMessage,
-    DhtLocationResponse,
+    DhtStoreMessage,
+    DhtStoreResponse,
+
+    DhtLookupMessage,
+    DhtLookupResponse,
 } from './messages';
 
 const MAGIC_BYTES = Buffer.from([140, 98]);
@@ -290,20 +292,24 @@ class UdpNetworkManager {
                 message = DataResponseOk.fromBuffer(messageData);
                 isInRequest = false;
                 break;
-            case MessageType.DATA_RESPONSE_ELSEWHERE:
-                message = DataResponseElsewhere.fromBuffer(messageData);
-                isInRequest = false;
-                break;
             case MessageType.DATA_RESPONSE_UNKNOWN:
                 message = DataResponseUnknown.fromBuffer(messageData);
                 isInRequest = false;
                 break;
-            case MessageType.DHT_LOCATION_MESSAGE:
-                message = DhtLocationMessage.fromBuffer(messageData);
+            case MessageType.DHT_STORE_MESSAGE:
+                message = DhtStoreMessage.fromBuffer(messageData);
                 isInRequest = true;
                 break;
-            case MessageType.DHT_LOCATION_RESPONSE:
-                message = DhtLocationResponse.fromBuffer(messageData);
+            case MessageType.DHT_STORE_RESPONSE:
+                message = DhtStoreResponse.fromBuffer(messageData);
+                isInRequest = false;
+                break;
+            case MessageType.DHT_LOOKUP_MESSAGE:
+                message = DhtLookupMessage.fromBuffer(messageData);
+                isInRequest = true;
+                break;
+            case MessageType.DHT_LOOKUP_RESPONSE:
+                message = DhtLookupResponse.fromBuffer(messageData);
                 isInRequest = false;
                 break;
             default:

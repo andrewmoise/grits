@@ -19,9 +19,9 @@ import {
 } from "./structures";
 
 import {
-    DataRequestMessage, DataResponseElsewhere, DataResponseOk,
-    DataResponseUnknown,
-    Message
+    Message,
+    DataRequestMessage, DataResponseOk, DataResponseUnknown,
+    DhtLookupMessage, DhtLookupResponse,
 } from "./messages";
 
 const TRANSFER_ID_CHARACTERS =
@@ -45,7 +45,7 @@ class DownloadInProgress {
     rejectCompletion!: (reason?: any) => void;
 
     outputFile: fs.promises.FileHandle | null;
-    tempDownloadFile?: string;
+    tempDownloadFile: string | null;
     
     availHosts: Set<PeerProxy>;
     rejectedHosts: Set<PeerProxy>;
@@ -72,7 +72,8 @@ class DownloadInProgress {
         });
 
         this.outputFile = null;
-
+        this.tempDownloadFile = null;
+        
         this.unreceivedOffsets = new Set(
             Array.from(
                 { length: Math.ceil(this.size / DOWNLOAD_CHUNK_SIZE) },
@@ -104,8 +105,7 @@ class DownloadInProgress {
                 } else {
                     this.runningRequests.set(
                         this.runningRequestIndex,
-                        this.downloadFrom(proxy, 0, dhtLength,
-                                          this.runningRequestIndex));
+                        this.lookupFrom(proxy, this.runningRequestIndex));
                     this.runningRequestIndex++;
                 }
             }
@@ -119,21 +119,41 @@ class DownloadInProgress {
                     this.runningRequests.values());
 
                 this.log(`Got completed promise for [${completed.offset}+${completed.length}]`);
+
+                this.log(`  ${this.unreceivedOffsets.size} unreceived offsets`);
+                
+                this.log('  needDownloads is:');
+                for(let download of needDownloads)
+                    this.log(`    ${download[0]} ${download[1]}`);
                 
                 if (this.unreceivedOffsets.size <= 0)
                     break;
-                assert(needDownloads.length > 0,
-                       'Not done but no needDownloads');
                 
                 this.runningRequests.delete(completed.id);
                 this.maybeRequeueDownload(needDownloads,
                                           completed.offset, completed.length);
 
+                if (needDownloads.length <= 0) {
+                    this.log('Not done but no needDownloads!');
+                    throw new Error('Not done but no needDownloads!');
+                }
+
+                this.log('  after requeue, needDownloads is:');
+                for(let download of needDownloads)
+                    this.log(`    ${download[0]} ${download[1]}`);
+
+                this.log(`Maybe queue: ${this.availHosts.size} avail hosts`);
+                
                 if (this.availHosts.size > 0) {
+                    this.log('  yes QD');
                     await this.queueDownload(needDownloads);
                 } else if (this.runningRequests.size <= 0) {
                     throw new Error("Couldn't complete download");
                 }
+
+                this.log('  all done, needDownloads is:');
+                for(let download of needDownloads)
+                    this.log(`    ${download[0]} ${download[1]}`);
             }
             
             const outputFile = this.outputFile;
@@ -151,8 +171,11 @@ class DownloadInProgress {
                 this.outputFile = null;
             }
 
-            if (this.tempDownloadFile)
-                await fs.promises.unlink(this.tempDownloadFile);
+            if (this.tempDownloadFile) {
+                const tempDownloadFile = this.tempDownloadFile;
+                this.tempDownloadFile = null;
+                await fs.promises.unlink(tempDownloadFile);
+            }
             
             this.rejectCompletion(err);
         }
@@ -174,8 +197,8 @@ class DownloadInProgress {
     }
 
     maybeRequeueDownload(needDownloads: number[][], offset: number,
-                         length: number): void
-    {
+                         length: number)
+    : void {
         this.log(`Maybe requeue ${offset}+${length}`);
         let currentChunk = null;
 
@@ -204,7 +227,11 @@ class DownloadInProgress {
     }
     
     async queueDownload(needDownloads: number[][]): Promise<void> {
-        assert(needDownloads.length > 0 && needDownloads[-1].length == 2,
+        this.log(`  In QD, ND length ${needDownloads.length}`);
+        this.log(`  Popping ${needDownloads[needDownloads.length-1]}`);
+
+        assert(needDownloads.length > 0
+            && needDownloads[needDownloads.length-1].length == 2,
                'needDownloads is malformed');
         let [offset, length] = needDownloads.pop()!;
 
@@ -234,6 +261,28 @@ class DownloadInProgress {
             needDownloads.push([offset, length]);
     }
 
+    async lookupFrom(host: PeerProxy, id: number): Promise<DownloadTaskResult> {
+        this.log(`  Iter lookup ${host.ip}:${host.port}`);
+
+        const network = this.downloadManager.proxyManager.networkManager;
+        const message = new DhtLookupMessage(this.fileAddr, this.transferId);
+
+        for(let attempts = 0; attempts < 30; attempts++) {
+            const request = network.newRequest(host.ip, host.port, message);
+            const response = await request.getResponse();
+            if (response === null) {
+                continue;
+            } else if (response instanceof DhtLookupResponse) {
+                await this.handleDhtLookupResponse(host, response!);
+                return {id, offset: 0, length: 0};
+            } else {
+                throw new Error(`Wrong type result: ${response}`);
+            }
+        }
+
+        throw new Error("Couldn't communicate with ${host.ip}:${host.port}");
+    }
+        
     async downloadFrom(
         host: PeerProxy, offset: number, length: number, id: number)
     : Promise<DownloadTaskResult> {
@@ -260,22 +309,23 @@ class DownloadInProgress {
                     // timeouts for each host, and we can bail on the overall
                     // transfer IFF we have no availHosts with no timeouts.
 
-                    if (this.availHosts.has(host)) {
-                        this.availHosts.delete(host);
-                        this.rejectedHosts.add(host);
-                    }
+                    //if (this.availHosts.has(host)) {
+                    //    this.availHosts.delete(host);
+                    //    this.rejectedHosts.add(host);
+                    //}
 
                     return {id, offset, length};
                 } else if (response instanceof DataResponseUnknown) {
-                    this.handleDataResponseUnknown(host, response!);
-                    return {id, offset, length};
-                } else if (response instanceof DataResponseElsewhere) {
-                    this.handleDataResponseElsewhere(host, response!);
+                    await this.handleDataResponseUnknown(host, response!);
                     return {id, offset, length};
                 } else if (response instanceof DataResponseOk) {
-                    this.handleDataResponseOk(host, response!);
-                    if (this.unreceivedOffsets.size <= 0)
+                    await this.handleDataResponseOk(host, response!);
+                    this.log(`Response is ok. availHosts has ${this.availHosts.size}.`);
+                    if (this.unreceivedOffsets.size <= 0
+                        || response.offset+response.length === offset+length)
+                    {
                         return {id, offset, length};
+                    }
                 } else {
                     throw new Error(`Unrecognized response: ${response}`);
                 }
@@ -292,24 +342,36 @@ class DownloadInProgress {
     {
         this.log(`Got OK ${this.fileAddr}@${message.offset}[${message.length}] from ${source.ip}:${source.port}`);
 
-        // FIXME - this is for DHT hosts that unexpectedly have real data;
-        // this should be handled better though:
-        if (!this.availHosts.has(source))
-            this.availHosts.add(source);
+        try {
+        
+            this.log(`  Before: ${this.unreceivedOffsets.size} unreceived`);
+            
+            // FIXME - this is for DHT hosts that unexpectedly have real data;
+            // this should be handled better though:
+            if (!this.availHosts.has(source))
+                this.availHosts.add(source);
+            
+            if (this.unreceivedOffsets.has(message.offset)) {
+                this.log('    has');
                 
-        if (this.unreceivedOffsets.has(message.offset)) {
-            assert(message.offset >= 0,
-                   'Received offset negative');
-            assert(message.offset + message.length <= this.size,
-                   'Received end offset too large');
-            assert(message.length <= DOWNLOAD_CHUNK_SIZE,
-                   `Received chunk size ${message.length} is greater than DOWNLOAD_CHUNK_SIZE`);
-                    
-            await this.outputFile!.write(
-                message.data,
-                0, message.length, message.offset);
-                    
-            this.unreceivedOffsets.delete(message.offset);
+                assert(message.offset >= 0,
+                       'Received offset negative');
+                assert(message.offset + message.length <= this.size,
+                       'Received end offset too large');
+                assert(message.length <= DOWNLOAD_CHUNK_SIZE,
+                       `Received chunk size ${message.length} is greater than DOWNLOAD_CHUNK_SIZE`);
+                
+                await this.outputFile!.write(
+                    message.data,
+                    0, message.length, message.offset);
+                
+                this.unreceivedOffsets.delete(message.offset);
+            }
+            
+            this.log(`  After: ${this.unreceivedOffsets.size} unreceived`);
+        } catch(err) {
+            this.log(`Caught error! ${err}`);
+            throw err;
         }
     }
 
@@ -323,19 +385,15 @@ class DownloadInProgress {
         this.rejectedHosts.add(source);
     }
 
-    async handleDataResponseElsewhere(source: PeerProxy,
-                                      message: DataResponseElsewhere)
+    async handleDhtLookupResponse(source: PeerProxy,
+                                  message: DhtLookupResponse)
     {
-        this.log(`Got elsewhere ${this.fileAddr} from ${source.ip}:${source.port}`);
+        this.log(`Got DHT response ${this.fileAddr} from ${source.ip}:${source.port}`);
         
         if (!this.outputFile) {
             this.log('  Bail early');
             return;
         }
-
-        if (this.availHosts.has(source))
-            this.availHosts.delete(source);
-        this.rejectedHosts.add(source);
 
         for (const {ip, port} of message.nodeInfo) {
             this.log(`Elsewhere ${ip}:${port}`);

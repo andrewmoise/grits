@@ -8,11 +8,13 @@ export enum MessageType {
     
     DATA_REQUEST_MESSAGE = 2,
     DATA_RESPONSE_OK = 3,
-    DATA_RESPONSE_ELSEWHERE = 4,
-    DATA_RESPONSE_UNKNOWN = 5,
+    DATA_RESPONSE_UNKNOWN = 4,
 
-    DHT_LOCATION_MESSAGE = 6,
-    DHT_LOCATION_RESPONSE = 7,
+    DHT_STORE_MESSAGE = 5,
+    DHT_STORE_RESPONSE = 6,
+
+    DHT_LOOKUP_MESSAGE = 7,
+    DHT_LOOKUP_RESPONSE = 8,
 }
 
 export abstract class Message {
@@ -196,98 +198,6 @@ export class DataResponseOk extends Message {
     }
 }
 
-export class DataResponseElsewhere extends Message {
-    fileAddr: string;
-    nodeInfo: Array<{ ip: string, port: number }>;
-
-    constructor(fileAddr: string, nodeInfo: Array<{ ip: string, port: number }>)
-    {
-        console.log(`Constructing elsewhere: ${nodeInfo.length}`);
-        
-        super(MessageType.DATA_RESPONSE_ELSEWHERE);
-        this.fileAddr = fileAddr;
-        this.nodeInfo = nodeInfo;
-    }
-
-    static fromBuffer(buffer: Buffer): DataResponseElsewhere {
-        let offset = 0;
-        const hash = buffer.slice(offset, offset + 32).toString('hex');
-        offset += 32;
-        const size = buffer.readBigUInt64BE(offset).toString();
-        offset += 8;
-        const fileAddr = `${hash}:${size}`;
-        const nodeInfo: Array<{ ip: string, port: number }> = [];
-
-        console.log(`fromBuffer elsewhere`);
-        
-        while (offset < buffer.length) {
-            const protocolType = buffer.readUInt8(offset);
-            offset++;
-
-            console.log(`  offset ${offset}`);
-            
-            if (protocolType === 97) {
-                if (offset !== buffer.length) {
-                    throw new Error("Malformed DataResponseElsewhere");
-                }
-                break;
-            } else if (protocolType === 98) {
-                console.log('    read');
-                
-                const nodeSize = buffer.readUInt8(offset);
-                offset++;
-                if (nodeSize !== 6) {
-                    throw new Error("Malformed nodeInfo in DataResponseElsewhere");
-                }
-                const ipBytes = buffer.slice(offset, offset + 4);
-                offset += 4;
-                const ip = Array.from(ipBytes).join('.');
-                const port = buffer.readUInt16BE(offset);
-                offset += 2;
-                nodeInfo.push({ ip, port });
-            } else {
-                const nodeSize = buffer.readUInt8(offset);
-                offset += nodeSize;
-            }
-        }
-
-        return new DataResponseElsewhere(fileAddr, nodeInfo);
-    }
-
-    encode(): Buffer {
-        let offset = 0;
-        const headerBuffer = Buffer.allocUnsafe(40);
-
-        const [hash, size] = this.fileAddr.split(':');
-        const hashBuffer = Buffer.from(hash, 'hex');
-        hashBuffer.copy(headerBuffer, offset);
-        offset += 32;
-
-        const sizeBuffer = Buffer.alloc(8);
-        sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
-        sizeBuffer.copy(headerBuffer, offset);
-        offset += 8;
-
-        const nodeInfoBuffers = this.nodeInfo.map(({ ip, port }) => {
-            const buffer = Buffer.allocUnsafe(8);
-            buffer.writeUInt8(98, 0);
-            buffer.writeUInt8(6, 1);
-            ip.split('.').map(Number).forEach((byte, i) => {
-                buffer.writeUInt8(byte, 2 + i);
-            });
-            buffer.writeUInt16BE(port, 6);
-            return buffer;
-        });
-
-        console.log(`encode elsewhere: ${nodeInfoBuffers.length}`);
-        
-        const endSignal = Buffer.alloc(1);
-        endSignal.writeUInt8(97, 0);
-
-        return Buffer.concat([headerBuffer, ...nodeInfoBuffers, endSignal]);
-    }
-}
-
 export class DataResponseUnknown extends Message {
     fileAddr: string;
 
@@ -327,22 +237,22 @@ export class DataResponseUnknown extends Message {
     }
 }
 
-export class DhtLocationMessage extends Message {
+export class DhtStoreMessage extends Message {
     fileAddr: string;
 
     constructor(fileAddr: string) {
-        super(MessageType.DHT_LOCATION_MESSAGE);
+        super(MessageType.DHT_STORE_MESSAGE);
         this.fileAddr = fileAddr;
     }
 
-    static fromBuffer(buffer: Buffer): DhtLocationMessage {
+    static fromBuffer(buffer: Buffer): DhtStoreMessage {
         let offset = 0;
         const hash = buffer.slice(offset, offset + 32).toString('hex');
         offset += 32;
         const size = buffer.readBigUInt64BE(offset).toString();
         offset += 8;
         const fileAddr = `${hash}:${size}`;
-        return new DhtLocationMessage(fileAddr);
+        return new DhtStoreMessage(fileAddr);
     }
 
     encode(): Buffer {
@@ -363,22 +273,22 @@ export class DhtLocationMessage extends Message {
     }
 }
 
-export class DhtLocationResponse extends Message {
+export class DhtStoreResponse extends Message {
     fileAddr: string;
 
     constructor(fileAddr: string) {
-        super(MessageType.DHT_LOCATION_RESPONSE);
+        super(MessageType.DHT_STORE_RESPONSE);
         this.fileAddr = fileAddr;
     }
 
-    static fromBuffer(buffer: Buffer): DhtLocationResponse {
+    static fromBuffer(buffer: Buffer): DhtStoreResponse {
         let offset = 0;
         const hash = buffer.slice(offset, offset + 32).toString('hex');
         offset += 32;
         const size = buffer.readBigUInt64BE(offset).toString();
         offset += 8;
         const fileAddr = `${hash}:${size}`;
-        return new DhtLocationResponse(fileAddr);
+        return new DhtStoreResponse(fileAddr);
     }
 
     encode(): Buffer {
@@ -396,6 +306,132 @@ export class DhtLocationResponse extends Message {
         offset += 8;
         
         return buffer;
+    }
+}
+
+export class DhtLookupMessage extends Message {
+    fileAddr: string;
+    transferId: string;
+
+    constructor(fileAddr: string, transferId: string)
+    {
+        super(MessageType.DHT_LOOKUP_MESSAGE);
+        this.fileAddr = fileAddr;
+        this.transferId = transferId;
+    }
+
+    static fromBuffer(buffer: Buffer): DhtLookupMessage {
+        let offset = 0;
+        const hash = buffer.slice(offset, offset + 32).toString('hex');
+        offset += 32;
+        const size = buffer.readBigUInt64BE(offset).toString();
+        offset += 8;
+        const transferId = buffer.slice(offset, offset + 8).toString('binary');
+        offset += 8;
+
+        return new DhtLookupMessage(`${hash}:${size}`, transferId);
+    }
+
+    encode(): Buffer {
+        let offset = 0;
+        const buffer = Buffer.allocUnsafe(48);
+
+        const [hash, size] = this.fileAddr.split(':');
+        const hashBuffer = Buffer.from(hash, 'hex');
+        hashBuffer.copy(buffer, offset);
+        offset += 32;
+
+        const sizeBuffer = Buffer.alloc(8);
+        sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
+        sizeBuffer.copy(buffer, offset);
+        offset += 8;
+
+        buffer.write(this.transferId, offset, 'binary');
+        offset += 8;
+
+        return buffer;
+    }
+}
+
+export class DhtLookupResponse extends Message {
+    fileAddr: string;
+    nodeInfo: Array<{ ip: string, port: number }>;
+
+    constructor(fileAddr: string, nodeInfo: Array<{ ip: string, port: number }>)
+    {
+        super(MessageType.DHT_LOOKUP_RESPONSE);
+        this.fileAddr = fileAddr;
+        this.nodeInfo = nodeInfo;
+    }
+
+    static fromBuffer(buffer: Buffer): DhtLookupResponse {
+        let offset = 0;
+        const hash = buffer.slice(offset, offset + 32).toString('hex');
+        offset += 32;
+        const size = buffer.readBigUInt64BE(offset).toString();
+        offset += 8;
+        const fileAddr = `${hash}:${size}`;
+        const nodeInfo: Array<{ ip: string, port: number }> = [];
+
+        while (offset < buffer.length) {
+            const protocolType = buffer.readUInt8(offset);
+            offset++;
+
+            if (protocolType === 97) {
+                if (offset !== buffer.length) {
+                    throw new Error("Malformed DhtLookupResponse");
+                }
+                break;
+            } else if (protocolType === 98) {
+                const nodeSize = buffer.readUInt8(offset);
+                offset++;
+                if (nodeSize !== 6) {
+                    throw new Error("Malformed nodeInfo in DhtLookupResponse");
+                }
+                const ipBytes = buffer.slice(offset, offset + 4);
+                offset += 4;
+                const ip = Array.from(ipBytes).join('.');
+                const port = buffer.readUInt16BE(offset);
+                offset += 2;
+                nodeInfo.push({ ip, port });
+            } else {
+                const nodeSize = buffer.readUInt8(offset);
+                offset += nodeSize;
+            }
+        }
+
+        return new DhtLookupResponse(fileAddr, nodeInfo);
+    }
+
+    encode(): Buffer {
+        let offset = 0;
+        const headerBuffer = Buffer.allocUnsafe(40);
+
+        const [hash, size] = this.fileAddr.split(':');
+        const hashBuffer = Buffer.from(hash, 'hex');
+        hashBuffer.copy(headerBuffer, offset);
+        offset += 32;
+
+        const sizeBuffer = Buffer.alloc(8);
+        sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
+        sizeBuffer.copy(headerBuffer, offset);
+        offset += 8;
+
+        const nodeInfoBuffers = this.nodeInfo.map(({ ip, port }) => {
+            const buffer = Buffer.allocUnsafe(8);
+            buffer.writeUInt8(98, 0);
+            buffer.writeUInt8(6, 1);
+            ip.split('.').map(Number).forEach((byte, i) => {
+                buffer.writeUInt8(byte, 2 + i);
+            });
+            buffer.writeUInt16BE(port, 6);
+            return buffer;
+        });
+
+        const endSignal = Buffer.alloc(1);
+        endSignal.writeUInt8(97, 0);
+
+        return Buffer.concat([headerBuffer, ...nodeInfoBuffers, endSignal]);
     }
 }
 
@@ -408,9 +444,11 @@ module.exports = {
 
     DataRequestMessage,
     DataResponseOk,
-    DataResponseElsewhere,
     DataResponseUnknown,
 
-    DhtLocationMessage,
-    DhtLocationResponse,
+    DhtStoreMessage,
+    DhtStoreResponse,
+
+    DhtLookupMessage,
+    DhtLookupResponse,
 };

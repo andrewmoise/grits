@@ -8,10 +8,11 @@ import {
     HeartbeatMessage,
     DataRequestMessage,
     DataResponseOk,
-    DataResponseElsewhere,
     DataResponseUnknown,
-    DhtLocationMessage,
-    DhtLocationResponse,
+    DhtStoreMessage,
+    DhtStoreResponse,
+    DhtLookupMessage,
+    DhtLookupResponse,
 } from './messages';
 
 import { Config } from './config';
@@ -162,9 +163,13 @@ abstract class ProxyManagerBase {
             this.handleDataRequest.bind(this));
 
         this.networkManager.registerRequestHandler(
-            MessageType.DHT_LOCATION_MESSAGE,
-            this.handleDhtLocationMessage.bind(this));
+            MessageType.DHT_STORE_MESSAGE,
+            this.handleDhtStoreMessage.bind(this));
 
+        this.networkManager.registerRequestHandler(
+            MessageType.DHT_LOOKUP_MESSAGE,
+            this.handleDhtLookupRequest.bind(this));
+        
         this.cleanupIntervalId = setInterval(
             this.proxyDataMap.cleanup.bind(this.proxyDataMap),
             this.config.proxyMapCleanupPeriod);
@@ -184,7 +189,7 @@ abstract class ProxyManagerBase {
         clearInterval(this.cleanupIntervalId);
 
         this.networkManager.unregisterRequestHandler(
-            MessageType.DHT_LOCATION_MESSAGE);
+            MessageType.DHT_STORE_MESSAGE);
         this.networkManager.unregisterRequestHandler(
             MessageType.DATA_REQUEST_MESSAGE);
 
@@ -255,28 +260,7 @@ abstract class ProxyManagerBase {
             return;
         }
 
-        // Try to find in other nodes.
-        const fileProxies = this.proxyDataMap.fileAddrToProxy.get(
-            fileAddr);
-        if (fileProxies) {
-            this.logger.log(new Date(), message.transferId,
-                            `Send elsewhere, ${fileProxies.proxies.length} hosts`);
-
-            const recentProxies = fileProxies.proxies.slice(
-                -this.config.dhtMaxResponseNodes);
-                
-            const nodeInfo = recentProxies.map(
-                proxy => ({ ip: proxy.ip, port: proxy.port }));
-                
-            const responseMessage = new DataResponseElsewhere(
-                fileAddr, nodeInfo);
-
-            request.sendResponse(responseMessage);
-
-            return;
-        }
-
-        // Return failure, since we can't find it here or elsewhere.
+        // Return failure, since we can't find it here.
         this.logger.log(new Date(), message.transferId,
                         `fileAddr is unknown`);
 
@@ -286,11 +270,11 @@ abstract class ProxyManagerBase {
         return;
     }
     
-    async handleDhtLocationMessage(request: InRequest, rawMessage: Message)
+    async handleDhtStoreMessage(request: InRequest, rawMessage: Message)
     : Promise<void> {
-        if (!(rawMessage instanceof DhtLocationMessage))
+        if (!(rawMessage instanceof DhtStoreMessage))
             throw new Error("Received wrong message type!");
-        const message = rawMessage as DhtLocationMessage;
+        const message = rawMessage as DhtStoreMessage;
 
         this.logger.log(new Date(), 'dht', `Got location ${message.fileAddr} at ${request.ip}:${request.port}`);
         
@@ -305,10 +289,55 @@ abstract class ProxyManagerBase {
         this.upstreamManager.requestUpload(40); // FIXME
         this.logger.log(new Date(), 'dht', `Sending location response for ${message.fileAddr} to ${request.ip}:${request.port}`);
         
-        const response = new DhtLocationResponse(message.fileAddr);
+        const response = new DhtStoreResponse(message.fileAddr);
         request.sendResponse(response);
         //this.networkManager.send(response, request.ip, request.port);
     }
+
+    async handleDhtLookupRequest(request: InRequest, message: Message)
+    : Promise<void> {
+        if (!(message instanceof DhtLookupMessage))
+            throw new Error("Data request of wrong TS type!");
+        const dhtLookupMessage = message as DataRequestMessage;
+
+        const fileAddr = dhtLookupMessage.fileAddr;
+
+        if (!message.transferId.match("^[A-Za-z0-9]{8}$"))
+            throw new Error(`Malformed transfer ID! ${message.transferId}`);
+        
+        this.logger.log(new Date(), message.transferId,
+                        `Data request for ${fileAddr}`);
+        
+        const fileProxies = this.proxyDataMap.fileAddrToProxy.get(
+            fileAddr);
+
+        let nodeInfo: Array<{ ip: string, port: number }>;
+        
+        if (fileProxies) {
+            this.logger.log(new Date(), message.transferId,
+                            `  Got ${fileProxies.proxies.length} hosts`);
+
+            const recentProxies = fileProxies.proxies.slice(
+                -this.config.dhtMaxResponseNodes);
+                
+            nodeInfo = recentProxies.map(
+                proxy => ({ ip: proxy.ip, port: proxy.port }));
+        } else {
+            this.logger.log(new Date(), message.transferId,
+                            `  Got nothing from lookup`);
+
+            nodeInfo = [];
+        }
+
+        this.logger.log(new Date(), message.transferId,
+                        `  Finished lookup: ${nodeInfo.length} nodes`);
+        
+        const responseMessage = new DhtLookupResponse(
+            fileAddr, nodeInfo);
+
+        request.sendResponse(responseMessage);
+    }
+
     
     async dhtNotify(cachedFile: CachedFile): Promise<void> {
         this.logger.log(new Date(), 'dht', `DHT Notify ${cachedFile.fileAddr}`);
@@ -339,7 +368,7 @@ abstract class ProxyManagerBase {
             this.logger.log(
                 new Date(), 'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);
             
-            const message = new DhtLocationMessage(cachedFile.fileAddr);
+            const message = new DhtStoreMessage(cachedFile.fileAddr);
             const request = this.networkManager.newRequest(
                 node.ip, node.port, message);
             const response = await request.getResponse();
@@ -368,9 +397,9 @@ abstract class ProxyManagerBase {
     async handleDhtResponse(senderIp: string, senderPort: number,
                             rawMessage: Message): Promise<void>
     {
-        if (!(rawMessage instanceof DhtLocationResponse))
+        if (!(rawMessage instanceof DhtStoreResponse))
             throw new Error("Data request of wrong TS type!");
-        const message = rawMessage as DhtLocationResponse;
+        const message = rawMessage as DhtStoreResponse;
 
         this.logger.log(new Date(), 'dht', `DHT ack from ${senderIp}:${senderPort} for ${message.fileAddr}`);
         
@@ -629,6 +658,8 @@ class RootProxyManager extends ProxyManagerBase {
         } else {
             file.release();
         }
+
+        this.proxyDataMap.updateData(file.fileAddr, this.thisProxy);
     }
 
     async updatePeerList(): Promise<void> {
