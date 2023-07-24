@@ -22,13 +22,13 @@ class Logger {
         this.fileHandle = await fs.promises.open(this.config.logFile, 'a');
     }
 
-    log(timestamp: Date, transferId: string, message: string): void {
+    log(segmentId: string, message: string): void {
         if (!this.fileHandle) {
             throw new Error('Logger not started - call start() first');
         }
 
-        const formattedTimestamp = timestamp.toISOString();
-        const formattedMessage = `${formattedTimestamp} ${transferId} ${this.config.thisHost}:${this.config.thisPort} ${message}\n`;
+        const formattedTimestamp = new Date().toISOString();
+        const formattedMessage = `${formattedTimestamp} ${segmentId} ${this.config.thisHost}:${this.config.thisPort} ${message}\n`;
 
         this.writeQueue.push(formattedMessage);
         if (this.writePromise === null)

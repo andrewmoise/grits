@@ -419,7 +419,7 @@ class DownloadInProgress {
 
     log(msg: string) {
         this.downloadManager.proxyManager.logger.log(
-            new Date(), this.transferId, msg);
+            this.transferId, msg);
     }
 }
 
@@ -440,7 +440,7 @@ class DownloadManager {
 
     async download(fileAddr: string): Promise<CachedFile> {
         this.proxyManager.logger.log(
-            new Date(), 'download',
+            'download',
             `DownloadManager.download(${fileAddr})`);
         
         // If a download already exists for the given file, return its promise.

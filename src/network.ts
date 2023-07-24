@@ -247,14 +247,14 @@ class UdpNetworkManager {
         const encodedMessage = Buffer.concat([header, encodedContent]);
 
         if (!this.socket) {
-            this.logger.log(new Date(), 'network', 'Socket is not initialized');
+            this.logger.log('network', 'Socket is not initialized');
             return;
         }
 
         this.socket.send(encodedMessage, 0, encodedMessage.length, port,
             ipAddress, (error) => {
                 if (error) {
-                    this.logger.log(new Date(), 'network',
+                    this.logger.log('network',
                                     `Error sending message: ${error}`);
                     return;
                 }
@@ -324,7 +324,7 @@ class UdpNetworkManager {
                                                   requestId, message);
                     handler(request, message);
                 } else {
-                    this.logger.log(new Date(), 'network',
+                    this.logger.log('network',
                                     `No handler for ${message.type}`);
                 }
                 return;
@@ -332,7 +332,7 @@ class UdpNetworkManager {
         } else {
             const request = this.outRequests.get(requestId);
             if (request === undefined) {
-                this.logger.log(new Date(), 'network',
+                this.logger.log('network',
                                 `Unknown request ID ${requestId}`);
                 return;
             }
@@ -342,7 +342,7 @@ class UdpNetworkManager {
         }
 
         this.logger.log(
-            new Date(), 'network',
+            'network',
             `Unhandled message, type ${message.type}`);
     }
     

@@ -20,10 +20,10 @@ class HttpServer {
             const fileAddr = req.params.fileAddr;
             let file: CachedFile | null = null;
 
-            proxyManager.logger.log(new Date(), 'web', "Web request: " + fileAddr);
+            proxyManager.logger.log('web', "Web request: " + fileAddr);
 
             try {
-                proxyManager.logger.log(new Date(), 'web',
+                proxyManager.logger.log('web',
                                  `Trying to serve ${fileAddr}`);
                 file = await this.proxyManager.retrieveFile(fileAddr);
                 res.setHeader('Content-Type', 'application/octet-stream');
@@ -36,7 +36,7 @@ class HttpServer {
                 });
                 readStream.pipe(res);
             } catch (err) {
-                proxyManager.logger.log(new Date(), 'web', `Retrieval error: ${err}`);
+                proxyManager.logger.log('web', `Retrieval error: ${err}`);
                 if (err instanceof FileRetrievalError) {
                     res.status(404).send(err.message);
                 } else {
@@ -55,13 +55,13 @@ class HttpServer {
     start(): void {
         this.server = this.app.listen(
             this.port, () => this.proxyManager.logger.log(
-                new Date(), 'web', `HTTP server started on port ${this.port}`));
+                'web', `HTTP server started on port ${this.port}`));
     }
 
     stop(): void {
         if (this.server) {
             this.server.close(() => this.proxyManager.logger.log(
-                new Date(), 'web', `HTTP server stopped on port ${this.port}`));
+                'web', `HTTP server stopped on port ${this.port}`));
         }
     }
 }

@@ -153,7 +153,7 @@ abstract class ProxyManagerBase {
     async start(): Promise<void> {
         await this.logger.start();
 
-        this.logger.log(new Date(), 'proxies',
+        this.logger.log('proxies',
                         `Init with ${this.peerProxies.size} proxies`);
         
         this.networkManager.start();
@@ -209,7 +209,7 @@ abstract class ProxyManagerBase {
         if (!message.transferId.match("^[A-Za-z0-9]{8}$"))
             throw new Error(`Malformed transfer ID! ${message.transferId}`);
         
-        this.logger.log(new Date(), message.transferId,
+        this.logger.log(message.transferId,
                         `Data request for ${fileAddr}`);
         
         // Try to find in local storage.
@@ -221,12 +221,12 @@ abstract class ProxyManagerBase {
                 let budget = 0;
                 
                 while (length > 0) {
-                    this.logger.log(new Date(), message.transferId,
+                    this.logger.log(message.transferId,
                                     `Have ${budget}, requesting budget ${length-budget}`);
                     budget += await this.upstreamManager.requestUpload(
                         length - budget);
 
-                    this.logger.log(new Date(), message.transferId,
+                    this.logger.log(message.transferId,
                                     `Got total budget ${budget}`);
                     
                     while(budget >= Math.min(length, DOWNLOAD_CHUNK_SIZE)
@@ -236,7 +236,7 @@ abstract class ProxyManagerBase {
 
                         const data = await file.read(offset, packetLen);
                         
-                        this.logger.log(new Date(), message.transferId,
+                        this.logger.log(message.transferId,
                                         `Send data response ${packetLen}`);
 
                         const responseMessage = new DataResponseOk(
@@ -251,7 +251,7 @@ abstract class ProxyManagerBase {
                     }
                 }
 
-                this.logger.log(new Date(), message.transferId,
+                this.logger.log(message.transferId,
                                 `All done with upload`);
             } finally {
                 file.release();
@@ -261,7 +261,7 @@ abstract class ProxyManagerBase {
         }
 
         // Return failure, since we can't find it here.
-        this.logger.log(new Date(), message.transferId,
+        this.logger.log(message.transferId,
                         `fileAddr is unknown`);
 
         const responseMessage = new DataResponseUnknown(
@@ -276,18 +276,18 @@ abstract class ProxyManagerBase {
             throw new Error("Received wrong message type!");
         const message = rawMessage as DhtStoreMessage;
 
-        this.logger.log(new Date(), 'dht', `Got location ${message.fileAddr} at ${request.ip}:${request.port}`);
+        this.logger.log('dht', `Got location ${message.fileAddr} at ${request.ip}:${request.port}`);
         
         const senderProxy = this.getPeerProxy(request.ip, request.port);
         if (senderProxy) {
             this.proxyDataMap.updateData(message.fileAddr,
                                          senderProxy);
         } else {
-            this.logger.log(new Date(), 'dht', '  But no proxy found!');
+            this.logger.log('dht', '  But no proxy found!');
         }
 
         this.upstreamManager.requestUpload(40); // FIXME
-        this.logger.log(new Date(), 'dht', `Sending location response for ${message.fileAddr} to ${request.ip}:${request.port}`);
+        this.logger.log('dht', `Sending location response for ${message.fileAddr} to ${request.ip}:${request.port}`);
         
         const response = new DhtStoreResponse(message.fileAddr);
         request.sendResponse(response);
@@ -305,7 +305,7 @@ abstract class ProxyManagerBase {
         if (!message.transferId.match("^[A-Za-z0-9]{8}$"))
             throw new Error(`Malformed transfer ID! ${message.transferId}`);
         
-        this.logger.log(new Date(), message.transferId,
+        this.logger.log(message.transferId,
                         `Data request for ${fileAddr}`);
         
         const fileProxies = this.proxyDataMap.fileAddrToProxy.get(
@@ -314,7 +314,7 @@ abstract class ProxyManagerBase {
         let nodeInfo: Array<{ ip: string, port: number }>;
         
         if (fileProxies) {
-            this.logger.log(new Date(), message.transferId,
+            this.logger.log(message.transferId,
                             `  Got ${fileProxies.proxies.length} hosts`);
 
             const recentProxies = fileProxies.proxies.slice(
@@ -323,13 +323,13 @@ abstract class ProxyManagerBase {
             nodeInfo = recentProxies.map(
                 proxy => ({ ip: proxy.ip, port: proxy.port }));
         } else {
-            this.logger.log(new Date(), message.transferId,
+            this.logger.log(message.transferId,
                             `  Got nothing from lookup`);
 
             nodeInfo = [];
         }
 
-        this.logger.log(new Date(), message.transferId,
+        this.logger.log(message.transferId,
                         `  Finished lookup: ${nodeInfo.length} nodes`);
         
         const responseMessage = new DhtLookupResponse(
@@ -340,7 +340,7 @@ abstract class ProxyManagerBase {
 
     
     async dhtNotify(cachedFile: CachedFile): Promise<void> {
-        this.logger.log(new Date(), 'dht', `DHT Notify ${cachedFile.fileAddr}`);
+        this.logger.log('dht', `DHT Notify ${cachedFile.fileAddr}`);
 
         const closestNodes = await this.blobFinder.getClosestProxies(
             cachedFile.fileAddr, this.config.dhtNotifyNumber);
@@ -353,10 +353,10 @@ abstract class ProxyManagerBase {
             
             if (lastRefresh) {
                 if (new Date().getTime() - lastRefresh.getTime() < refreshAge) {
-                    this.logger.log(new Date(), 'dht', `Too recent for refresh: ${new Date()} <-> ${lastRefresh}`);
+                    this.logger.log('dht', `Too recent for refresh: ${new Date()} <-> ${lastRefresh}`);
                     continue;
                 } else {
-                    this.logger.log(new Date(), 'dht', `Too old, we refresh: ${new Date()} <-> ${lastRefresh}`);
+                    this.logger.log('dht', `Too old, we refresh: ${new Date()} <-> ${lastRefresh}`);
                 }                    
             }
 
@@ -366,7 +366,7 @@ abstract class ProxyManagerBase {
             await this.upstreamManager.requestUpload(40);
 
             this.logger.log(
-                new Date(), 'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);
+                'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);
             
             const message = new DhtStoreMessage(cachedFile.fileAddr);
             const request = this.networkManager.newRequest(
@@ -381,10 +381,10 @@ abstract class ProxyManagerBase {
     notifyAllRunning: boolean = false;
     
     async dhtNotifyAll(): Promise<void> {
-        this.logger.log(new Date(), 'dht', 'DHT notify loop');
+        this.logger.log('dht', 'DHT notify loop');
 
         if (this.notifyAllRunning) {
-            this.logger.log(new Date(), 'dht', '  early return');
+            this.logger.log('dht', '  early return');
             return;
         }
         
@@ -401,17 +401,17 @@ abstract class ProxyManagerBase {
             throw new Error("Data request of wrong TS type!");
         const message = rawMessage as DhtStoreResponse;
 
-        this.logger.log(new Date(), 'dht', `DHT ack from ${senderIp}:${senderPort} for ${message.fileAddr}`);
+        this.logger.log('dht', `DHT ack from ${senderIp}:${senderPort} for ${message.fileAddr}`);
         
         const node = this.getPeerProxy(senderIp, senderPort);
         if (!node) {
-            this.logger.log(new Date(), 'dht', '  No peer found');
+            this.logger.log('dht', '  No peer found');
             return;
         }
 
         const cachedFile = await this.fileCache.readFile(message.fileAddr);
         if (!cachedFile) {
-            this.logger.log(new Date(), 'dht', '  No file found');
+            this.logger.log('dht', '  No file found');
             return;
         }
 
@@ -420,14 +420,14 @@ abstract class ProxyManagerBase {
     }
     
     async retrieveFile(fileAddr: string): Promise<CachedFile> {
-        this.logger.log(new Date(), 'proxy', `Retrieve file: ${fileAddr}`);
+        this.logger.log('proxy', `Retrieve file: ${fileAddr}`);
 
         // Try to find in local storage.
         const file = await this.fileCache.readFile(fileAddr);
         if (file)
             return file;
 
-        this.logger.log(new Date(), 'proxy', "  Not in storage.");
+        this.logger.log('proxy', "  Not in storage.");
         
         // If the file isn't in the cache, attempt to download it
         const downloadedFile = await this.downloadManager.download(fileAddr);
@@ -481,7 +481,7 @@ class ProxyManager extends ProxyManagerBase {
     }
 
     async sendProxyHeartbeat() {
-        this.logger.log(new Date(), 'heartbeat', 'Sending proxy heartbeat');
+        this.logger.log('heartbeat', 'Sending proxy heartbeat');
 
         const heartbeatMessage = new HeartbeatMessage();
 
@@ -498,7 +498,7 @@ class ProxyManager extends ProxyManagerBase {
                 responseMessage);
         } catch (err) {
             this.logger.log(
-                new Date(), 'heartbeat',
+                'heartbeat',
                 `Error: ${err}`);
         } finally {
             request.close();
@@ -509,7 +509,7 @@ class ProxyManager extends ProxyManagerBase {
                               message: Message | null)
     : Promise<void> {
         this.logger.log(
-            new Date(), 'heartbeat',
+            'heartbeat',
             `Got root heartbeat, ${this.peerProxies.size} proxies`);
 
         if (!(message instanceof HeartbeatResponse))
@@ -575,7 +575,7 @@ class ProxyManager extends ProxyManagerBase {
             //console.log(`Updated local peerProxies.`);
         } else {
             this.logger.log(
-                new Date(), 'heartbeat',
+                'heartbeat',
                 'Root heartbeat, but no map.');
         }
     }
@@ -614,7 +614,7 @@ class RootProxyManager extends ProxyManagerBase {
     handleProxyHeartbeat(request: InRequest, message: Message): void
     {
         this.logger.log(
-            new Date(), 'heartbeat',
+            'heartbeat',
             `Got proxy heartbeat from ${request.ip}:${request.port}`);
 
         let peerProxy = this.getPeerProxy(request.ip, request.port);
@@ -624,7 +624,7 @@ class RootProxyManager extends ProxyManagerBase {
 
         peerProxy.updateLastSeen();
 
-        this.logger.log(new Date(), 'heartbeat',
+        this.logger.log('heartbeat',
                         `Send root heartbeat to ${request.ip}:${request.port}`);
 
         const heartbeatMessage = new HeartbeatResponse(
