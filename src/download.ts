@@ -9,10 +9,9 @@ import { assert } from 'console';
 
 import { Config } from './config';
 import { FileCache } from './filecache';
-import { PotentialDownloadBurst, DownstreamManager } from './traffic';
+import { PotentialDownloadBurst, TrafficManager } from './traffic';
 import { NetworkManager } from "./network";
 import { ProxyManagerBase } from "./proxy";
-import { UpstreamManager } from "./traffic";
 
 import {
     CachedFile, FileRetrievalError, PeerProxy, DOWNLOAD_CHUNK_SIZE
@@ -26,12 +25,6 @@ import {
 
 const TRANSFER_ID_CHARACTERS =
     'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-
-type DownloadTaskResult = {
-  id: number;
-  offset: number;
-  length: number;
-};
 
 class DownloadInProgress {
     downloadManager: DownloadManager;
@@ -52,8 +45,10 @@ class DownloadInProgress {
     
     unreceivedOffsets: Set<number>;
 
-    runningRequests: Map<number, Promise<DownloadTaskResult>>;
+    runningRequests: Map<number, Promise<number>>;
     runningRequestIndex: number;
+
+    needDownloads: number[][];
     
     constructor(downloadManager: DownloadManager, fileAddr: string) {
         this.downloadManager = downloadManager;
@@ -86,6 +81,9 @@ class DownloadInProgress {
         
         this.runningRequests = new Map();
         this.runningRequestIndex = 0;
+        this.needDownloads = [[0, this.size]];
+        
+        this.downloadManager.activeDownloads.set(fileAddr, this);
     }
 
     async run(seedProxies: PeerProxy[]): Promise<void> {
@@ -97,63 +95,61 @@ class DownloadInProgress {
             this.outputFile = await fs.promises.open(
                 this.tempDownloadFile, 'w');
 
-            let dhtLength = Math.min(this.size, DOWNLOAD_CHUNK_SIZE);
-        
             for(let proxy of seedProxies) {
-                if (proxy === this.downloadManager.proxyManager.thisProxy) {
-                    this.rejectedHosts.add(proxy);
-                } else {
+                if (proxy !== this.downloadManager.proxyManager.thisProxy) {
+                    let requestIndex = this.runningRequestIndex++;
                     this.runningRequests.set(
-                        this.runningRequestIndex,
-                        this.lookupFrom(proxy, this.runningRequestIndex));
-                    this.runningRequestIndex++;
+                        requestIndex, this.lookupFrom(proxy, requestIndex));
+                } else {
+                    // We are one of the DHT proxies -- we can right away
+                    // populate our answers, if any.
+                    const proxyManager = this.downloadManager.proxyManager;
+                    const dataMap = proxyManager.proxyDataMap.fileAddrToProxy;
+                    const dhtHosts = dataMap.get(this.fileAddr);
+                    if (dhtHosts)
+                        this.availHosts = new Set(dhtHosts.proxies);
+
+                    this.log(`Found self DHT proxy; init ${this.availHosts.size} hosts`);
                 }
             }
 
             this.log(`Ready; queued all DHT downloads - ${this.runningRequests.size}`);
 
-            let needDownloads = [[0, this.size]];
-         
+            while (this.availHosts.size <= 0) {
+                let completed = await Promise.race(
+                    this.runningRequests.values());
+
+                this.runningRequests.delete(completed);
+
+                if (this.runningRequests.size <= 0
+                    && this.availHosts.size <= 0)
+                {
+                    this.log(`Couldn't find ${this.fileAddr} in DHT`);
+                    throw new Error(`Couldn't find ${this.fileAddr} in DHT`);
+                }
+            }
+
+            let requestIndex = this.runningRequestIndex++;
+            this.runningRequests.set(requestIndex,
+                                     this.makeRequest(requestIndex));
+            
             while(true) {
                 let completed = await Promise.race(
                     this.runningRequests.values());
 
-                this.log(`Got completed promise for [${completed.offset}+${completed.length}]`);
-
-                this.log(`  ${this.unreceivedOffsets.size} unreceived offsets`);
-                
-                this.log('  needDownloads is:');
-                for(let download of needDownloads)
+                this.log(`Got completed promise`);
+                this.log(`  ${this.unreceivedOffsets.size} unreceived offsets`);                this.log('  needDownloads is:');
+                for(let download of this.needDownloads)
                     this.log(`    ${download[0]} ${download[1]}`);
-                
-                if (this.unreceivedOffsets.size <= 0)
-                    break;
-                
-                this.runningRequests.delete(completed.id);
-                this.maybeRequeueDownload(needDownloads,
-                                          completed.offset, completed.length);
-
-                if (needDownloads.length <= 0) {
-                    this.log('Not done but no needDownloads!');
-                    throw new Error('Not done but no needDownloads!');
-                }
-
-                this.log('  after requeue, needDownloads is:');
-                for(let download of needDownloads)
-                    this.log(`    ${download[0]} ${download[1]}`);
-
                 this.log(`Maybe queue: ${this.availHosts.size} avail hosts`);
                 
-                if (this.availHosts.size > 0) {
-                    this.log('  yes QD');
-                    await this.queueDownload(needDownloads);
-                } else if (this.runningRequests.size <= 0) {
+                this.runningRequests.delete(completed);
+                if (this.unreceivedOffsets.size <= 0)
+                    break;
+                if (this.availHosts.size <= 0) {
+                    this.log("  Couldn't complete download!");
                     throw new Error("Couldn't complete download");
                 }
-
-                this.log('  all done, needDownloads is:');
-                for(let download of needDownloads)
-                    this.log(`    ${download[0]} ${download[1]}`);
             }
             
             const outputFile = this.outputFile;
@@ -164,6 +160,8 @@ class DownloadInProgress {
                 await this.downloadManager.proxyManager.fileCache.addFile(
                     this.tempDownloadFile!,
                     this.fileAddr, true, false);
+
+            this.downloadManager.activeDownloads.delete(this.fileAddr);
             this.resolveCompletion(cachedFile);
         } catch(err) {
             if (this.outputFile) {
@@ -176,8 +174,13 @@ class DownloadInProgress {
                 this.tempDownloadFile = null;
                 await fs.promises.unlink(tempDownloadFile);
             }
-            
+
+            this.downloadManager.activeDownloads.delete(this.fileAddr);
             this.rejectCompletion(err);
+
+            // FIXME - We leave some resources un-cleaned-up, even in
+            // a legit case like just being unable to find a DHT host
+            // for fileAddr
         }
 
         this.log(`Promise resolved for download ${this.fileAddr}`);
@@ -190,14 +193,13 @@ class DownloadInProgress {
         while (this.runningRequests.size > 0) {
             let completed = await Promise.race(
                 this.runningRequests.values());
-            this.runningRequests.delete(completed.id);
+            this.runningRequests.delete(completed);
         }
         
         this.log(`All done with cleanup for download ${this.fileAddr}`);
     }
 
-    maybeRequeueDownload(needDownloads: number[][], offset: number,
-                         length: number)
+    maybeRequeueDownload(offset: number, length: number)
     : void {
         this.log(`Maybe requeue ${offset}+${length}`);
         let currentChunk = null;
@@ -220,20 +222,34 @@ class DownloadInProgress {
             if (needThisOne && !needNextOne) {
                 let realLength = Math.min(offset+length, nextI) - currentChunk;
                 this.log(`  Do requeue ${currentChunk}+${realLength}`);
-                needDownloads.push([currentChunk, realLength]);
+                this.needDownloads.push([currentChunk, realLength]);
                 currentChunk = null;
             }
         }
     }
-    
-    async queueDownload(needDownloads: number[][]): Promise<void> {
-        this.log(`  In QD, ND length ${needDownloads.length}`);
-        this.log(`  Popping ${needDownloads[needDownloads.length-1]}`);
 
-        assert(needDownloads.length > 0
-            && needDownloads[needDownloads.length-1].length == 2,
+    async makeRequest(requestIndex: number): Promise<number> {
+        this.log(`  In MR, ND length ${this.needDownloads.length}`);
+
+        if (this.needDownloads.length <= 0
+            || this.availHosts.size <= 0
+            || this.outputFile === null)
+        {
+            // All done! Whether from success or failure, we don't need
+            // any more request initiations.
+            
+            // If we've got to the end, we may wind up needing more requests
+            // for failed chunks, but we'll do all that via requeues.
+            return requestIndex;
+        }
+
+        this.log(
+            `  Popping ${this.needDownloads[this.needDownloads.length-1]}`);
+
+        assert(this.needDownloads[this.needDownloads.length-1].length == 2,
                'needDownloads is malformed');
-        let [offset, length] = needDownloads.pop()!;
+        assert(this.availHosts.size > 0, 'No hosts!');
+        let [offset, length] = this.needDownloads.pop()!;
 
         this.log(`Do queue download [${offset}+${length}]`);
         this.log(`  Avail hosts ${this.availHosts.size}`);
@@ -247,21 +263,41 @@ class DownloadInProgress {
         for (let burst of potentialBursts) {
             if (length <= 0)
                 break;
+            const thisLen = Math.min(length, burst.bytesAllowed);
             
-            const requestId = this.runningRequestIndex++;
-            const realLen = Math.min(burst.bytesAllowed, length);
+            assert(offset % DOWNLOAD_CHUNK_SIZE == 0);
+            assert(thisLen % DOWNLOAD_CHUNK_SIZE == 0
+                || (offset+thisLen) == this.size);
             
-            this.runningRequests.set(requestId, this.downloadFrom(
-                burst.source, offset, length, requestId));
-            offset += realLen;
-            length -= realLen;
+            const newRequestIndex = this.runningRequestIndex++;
+            this.runningRequests.set(
+                newRequestIndex,
+                this.downloadFrom(burst.source, offset, thisLen,
+                                  newRequestIndex));
+
+            offset += thisLen;
+            length -= thisLen;
         }
 
         if (length > 0)
-            needDownloads.push([offset, length]);
+            this.needDownloads.push([offset, length]);
+        
+        if (this.outputFile && this.needDownloads.length > 0) {
+            this.log(`  Repeat download queue call`);
+
+            const newRequestIndex = this.runningRequestIndex++;
+            this.runningRequests.set(
+                newRequestIndex,
+                this.makeRequest(newRequestIndex));
+        }
+        
+        this.log(
+            `  All done -- needDownloads has ${this.needDownloads.length}`);
+
+        return requestIndex;
     }
 
-    async lookupFrom(host: PeerProxy, id: number): Promise<DownloadTaskResult> {
+    async lookupFrom(host: PeerProxy, id: number): Promise<number> {
         this.log(`  Iter lookup ${host.ip}:${host.port}`);
 
         const network = this.downloadManager.proxyManager.networkManager;
@@ -274,7 +310,7 @@ class DownloadInProgress {
                 continue;
             } else if (response instanceof DhtLookupResponse) {
                 await this.handleDhtLookupResponse(host, response!);
-                return {id, offset: 0, length: 0};
+                return id;
             } else {
                 throw new Error(`Wrong type result: ${response}`);
             }
@@ -282,10 +318,10 @@ class DownloadInProgress {
 
         throw new Error("Couldn't communicate with ${host.ip}:${host.port}");
     }
-        
+
     async downloadFrom(
         host: PeerProxy, offset: number, length: number, id: number)
-    : Promise<DownloadTaskResult> {
+    : Promise<number> {
         this.log(`  Iter downloadFrom() ${host.ip}:${host.port} at [${offset}+${length}]`);
 
         const network = this.downloadManager.proxyManager.networkManager;
@@ -298,10 +334,13 @@ class DownloadInProgress {
             while(true) {
                 let response = await request.getResponse();
                 
-                if (!this.outputFile || this.unreceivedOffsets.size <= 0)
-                    return {id, offset, length};
+                if (!this.outputFile || this.unreceivedOffsets.size <= 0) {
+                    this.log(`    All done - downloadFrom() ${host.ip}:${host.port} at [${offset}+${length}] returning`);
+                    return id;
+                }
                 
                 if (response === null) {
+                    this.log(`Response is null.`);
                     // Timeout
                     
                     // FIXME - we need a little better handling for this; maybe
@@ -314,24 +353,27 @@ class DownloadInProgress {
                     //    this.rejectedHosts.add(host);
                     //}
 
-                    return {id, offset, length};
+                    return id;
                 } else if (response instanceof DataResponseUnknown) {
+                    this.log(`Response is unknown.`);
                     await this.handleDataResponseUnknown(host, response!);
-                    return {id, offset, length};
+                    return id;
                 } else if (response instanceof DataResponseOk) {
-                    await this.handleDataResponseOk(host, response!);
                     this.log(`Response is ok. availHosts has ${this.availHosts.size}.`);
+                    await this.handleDataResponseOk(host, response!);
                     if (this.unreceivedOffsets.size <= 0
                         || response.offset+response.length === offset+length)
                     {
-                        return {id, offset, length};
+                        return id;
                     }
                 } else {
+                    this.log(`Wrong response class!`);
                     throw new Error(`Unrecognized response: ${response}`);
                 }
             }
         } finally {
             request.close();
+            this.maybeRequeueDownload(offset, length);
         }
 
         throw new Error('Fell out of downloadFrom() main loop');
@@ -425,41 +467,41 @@ class DownloadInProgress {
 
 class DownloadManager {
     proxyManager: ProxyManagerBase;
-    downstreamManager: DownstreamManager;
+    downstreamManager: TrafficManager;
 
     nextBurstId: number;
     
-    private activeDownloads: Map<string, DownloadInProgress>;
+    activeDownloads: Map<string, DownloadInProgress>;
 
     constructor(proxyManager: ProxyManagerBase) {
         this.proxyManager = proxyManager;
-        this.downstreamManager = new DownstreamManager(proxyManager.config);
+        this.downstreamManager = new TrafficManager(
+            proxyManager.config,
+            proxyManager.config.maxDownstreamSpeed,
+            proxyManager.config.maxDownstreamQueue,
+        );
         this.nextBurstId = 0;
         this.activeDownloads = new Map();
     }
 
-    async download(fileAddr: string): Promise<CachedFile> {
+    download(fileAddr: string): Promise<CachedFile> {
         this.proxyManager.logger.log(
             'download',
             `DownloadManager.download(${fileAddr})`);
         
-        // If a download already exists for the given file, return its promise.
         let downloadInProgress = this.activeDownloads.get(fileAddr);
 
-        if (downloadInProgress) {
-            return downloadInProgress.completionPromise;
+        if (!downloadInProgress) {
+            // Create a new DownloadInProgress and return its promise.
+            downloadInProgress = new DownloadInProgress(this, fileAddr);
+            downloadInProgress.log(`Starting new download for ${fileAddr}`);
+            
+            const seedProxies = this.proxyManager.blobFinder.getClosestProxies(
+                fileAddr, this.proxyManager.config.dhtNotifyNumber);
+            downloadInProgress.log(`Got ${seedProxies.length} seed proxies`);
+            downloadInProgress.run(seedProxies);
         }
-
-        // Otherwise, create a new DownloadInProgress and return its promise.
-        downloadInProgress = new DownloadInProgress(this, fileAddr);
-        downloadInProgress.log(`Starting new download for ${fileAddr}`);
-        this.activeDownloads.set(fileAddr, downloadInProgress);
-
-        const seedProxies = this.proxyManager.blobFinder.getClosestProxies(
-            fileAddr, this.proxyManager.config.dhtNotifyNumber);
-        downloadInProgress.log(`Got ${seedProxies.length} seed proxies`);
-        downloadInProgress.run(seedProxies);
-
+        
         return downloadInProgress.completionPromise;
     }
 };

@@ -4,7 +4,7 @@ import { performance } from 'perf_hooks';
 
 import { Config } from './config';
 import { Logger } from './logger';
-import { UpstreamManager } from "./traffic";
+import { TrafficManager } from "./traffic";
 
 import {
     MessageType,
@@ -177,7 +177,6 @@ class UdpNetworkManager {
     
     requestHandlers: Map<number, RequestHandler>;
     socket: dgram.Socket | null;
-    trafficManager: UpstreamManager;
 
     constructor(logger: Logger, config: Config) {
         if (config.thisHost === null) {
@@ -197,7 +196,6 @@ class UdpNetworkManager {
         
         this.requestHandlers = new Map();
         this.socket = null;
-        this.trafficManager = new UpstreamManager(config);
     }
 
     start(): void {

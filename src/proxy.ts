@@ -29,7 +29,7 @@ import {
 
 import { BlobFinder } from './dht';
 import { Logger } from './logger';
-import { UpstreamManager } from './traffic';
+import { TrafficManager } from './traffic';
 
 // ProxyDataMap class to track the most recent proxies where a file has been
 // seen.
@@ -82,7 +82,7 @@ abstract class ProxyManagerBase {
     networkManager: NetworkManager;
     fileCache: FileCache;
     downloadManager: DownloadManager;
-    upstreamManager: UpstreamManager;
+    upstreamManager: TrafficManager;
     logger: Logger;
     
     peerProxies: Map<string, PeerProxy>;
@@ -102,7 +102,9 @@ abstract class ProxyManagerBase {
         this.networkManager = new UdpNetworkManager(this.logger, config);
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
-        this.upstreamManager = new UpstreamManager(config);
+        this.upstreamManager = new TrafficManager(config,
+                                                  config.maxUpstreamSpeed,
+                                                  config.maxUpstreamQueue);
 
         this.peerProxies = new Map();
         this.rootProxy = this.addPeerProxy(
@@ -223,7 +225,7 @@ abstract class ProxyManagerBase {
                 while (length > 0) {
                     this.logger.log(message.transferId,
                                     `Have ${budget}, requesting budget ${length-budget}`);
-                    budget += await this.upstreamManager.requestUpload(
+                    budget += await this.upstreamManager.requestTransfer(
                         length - budget);
 
                     this.logger.log(message.transferId,
@@ -286,7 +288,7 @@ abstract class ProxyManagerBase {
             this.logger.log('dht', '  But no proxy found!');
         }
 
-        this.upstreamManager.requestUpload(40); // FIXME
+        this.upstreamManager.requestTransfer(40); // FIXME
         this.logger.log('dht', `Sending location response for ${message.fileAddr} to ${request.ip}:${request.port}`);
         
         const response = new DhtStoreResponse(message.fileAddr);
@@ -297,7 +299,7 @@ abstract class ProxyManagerBase {
     async handleDhtLookupRequest(request: InRequest, message: Message)
     : Promise<void> {
         if (!(message instanceof DhtLookupMessage))
-            throw new Error("Data request of wrong TS type!");
+            throw new Error("DHT request of wrong TS type!");
         const dhtLookupMessage = message as DataRequestMessage;
 
         const fileAddr = dhtLookupMessage.fileAddr;
@@ -306,7 +308,7 @@ abstract class ProxyManagerBase {
             throw new Error(`Malformed transfer ID! ${message.transferId}`);
         
         this.logger.log(message.transferId,
-                        `Data request for ${fileAddr}`);
+                        `DHT request for ${fileAddr}`);
         
         const fileProxies = this.proxyDataMap.fileAddrToProxy.get(
             fileAddr);
@@ -363,7 +365,7 @@ abstract class ProxyManagerBase {
             // We have no refresh timestamp, or an old one - send notification
 
             // FIXME - maybe this should be in the network manager:
-            await this.upstreamManager.requestUpload(40);
+            await this.upstreamManager.requestTransfer(40);
 
             this.logger.log(
                 'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);
