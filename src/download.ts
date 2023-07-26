@@ -45,8 +45,8 @@ class DownloadInProgress {
     
     unreceivedOffsets: Set<number>;
 
-    runningRequests: Map<number, Promise<number>>;
-    runningRequestIndex: number;
+    runningSteps: Map<number, Promise<number>>;
+    runningStepIndex: number;
 
     needDownloads: number[][];
     
@@ -79,8 +79,8 @@ class DownloadInProgress {
         this.availHosts = new Set();
         this.rejectedHosts = new Set();
         
-        this.runningRequests = new Map();
-        this.runningRequestIndex = 0;
+        this.runningSteps = new Map();
+        this.runningStepIndex = 0;
         this.needDownloads = [[0, this.size]];
         
         this.downloadManager.activeDownloads.set(fileAddr, this);
@@ -95,47 +95,20 @@ class DownloadInProgress {
             this.outputFile = await fs.promises.open(
                 this.tempDownloadFile, 'w');
 
-            for(let proxy of seedProxies) {
-                if (proxy !== this.downloadManager.proxyManager.thisProxy) {
-                    let requestIndex = this.runningRequestIndex++;
-                    this.runningRequests.set(
-                        requestIndex, this.lookupFrom(proxy, requestIndex));
-                } else {
-                    // We are one of the DHT proxies -- we can right away
-                    // populate our answers, if any.
-                    const proxyManager = this.downloadManager.proxyManager;
-                    const dataMap = proxyManager.proxyDataMap.fileAddrToProxy;
-                    const dhtHosts = dataMap.get(this.fileAddr);
-                    if (dhtHosts)
-                        this.availHosts = new Set(dhtHosts.proxies);
-
-                    this.log(`Found self DHT proxy; init ${this.availHosts.size} hosts`);
-                }
-            }
-
-            this.log(`Ready; queued all DHT downloads - ${this.runningRequests.size}`);
-
-            while (this.availHosts.size <= 0) {
-                let completed = await Promise.race(
-                    this.runningRequests.values());
-
-                this.runningRequests.delete(completed);
-
-                if (this.runningRequests.size <= 0
-                    && this.availHosts.size <= 0)
-                {
-                    this.log(`Couldn't find ${this.fileAddr} in DHT`);
-                    throw new Error(`Couldn't find ${this.fileAddr} in DHT`);
-                }
-            }
-
-            let requestIndex = this.runningRequestIndex++;
-            this.runningRequests.set(requestIndex,
-                                     this.makeRequest(requestIndex));
+            // Populate this.availHosts via DHT lookup, pausing until at least
+            // one of the DHT hosts gets back to us
+            await this.populateAvailHosts(seedProxies);
             
+            // Start up the first of the main download-queueing steps.
+            let stepId = this.runningStepIndex++;
+            this.runningSteps.set(stepId,
+                                     this.makeNewBurstsStep(stepId));
+
+            // Main loop, waiting for any step to complete and then finishing
+            // if after it, we're done.
             while(true) {
                 let completed = await Promise.race(
-                    this.runningRequests.values());
+                    this.runningSteps.values());
 
                 this.log(`Got completed promise`);
                 this.log(`  ${this.unreceivedOffsets.size} unreceived offsets`);                this.log('  needDownloads is:');
@@ -143,7 +116,7 @@ class DownloadInProgress {
                     this.log(`    ${download[0]} ${download[1]}`);
                 this.log(`Maybe queue: ${this.availHosts.size} avail hosts`);
                 
-                this.runningRequests.delete(completed);
+                this.runningSteps.delete(completed);
                 if (this.unreceivedOffsets.size <= 0)
                     break;
                 if (this.availHosts.size <= 0) {
@@ -151,7 +124,8 @@ class DownloadInProgress {
                     throw new Error("Couldn't complete download");
                 }
             }
-            
+
+            // All done. Close the file, put it in the cache.
             const outputFile = this.outputFile;
             this.outputFile = null;
             await outputFile.close();
@@ -161,9 +135,18 @@ class DownloadInProgress {
                     this.tempDownloadFile!,
                     this.fileAddr, true, false);
 
+            // Download is no longer in progress now; resolve to anyone
+            // waiting for us.
             this.downloadManager.activeDownloads.delete(this.fileAddr);
             this.resolveCompletion(cachedFile);
+
+            this.log(`Promise resolved for download ${this.fileAddr}`);
         } catch(err) {
+            // Errors can happen from legit things like timeouts or fileAddrs
+            // that aren't anywhere in the DHT. Make sure we clean up properly
+            // and wait for all the steps we're running to finish before we
+            // end for real.
+            
             if (this.outputFile) {
                 this.outputFile.close();
                 this.outputFile = null;
@@ -178,27 +161,58 @@ class DownloadInProgress {
             this.downloadManager.activeDownloads.delete(this.fileAddr);
             this.rejectCompletion(err);
 
-            // FIXME - We leave some resources un-cleaned-up, even in
-            // a legit case like just being unable to find a DHT host
-            // for fileAddr
-        }
+            this.log(`Promise rejected for download ${this.fileAddr}`);
+        } finally {
+            // We resolved the promise right away so no one has to wait for
+            // the lame-duck transfer steps to complete, but we still need
+            // to hang around until all the Promise resources are cleaned up.
 
-        this.log(`Promise resolved for download ${this.fileAddr}`);
+            while (this.runningSteps.size > 0) {
+                let completed = await Promise.race(
+                    this.runningSteps.values());
+                this.runningSteps.delete(completed);
+            }
         
-        // We've already resolved the main promise -- now we hang around and
-        // clean up outstanding network requests. If we get an exception
-        // at this stage, we blow up the server process, since we can't
-        // anymore reject the promise. Hopefully we don't get exceptions.
-        
-        while (this.runningRequests.size > 0) {
-            let completed = await Promise.race(
-                this.runningRequests.values());
-            this.runningRequests.delete(completed);
+            this.log(`All done with cleanup for download ${this.fileAddr}`);
         }
-        
-        this.log(`All done with cleanup for download ${this.fileAddr}`);
     }
 
+    async populateAvailHosts(seedProxies: PeerProxy[]): Promise<void> {
+        for(let proxy of seedProxies) {
+            if (proxy !== this.downloadManager.proxyManager.thisProxy) {
+                let stepId = this.runningStepIndex++;
+                this.runningSteps.set(
+                    stepId, this.dhtLookupStep(proxy, stepId));
+            } else {
+                // We are one of the DHT proxies -- we can right away
+                // populate our answers, if any.
+                const proxyManager = this.downloadManager.proxyManager;
+                const dataMap = proxyManager.proxyDataMap.fileAddrToProxy;
+                const dhtHosts = dataMap.get(this.fileAddr);
+                if (dhtHosts)
+                    this.availHosts = new Set(dhtHosts.proxies);
+                
+                this.log(`Found self DHT proxy; init ${this.availHosts.size} hosts`);
+            }
+        }
+        
+        this.log(`Ready; queued all DHT downloads - ${this.runningSteps.size}`);
+        
+        while (this.availHosts.size <= 0) {
+            let completed = await Promise.race(
+                this.runningSteps.values());
+            
+            this.runningSteps.delete(completed);
+            
+            if (this.runningSteps.size <= 0
+                && this.availHosts.size <= 0)
+            {
+                this.log(`Couldn't find ${this.fileAddr} in DHT`);
+                throw new Error(`Couldn't find ${this.fileAddr} in DHT`);
+            }
+        }
+    }
+    
     maybeRequeueDownload(offset: number, length: number)
     : void {
         this.log(`Maybe requeue ${offset}+${length}`);
@@ -228,7 +242,29 @@ class DownloadInProgress {
         }
     }
 
-    async makeRequest(requestIndex: number): Promise<number> {
+    async dhtLookupStep(host: PeerProxy, id: number): Promise<number> {
+        this.log(`  Iter lookup ${host.ip}:${host.port}`);
+
+        const network = this.downloadManager.proxyManager.networkManager;
+        const message = new DhtLookupMessage(this.fileAddr, this.transferId);
+
+        for(let attempts = 0; attempts < 30; attempts++) {
+            const request = network.newRequest(host.ip, host.port, message);
+            const response = await request.getResponse();
+            if (response === null) {
+                continue;
+            } else if (response instanceof DhtLookupResponse) {
+                await this.handleDhtLookupResponse(host, response!);
+                return id;
+            } else {
+                throw new Error(`Wrong type result: ${response}`);
+            }
+        }
+
+        throw new Error("Couldn't communicate with ${host.ip}:${host.port}");
+    }
+
+    async makeNewBurstsStep(stepId: number): Promise<number> {
         this.log(`  In MR, ND length ${this.needDownloads.length}`);
 
         if (this.needDownloads.length <= 0
@@ -236,11 +272,11 @@ class DownloadInProgress {
             || this.outputFile === null)
         {
             // All done! Whether from success or failure, we don't need
-            // any more request initiations.
+            // any more step initiations.
             
-            // If we've got to the end, we may wind up needing more requests
-            // for failed chunks, but we'll do all that via requeues.
-            return requestIndex;
+            // If we've got to the end, we may wind up needing more data
+            // reqeusts for failed chunks, but we'll do all that via requeues.
+            return stepId;
         }
 
         this.log(
@@ -269,11 +305,11 @@ class DownloadInProgress {
             assert(thisLen % DOWNLOAD_CHUNK_SIZE == 0
                 || (offset+thisLen) == this.size);
             
-            const newRequestIndex = this.runningRequestIndex++;
-            this.runningRequests.set(
-                newRequestIndex,
-                this.downloadFrom(burst.source, offset, thisLen,
-                                  newRequestIndex));
+            const newStepIndex = this.runningStepIndex++;
+            this.runningSteps.set(
+                newStepIndex,
+                this.downloadBurstStep(burst.source, offset, thisLen,
+                                  newStepIndex));
 
             offset += thisLen;
             length -= thisLen;
@@ -285,44 +321,22 @@ class DownloadInProgress {
         if (this.outputFile && this.needDownloads.length > 0) {
             this.log(`  Repeat download queue call`);
 
-            const newRequestIndex = this.runningRequestIndex++;
-            this.runningRequests.set(
-                newRequestIndex,
-                this.makeRequest(newRequestIndex));
+            const newStepIndex = this.runningStepIndex++;
+            this.runningSteps.set(
+                newStepIndex,
+                this.makeNewBurstsStep(newStepIndex));
         }
         
         this.log(
             `  All done -- needDownloads has ${this.needDownloads.length}`);
 
-        return requestIndex;
+        return stepId;
     }
-
-    async lookupFrom(host: PeerProxy, id: number): Promise<number> {
-        this.log(`  Iter lookup ${host.ip}:${host.port}`);
-
-        const network = this.downloadManager.proxyManager.networkManager;
-        const message = new DhtLookupMessage(this.fileAddr, this.transferId);
-
-        for(let attempts = 0; attempts < 30; attempts++) {
-            const request = network.newRequest(host.ip, host.port, message);
-            const response = await request.getResponse();
-            if (response === null) {
-                continue;
-            } else if (response instanceof DhtLookupResponse) {
-                await this.handleDhtLookupResponse(host, response!);
-                return id;
-            } else {
-                throw new Error(`Wrong type result: ${response}`);
-            }
-        }
-
-        throw new Error("Couldn't communicate with ${host.ip}:${host.port}");
-    }
-
-    async downloadFrom(
+    
+    async downloadBurstStep(
         host: PeerProxy, offset: number, length: number, id: number)
     : Promise<number> {
-        this.log(`  Iter downloadFrom() ${host.ip}:${host.port} at [${offset}+${length}]`);
+        this.log(`  Iter downloadBurstStep() ${host.ip}:${host.port} at [${offset}+${length}]`);
 
         const network = this.downloadManager.proxyManager.networkManager;
         const message = new DataRequestMessage(
@@ -335,7 +349,7 @@ class DownloadInProgress {
                 let response = await request.getResponse();
                 
                 if (!this.outputFile || this.unreceivedOffsets.size <= 0) {
-                    this.log(`    All done - downloadFrom() ${host.ip}:${host.port} at [${offset}+${length}] returning`);
+                    this.log(`    All done - downloadBurstStep() ${host.ip}:${host.port} at [${offset}+${length}] returning`);
                     return id;
                 }
                 
@@ -376,7 +390,7 @@ class DownloadInProgress {
             this.maybeRequeueDownload(offset, length);
         }
 
-        throw new Error('Fell out of downloadFrom() main loop');
+        throw new Error('Fell out of downloadBurstStep() main loop');
     }
 
     async handleDataResponseOk(source: PeerProxy,
