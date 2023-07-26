@@ -82,7 +82,7 @@ abstract class ProxyManagerBase {
     networkManager: NetworkManager;
     fileCache: FileCache;
     downloadManager: DownloadManager;
-    upstreamManager: TrafficManager;
+    trafficManager: TrafficManager;
     logger: Logger;
     
     peerProxies: Map<string, PeerProxy>;
@@ -102,9 +102,7 @@ abstract class ProxyManagerBase {
         this.networkManager = new UdpNetworkManager(this.logger, config);
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
-        this.upstreamManager = new TrafficManager(config,
-                                                  config.maxUpstreamSpeed,
-                                                  config.maxUpstreamQueue);
+        this.trafficManager = new TrafficManager(config);
 
         this.peerProxies = new Map();
         this.rootProxy = this.addPeerProxy(
@@ -225,7 +223,7 @@ abstract class ProxyManagerBase {
                 while (length > 0) {
                     this.logger.log(message.transferId,
                                     `Have ${budget}, requesting budget ${length-budget}`);
-                    budget += await this.upstreamManager.requestTransfer(
+                    budget += await this.trafficManager.requestUpload(
                         length - budget);
 
                     this.logger.log(message.transferId,
@@ -288,7 +286,7 @@ abstract class ProxyManagerBase {
             this.logger.log('dht', '  But no proxy found!');
         }
 
-        this.upstreamManager.requestTransfer(40); // FIXME
+        this.trafficManager.requestUpload(40); // FIXME
         this.logger.log('dht', `Sending location response for ${message.fileAddr} to ${request.ip}:${request.port}`);
         
         const response = new DhtStoreResponse(message.fileAddr);
@@ -365,7 +363,7 @@ abstract class ProxyManagerBase {
             // We have no refresh timestamp, or an old one - send notification
 
             // FIXME - maybe this should be in the network manager:
-            await this.upstreamManager.requestTransfer(40);
+            await this.trafficManager.requestUpload(40);
 
             this.logger.log(
                 'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);

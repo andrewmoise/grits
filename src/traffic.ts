@@ -11,51 +11,30 @@ interface PotentialDownloadBurst {
 }
 
 class TrafficManager {
-    private bytesBudgeted: number;
-    private lastUpdate: number;
+    upstream: TrafficShaper;
+    downstream: TrafficShaper;
+    downstreamReceived: TrafficShaper;
 
-    private config: Config;
-    private maxSpeed: number; // bytes per second
-    private queueDepth: number; // bytes    
-    
-    constructor(config: Config, maxSpeed: number, queueDepth: number) {
-        this.bytesBudgeted = 0;
-        this.lastUpdate = performance.now();
+    constructor(config: Config) {
+        this.upstream = new TrafficShaper(
+            config.maxUpstreamSpeed, config.maxUpstreamQueue);
 
-        this.config = config;
-        this.maxSpeed = maxSpeed;
-        this.queueDepth = queueDepth;
+        this.downstream = new TrafficShaper(
+            config.maxDownstreamSpeed, config.maxDownstreamQueue);
+
+        this.downstreamReceived = new TrafficShaper(
+            config.maxDownstreamSpeed, config.maxDownstreamQueue);
     }
 
-    private updateBudgets() {
-        const now = performance.now();
-        const deltaTime = (now - this.lastUpdate) / 1000;
-        this.lastUpdate = now;
-
-        this.bytesBudgeted = Math.max(
-            0, this.bytesBudgeted - this.maxSpeed * deltaTime);
+    async requestUpload(bytes: number): Promise<number> {
+        return await this.upstream.requestTransfer(bytes);
     }
-
-    public async requestTransfer(bytes: number): Promise<number> {
-        this.updateBudgets();
-
-        const maxBytes = Math.min(bytes, this.queueDepth);
-        this.bytesBudgeted += maxBytes;
-
-        if (this.bytesBudgeted >= this.queueDepth+1) {
-            const waitTime =
-                (this.bytesBudgeted - this.queueDepth / 2)
-                / this.maxSpeed * 1000;
-            await sleep(waitTime);
-        }
-
-        return maxBytes;
-    }   
 
     public async requestDownload(peerProxies: PeerProxy[],
                                  bytesRequested: number)
     : Promise<PotentialDownloadBurst[] | null> {
-        const bytesAllowed = await this.requestTransfer(bytesRequested);
+        const bytesAllowed = await this.downstream.requestTransfer(
+            bytesRequested);
         
         const burstsPerPeer = Math.ceil(
             bytesRequested / DOWNLOAD_CHUNK_SIZE / peerProxies.length);
@@ -78,6 +57,60 @@ class TrafficManager {
 
         return downloadBursts;
     }
+};
+
+class TrafficShaper {
+    bytesBudgeted: number;
+    lastUpdate: number;
+
+    maxSpeed: number; // bytes per second
+    queueDepth: number; // bytes    
+
+    resetTimestamp: number | null;
+    bytesSinceReset: number;
+    
+    constructor(maxSpeed: number, queueDepth: number) {
+        this.bytesBudgeted = 0;
+        this.lastUpdate = performance.now();
+
+        this.maxSpeed = maxSpeed;
+        this.queueDepth = queueDepth;
+
+        this.resetTimestamp = null;
+        this.bytesSinceReset = 0;
+    }
+
+    private updateBudgets() {
+        const now = performance.now();
+        const deltaTime = (now - this.lastUpdate) / 1000;
+        this.lastUpdate = now;
+
+        this.bytesBudgeted = Math.max(
+            0, this.bytesBudgeted - this.maxSpeed * deltaTime);
+    }
+
+    public async requestTransfer(bytes: number): Promise<number> {
+        this.updateBudgets();
+
+        const maxBytes = Math.min(bytes, this.queueDepth);
+
+        if (this.bytesBudgeted == 0) {
+            this.resetTimestamp = performance.now();
+            this.bytesSinceReset = 0;
+        }
+
+        this.bytesSinceReset += maxBytes;
+        this.bytesBudgeted += maxBytes;
+
+        if (this.bytesBudgeted >= this.queueDepth+1) {
+            const waitTime =
+                (this.bytesBudgeted - this.queueDepth / 2)
+                / this.maxSpeed * 1000;
+            await sleep(waitTime);
+        }
+
+        return maxBytes;
+    }   
 }
 
-export { PotentialDownloadBurst, TrafficManager };
+export { PotentialDownloadBurst, TrafficShaper, TrafficManager };

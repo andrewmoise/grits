@@ -289,12 +289,14 @@ class DownloadInProgress {
 
         this.log(`Do queue download [${offset}+${length}]`);
         this.log(`  Avail hosts ${this.availHosts.size}`);
-        
+
+        const trafficManager = this.downloadManager.proxyManager.trafficManager;
+
         const potentialBursts =
-            await this.downloadManager.downstreamManager.requestDownload(
+            await trafficManager.requestDownload(
                 Array.from(this.availHosts), length);
         if (potentialBursts === null || potentialBursts.length <= 0)
-            throw new Error('Null return from downstreamManager');
+            throw new Error('Null return from requestDownload()');
 
         for (let burst of potentialBursts) {
             if (length <= 0)
@@ -481,7 +483,6 @@ class DownloadInProgress {
 
 class DownloadManager {
     proxyManager: ProxyManagerBase;
-    downstreamManager: TrafficManager;
 
     nextBurstId: number;
     
@@ -489,11 +490,6 @@ class DownloadManager {
 
     constructor(proxyManager: ProxyManagerBase) {
         this.proxyManager = proxyManager;
-        this.downstreamManager = new TrafficManager(
-            proxyManager.config,
-            proxyManager.config.maxDownstreamSpeed,
-            proxyManager.config.maxDownstreamQueue,
-        );
         this.nextBurstId = 0;
         this.activeDownloads = new Map();
     }
