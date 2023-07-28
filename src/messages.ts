@@ -15,6 +15,9 @@ export enum MessageType {
 
     DHT_LOOKUP_MESSAGE = 7,
     DHT_LOOKUP_RESPONSE = 8,
+
+    TELEMETRY_FETCH_MESSAGE = 9,
+    TELEMETRY_FETCH_RESPONSE = 10,
 }
 
 export abstract class Message {
@@ -435,6 +438,46 @@ export class DhtLookupResponse extends Message {
     }
 }
 
+export class TelemetryFetchMessage extends Message {
+    telemetryId: number;
+    
+    constructor(telemetryId: number) {
+        super(MessageType.TELEMETRY_FETCH_MESSAGE);
+        this.telemetryId = telemetryId;
+    }
+
+    static fromBuffer(buffer: Buffer): TelemetryFetchMessage {
+        const telmetryId = buffer.readUInt32BE(0);
+        return new TelemetryFetchMessage(telmetryId);
+    }
+
+    encode(): Buffer {
+        const buffer = Buffer.allocUnsafe(4);
+        buffer.writeUInt32BE(this.telemetryId, 0);
+        return buffer;
+    }
+}
+
+export class TelemetryFetchResponse extends Message {
+    byteCount: number;
+
+    constructor(byteCount: number) {
+        super(MessageType.TELEMETRY_FETCH_RESPONSE);
+        this.byteCount = byteCount;
+    }
+
+    static fromBuffer(buffer: Buffer): TelemetryFetchResponse {
+        const byteCount = buffer.readUInt32BE(0);
+        return new TelemetryFetchResponse(byteCount);
+    }
+
+    encode(): Buffer {
+        const buffer = Buffer.allocUnsafe(4);
+        buffer.writeUInt32BE(this.byteCount, 0);
+        return buffer;
+    }
+}
+
 module.exports = {
     MessageType,
     Message,
@@ -451,4 +494,7 @@ module.exports = {
 
     DhtLookupMessage,
     DhtLookupResponse,
+
+    TelemetryFetchMessage,
+    TelemetryFetchResponse,
 };

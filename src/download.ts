@@ -9,7 +9,7 @@ import { assert } from 'console';
 
 import { Config } from './config';
 import { FileCache } from './filecache';
-import { PotentialDownloadBurst, TrafficManager } from './traffic';
+import { TrafficManager } from './traffic';
 import { NetworkManager } from "./network";
 import { ProxyManagerBase } from "./proxy";
 
@@ -46,7 +46,7 @@ class DownloadInProgress {
     unreceivedOffsets: Set<number>;
 
     runningSteps: Map<number, Promise<number>>;
-    runningStepIndex: number;
+    nextRunningStepId: number;
 
     needDownloads: number[][];
     
@@ -80,7 +80,7 @@ class DownloadInProgress {
         this.rejectedHosts = new Set();
         
         this.runningSteps = new Map();
-        this.runningStepIndex = 0;
+        this.nextRunningStepId = 0;
         this.needDownloads = [[0, this.size]];
         
         this.downloadManager.activeDownloads.set(fileAddr, this);
@@ -100,7 +100,7 @@ class DownloadInProgress {
             await this.populateAvailHosts(seedProxies);
             
             // Start up the first of the main download-queueing steps.
-            let stepId = this.runningStepIndex++;
+            let stepId = this.nextRunningStepId++;
             this.runningSteps.set(stepId,
                                      this.makeNewBurstsStep(stepId));
 
@@ -180,7 +180,7 @@ class DownloadInProgress {
     async populateAvailHosts(seedProxies: PeerProxy[]): Promise<void> {
         for(let proxy of seedProxies) {
             if (proxy !== this.downloadManager.proxyManager.thisProxy) {
-                let stepId = this.runningStepIndex++;
+                let stepId = this.nextRunningStepId++;
                 this.runningSteps.set(
                     stepId, this.dhtLookupStep(proxy, stepId));
             } else {
@@ -290,10 +290,10 @@ class DownloadInProgress {
         this.log(`Do queue download [${offset}+${length}]`);
         this.log(`  Avail hosts ${this.availHosts.size}`);
 
-        const trafficManager = this.downloadManager.proxyManager.trafficManager;
-
+        const network = this.downloadManager.proxyManager.networkManager;
+        
         const potentialBursts =
-            await trafficManager.requestDownload(
+            await network.requestDownload(
                 Array.from(this.availHosts), length);
         if (potentialBursts === null || potentialBursts.length <= 0)
             throw new Error('Null return from requestDownload()');
@@ -307,11 +307,11 @@ class DownloadInProgress {
             assert(thisLen % DOWNLOAD_CHUNK_SIZE == 0
                 || (offset+thisLen) == this.size);
             
-            const newStepIndex = this.runningStepIndex++;
+            const newStepId = this.nextRunningStepId++;
             this.runningSteps.set(
-                newStepIndex,
+                newStepId,
                 this.downloadBurstStep(burst.source, offset, thisLen,
-                                  newStepIndex));
+                                  newStepId));
 
             offset += thisLen;
             length -= thisLen;
@@ -323,10 +323,10 @@ class DownloadInProgress {
         if (this.outputFile && this.needDownloads.length > 0) {
             this.log(`  Repeat download queue call`);
 
-            const newStepIndex = this.runningStepIndex++;
+            const newStepId = this.nextRunningStepId++;
             this.runningSteps.set(
-                newStepIndex,
-                this.makeNewBurstsStep(newStepIndex));
+                newStepId,
+                this.makeNewBurstsStep(newStepId));
         }
         
         this.log(

@@ -4,6 +4,7 @@ import { performance } from 'perf_hooks';
 
 import { Config } from './config';
 import { Logger } from './logger';
+import { PeerProxy } from './structures';
 import { TrafficManager } from "./traffic";
 
 import {
@@ -12,16 +13,15 @@ import {
     
     HeartbeatMessage,
     HeartbeatResponse,
-
     DataRequestMessage,
     DataResponseOk,
     DataResponseUnknown,
-
     DhtStoreMessage,
     DhtStoreResponse,
-
     DhtLookupMessage,
     DhtLookupResponse,
+    TelemetryFetchMessage,
+    TelemetryFetchResponse,
 } from './messages';
 
 const MAGIC_BYTES = Buffer.from([140, 98]);
@@ -40,6 +40,21 @@ interface NetworkManager {
         handler: RequestHandler,
     ): void;
     unregisterRequestHandler(type: number): void;
+
+    requestUpload(source: PeerProxy, bytes: number): Promise<AllowedTransfer>;
+    
+    requestDownload(sources: PeerProxy[], bytes: number)
+    : Promise<AllowedTransfer[] | null>;
+    
+    newTelemetryId(): number;
+
+    log(msg: string): void;
+}
+
+interface AllowedTransfer {
+    source: PeerProxy;
+    bytesAllowed: number;
+    telemetryId: number;
 }
 
 class InRequest {
@@ -151,23 +166,6 @@ class OutRequest {
     }
 }
 
-function getLocalIPAddresses(): string[] {
-    const interfaces = os.networkInterfaces();
-    const addresses: string[] = [];
-
-    for (const interfaceName in interfaces) {
-        const interfaceInfo = interfaces[interfaceName];
-
-        if (interfaceInfo)
-            for (const netInterface of interfaceInfo)
-                if (netInterface.family === 'IPv4')
-                    if (netInterface.address !== '127.0.0.1')
-                        addresses.push(netInterface.address);
-    }
-
-    return addresses;
-}
-
 class UdpNetworkManager {
     logger: Logger;
     config: Config;
@@ -178,6 +176,9 @@ class UdpNetworkManager {
     requestHandlers: Map<number, RequestHandler>;
     socket: dgram.Socket | null;
 
+    nextTelemetryId: number;
+    allLocalTrafficManager: TrafficManager;
+    
     constructor(logger: Logger, config: Config) {
         if (config.thisHost === null) {
             let addresses = getLocalIPAddresses();
@@ -196,6 +197,9 @@ class UdpNetworkManager {
         
         this.requestHandlers = new Map();
         this.socket = null;
+
+        this.nextTelemetryId = 0;
+        this.allLocalTrafficManager = new TrafficManager(this, config);
     }
 
     start(): void {
@@ -211,7 +215,7 @@ class UdpNetworkManager {
             'message',
             this.handleIncomingMessage.bind(this));
     }
-
+  
     stop(): void {
         if (this.socket) {
             this.socket.close();
@@ -245,15 +249,14 @@ class UdpNetworkManager {
         const encodedMessage = Buffer.concat([header, encodedContent]);
 
         if (!this.socket) {
-            this.logger.log('network', 'Socket is not initialized');
+            this.log('Socket is not initialized');
             return;
         }
 
         this.socket.send(encodedMessage, 0, encodedMessage.length, port,
             ipAddress, (error) => {
                 if (error) {
-                    this.logger.log('network',
-                                    `Error sending message: ${error}`);
+                    this.log(`Error sending message: ${error}`);
                     return;
                 }
             });
@@ -310,6 +313,12 @@ class UdpNetworkManager {
                 message = DhtLookupResponse.fromBuffer(messageData);
                 isInRequest = false;
                 break;
+            case MessageType.TELEMETRY_FETCH_MESSAGE:
+                message = TelemetryFetchMessage.fromBuffer(messageData);
+                isInRequest = true;
+            case MessageType.TELEMETRY_FETCH_RESPONSE:
+                message = TelemetryFetchResponse.fromBuffer(messageData);
+                isInRequest = false;
             default:
                 throw new Error('Unknown message type: ' + messageType);
         }
@@ -322,16 +331,14 @@ class UdpNetworkManager {
                                                   requestId, message);
                     handler(request, message);
                 } else {
-                    this.logger.log('network',
-                                    `No handler for ${message.type}`);
+                    this.log( `No handler for ${message.type}`);
                 }
                 return;
             }
         } else {
             const request = this.outRequests.get(requestId);
             if (request === undefined) {
-                this.logger.log('network',
-                                `Unknown request ID ${requestId}`);
+                this.log(`Unknown request ID ${requestId}`);
                 return;
             }
             request.handleMessage(message);
@@ -339,9 +346,7 @@ class UdpNetworkManager {
             return;
         }
 
-        this.logger.log(
-            'network',
-            `Unhandled message, type ${message.type}`);
+        this.log(`Unhandled message, type ${message.type}`);
     }
     
     registerRequestHandler(type: number, handler: RequestHandler): void {
@@ -351,8 +356,45 @@ class UdpNetworkManager {
     unregisterRequestHandler(type: number): void {
         this.requestHandlers.delete(type);
     }
+
+    async requestUpload(source: PeerProxy, bytes: number)
+    : Promise<AllowedTransfer> {
+        return await this.allLocalTrafficManager.requestUpload(source, bytes);
+    }
+    
+    async requestDownload(sources: PeerProxy[], bytes: number)
+    : Promise<AllowedTransfer[] | null> {
+        return await this.allLocalTrafficManager.requestDownload(
+            sources, bytes);
+    }
+    
+    newTelemetryId(): number {
+        return this.nextTelemetryId++;
+    }
+
+    log(msg: string): void {
+        this.logger.log('network', msg);
+    }
+}
+
+function getLocalIPAddresses(): string[] {
+    const interfaces = os.networkInterfaces();
+    const addresses: string[] = [];
+
+    for (const interfaceName in interfaces) {
+        const interfaceInfo = interfaces[interfaceName];
+
+        if (interfaceInfo)
+            for (const netInterface of interfaceInfo)
+                if (netInterface.family === 'IPv4')
+                    if (netInterface.address !== '127.0.0.1')
+                        addresses.push(netInterface.address);
+    }
+
+    return addresses;
 }
 
 export {
-    InRequest, OutRequest, RequestHandler, NetworkManager, UdpNetworkManager
+    InRequest, OutRequest, RequestHandler, NetworkManager, UdpNetworkManager,
+    AllowedTransfer
 };

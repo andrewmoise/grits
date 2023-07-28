@@ -82,7 +82,6 @@ abstract class ProxyManagerBase {
     networkManager: NetworkManager;
     fileCache: FileCache;
     downloadManager: DownloadManager;
-    trafficManager: TrafficManager;
     logger: Logger;
     
     peerProxies: Map<string, PeerProxy>;
@@ -102,20 +101,18 @@ abstract class ProxyManagerBase {
         this.networkManager = new UdpNetworkManager(this.logger, config);
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
-        this.trafficManager = new TrafficManager(config);
 
         this.peerProxies = new Map();
         this.rootProxy = this.addPeerProxy(
             this.config.rootHost, this.config.rootPort);
-
-        const thisProxy = this.getPeerProxy(
-            this.config.thisHost, this.config.thisPort);
-
-        if (thisProxy)
-            this.thisProxy = thisProxy;
-        else
+        if (this.config.rootHost == this.config.thisHost
+            && this.config.rootPort == this.config.thisPort)
+        {
+            this.thisProxy = this.rootProxy;
+        } else {
             this.thisProxy = this.addPeerProxy(
                 this.config.thisHost, this.config.thisPort);
+        }
         
         this.proxyDataMap = new ProxyDataMap(config);
 
@@ -127,9 +124,19 @@ abstract class ProxyManagerBase {
         return `${ip}:${port}`;
     }
 
-    getPeerProxy(ip: string, port: number): PeerProxy | undefined {
+    getPeerProxy(ip: string, port: number): PeerProxy {
         const key = this.generateProxyKey(ip, port);
-        return this.peerProxies.get(key);
+
+        let result = this.peerProxies.get(key);
+        if (result)
+            return result;
+
+        this.logger.log(
+            'proxy', `Unknown proxy! ${ip}:${port} For now we add it.`);
+
+        result = new PeerProxy(ip, port);
+        this.peerProxies.set(key, result);
+        return result;
     }
 
     addPeerProxy(ip: string, port: number): PeerProxy {
@@ -155,7 +162,7 @@ abstract class ProxyManagerBase {
 
         this.logger.log('proxies',
                         `Init with ${this.peerProxies.size} proxies`);
-        
+
         this.networkManager.start();
 
         this.networkManager.registerRequestHandler(
@@ -204,6 +211,10 @@ abstract class ProxyManagerBase {
             throw new Error("Data request of wrong TS type!");
         const dataRequestMessage = message as DataRequestMessage;
 
+        const source = this.getPeerProxy(request.ip, request.port);
+        if (!source)
+            throw new Error(`Request from unrecognized host ${request.ip}:${request.port}`);
+        
         const fileAddr = dataRequestMessage.fileAddr;
 
         if (!message.transferId.match("^[A-Za-z0-9]{8}$"))
@@ -223,8 +234,9 @@ abstract class ProxyManagerBase {
                 while (length > 0) {
                     this.logger.log(message.transferId,
                                     `Have ${budget}, requesting budget ${length-budget}`);
-                    budget += await this.trafficManager.requestUpload(
-                        length - budget);
+
+                    budget += (await this.networkManager.requestUpload(
+                        source, length - budget)).bytesAllowed;
 
                     this.logger.log(message.transferId,
                                     `Got total budget ${budget}`);
@@ -286,7 +298,7 @@ abstract class ProxyManagerBase {
             this.logger.log('dht', '  But no proxy found!');
         }
 
-        this.trafficManager.requestUpload(40); // FIXME
+        await this.networkManager.requestUpload(senderProxy, 40); // FIXME
         this.logger.log('dht', `Sending location response for ${message.fileAddr} to ${request.ip}:${request.port}`);
         
         const response = new DhtStoreResponse(message.fileAddr);
@@ -362,8 +374,7 @@ abstract class ProxyManagerBase {
 
             // We have no refresh timestamp, or an old one - send notification
 
-            // FIXME - maybe this should be in the network manager:
-            await this.trafficManager.requestUpload(40);
+            await this.networkManager.requestUpload(node, 40);
 
             this.logger.log(
                 'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);
