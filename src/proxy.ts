@@ -6,9 +6,9 @@ import {
     Message,
     HeartbeatResponse,
     HeartbeatMessage,
-    DataRequestMessage,
-    DataResponseOk,
-    DataResponseUnknown,
+    DataFetchMessage,
+    DataFetchResponseOk,
+    DataFetchResponseNo,
     DhtStoreMessage,
     DhtStoreResponse,
     DhtLookupMessage,
@@ -166,7 +166,7 @@ abstract class ProxyManagerBase {
         this.networkManager.start();
 
         this.networkManager.registerRequestHandler(
-            MessageType.DATA_REQUEST_MESSAGE,
+            MessageType.DATA_FETCH_MESSAGE,
             this.handleDataRequest.bind(this));
 
         this.networkManager.registerRequestHandler(
@@ -198,7 +198,7 @@ abstract class ProxyManagerBase {
         this.networkManager.unregisterRequestHandler(
             MessageType.DHT_STORE_MESSAGE);
         this.networkManager.unregisterRequestHandler(
-            MessageType.DATA_REQUEST_MESSAGE);
+            MessageType.DATA_FETCH_MESSAGE);
 
         this.networkManager.stop();
 
@@ -207,9 +207,9 @@ abstract class ProxyManagerBase {
 
     async handleDataRequest(request: InRequest, message: Message)
     : Promise<void> {
-        if (!(message instanceof DataRequestMessage))
+        if (!(message instanceof DataFetchMessage))
             throw new Error("Data request of wrong TS type!");
-        const dataRequestMessage = message as DataRequestMessage;
+        const dataRequestMessage = message as DataFetchMessage;
 
         const source = this.getPeerProxy(request.ip, request.port);
         if (!source)
@@ -251,7 +251,7 @@ abstract class ProxyManagerBase {
                         this.logger.log(message.transferId,
                                         `Send data response ${packetLen}`);
 
-                        const responseMessage = new DataResponseOk(
+                        const responseMessage = new DataFetchResponseOk(
                             fileAddr, offset,
                             packetLen, data);
 
@@ -276,7 +276,7 @@ abstract class ProxyManagerBase {
         this.logger.log(message.transferId,
                         `fileAddr is unknown`);
 
-        const responseMessage = new DataResponseUnknown(
+        const responseMessage = new DataFetchResponseNo(
             fileAddr);
         request.sendResponse(responseMessage);
         return;
@@ -310,7 +310,7 @@ abstract class ProxyManagerBase {
     : Promise<void> {
         if (!(message instanceof DhtLookupMessage))
             throw new Error("DHT request of wrong TS type!");
-        const dhtLookupMessage = message as DataRequestMessage;
+        const dhtLookupMessage = message as DataFetchMessage;
 
         const fileAddr = dhtLookupMessage.fileAddr;
 

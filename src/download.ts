@@ -19,7 +19,7 @@ import {
 
 import {
     Message,
-    DataRequestMessage, DataResponseOk, DataResponseUnknown,
+    DataFetchMessage, DataFetchResponseOk, DataFetchResponseNo,
     DhtLookupMessage, DhtLookupResponse,
 } from "./messages";
 
@@ -341,7 +341,7 @@ class DownloadInProgress {
         this.log(`  Iter downloadBurstStep() ${host.ip}:${host.port} at [${offset}+${length}]`);
 
         const network = this.downloadManager.proxyManager.networkManager;
-        const message = new DataRequestMessage(
+        const message = new DataFetchMessage(
             this.fileAddr, offset, length,
             this.transferId);
         const request = network.newRequest(host.ip, host.port, message);
@@ -370,13 +370,13 @@ class DownloadInProgress {
                     //}
 
                     return id;
-                } else if (response instanceof DataResponseUnknown) {
+                } else if (response instanceof DataFetchResponseNo) {
                     this.log(`Response is unknown.`);
-                    await this.handleDataResponseUnknown(host, response!);
+                    await this.handleDataFetchResponseNo(host, response!);
                     return id;
-                } else if (response instanceof DataResponseOk) {
+                } else if (response instanceof DataFetchResponseOk) {
                     this.log(`Response is ok. availHosts has ${this.availHosts.size}.`);
-                    await this.handleDataResponseOk(host, response!);
+                    await this.handleDataFetchResponseOk(host, response!);
                     if (this.unreceivedOffsets.size <= 0
                         || response.offset+response.length === offset+length)
                     {
@@ -395,8 +395,8 @@ class DownloadInProgress {
         throw new Error('Fell out of downloadBurstStep() main loop');
     }
 
-    async handleDataResponseOk(source: PeerProxy,
-                               message: DataResponseOk)
+    async handleDataFetchResponseOk(source: PeerProxy,
+                               message: DataFetchResponseOk)
     {
         this.log(`Got OK ${this.fileAddr}@${message.offset}[${message.length}] from ${source.ip}:${source.port}`);
 
@@ -433,8 +433,8 @@ class DownloadInProgress {
         }
     }
 
-    async handleDataResponseUnknown(source: PeerProxy,
-                                    message: DataResponseUnknown)
+    async handleDataFetchResponseNo(source: PeerProxy,
+                                    message: DataFetchResponseNo)
     {
         this.log(`Got Unk ${this.fileAddr} from ${source.ip}:${source.port}`);
         

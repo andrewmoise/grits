@@ -6,9 +6,9 @@ export enum MessageType {
     HEARTBEAT_MESSAGE = 0,
     HEARTBEAT_RESPONSE = 1,
     
-    DATA_REQUEST_MESSAGE = 2,
-    DATA_RESPONSE_OK = 3,
-    DATA_RESPONSE_UNKNOWN = 4,
+    DATA_FETCH_MESSAGE = 2,
+    DATA_FETCH_RESPONSE_OK = 3,
+    DATA_FETCH_RESPONSE_NO = 4,
 
     DHT_STORE_MESSAGE = 5,
     DHT_STORE_RESPONSE = 6,
@@ -91,21 +91,21 @@ export class HeartbeatResponse extends Message {
     }
 }
 
-export class DataRequestMessage extends Message {
+export class DataFetchMessage extends Message {
     fileAddr: string;
     offset: number;
     length: number;
     transferId: string;
 
     constructor(fileAddr: string, offset: number, length: number, transferId: string) {
-        super(MessageType.DATA_REQUEST_MESSAGE);
+        super(MessageType.DATA_FETCH_MESSAGE);
         this.fileAddr = fileAddr;
         this.offset = offset;
         this.length = length;
         this.transferId = transferId;
     }
 
-    static fromBuffer(buffer: Buffer): DataRequestMessage {
+    static fromBuffer(buffer: Buffer): DataFetchMessage {
         let offset = 0;
         const hash = buffer.slice(offset, offset + 32).toString('hex');
         offset += 32;
@@ -119,7 +119,7 @@ export class DataRequestMessage extends Message {
         const transferId = buffer.slice(offset, offset + 8).toString('binary');
         offset += 8;
 
-        return new DataRequestMessage(fileAddr, messageOffset, length, transferId);
+        return new DataFetchMessage(fileAddr, messageOffset, length, transferId);
     }
 
     encode(): Buffer {
@@ -148,21 +148,21 @@ export class DataRequestMessage extends Message {
     }
 }
 
-export class DataResponseOk extends Message {
+export class DataFetchResponseOk extends Message {
     fileAddr: string;
     offset: number;
     length: number;
     data: Buffer;
 
     constructor(fileAddr: string, offset: number, length: number, data: Buffer) {
-        super(MessageType.DATA_RESPONSE_OK);
+        super(MessageType.DATA_FETCH_RESPONSE_OK);
         this.fileAddr = fileAddr;
         this.offset = offset;
         this.length = length;
         this.data = data;
     }
 
-    static fromBuffer(buffer: Buffer): DataResponseOk {
+    static fromBuffer(buffer: Buffer): DataFetchResponseOk {
         let offset = 0;
         const hash = buffer.slice(offset, offset + 32).toString('hex');
         offset += 32;
@@ -175,7 +175,7 @@ export class DataResponseOk extends Message {
         offset += 4;
         const data = buffer.slice(offset);
 
-        return new DataResponseOk(fileAddr, messageOffset, length, data);
+        return new DataFetchResponseOk(fileAddr, messageOffset, length, data);
     }
 
     encode(): Buffer {
@@ -201,15 +201,15 @@ export class DataResponseOk extends Message {
     }
 }
 
-export class DataResponseUnknown extends Message {
+export class DataFetchResponseNo extends Message {
     fileAddr: string;
 
     constructor(fileAddr: string) {
-        super(MessageType.DATA_RESPONSE_UNKNOWN);
+        super(MessageType.DATA_FETCH_RESPONSE_NO);
         this.fileAddr = fileAddr;
     }
 
-    static fromBuffer(buffer: Buffer): DataResponseUnknown {
+    static fromBuffer(buffer: Buffer): DataFetchResponseNo {
         let offset = 0;
 
         const hash = buffer.slice(offset, offset + 32).toString('hex');
@@ -219,7 +219,7 @@ export class DataResponseUnknown extends Message {
         offset += 8;
 
         const fileAddr = `${hash}:${size}`;
-        return new DataResponseUnknown(fileAddr);
+        return new DataFetchResponseNo(fileAddr);
     }
 
     encode(): Buffer {
@@ -485,9 +485,9 @@ module.exports = {
     HeartbeatMessage,
     HeartbeatResponse,
 
-    DataRequestMessage,
-    DataResponseOk,
-    DataResponseUnknown,
+    DataFetchMessage,
+    DataFetchResponseOk,
+    DataFetchResponseNo,
 
     DhtStoreMessage,
     DhtStoreResponse,

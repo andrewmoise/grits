@@ -13,9 +13,9 @@ import {
     
     HeartbeatMessage,
     HeartbeatResponse,
-    DataRequestMessage,
-    DataResponseOk,
-    DataResponseUnknown,
+    DataFetchMessage,
+    DataFetchResponseOk,
+    DataFetchResponseNo,
     DhtStoreMessage,
     DhtStoreResponse,
     DhtLookupMessage,
@@ -285,16 +285,16 @@ class UdpNetworkManager {
                 message = HeartbeatResponse.fromBuffer(messageData);
                 isInRequest = false;
                 break;
-            case MessageType.DATA_REQUEST_MESSAGE:
-                message = DataRequestMessage.fromBuffer(messageData);
+            case MessageType.DATA_FETCH_MESSAGE:
+                message = DataFetchMessage.fromBuffer(messageData);
                 isInRequest = true;
                 break;
-            case MessageType.DATA_RESPONSE_OK:
-                message = DataResponseOk.fromBuffer(messageData);
+            case MessageType.DATA_FETCH_RESPONSE_OK:
+                message = DataFetchResponseOk.fromBuffer(messageData);
                 isInRequest = false;
                 break;
-            case MessageType.DATA_RESPONSE_UNKNOWN:
-                message = DataResponseUnknown.fromBuffer(messageData);
+            case MessageType.DATA_FETCH_RESPONSE_NO:
+                message = DataFetchResponseNo.fromBuffer(messageData);
                 isInRequest = false;
                 break;
             case MessageType.DHT_STORE_MESSAGE:
