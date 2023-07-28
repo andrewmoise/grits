@@ -439,21 +439,21 @@ export class DhtLookupResponse extends Message {
 }
 
 export class TelemetryFetchMessage extends Message {
-    telemetryId: number;
+    telemetryBatchId: number;
     
-    constructor(telemetryId: number) {
+    constructor(telemetryBatchId: number) {
         super(MessageType.TELEMETRY_FETCH_MESSAGE);
-        this.telemetryId = telemetryId;
+        this.telemetryBatchId = telemetryBatchId;
     }
 
     static fromBuffer(buffer: Buffer): TelemetryFetchMessage {
-        const telmetryId = buffer.readUInt32BE(0);
-        return new TelemetryFetchMessage(telmetryId);
+        const telmetryBatchId = buffer.readUInt32BE(0);
+        return new TelemetryFetchMessage(telmetryBatchId);
     }
 
     encode(): Buffer {
         const buffer = Buffer.allocUnsafe(4);
-        buffer.writeUInt32BE(this.telemetryId, 0);
+        buffer.writeUInt32BE(this.telemetryBatchId, 0);
         return buffer;
     }
 }
