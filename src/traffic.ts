@@ -9,6 +9,18 @@ import { TelemetryFetchMessage, TelemetryFetchResponse } from './messages';
 
 const RATE_UPDATE_THRESHOLD = 0.1; // in seconds
 
+interface TrafficManager {
+    requestUpload(peerProxy: PeerProxy, bytes: number)
+    : Promise<AllowedTransfer>;
+
+    requestDownload(peerProxies: PeerProxy[], bytesRequested: number)
+    : Promise<AllowedTransfer[] | null>;
+
+    notifyDownload(actualBytes: number, wholeTransferBytes: number): void;
+    notifyLatency(latency: number): void;
+    notifyPacketLoss(loss: number): void;
+}
+
 class TrafficShaper {
     bytesBudgeted: number;
     lastUpdate: number;
@@ -52,7 +64,7 @@ class TrafficShaper {
     }   
 }
 
-class TrafficManager {
+class TrafficManagerImpl implements TrafficManager {
     networkManager: NetworkManager;
     config: Config;
     
@@ -116,7 +128,7 @@ class TrafficManager {
         const result: AllowedTransfer = {
             source: peerProxy,
             bytesAllowed,
-            telemetryId: this.upstreamTelemetryId
+            telemetryBatchId: this.upstreamTelemetryId
         };
         
         // Disabled temporarily
@@ -190,7 +202,7 @@ class TrafficManager {
 
             downloadBursts.push({
                 source: peerProxies[i],
-                telemetryId: -1,
+                telemetryBatchId: -1,
                 bytesAllowed: bytesThisPeer,
             });
 
@@ -202,8 +214,10 @@ class TrafficManager {
     }
 
     // Disabled temporarily
-    public async notifyDownload(actualBytes: number, wholeTransferBytes: number) {
-        await this.observedDownstream.requestTransfer(wholeTransferBytes, false);
+    public async notifyDownload(actualBytes: number, wholeTransferBytes: number)
+    {
+        await this.observedDownstream.requestTransfer(
+            wholeTransferBytes, false);
 
         const now = performance.now();
         
@@ -215,8 +229,8 @@ class TrafficManager {
             this.downstreamByteCounter = 0;
             this.downstreamBurstStart = now;
         } else {
-            // We don't count the first packet's bytes to prevent
-            // an off-by-one error in the rate calculation
+            // "else" because we don't count the first packet's bytes, to
+            // prevent an off-by-one error in the rate calculation
             
             this.downstreamByteCounter += actualBytes;
         }
@@ -256,4 +270,4 @@ class TrafficManager {
     }
 };
 
-export { AllowedTransfer, TrafficShaper, TrafficManager };
+export { AllowedTransfer, TrafficShaper, TrafficManager, TrafficManagerImpl };

@@ -1,16 +1,20 @@
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 
+import { TrafficManager } from './traffic';
+
 class PeerProxy {
     ip: string;
     port: number;
     lastSeen: Date | null;
 
     dhtStoredData: WeakMap<CachedFile, Date>;
+    trafficManager: TrafficManager;
     
-    constructor(ip: string, port: number) {
+    constructor(ip: string, port: number, trafficManager: TrafficManager) {
         this.ip = ip;
         this.port = port;
+        this.trafficManager = trafficManager;
         this.lastSeen = null;
 
         this.dhtStoredData = new WeakMap();

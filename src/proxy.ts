@@ -29,7 +29,7 @@ import {
 
 import { BlobFinder } from './dht';
 import { Logger } from './logger';
-import { TrafficManager } from './traffic';
+import { TrafficManagerImpl } from './traffic';
 
 // ProxyDataMap class to track the most recent proxies where a file has been
 // seen.
@@ -131,18 +131,19 @@ abstract class ProxyManagerBase {
         if (result)
             return result;
 
+        // FIXME
         this.logger.log(
-            'proxy', `Unknown proxy! ${ip}:${port} For now we add it.`);
+            'proxy', `Unknown proxy ${ip}:${port}! For now we add it.`);
 
-        result = new PeerProxy(ip, port);
-        this.peerProxies.set(key, result);
-        return result;
+        return this.addPeerProxy(ip, port);
     }
 
     addPeerProxy(ip: string, port: number): PeerProxy {
         const key = this.generateProxyKey(ip, port);
         if (!this.peerProxies.has(key)) {
-            const peerProxy = new PeerProxy(ip, port);
+            const trafficManager = new TrafficManagerImpl(
+                this.networkManager, this.config);
+            const peerProxy = new PeerProxy(ip, port, trafficManager);
             this.peerProxies.set(key, peerProxy);
             return peerProxy;
         } else {
@@ -555,21 +556,9 @@ class ProxyManager extends ProxyManagerBase {
             const newPeersSet = new Set();
             newPeers.forEach((peer: { ip: string; port: number; }) => {
                 newPeersSet.add(this.generateProxyKey(peer.ip, peer.port));
+                const peerProxy = this.getPeerProxy(peer.ip, peer.port);
+                peerProxy.updateLastSeen();
             });
-
-            // Update existing and add new peers
-            for (let newPeer of newPeers) {
-                const { ip, port } = newPeer;
-                if (!this.peerProxies.has(this.generateProxyKey(ip, port))) {
-                    const peerProxy = new PeerProxy(ip, port);
-                    this.peerProxies.set(this.generateProxyKey(ip, port),
-                                         peerProxy);
-                } else {
-                    // update lastSeen timestamp for the existing peer
-                    this.peerProxies.get(
-                        this.generateProxyKey(ip, port))!.updateLastSeen();
-                }
-            }
 
             // Remove peers not present in the new list
             for (let [key, proxy] of this.peerProxies.entries()) {

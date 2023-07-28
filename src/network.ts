@@ -5,7 +5,7 @@ import { performance } from 'perf_hooks';
 import { Config } from './config';
 import { Logger } from './logger';
 import { PeerProxy } from './structures';
-import { TrafficManager } from "./traffic";
+import { TrafficManagerImpl } from "./traffic";
 
 import {
     MessageType,
@@ -54,7 +54,7 @@ interface NetworkManager {
 interface AllowedTransfer {
     source: PeerProxy;
     bytesAllowed: number;
-    telemetryId: number;
+    telemetryBatchId: number;
 }
 
 class InRequest {
@@ -177,7 +177,7 @@ class UdpNetworkManager {
     socket: dgram.Socket | null;
 
     nextTelemetryId: number;
-    allLocalTrafficManager: TrafficManager;
+    allLocalTrafficManager: TrafficManagerImpl;
     
     constructor(logger: Logger, config: Config) {
         if (config.thisHost === null) {
@@ -199,7 +199,7 @@ class UdpNetworkManager {
         this.socket = null;
 
         this.nextTelemetryId = 0;
-        this.allLocalTrafficManager = new TrafficManager(this, config);
+        this.allLocalTrafficManager = new TrafficManagerImpl(this, config);
     }
 
     start(): void {

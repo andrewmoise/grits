@@ -9,7 +9,6 @@ import { assert } from 'console';
 
 import { Config } from './config';
 import { FileCache } from './filecache';
-import { TrafficManager } from './traffic';
 import { NetworkManager } from "./network";
 import { ProxyManagerBase } from "./proxy";
 
