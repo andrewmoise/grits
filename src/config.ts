@@ -1,78 +1,46 @@
 export class Config {
     // General proxy configuration
-    thisHost: string;
-    thisPort: number;
-    isRootNode: boolean;
+    thisHost: string = '127.0.0.1';
+    thisPort: number = 1787;
+    isRootNode: boolean = false;
     rootHost: string;
     rootPort: number;
-    logFile: string;
+    logFile: string = 'grits.log';
     
     // Storage configuration
-    storageDirectory: string;
-    storageSize: number; // in bytes
-    tempDownloadDirectory: string;
+    storageDirectory: string = 'cache';
+    storageSize: number = 20 * 1024 * 1024; // in bytes
+    tempDownloadDirectory: string = 'tmp-download';
 
     // DHT params
-    dhtNotifyNumber: number;
-    dhtNotifyPeriod: number; // In seconds
-    dhtMaxResponseNodes: number;
-    dhtRefreshTime: number; // Seconds
-    dhtExpiryTime: number; // Seconds
+    dhtNotifyNumber: number = 5;
+    dhtNotifyPeriod: number = 20; // In seconds
+    dhtMaxResponseNodes: number = 10;
+    dhtRefreshTime: number = 8 * 60 * 60; // Seconds
+    dhtExpiryTime: number = 24 * 60 * 60; // Seconds
     
     // Download params
-    maxBursts: number;
-    defaultBandwidth: number; // assumed bandwidth in bytes/s when no info
-    downloadTickPeriod: number; // in ms
-    burstTimeout: number; // in ms
+    maxBursts: number = 5;
+    defaultBandwidth: number = 100 * 1024; // assumed bandwidth in bytes/s when no info
+    downloadTickPeriod: number = 100; // in ms
+    burstTimeout: number = 1000; // in ms
     
     // Traffic configuration
-    maxUpstreamSpeed: number;   // bytes per second
-    maxDownstreamSpeed: number; // bytes per second
+    maxUpstreamSpeed: number = 100 * 1024;   // bytes per second
+    maxDownstreamSpeed: number = 100 * 1024; // bytes per second
 
-    performanceUpdateStiffness: number;
-    telemetryFetchRetries: number;
+    performanceUpdateStiffness: number = 0.95;
+    telemetryFetchRetries: number = 3;
     
     // Various less-relevant params
-    maxProxyMapAge: number; // In seconds
-    proxyMapCleanupPeriod: number; // In seconds
-    proxyHeartbeatPeriod: number; // In seconds
-    rootUpdatePeerListPeriod: number; // In seconds
-    rootProxyDropTimeout: number; // In seconds
+    maxProxyMapAge: number = 24 * 60 * 60; // In seconds
+    proxyMapCleanupPeriod: number = 60 * 60; // In seconds
+    proxyHeartbeatPeriod: number = 10; // In seconds
+    rootUpdatePeerListPeriod: number = 8; // In seconds
+    rootProxyDropTimeout: number = 180; // In seconds
     
     constructor(rootHost: string, rootPort: number) {
-        this.thisHost = '127.0.0.1';
-        this.thisPort = 1787;
-        this.isRootNode = false;
         this.rootHost = rootHost;
         this.rootPort = rootPort;
-
-        this.logFile = 'grits.log';
-        
-        this.storageDirectory = 'cache';
-        this.storageSize = 20 * 1024 * 1024;
-        this.tempDownloadDirectory = 'tmp-download';
-
-        this.dhtNotifyNumber = 5;
-        this.dhtNotifyPeriod = 20;
-        this.dhtMaxResponseNodes = 10;
-        this.dhtRefreshTime = 8 * 60 * 60; // 8 hours
-        this.dhtExpiryTime = 24 * 60 * 60; // 24 hours
-        
-        this.maxBursts = 5;
-        this.defaultBandwidth = 100 * 1024;
-        this.downloadTickPeriod = 100;
-        this.burstTimeout = 1000;
-        
-        this.maxUpstreamSpeed = 100 * 1024;   // 100 kb/s
-        this.maxDownstreamSpeed = 100 * 1024; // 100 kb/s
-        
-        this.performanceUpdateStiffness = 0.95;
-        this.telemetryFetchRetries = 3;
-        
-        this.maxProxyMapAge = 24 * 60 * 60;
-        this.proxyMapCleanupPeriod = 60 * 60;
-        this.proxyHeartbeatPeriod = 10;
-        this.rootUpdatePeerListPeriod = 8;
-        this.rootProxyDropTimeout = 180;
     }
 }
