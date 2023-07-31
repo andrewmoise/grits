@@ -55,7 +55,7 @@ proxyManagers.push(rootProxy);
 console.log('  Create other proxy managers');
 
 // Create configs for other nodes
-for (let i = 0; i < 5; i++) {
+for (let i = 0; i < 50; i++) {
     const config = new Config('127.0.0.1', 1787);
     config.thisPort = 1800 + i;
     
@@ -67,21 +67,6 @@ for (let i = 0; i < 5; i++) {
     config.logFile = path.join(config.storageDirectory, 'grits.log');
     
     const proxyManager = new ProxyManager(config);
-
-    let downBandwidth = 20000 + Math.random() * 80000;
-    let upBandwidth = 20000 + Math.random() * 80000;
-    let latency = 50 + Math.random() * 150;
-    let packetLossChance = Math.max(0, Math.random() - .8);
-
-    console.log(`Port ${config.thisPort}:`);
-    console.log(`  Bandwidth ${downBandwidth}/${upBandwidth}, latency ${latency}, packet loss ${packetLossChance}`);
-    let degraded = new DegradedNetworkManager(
-        proxyManager.networkManager,
-        downBandwidth, downBandwidth * 0.1,
-        upBandwidth, upBandwidth * 0.1,
-        latency, packetLossChance);
-    proxyManager.networkManager = degraded;
-    
     proxyManagers.push(proxyManager);
 }
 
@@ -93,11 +78,9 @@ console.log('  Starting proxy managers');
         return proxyManager.start();
     }));
 
-    for(let i=1; i<5; i++) {
-        // Start the http service
-        const httpServer = new HttpServer(proxyManagers[i], 12340 + i);
-        httpServer.start();
-    }
+    // Start the http service
+    const httpServer = new HttpServer(proxyManagers[1], 1234);
+    httpServer.start();
 })();
 
 console.log('  Signal handlers');
@@ -123,5 +106,60 @@ console.log('  Signal handlers');
 //    console.log('All loggers have shut down, exiting.');
 //    process.exit();
 //});
+
+console.log('  Set request timers');
+
+setTimeout(() => {
+    let loopCount = 0;
+
+    const allFiles = Array.from(rootProxy.fileCache.getFiles()).map(
+        (file) => { return file.fileAddr; });
+
+    console.log(`Timeout starts! ${allFiles.length} files`);
+    
+    const intervalId = setInterval(async () => {
+        if (loopCount++ >= 20) {
+            clearInterval(intervalId);
+            return;
+        }
+
+        // Pick a random proxy from the network
+        const randomProxyIndex =
+            Math.floor(Math.random() * proxyManagers.length);
+        const randomProxy = proxyManagers[randomProxyIndex];
+
+        // Our pretend client is browsing images. We select what topic
+        // they are browsing somewhat at random:
+
+        let randomFileIndex = 0;
+        while(randomFileIndex + 100 < allFiles.length
+            && Math.floor(Math.random() * 5) != 0)
+        {
+            randomFileIndex += 100;
+        }
+
+        console.log();
+        console.log();
+        console.log(`  Request starting at ${randomFileIndex}`);
+
+        do {
+            for(let i=0; i<10; i++) {
+                const randomFileAddr = allFiles[randomFileIndex + i];
+                console.log(`  Request ${randomFileAddr}`);
+        
+                // Request the file and measure the time it takes
+                try {
+                    const startTime = performance.now();
+                    const file = await randomProxy.retrieveFile(randomFileAddr);
+                    const endTime = performance.now();
+                    console.log(`    File size: ${file.size}, Fetch time: ${endTime - startTime}ms`);
+                } catch (err) {
+                    console.log(`Error retrieving file: ${err}`);
+                }
+            }
+            randomFileIndex += 10;
+        } while(Math.floor(Math.random() * 2) != 0);
+    }, 30000);
+}, 45000);  // Wait 30 seconds before starting
 
 console.log('  Init done, event loop starts');

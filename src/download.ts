@@ -101,7 +101,7 @@ class DownloadInProgress {
             // Start up the first of the main download-queueing steps.
             let stepId = this.nextRunningStepId++;
             this.runningSteps.set(stepId,
-                                     this.makeNewBurstsStep(stepId));
+                                  this.makeNewBurstsStep(stepId, null));
 
             // Main loop, waiting for any step to complete and then finishing
             // if after it, we're done.
@@ -189,7 +189,8 @@ class DownloadInProgress {
                 const dataMap = proxyManager.proxyDataMap.fileAddrToProxy;
                 const dhtHosts = dataMap.get(this.fileAddr);
                 if (dhtHosts)
-                    this.availHosts = new Set(dhtHosts.proxies);
+                    this.availHosts = new Set(dhtHosts.map(
+                        proxyInfo => proxyInfo.proxy));
                 
                 this.log(`Found self DHT proxy; init ${this.availHosts.size} hosts`);
             }
@@ -248,7 +249,8 @@ class DownloadInProgress {
         const message = new DhtLookupMessage(this.fileAddr, this.transferId);
 
         for(let attempts = 0; attempts < 30; attempts++) {
-            const request = network.newRequest(host.ip, host.port, message);
+            await network.requestTransfer(host, message);
+            const request = network.newRequest(host, message);
             const response = await request.getResponse();
             if (response === null) {
                 continue;
@@ -260,10 +262,11 @@ class DownloadInProgress {
             }
         }
 
-        throw new Error("Couldn't communicate with ${host.ip}:${host.port}");
+        throw new Error(`Couldn't communicate with ${host.ip}:${host.port}`);
     }
 
-    async makeNewBurstsStep(stepId: number): Promise<number> {
+    async makeNewBurstsStep(stepId: number, localAvailHosts: PeerProxy[] | null)
+    : Promise<number> {
         this.log(`  In MR, ND length ${this.needDownloads.length}`);
 
         if (this.needDownloads.length <= 0
@@ -293,14 +296,16 @@ class DownloadInProgress {
         
         const potentialBursts =
             await network.requestDownload(
-                Array.from(this.availHosts), length);
+                localAvailHosts ? localAvailHosts : Array.from(this.availHosts),
+                length);
         if (potentialBursts === null || potentialBursts.length <= 0)
             throw new Error('Null return from requestDownload()');
 
         for (let burst of potentialBursts) {
             if (length <= 0)
                 break;
-            const thisLen = Math.min(length, burst.bytesAllowed);
+
+            const thisLen = Math.min(length, burst.downloadBytesAllowed);
             
             assert(offset % DOWNLOAD_CHUNK_SIZE == 0);
             assert(thisLen % DOWNLOAD_CHUNK_SIZE == 0
@@ -309,8 +314,8 @@ class DownloadInProgress {
             const newStepId = this.nextRunningStepId++;
             this.runningSteps.set(
                 newStepId,
-                this.downloadBurstStep(burst.source, offset, thisLen,
-                                  newStepId));
+                this.downloadBurstStep(
+                    burst.source, offset, thisLen, newStepId));
 
             offset += thisLen;
             length -= thisLen;
@@ -319,13 +324,16 @@ class DownloadInProgress {
         if (length > 0)
             this.needDownloads.push([offset, length]);
         
-        if (this.outputFile && this.needDownloads.length > 0) {
+        if (!localAvailHosts
+            && this.outputFile
+            && this.needDownloads.length > 0)
+        {
             this.log(`  Repeat download queue call`);
 
             const newStepId = this.nextRunningStepId++;
             this.runningSteps.set(
                 newStepId,
-                this.makeNewBurstsStep(newStepId));
+                this.makeNewBurstsStep(newStepId, null));
         }
         
         this.log(
@@ -334,8 +342,8 @@ class DownloadInProgress {
         return stepId;
     }
     
-    async downloadBurstStep(
-        host: PeerProxy, offset: number, length: number, id: number)
+    async downloadBurstStep(host: PeerProxy, offset: number, length: number,
+                            id: number)
     : Promise<number> {
         this.log(`  Iter downloadBurstStep() ${host.ip}:${host.port} at [${offset}+${length}]`);
 
@@ -343,7 +351,9 @@ class DownloadInProgress {
         const message = new DataFetchMessage(
             this.fileAddr, offset, length,
             this.transferId);
-        const request = network.newRequest(host.ip, host.port, message);
+        // No requestTransfer -- we already budgeted for it in
+        // makeNewBurstsStep();
+        const request = network.newRequest(host, message);
 
         try {
             while(true) {
@@ -395,8 +405,8 @@ class DownloadInProgress {
     }
 
     async handleDataFetchResponseOk(source: PeerProxy,
-                               message: DataFetchResponseOk)
-    {
+                                    message: DataFetchResponseOk)
+    : Promise<void> {
         this.log(`Got OK ${this.fileAddr}@${message.offset}[${message.length}] from ${source.ip}:${source.port}`);
 
         try {
@@ -434,7 +444,7 @@ class DownloadInProgress {
 
     async handleDataFetchResponseNo(source: PeerProxy,
                                     message: DataFetchResponseNo)
-    {
+    : Promise<void> {
         this.log(`Got Unk ${this.fileAddr} from ${source.ip}:${source.port}`);
         
         if (this.availHosts.has(source))
@@ -444,7 +454,7 @@ class DownloadInProgress {
 
     async handleDhtLookupResponse(source: PeerProxy,
                                   message: DhtLookupResponse)
-    {
+    : Promise<void> {
         this.log(`Got DHT response ${this.fileAddr} from ${source.ip}:${source.port}`);
         
         if (!this.outputFile) {
@@ -468,6 +478,10 @@ class DownloadInProgress {
             {
                 this.log(`  Adding ${newHost.ip}:${newHost.port}`);
                 this.availHosts.add(newHost);
+
+                let stepId = this.nextRunningStepId++;
+                this.runningSteps.set(
+                    stepId, this.makeNewBurstsStep(stepId, [newHost]));
             } else {
                 this.log(`  Skipping ${newHost.ip}:${newHost.port}`);
             }

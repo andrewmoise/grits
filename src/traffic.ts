@@ -1,24 +1,32 @@
 import { performance } from 'perf_hooks';
 import { promisify } from 'util';
+
 const sleep = promisify(setTimeout);
 
+import { assert } from 'console';
+
 import { Config } from './config';
-import { NetworkManager, AllowedTransfer } from './network';
+import { Logger } from './logger';
+import { NetworkManager, AllowedTransfer, OutRequest } from './network';
 import { DOWNLOAD_CHUNK_SIZE, PeerProxy } from './structures';
 import { TelemetryFetchMessage, TelemetryFetchResponse } from './messages';
 
-const RATE_UPDATE_THRESHOLD = 0.1; // in seconds
+const TELEMETRY_CHECK_RATE = 0.1;
+const UPSTREAM_TELEMETRY_CHECK_RATE = 0.12;
+
+const QUEUE_DEPTH_LIMIT: number = 0.05;
+const QUEUE_CHECK_RATE: number = 0.025;
+const QUEUE_MESSAGE_LIMIT: number = 0.025;
 
 interface TrafficManager {
-    requestUpload(peerProxy: PeerProxy, bytes: number)
-    : Promise<AllowedTransfer>;
-
-    requestDownload(peerProxies: PeerProxy[], bytesRequested: number)
-    : Promise<AllowedTransfer[] | null>;
-
-    notifyDownload(actualBytes: number, wholeTransferBytes: number): void;
+    notifyDownload(
+        actualBytes: number, wholeTransferBytes: number, isInRequest:boolean)
+    : void;
+    
     notifyLatency(latency: number): void;
     notifyPacketLoss(loss: number): void;
+
+    updateBudgets(): void;
 }
 
 class TrafficShaper {
@@ -26,17 +34,15 @@ class TrafficShaper {
     lastUpdate: number;
 
     maxSpeed: number; // bytes per second
-    queueDepth: number; // bytes    
-
-    constructor(maxSpeed: number, queueDepth: number) {
+    
+    constructor(initialMaxSpeed: number) {
         this.bytesBudgeted = 0;
         this.lastUpdate = performance.now();
 
-        this.maxSpeed = maxSpeed;
-        this.queueDepth = queueDepth;
+        this.maxSpeed = initialMaxSpeed;
     }
 
-    private updateBudgets() {
+    updateBudget(): void {
         const now = performance.now();
         const deltaTime = (now - this.lastUpdate) / 1000;
         this.lastUpdate = now;
@@ -45,23 +51,17 @@ class TrafficShaper {
             0, this.bytesBudgeted - this.maxSpeed * deltaTime);
     }
 
-    public async requestTransfer(bytes: number, blockUntilReady: boolean = true)
-    : Promise<number> {
-        this.updateBudgets();
-
-        const maxBytes = Math.min(bytes, this.queueDepth);
-
-        this.bytesBudgeted += maxBytes;
-
-        if (blockUntilReady && this.bytesBudgeted >= this.queueDepth+1) {
-            const waitTime =
-                (this.bytesBudgeted - this.queueDepth / 2)
-                / this.maxSpeed * 1000;
-            await sleep(waitTime);
-        }
-
-        return maxBytes;
-    }   
+    consume(bytes: number): void {
+        this.bytesBudgeted += bytes;
+    }
+    
+    public readyToGo(logger: Logger): boolean {
+        logger.log(
+            'traffic',
+            `    RTG ${this.bytesBudgeted} <= ${QUEUE_DEPTH_LIMIT} * ${this.maxSpeed}`);
+        
+        return this.bytesBudgeted <= QUEUE_DEPTH_LIMIT * this.maxSpeed;
+    }
 }
 
 class TrafficManagerImpl implements TrafficManager {
@@ -72,96 +72,47 @@ class TrafficManagerImpl implements TrafficManager {
     requestedDownstream: TrafficShaper;
     observedDownstream: TrafficShaper;
     
-    upstreamByteCounter: number;
-    upstreamBurstStart: number;
-    upstreamTelemetryId: number;
-    upstreamHosts: Set<PeerProxy>;
+    upstreamByteCounter: number = 0;
+    upstreamBurstStart: number = 0;
+    upstreamTelemetryBatchId: number = -1;
+    upstreamHosts: Set<PeerProxy> = new Set();
     
-    downstreamByteCounter: number;
-    downstreamBurstStart: number;
+    downstreamByteCounter: number = 0;
+    downstreamBurstStart: number = 0;
 
-    latency: number | null;
-    packetLoss: number | null;
+    latency: number | null = null;
+    packetLoss: number | null = null;
+
+    requestQueue: OutRequest[] = [];
+    processRequestQueueInterval: NodeJS.Timeout | null = null;
     
     constructor(networkManager: NetworkManager, config: Config) {
         this.networkManager = networkManager;
         this.config = config;
         
         this.upstream = new TrafficShaper(
-            config.maxUpstreamSpeed, config.maxUpstreamQueue);
+            config.maxUpstreamSpeed);
 
         this.requestedDownstream = new TrafficShaper(
-            config.maxDownstreamSpeed, config.maxDownstreamQueue);
+            config.maxDownstreamSpeed);
 
         this.observedDownstream = new TrafficShaper(
-            config.maxDownstreamSpeed, 99999999999);
-        
-        this.upstreamByteCounter = 0;
-        this.upstreamBurstStart = 0;
-        this.upstreamTelemetryId = -1;
-        this.upstreamHosts = new Set();
-
-        this.downstreamByteCounter = 0;
-        this.downstreamBurstStart = 0;
-
-        this.latency = null;
-        this.packetLoss = null;
-    }
-
-    async requestUpload(peerProxy: PeerProxy, bytes: number)
-    : Promise<AllowedTransfer> {
-        let bytesAllowed = await this.upstream.requestTransfer(bytes);
-
-        if (this.upstreamBurstStart == 0
-            || this.upstream.bytesBudgeted == bytesAllowed)
-        {
-            // We're starting a new burst.
-            this.upstreamByteCounter = 0;
-            this.upstreamHosts = new Set();
-            this.upstreamBurstStart = performance.now();
-            this.upstreamTelemetryId = this.networkManager.newTelemetryId();
-        }
-
-        this.upstreamByteCounter += bytesAllowed;
-        this.upstreamHosts.add(peerProxy);
-
-        const result: AllowedTransfer = {
-            source: peerProxy,
-            bytesAllowed,
-            telemetryBatchId: this.upstreamTelemetryId
-        };
-        
-        // Disabled temporarily
-        if (false && this.upstreamByteCounter
-            >= this.upstream.maxSpeed * RATE_UPDATE_THRESHOLD)
-        {
-            // We have a sustained burst, including this request -- initiate
-            // a recovery of how many bytes went through, and reset the burst
-            // so the next request will get a new telemetry ID
-            
-            this.upstream.maxSpeed *= this.config.performanceUpdateStiffness;
-            this.upstreamBurstStart = 0;
-
-            // Request telemetry from each remote host
-            const message = new TelemetryFetchMessage(
-                this.upstreamTelemetryId);
-            for (let proxy of this.upstreamHosts)
-                this.recoverTelemetry(proxy, message);
-        }
-            
-        return result;
+            config.maxDownstreamSpeed);
     }
 
     private async recoverTelemetry(peerProxy: PeerProxy,
                                    message: TelemetryFetchMessage)
     : Promise<void> {
+        await sleep(UPSTREAM_TELEMETRY_CHECK_RATE - TELEMETRY_CHECK_RATE);
+
         try {
             for(let attempt = 0;
                 attempt < this.config.telemetryFetchRetries;
                 attempt++)
             {
+                await this.networkManager.requestTransfer(peerProxy, message);
                 const request = this.networkManager.newRequest(
-                    peerProxy.ip, peerProxy.port, message);
+                    peerProxy, message);
                 const rawResponse = await request.getResponse();
                 request.close();
                 
@@ -173,7 +124,7 @@ class TrafficManagerImpl implements TrafficManager {
                 const response = rawResponse as TelemetryFetchResponse;
                 this.upstream.maxSpeed +=
                     (1 - this.config.performanceUpdateStiffness)
-                    * response.byteCount / RATE_UPDATE_THRESHOLD;
+                    * response.byteCount / TELEMETRY_CHECK_RATE;
 
                 return;
             }
@@ -184,65 +135,38 @@ class TrafficManagerImpl implements TrafficManager {
         }
     }
     
-    public async requestDownload(peerProxies: PeerProxy[],
-                                 bytesRequested: number)
-    : Promise<AllowedTransfer[] | null> {
-        const bytesAllowed = await this.requestedDownstream.requestTransfer(
-            bytesRequested);
-
-        const burstsPerPeer = Math.ceil(
-            bytesRequested / DOWNLOAD_CHUNK_SIZE / peerProxies.length);
-            
-        const downloadBursts: AllowedTransfer[] = [];
-            
-        for (let i = 0; i < peerProxies.length; i++) {
-            const bytesThisPeer = Math.min(burstsPerPeer * DOWNLOAD_CHUNK_SIZE,
-                                           bytesRequested);
-            bytesRequested -= bytesThisPeer;
-
-            downloadBursts.push({
-                source: peerProxies[i],
-                telemetryBatchId: -1,
-                bytesAllowed: bytesThisPeer,
-            });
-
-            if (bytesRequested <= 0)
-                break;
-        }
-
-        return downloadBursts;
-    }
-
-    // Disabled temporarily
-    public async notifyDownload(actualBytes: number, wholeTransferBytes: number)
+    public async notifyDownload(actualBytes: number, wholeTransferBytes: number,
+                                isInRequest: boolean)
     {
-        await this.observedDownstream.requestTransfer(
-            wholeTransferBytes, false);
-
         const now = performance.now();
-        
-        if (this.downstreamBurstStart == 0
-            || this.observedDownstream.bytesBudgeted == wholeTransferBytes)
-        {
-            // We're starting a new burst.
 
-            this.downstreamByteCounter = 0;
+        this.observedDownstream.updateBudget();
+        if (this.observedDownstream.bytesBudgeted <= 0) {
             this.downstreamBurstStart = now;
+            this.downstreamByteCounter = 0;
         } else {
-            // "else" because we don't count the first packet's bytes, to
-            // prevent an off-by-one error in the rate calculation
-            
+            // Note: "else" because we don't count the first packet's bytes
+            // to avoid an off-by-one error
             this.downstreamByteCounter += actualBytes;
         }
         
-        const burstLength = now - this.downstreamBurstStart;
-        if (burstLength >= RATE_UPDATE_THRESHOLD) {
-            const rate = this.downstreamByteCounter / burstLength;
+        this.observedDownstream.consume(wholeTransferBytes);
+
+        const burstLength = (now - this.downstreamBurstStart) / 1000;
+        if (burstLength >= TELEMETRY_CHECK_RATE) {
+            const bandwidth = this.downstreamByteCounter / burstLength;
+            
+            this.networkManager.log(
+                `Update download estimation (${burstLength} burst)`);
+            this.networkManager.log(
+                `  byte counter is ${this.downstreamByteCounter}`);
+            this.networkManager.log(
+                `  Averaging in ${bandwidth}`);
 
             this.requestedDownstream.maxSpeed *=
                 this.config.performanceUpdateStiffness;
             this.requestedDownstream.maxSpeed +=
-                rate * (1 - this.config.performanceUpdateStiffness);
+                bandwidth * (1 - this.config.performanceUpdateStiffness);
             
             this.observedDownstream.maxSpeed =
                 this.requestedDownstream.maxSpeed;
@@ -251,16 +175,19 @@ class TrafficManagerImpl implements TrafficManager {
             this.downstreamBurstStart = now;
             this.downstreamByteCounter = 0;
         }
-    }
 
+        if (isInRequest)
+            this.requestedDownstream.consume(actualBytes);
+    }
+        
     public notifyLatency(latency: number) {
         if (this.latency === null)
             this.latency = latency;
         else
             this.latency = this.config.performanceUpdateStiffness * this.latency
-                + latency * (1 - this.config.performanceUpdateStiffness);
+            + latency * (1 - this.config.performanceUpdateStiffness);
     }
-
+        
     public notifyPacketLoss(loss: number) {
         if (this.packetLoss === null)
             this.packetLoss = loss;
@@ -268,6 +195,42 @@ class TrafficManagerImpl implements TrafficManager {
             this.packetLoss = this.config.performanceUpdateStiffness * this.packetLoss
             + loss * (1 - this.config.performanceUpdateStiffness);
     }
+
+    public updateBudgets(): void {
+        this.requestedDownstream.updateBudget();
+        
+        this.upstream.updateBudget();
+        if (this.upstream.bytesBudgeted <= 0) {
+            this.upstreamTelemetryBatchId = this.networkManager.newTelemetryId();
+            this.upstreamBurstStart = performance.now();
+            this.upstreamHosts = new Set();
+        }
+    }
+
+    public checkUploadTelemetry(): void {
+        assert(this.upstreamBurstStart > 0,
+               'checkUploadTelemetry() without budgets updated');
+        
+        const now = performance.now();
+        const burstLength = (now - this.upstreamBurstStart) / 1000;
+        
+        if (burstLength >= UPSTREAM_TELEMETRY_CHECK_RATE) {
+            this.upstream.maxSpeed *=
+                this.config.performanceUpdateStiffness;
+
+            const message = new TelemetryFetchMessage(
+                this.upstreamTelemetryBatchId);
+            
+            for (let peerProxy of this.upstreamHosts)
+                this.recoverTelemetry(peerProxy, message);
+
+            this.upstreamBurstStart = 0;
+        }
+    }
 };
 
-export { AllowedTransfer, TrafficShaper, TrafficManager, TrafficManagerImpl };
+export {
+    AllowedTransfer, TrafficShaper, TrafficManager, TrafficManagerImpl,
+    TELEMETRY_CHECK_RATE, UPSTREAM_TELEMETRY_CHECK_RATE,
+    QUEUE_DEPTH_LIMIT, QUEUE_CHECK_RATE, QUEUE_MESSAGE_LIMIT,
+};

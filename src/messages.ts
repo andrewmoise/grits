@@ -28,6 +28,11 @@ export abstract class Message {
     }
 
     abstract encode(): Uint8Array;
+
+    abstract transferSize(): number;
+    responseSize(): number {
+        return 0;
+    }
 }
 
 export class HeartbeatMessage extends Message {
@@ -45,12 +50,23 @@ export class HeartbeatMessage extends Message {
 
         return encodedMessage;
     }
+
+    transferSize(): number {
+        return 0;
+    }
+    responseSize() {
+        return 40;
+    }
+
+    toString(): string {
+        return 'HeartbeatMessage';
+    }
 }
 
 export class HeartbeatResponse extends Message {
     nodeMapFileAddr: string | null;
     
-    static zeroBuffer = Buffer.alloc(38, 0);
+    static zeroBuffer = Buffer.alloc(40, 0);
     
     constructor(nodeMapFileAddr: string | null) {
         super(MessageType.HEARTBEAT_RESPONSE);
@@ -59,7 +75,7 @@ export class HeartbeatResponse extends Message {
 
     static fromBuffer(buffer: Buffer): HeartbeatResponse {
         let offset = 0;
-        if (buffer.slice(offset, offset + 38).equals(this.zeroBuffer)) {
+        if (buffer.slice(offset, offset + 40).equals(this.zeroBuffer)) {
             return new HeartbeatResponse(null);
         } else {
             const hash = buffer.slice(offset, offset + 32).toString('hex');
@@ -88,6 +104,14 @@ export class HeartbeatResponse extends Message {
             offset += sizeBuffer.length;
         }
         return buffer;
+    }
+
+    transferSize(): number {
+        return 40;
+    }
+    
+    toString(): string {
+        return 'HeartbeatResponse';
     }
 }
 
@@ -146,6 +170,19 @@ export class DataFetchMessage extends Message {
 
         return buffer;
     }
+
+    transferSize(): number {
+        return 56;
+    }
+
+    responseSize(): number {
+        // Nothing really wrong with it, but we don't expect this path to happen
+        throw new Error('Direct responseSize() for data fetch');
+    }
+
+    toString(): string {
+        return 'DataFetchMessage';
+    }
 }
 
 export class DataFetchResponseOk extends Message {
@@ -154,7 +191,8 @@ export class DataFetchResponseOk extends Message {
     length: number;
     data: Buffer;
 
-    constructor(fileAddr: string, offset: number, length: number, data: Buffer) {
+    constructor(fileAddr: string, offset: number, length: number, data: Buffer)
+    {
         super(MessageType.DATA_FETCH_RESPONSE_OK);
         this.fileAddr = fileAddr;
         this.offset = offset;
@@ -199,6 +237,14 @@ export class DataFetchResponseOk extends Message {
 
         return Buffer.concat([headerBuffer, this.data]);
     }
+
+    transferSize(): number {
+        return 48 + this.length;
+    }
+
+    toString(): string {
+        return 'DataFetchResponseOk';
+    }
 }
 
 export class DataFetchResponseNo extends Message {
@@ -238,6 +284,15 @@ export class DataFetchResponseNo extends Message {
         
         return buffer;
     }
+
+    transferSize(): number {
+        return 40;
+    }
+
+    toString(): string {
+        return 'DataFetchResponseNo';
+    }
+
 }
 
 export class DhtStoreMessage extends Message {
@@ -274,6 +329,17 @@ export class DhtStoreMessage extends Message {
         
         return buffer;
     }
+
+    transferSize(): number {
+        return 40;
+    }
+    responseSize() {
+        return 40;
+    }
+
+    toString(): string {
+        return 'DhtStoreMessage';
+    }
 }
 
 export class DhtStoreResponse extends Message {
@@ -309,6 +375,14 @@ export class DhtStoreResponse extends Message {
         offset += 8;
         
         return buffer;
+    }
+
+    transferSize(): number {
+        return 40;
+    }
+
+    toString(): string {
+        return 'DhtStoreResponse';
     }
 }
 
@@ -353,6 +427,18 @@ export class DhtLookupMessage extends Message {
         offset += 8;
 
         return buffer;
+    }
+
+    transferSize(): number {
+        return 48;
+    }
+    responseSize() {
+        // Assume 10 nodes in the response
+        return 40 + 8 * 10 + 1;
+    }
+
+    toString(): string {
+        return 'DhtLookupMessage';
     }
 }
 
@@ -436,6 +522,14 @@ export class DhtLookupResponse extends Message {
 
         return Buffer.concat([headerBuffer, ...nodeInfoBuffers, endSignal]);
     }
+
+    transferSize(): number {
+        return 40 + 8 * this.nodeInfo.length + 1;
+    }
+
+    toString(): string {
+        return 'DhtLookupResponse';
+    }
 }
 
 export class TelemetryFetchMessage extends Message {
@@ -456,6 +550,17 @@ export class TelemetryFetchMessage extends Message {
         buffer.writeUInt32BE(this.telemetryBatchId, 0);
         return buffer;
     }
+
+    transferSize(): number {
+        return 4;
+    }
+    responseSize() {
+        return 4;
+    }
+
+    toString(): string {
+        return 'TelemetryFetchMessage';
+    }
 }
 
 export class TelemetryFetchResponse extends Message {
@@ -475,6 +580,14 @@ export class TelemetryFetchResponse extends Message {
         const buffer = Buffer.allocUnsafe(4);
         buffer.writeUInt32BE(this.byteCount, 0);
         return buffer;
+    }
+
+    transferSize(): number {
+        return 4;
+    }
+
+    toString(): string {
+        return 'TelemetryFetchResponse';
     }
 }
 

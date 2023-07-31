@@ -1,7 +1,28 @@
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 
-import { TrafficManager } from './traffic';
+import { TrafficManager, TELEMETRY_CHECK_RATE } from './traffic';
+
+class TelemetryInfo {
+    bytesSeen: number;
+    startTimestamp: number;
+    isOpen: boolean;
+
+    constructor(now: number) {
+        this.bytesSeen = 0;
+        this.startTimestamp = now;
+        this.isOpen = true;
+    }
+    
+    update(now: number, inBytes: number): void {
+        if (this.startTimestamp + TELEMETRY_CHECK_RATE < now) {
+            this.bytesSeen += inBytes;
+        } else if (this.isOpen) {
+            this.bytesSeen += inBytes / 2;
+            this.isOpen = false;
+        }
+    }
+}
 
 class PeerProxy {
     ip: string;
@@ -10,14 +31,18 @@ class PeerProxy {
 
     dhtStoredData: WeakMap<CachedFile, Date>;
     trafficManager: TrafficManager;
+
+    telemetryInfo: Map<number, TelemetryInfo>;
     
     constructor(ip: string, port: number, trafficManager: TrafficManager) {
         this.ip = ip;
         this.port = port;
-        this.trafficManager = trafficManager;
         this.lastSeen = null;
 
         this.dhtStoredData = new WeakMap();
+        this.trafficManager = trafficManager;
+
+        this.telemetryInfo = new Map();
     }
 
     updateLastSeen() {
@@ -73,4 +98,5 @@ class FileRetrievalError extends Error {
 
 const DOWNLOAD_CHUNK_SIZE = 1400;
 
-export { PeerProxy, CachedFile, FileRetrievalError, DOWNLOAD_CHUNK_SIZE };
+export { PeerProxy, CachedFile, FileRetrievalError, TelemetryInfo,
+         DOWNLOAD_CHUNK_SIZE };

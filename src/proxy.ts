@@ -24,18 +24,15 @@ import {
 } from "./structures";
 
 import {
-    InRequest, OutRequest, NetworkManager, UdpNetworkManager
+    InRequest, OutRequest, NetworkManager, NetworkManagerImpl
 } from './network';
 
 import { BlobFinder } from './dht';
 import { Logger } from './logger';
 import { TrafficManagerImpl } from './traffic';
 
-// ProxyDataMap class to track the most recent proxies where a file has been
-// seen.
 class ProxyDataMap {
-    fileAddrToProxy: Map<
-        string, { timestamp: Date, proxies: Array<PeerProxy> }>;
+    fileAddrToProxy: Map<string, Array<{ timestamp: Date, proxy: PeerProxy }>>;
     config: Config;
     
     constructor(config: Config) {
@@ -45,20 +42,22 @@ class ProxyDataMap {
 
     // Adds a new fileAddr - proxy mapping.
     updateData(fileAddr: string, proxy: PeerProxy) {
-        const proxyData = this.fileAddrToProxy.get(fileAddr);
+        let proxyData = this.fileAddrToProxy.get(fileAddr);
 
         if (proxyData) {
-            proxyData.timestamp = new Date();
-
             // Check if the proxy is already in the array.
-            const existingProxy = proxyData.proxies.find(
-                p => p.ip === proxy.ip && p.port === proxy.port);
+            let existingProxyData = proxyData.find(
+                p => p.proxy.ip === proxy.ip && p.proxy.port === proxy.port);
 
-            if (!existingProxy)
-                proxyData.proxies.push(proxy);
+            if (existingProxyData) {
+                // Update timestamp for the existing proxy.
+                existingProxyData.timestamp = new Date();
+            } else {
+                // Add new proxy with current timestamp.
+                proxyData.push({ timestamp: new Date(), proxy });
+            }
         } else {
-            this.fileAddrToProxy.set(
-                fileAddr, { timestamp: new Date(), proxies: [proxy] });
+            this.fileAddrToProxy.set(fileAddr, [{ timestamp: new Date(), proxy }]);
         }
     }
 
@@ -68,9 +67,14 @@ class ProxyDataMap {
         const maxAge = this.config.maxProxyMapAge;
 
         this.fileAddrToProxy.forEach((value, key) => {
-            if (Math.floor((currentTime.getTime() - value.timestamp.getTime())
-                / 1000) >= maxAge) // maxAge is seconds
-            {
+            const filteredProxyData = value.filter(proxyData =>
+                Math.floor(
+                    (currentTime.getTime() - proxyData.timestamp.getTime())
+                        / 1000) < maxAge); // maxAge is in seconds
+
+            if (filteredProxyData.length > 0) {
+                this.fileAddrToProxy.set(key, filteredProxyData);
+            } else {
                 this.fileAddrToProxy.delete(key);
             }
         });
@@ -83,7 +87,7 @@ abstract class ProxyManagerBase {
     fileCache: FileCache;
     downloadManager: DownloadManager;
     logger: Logger;
-    
+
     peerProxies: Map<string, PeerProxy>;
     rootProxy: PeerProxy;
     thisProxy: PeerProxy;
@@ -98,7 +102,7 @@ abstract class ProxyManagerBase {
         this.config = config;
         this.logger = new Logger(config);
 
-        this.networkManager = new UdpNetworkManager(this.logger, config);
+        this.networkManager = new NetworkManagerImpl(this, this.logger, config);
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
 
@@ -118,6 +122,54 @@ abstract class ProxyManagerBase {
 
         this.blobFinder = new BlobFinder();
         this.blobFinder.updateProxies(this.peerProxies);
+    }
+
+    async start(): Promise<void> {
+        await this.logger.start();
+
+        this.logger.log('proxies',
+                        `Init with ${this.peerProxies.size} proxies`);
+
+        this.networkManager.start();
+
+        this.networkManager.registerRequestHandler(
+            MessageType.DATA_FETCH_MESSAGE,
+            this.handleDataFetchMessage.bind(this));
+
+        this.networkManager.registerRequestHandler(
+            MessageType.DHT_STORE_MESSAGE,
+            this.handleDhtStoreMessage.bind(this));
+
+        this.networkManager.registerRequestHandler(
+            MessageType.DHT_LOOKUP_MESSAGE,
+            this.handleDhtLookupRequest.bind(this));
+        
+        this.cleanupIntervalId = setInterval(
+            this.proxyDataMap.cleanup.bind(this.proxyDataMap),
+            this.config.proxyMapCleanupPeriod);
+
+        this.dhtNotifyIntervalId = setInterval(
+            this.dhtNotifyAll.bind(this),
+            this.config.dhtNotifyPeriod * 1000);
+
+        //this.printStateIntervalId = setInterval(
+        //    this.printState.bind(this),
+        //    15000);
+    }
+
+    stop(): void {
+        //clearInterval(this.printStateIntervalId);
+        clearInterval(this.dhtNotifyIntervalId);
+        clearInterval(this.cleanupIntervalId);
+
+        this.networkManager.unregisterRequestHandler(
+            MessageType.DHT_STORE_MESSAGE);
+        this.networkManager.unregisterRequestHandler(
+            MessageType.DATA_FETCH_MESSAGE);
+
+        this.networkManager.stop();
+
+        this.logger.stop();
     }
 
     generateProxyKey(ip: string, port: number): string {
@@ -158,64 +210,13 @@ abstract class ProxyManagerBase {
             this.peerProxies.delete(key);
     }
 
-    async start(): Promise<void> {
-        await this.logger.start();
-
-        this.logger.log('proxies',
-                        `Init with ${this.peerProxies.size} proxies`);
-
-        this.networkManager.start();
-
-        this.networkManager.registerRequestHandler(
-            MessageType.DATA_FETCH_MESSAGE,
-            this.handleDataRequest.bind(this));
-
-        this.networkManager.registerRequestHandler(
-            MessageType.DHT_STORE_MESSAGE,
-            this.handleDhtStoreMessage.bind(this));
-
-        this.networkManager.registerRequestHandler(
-            MessageType.DHT_LOOKUP_MESSAGE,
-            this.handleDhtLookupRequest.bind(this));
-        
-        this.cleanupIntervalId = setInterval(
-            this.proxyDataMap.cleanup.bind(this.proxyDataMap),
-            this.config.proxyMapCleanupPeriod);
-
-        this.dhtNotifyIntervalId = setInterval(
-            this.dhtNotifyAll.bind(this),
-            this.config.dhtNotifyPeriod * 1000);
-
-        //this.printStateIntervalId = setInterval(
-        //    this.printState.bind(this),
-        //    15000);
-    }
-
-    stop(): void {
-        //clearInterval(this.printStateIntervalId);
-        clearInterval(this.dhtNotifyIntervalId);
-        clearInterval(this.cleanupIntervalId);
-
-        this.networkManager.unregisterRequestHandler(
-            MessageType.DHT_STORE_MESSAGE);
-        this.networkManager.unregisterRequestHandler(
-            MessageType.DATA_FETCH_MESSAGE);
-
-        this.networkManager.stop();
-
-        this.logger.stop();
-    }
-
-    async handleDataRequest(request: InRequest, message: Message)
+    async handleDataFetchMessage(request: InRequest, message: Message)
     : Promise<void> {
         if (!(message instanceof DataFetchMessage))
             throw new Error("Data request of wrong TS type!");
         const dataRequestMessage = message as DataFetchMessage;
 
-        const source = this.getPeerProxy(request.ip, request.port);
-        if (!source)
-            throw new Error(`Request from unrecognized host ${request.ip}:${request.port}`);
-        
+        const source = request.peerProxy;
         const fileAddr = dataRequestMessage.fileAddr;
 
         if (!message.transferId.match("^[A-Za-z0-9]{8}$"))
@@ -230,38 +231,23 @@ abstract class ProxyManagerBase {
             try {
                 let offset = dataRequestMessage.offset;
                 let length = dataRequestMessage.length;
-                let budget = 0;
-                
+
                 while (length > 0) {
-                    this.logger.log(message.transferId,
-                                    `Have ${budget}, requesting budget ${length-budget}`);
+                    const packetLen = Math.min(DOWNLOAD_CHUNK_SIZE, length);
 
-                    budget += (await this.networkManager.requestUpload(
-                        source, length - budget)).bytesAllowed;
+                    // TODO - theoretically we could do this file read in
+                    // parallel
+                    const data = await file.read(offset, packetLen);
 
-                    this.logger.log(message.transferId,
-                                    `Got total budget ${budget}`);
-                    
-                    while(budget >= Math.min(length, DOWNLOAD_CHUNK_SIZE)
-                        && length > 0)
-                    {
-                        const packetLen = Math.min(length, DOWNLOAD_CHUNK_SIZE);
+                    const responseMessage = new DataFetchResponseOk(
+                        fileAddr, offset, packetLen, data);
+                    await this.networkManager.requestTransfer(
+                        request.peerProxy, responseMessage);
 
-                        const data = await file.read(offset, packetLen);
+                    request.sendResponse(responseMessage);
                         
-                        this.logger.log(message.transferId,
-                                        `Send data response ${packetLen}`);
-
-                        const responseMessage = new DataFetchResponseOk(
-                            fileAddr, offset,
-                            packetLen, data);
-
-                        request.sendResponse(responseMessage);
-                        
-                        offset += packetLen;
-                        budget -= packetLen;
-                        length -= packetLen;
-                    }
+                    offset += packetLen;
+                    length -= packetLen;
                 }
 
                 this.logger.log(message.transferId,
@@ -289,9 +275,9 @@ abstract class ProxyManagerBase {
             throw new Error("Received wrong message type!");
         const message = rawMessage as DhtStoreMessage;
 
-        this.logger.log('dht', `Got location ${message.fileAddr} at ${request.ip}:${request.port}`);
+        const senderProxy = request.peerProxy;
+        this.logger.log('dht', `Got location ${message.fileAddr} at ${senderProxy.ip}:${senderProxy.port}`);
         
-        const senderProxy = this.getPeerProxy(request.ip, request.port);
         if (senderProxy) {
             this.proxyDataMap.updateData(message.fileAddr,
                                          senderProxy);
@@ -299,19 +285,18 @@ abstract class ProxyManagerBase {
             this.logger.log('dht', '  But no proxy found!');
         }
 
-        await this.networkManager.requestUpload(senderProxy, 40); // FIXME
-        this.logger.log('dht', `Sending location response for ${message.fileAddr} to ${request.ip}:${request.port}`);
+        this.logger.log('dht', `Sending location response for ${message.fileAddr} to ${senderProxy.ip}:${senderProxy.port}`);
         
         const response = new DhtStoreResponse(message.fileAddr);
+        await this.networkManager.requestTransfer(senderProxy, response);
         request.sendResponse(response);
-        //this.networkManager.send(response, request.ip, request.port);
     }
 
     async handleDhtLookupRequest(request: InRequest, message: Message)
     : Promise<void> {
         if (!(message instanceof DhtLookupMessage))
             throw new Error("DHT request of wrong TS type!");
-        const dhtLookupMessage = message as DataFetchMessage;
+        const dhtLookupMessage = message as DhtLookupMessage;
 
         const fileAddr = dhtLookupMessage.fileAddr;
 
@@ -321,20 +306,20 @@ abstract class ProxyManagerBase {
         this.logger.log(message.transferId,
                         `DHT request for ${fileAddr}`);
         
-        const fileProxies = this.proxyDataMap.fileAddrToProxy.get(
-            fileAddr);
-
-        let nodeInfo: Array<{ ip: string, port: number }>;
+        let fileProxies = this.proxyDataMap.fileAddrToProxy.get(fileAddr);
+        let nodeInfo: Array<{ip: string, port: number}> = [];
         
         if (fileProxies) {
             this.logger.log(message.transferId,
-                            `  Got ${fileProxies.proxies.length} hosts`);
+                            `  Got ${fileProxies.length} hosts`);
 
-            const recentProxies = fileProxies.proxies.slice(
-                -this.config.dhtMaxResponseNodes);
-                
+            // Sort proxies by timestamp in descending order and take the most recent ones
+            let recentProxies = fileProxies.sort(
+                (a, b) => b.timestamp.getTime() - a.timestamp.getTime()
+            ).slice(0, this.config.dhtMaxResponseNodes);
+            
             nodeInfo = recentProxies.map(
-                proxy => ({ ip: proxy.ip, port: proxy.port }));
+                proxyData => ({ ip: proxyData.proxy.ip, port: proxyData.proxy.port }));
         } else {
             this.logger.log(message.transferId,
                             `  Got nothing from lookup`);
@@ -347,7 +332,8 @@ abstract class ProxyManagerBase {
         
         const responseMessage = new DhtLookupResponse(
             fileAddr, nodeInfo);
-
+        await this.networkManager.requestTransfer(
+            request.peerProxy, responseMessage);
         request.sendResponse(responseMessage);
     }
 
@@ -375,15 +361,14 @@ abstract class ProxyManagerBase {
 
             // We have no refresh timestamp, or an old one - send notification
 
-            await this.networkManager.requestUpload(node, 40);
-
             this.logger.log(
                 'dht', `DHT Refresh ${cachedFile.fileAddr} on ${node.ip}:${node.port}`);
             
             const message = new DhtStoreMessage(cachedFile.fileAddr);
-            const request = this.networkManager.newRequest(
-                node.ip, node.port, message);
+            await this.networkManager.requestTransfer(node, message);
+            const request = this.networkManager.newRequest(node, message);
             const response = await request.getResponse();
+
             if (response)
                 this.handleDhtResponse(node.ip, node.port, response);
             request.close();
@@ -407,8 +392,8 @@ abstract class ProxyManagerBase {
     }
 
     async handleDhtResponse(senderIp: string, senderPort: number,
-                            rawMessage: Message): Promise<void>
-    {
+                            rawMessage: Message)
+    : Promise<void> {
         if (!(rawMessage instanceof DhtStoreResponse))
             throw new Error("Data request of wrong TS type!");
         const message = rawMessage as DhtStoreResponse;
@@ -492,15 +477,14 @@ class ProxyManager extends ProxyManagerBase {
         super.stop();
     }
 
-    async sendProxyHeartbeat() {
+    async sendProxyHeartbeat(): Promise<void> {
         this.logger.log('heartbeat', 'Sending proxy heartbeat');
 
         const heartbeatMessage = new HeartbeatMessage();
-
+        await this.networkManager.requestTransfer(
+            this.rootProxy, heartbeatMessage);
         const request = this.networkManager.newRequest(
-            this.rootProxy.ip,
-            this.rootProxy.port,
-            heartbeatMessage);
+            this.rootProxy, heartbeatMessage);
 
         try {
             const responseMessage = await request.getResponse();
@@ -611,25 +595,22 @@ class RootProxyManager extends ProxyManagerBase {
         super.stop();
     }
 
-    handleProxyHeartbeat(request: InRequest, message: Message): void
-    {
+    async handleProxyHeartbeat(request: InRequest, message: Message)
+    : Promise<void> {
+        let peerProxy = request.peerProxy;
         this.logger.log(
             'heartbeat',
-            `Got proxy heartbeat from ${request.ip}:${request.port}`);
-
-        let peerProxy = this.getPeerProxy(request.ip, request.port);
-        if (!peerProxy) {
-            peerProxy = this.addPeerProxy(request.ip, request.port);
-        }
+            `Got proxy heartbeat from ${peerProxy.ip}:${peerProxy.port}`);
 
         peerProxy.updateLastSeen();
 
-        this.logger.log('heartbeat',
-                        `Send root heartbeat to ${request.ip}:${request.port}`);
+        this.logger.log(
+            'heartbeat',
+            `Send root heartbeat to ${peerProxy.ip}:${peerProxy.port}`);
 
         const heartbeatMessage = new HeartbeatResponse(
             this.proxyMapFile ? this.proxyMapFile.fileAddr : null);
-
+        await this.networkManager.requestTransfer(peerProxy, heartbeatMessage);
         request.sendResponse(heartbeatMessage);
     }
 

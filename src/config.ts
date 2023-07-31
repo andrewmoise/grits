@@ -27,9 +27,7 @@ export class Config {
     
     // Traffic configuration
     maxUpstreamSpeed: number;   // bytes per second
-    maxUpstreamQueue: number; // bytes
     maxDownstreamSpeed: number; // bytes per second
-    maxDownstreamQueue: number; // bytes
 
     performanceUpdateStiffness: number;
     telemetryFetchRetries: number;
@@ -66,10 +64,8 @@ export class Config {
         this.burstTimeout = 1000;
         
         this.maxUpstreamSpeed = 100 * 1024;   // 100 kb/s
-        this.maxUpstreamQueue = 10 * 1024;
         this.maxDownstreamSpeed = 100 * 1024; // 100 kb/s
-        this.maxDownstreamQueue = 10 * 1024;
-
+        
         this.performanceUpdateStiffness = 0.95;
         this.telemetryFetchRetries = 3;
         

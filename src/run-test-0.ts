@@ -29,7 +29,7 @@ rootConfig.logFile = path.join(rootConfig.storageDirectory, 'grits.log');
 proxyManagers.push(new RootProxyManager(rootConfig));
 
 // Create configs for other nodes
-for (let i = 0; i < 50; i++) {
+for (let i = 0; i < 5; i++) {
     const config = new Config('127.0.0.1', 1787);
     config.thisPort = 1800 + i;
     
