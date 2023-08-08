@@ -8,8 +8,9 @@ const sleep = promisify(setTimeout);
 
 import { Config } from './config';
 import { Logger } from './logger';
-import { PeerNode, TelemetryInfo, DOWNLOAD_CHUNK_SIZE } from './structures';
-import { ProxyManagerBase } from './proxy';
+import {
+    AllPeerNodes, PeerNode, TelemetryInfo, DOWNLOAD_CHUNK_SIZE
+} from './structures';
 
 import {
     TrafficManager, TrafficManagerImpl,
@@ -48,7 +49,7 @@ interface AllowedTransfer {
     source: PeerNode;
     downloadBytesAllowed: number;
     allTelemetryBatchId: number;
-    hostTelemetryBatchId: number;
+    peerTelemetryBatchId: number;
 }
 
 interface NetworkManager {
@@ -71,7 +72,6 @@ interface NetworkManager {
     
     newTelemetryId(): number;
     log(msg: string): void;
-    newTrafficManager(): TrafficManager;
 }
 
 class InRequest {
@@ -140,10 +140,12 @@ class OutRequest {
     handleMessage(message: Message): void {
         if (this.firstResponseTimestamp === null) {
             this.firstResponseTimestamp = performance.now();
-            this.dest.trafficManager.notifyLatency(
+            const peerTrafficManager = this.networkManager.getTrafficManager(
+                this.dest);
+            peerTrafficManager.notifyLatency(
                 this.firstResponseTimestamp - this.sendTimestamp!);
 
-            this.dest.trafficManager.notifyPacketLoss(0);
+            peerTrafficManager.notifyPacketLoss(0);
         }
         
         // Restart the timeout timer
@@ -184,7 +186,8 @@ class OutRequest {
         this.timeoutTimeout = null;
 
         if (this.firstResponseTimestamp === null)
-            this.dest.trafficManager.notifyPacketLoss(1);
+            this.networkManager.getTrafficManager(this.dest).notifyPacketLoss(
+                1);
         
         if (this.resolverQueue.length > 0) {
             const resolve = this.resolverQueue.shift();
@@ -196,7 +199,7 @@ class OutRequest {
 }
 
 class NetworkManagerImpl {
-    proxyManager: ProxyManagerBase;
+    allPeerNodes: AllPeerNodes;
     logger: Logger;
     config: Config;
 
@@ -215,7 +218,7 @@ class NetworkManagerImpl {
     degradeDownstreamShaper: TrafficShaper | null = null;
     degradeUpstreamShaper: TrafficShaper | null = null;
 
-    constructor(proxyManager: ProxyManagerBase, logger: Logger, config: Config) {
+    constructor(allPeerNodes: AllPeerNodes, logger: Logger, config: Config) {
         if (config.thisHost === null) {
             let addresses = getLocalIPAddresses();
             if (addresses.length !== 1) {
@@ -224,7 +227,7 @@ class NetworkManagerImpl {
             config.thisHost = addresses[0];
         }
 
-        this.proxyManager = proxyManager;
+        this.allPeerNodes = allPeerNodes;
         this.logger = logger;
         this.config = config;
 
@@ -294,9 +297,10 @@ class NetworkManagerImpl {
             this.allTrafficManager.upstreamTelemetryBatchId, offset);
         offset += 4;
 
-        const hostTrafficManager = peerNode.trafficManager as TrafficManagerImpl;
+        const peerTrafficManager = this.getTrafficManager(peerNode);
+
         headerBuffer.writeInt32BE(
-            hostTrafficManager.upstreamTelemetryBatchId, offset);
+            peerTrafficManager.upstreamTelemetryBatchId, offset);
         offset += 4;
         
         const encodedMessage = Buffer.concat([
@@ -404,7 +408,7 @@ class NetworkManagerImpl {
         offset++;
         const allTelemetryId = data.readInt32BE(offset);
         offset += 4;
-        const hostTelemetryId = data.readInt32BE(offset);
+        const peerTelemetryId = data.readInt32BE(offset);
         offset += 4;
         
         const messageData = data.slice(offset);
@@ -461,7 +465,7 @@ class NetworkManagerImpl {
 
         this.log(`Got packet from ${address}:${port}, msg ${message}`);
         
-        const peerNode = this.proxyManager.allPeerNodes.getPeerNode(
+        const peerNode = this.allPeerNodes.getPeerNode(
             address, port);
         let inBytes = data.length + 28; // 28 for UDP header
         let allBytes = inBytes;
@@ -473,7 +477,7 @@ class NetworkManagerImpl {
         else
             telemetryInfo = new TelemetryInfo(now);
 
-        telemetryInfo = peerNode.telemetryInfo.get(hostTelemetryId)
+        telemetryInfo = peerNode.telemetryInfo.get(peerTelemetryId)
         if (telemetryInfo)
             telemetryInfo.update(now, inBytes);
         else
@@ -483,7 +487,7 @@ class NetworkManagerImpl {
         // we can detect downstream congestion
         this.allTrafficManager.notifyDownload(
             inBytes, allBytes, isInRequest);
-        peerNode.trafficManager.notifyDownload(
+        this.getTrafficManager(peerNode).notifyDownload(
             inBytes, allBytes, isInRequest);
         
         if (isInRequest) {
@@ -526,7 +530,7 @@ class NetworkManagerImpl {
     requestTransferNoDelay(source: PeerNode, message: Message)
     : AllowedTransfer | null {
         const allManager = this.allTrafficManager;
-        const sourceManager = source.trafficManager as TrafficManagerImpl;
+        const sourceManager = this.getTrafficManager(source);
 
         let upBytes = 28 + 6 + message.transferSize();
         let downBytes = message.responseSize();
@@ -549,7 +553,7 @@ class NetworkManagerImpl {
                 source,
                 downloadBytesAllowed: downBytes,
                 allTelemetryBatchId: allManager.upstreamTelemetryBatchId,
-                hostTelemetryBatchId: sourceManager.upstreamTelemetryBatchId
+                peerTelemetryBatchId: sourceManager.upstreamTelemetryBatchId
             };
         } else {
             return null;
@@ -575,7 +579,7 @@ class NetworkManagerImpl {
         const downHeaderBytes = 28 + 6 + 48;
         
         for (let peerNode of sources) {
-            let sourceManager = peerNode.trafficManager as TrafficManagerImpl;
+            let sourceManager = this.getTrafficManager(peerNode);
                 
             if (!sourceManager.requestedDownstream.readyToGo(this.logger) ||
                 !sourceManager.upstream.readyToGo(this.logger))
@@ -611,7 +615,7 @@ class NetworkManagerImpl {
                 source: peerNode,
                 downloadBytesAllowed: allowedBytes,
                 allTelemetryBatchId: allManager.upstreamTelemetryBatchId,
-                hostTelemetryBatchId: sourceManager.upstreamTelemetryBatchId,
+                peerTelemetryBatchId: sourceManager.upstreamTelemetryBatchId,
             });
 
             maxDownBytes -= allowedBytes;
@@ -673,7 +677,7 @@ class NetworkManagerImpl {
         this.allTrafficManager.updateBudgets();
         for(let queuedRequest of this.requestQueue)
             for(let peerNode of queuedRequest.peerNodes)
-                peerNode.trafficManager.updateBudgets();
+                this.getTrafficManager(peerNode).updateBudgets();
             
         this.requestQueue = this.requestQueue.filter(
             queuedRequest => !queuedRequest.attemptRequest());
@@ -716,8 +720,10 @@ class NetworkManagerImpl {
         this.logger.log('network', msg);
     }
 
-    newTrafficManager(): TrafficManagerImpl {
-        return new TrafficManagerImpl(this, this.config);
+    getTrafficManager(peer: PeerNode): TrafficManagerImpl {
+        if (peer.trafficManager === null)
+            peer.trafficManager = new TrafficManagerImpl(this, this.config)
+        return (peer.trafficManager as TrafficManagerImpl);
     }
 }
 

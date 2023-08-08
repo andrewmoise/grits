@@ -32,17 +32,17 @@ class PeerNode {
     lastSeen: Date | null;
 
     dhtStoredData: WeakMap<CachedFile, Date>;
-    trafficManager: TrafficManager;
+    trafficManager: TrafficManager | null;
 
     telemetryInfo: Map<number, TelemetryInfo>;
     
-    constructor(ip: string, port: number, trafficManager: TrafficManager) {
+    constructor(ip: string, port: number) {
         this.ip = ip;
         this.port = port;
         this.lastSeen = null;
 
         this.dhtStoredData = new WeakMap();
-        this.trafficManager = trafficManager;
+        this.trafficManager = null;
 
         this.telemetryInfo = new Map();
     }
@@ -64,14 +64,8 @@ class PeerNode {
 class AllPeerNodes {
     peerNodes: Map<string, PeerNode>;
 
-    networkManager: NetworkManager;
-    config: Config;
-    
-    constructor(networkManager: NetworkManager, config: Config) {
+    constructor() {
         this.peerNodes = new Map();
-
-        this.networkManager = networkManager;
-        this.config = config;
     }
 
     generateNodeKey(ip: string, port: number): string {
@@ -92,8 +86,7 @@ class AllPeerNodes {
     addPeerNode(ip: string, port: number): PeerNode {
         const key = this.generateNodeKey(ip, port);
         if (!this.peerNodes.has(key)) {
-            const trafficManager = this.networkManager.newTrafficManager();
-            const peerNode = new PeerNode(ip, port, trafficManager);
+            const peerNode = new PeerNode(ip, port);
             this.peerNodes.set(key, peerNode);
             return peerNode;
         } else {

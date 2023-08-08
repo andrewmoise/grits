@@ -101,12 +101,13 @@ abstract class ProxyManagerBase {
     constructor(config: Config) {
         this.config = config;
         this.logger = new Logger(config);
+        this.allPeerNodes = new AllPeerNodes();
 
-        this.networkManager = new NetworkManagerImpl(this, this.logger, config);
+        this.networkManager = new NetworkManagerImpl(
+            this.allPeerNodes, this.logger, config);
+        
         this.fileCache = new FileCache(config);
         this.downloadManager = new DownloadManager(this);
-
-        this.allPeerNodes = new AllPeerNodes(this.networkManager, config);
 
         this.rootNode = this.allPeerNodes.addPeerNode(
             this.config.rootHost, this.config.rootPort);
