@@ -8,7 +8,7 @@ import { assert } from 'console';
 import { Config } from './config';
 import { Logger } from './logger';
 import { NetworkManager, AllowedTransfer, OutRequest } from './network';
-import { DOWNLOAD_CHUNK_SIZE, PeerProxy } from './structures';
+import { DOWNLOAD_CHUNK_SIZE, PeerNode } from './structures';
 import { TelemetryFetchMessage, TelemetryFetchResponse } from './messages';
 
 const TELEMETRY_CHECK_RATE = 0.1;
@@ -75,7 +75,7 @@ class TrafficManagerImpl implements TrafficManager {
     upstreamByteCounter: number = 0;
     upstreamBurstStart: number = 0;
     upstreamTelemetryBatchId: number = -1;
-    upstreamHosts: Set<PeerProxy> = new Set();
+    upstreamHosts: Set<PeerNode> = new Set();
     
     downstreamByteCounter: number = 0;
     downstreamBurstStart: number = 0;
@@ -100,7 +100,7 @@ class TrafficManagerImpl implements TrafficManager {
             config.maxDownstreamSpeed);
     }
 
-    private async recoverTelemetry(peerProxy: PeerProxy,
+    private async recoverTelemetry(peerNode: PeerNode,
                                    message: TelemetryFetchMessage)
     : Promise<void> {
         await sleep(UPSTREAM_TELEMETRY_CHECK_RATE - TELEMETRY_CHECK_RATE);
@@ -110,9 +110,9 @@ class TrafficManagerImpl implements TrafficManager {
                 attempt < this.config.telemetryFetchRetries;
                 attempt++)
             {
-                await this.networkManager.requestTransfer(peerProxy, message);
+                await this.networkManager.requestTransfer(peerNode, message);
                 const request = this.networkManager.newRequest(
-                    peerProxy, message);
+                    peerNode, message);
                 const rawResponse = await request.getResponse();
                 request.close();
                 
@@ -129,7 +129,7 @@ class TrafficManagerImpl implements TrafficManager {
                 return;
             }
 
-            this.networkManager.log(`Couldn't get telemetry from ${peerProxy.ip}:${peerProxy.port}!`);
+            this.networkManager.log(`Couldn't get telemetry from ${peerNode.ip}:${peerNode.port}!`);
         } catch (err) {
             this.networkManager.log(`Error in traffic: ${err}`);
         }
@@ -221,8 +221,8 @@ class TrafficManagerImpl implements TrafficManager {
             const message = new TelemetryFetchMessage(
                 this.upstreamTelemetryBatchId);
             
-            for (let peerProxy of this.upstreamHosts)
-                this.recoverTelemetry(peerProxy, message);
+            for (let peerNode of this.upstreamHosts)
+                this.recoverTelemetry(peerNode, message);
 
             this.upstreamBurstStart = 0;
         }

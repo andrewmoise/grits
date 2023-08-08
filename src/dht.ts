@@ -1,8 +1,8 @@
 import * as crypto from 'crypto';
 
-import { PeerProxy } from './structures';
+import { AllPeerNodes, PeerNode } from './structures';
 
-function convertPeerProxyToInteger(peer: PeerProxy): number {
+function convertPeerToInteger(peer: PeerNode): number {
     const sha = crypto.createHash('sha256');
     sha.update(peer.ip + ':' + peer.port + ':evenly distribute hash, please');
     const hash = sha.digest('hex');
@@ -16,26 +16,27 @@ function convertFileAddrToInteger(fileAddr: string): number {
 }
 
 class BlobFinder {
-    private sortedProxies: Array<[number, PeerProxy]>;
+    private sortedPeers: Array<[number, PeerNode]>;
     
     constructor() {
-        this.sortedProxies = [];
+        this.sortedPeers = [];
     }
     
-    updateProxies(proxies: Map<string, PeerProxy>) {
-        this.sortedProxies = Array.from(proxies.values())
-            .map((proxy): [number, PeerProxy] => [
-                convertPeerProxyToInteger(proxy), proxy])
+    updatePeers(allPeers: AllPeerNodes) {
+        const peers: Map<string, PeerNode> = allPeers.peerNodes;
+
+        this.sortedPeers = Array.from(peers.values())
+            .map((peer): [number, PeerNode] => [
+                convertPeerToInteger(peer), peer])
             .sort(([intIpPortA], [intIpPortB]) => intIpPortA - intIpPortB);
-
     }
     
-    getClosestProxies(fileAddr: string, n: number): Array<PeerProxy> {
-        //console.log(`    GCP ${fileAddr} from ${this.sortedProxies.length}`);
+    getClosestPeers(fileAddr: string, n: number): Array<PeerNode> {
+        //console.log(`    GCP ${fileAddr} from ${this.sortedPeers.length}`);
 
-        if (this.sortedProxies.length <= 0) {
-            throw new Error('No proxies');
-            //console.log('      Early bail, no proxies');
+        if (this.sortedPeers.length <= 0) {
+            throw new Error('No peers');
+            //console.log('      Early bail, no peers');
             return [];
         }
         
@@ -43,26 +44,26 @@ class BlobFinder {
         //console.log(`      Searching for ${target}`);
             
         let left = 0;
-        let right = this.sortedProxies.length - 1;
+        let right = this.sortedPeers.length - 1;
         while (right - left > 1) {
-            //console.log(`        [${left}: ${this.sortedProxies[left][0]}] - [${right}: ${this.sortedProxies[right][0]}]`);
+            //console.log(`        [${left}: ${this.sortedPeers[left][0]}] - [${right}: ${this.sortedPeers[right][0]}]`);
             const mid = Math.floor((right + left) / 2);
-            if (this.sortedProxies[mid][0] <= target)
+            if (this.sortedPeers[mid][0] <= target)
                 left = mid;
             else
                 right = mid;
         }
 
-        const result: PeerProxy[] = [];
+        const result: PeerNode[] = [];
         let i = left;
         let j = 0; // Count of added elements
         while (j < n) {
             // Use modulo to wrap around if we reach the end of the array
-            let index = i % this.sortedProxies.length;
+            let index = i % this.sortedPeers.length;
             
-            // Add to result if this proxy is not already included
-            if (!result.includes(this.sortedProxies[index][1]))
-                result.push(this.sortedProxies[index][1]);
+            // Add to result if this peer is not already included
+            if (!result.includes(this.sortedPeers[index][1]))
+                result.push(this.sortedPeers[index][1]);
             else
                 break;
             

@@ -1,7 +1,5 @@
 import { assert } from 'console';
 
-import { PeerProxy } from "./structures";
-
 export enum MessageType {
     HEARTBEAT_MESSAGE = 0,
     HEARTBEAT_RESPONSE = 1,

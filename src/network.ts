@@ -8,11 +8,11 @@ const sleep = promisify(setTimeout);
 
 import { Config } from './config';
 import { Logger } from './logger';
-import { PeerProxy, TelemetryInfo, DOWNLOAD_CHUNK_SIZE } from './structures';
+import { PeerNode, TelemetryInfo, DOWNLOAD_CHUNK_SIZE } from './structures';
 import { ProxyManagerBase } from './proxy';
 
 import {
-    TrafficManagerImpl,
+    TrafficManager, TrafficManagerImpl,
     QUEUE_DEPTH_LIMIT, QUEUE_CHECK_RATE, QUEUE_MESSAGE_LIMIT, TrafficShaper,
 } from "./traffic";
 
@@ -40,12 +40,12 @@ const DEFAULT_TIMEOUT: number = 500;
 type RequestHandler = (request: InRequest, message: Message) => Promise<void>;
 
 interface QueuedTransfer {
-    peerProxies: PeerProxy[];
+    peerNodes: PeerNode[];
     attemptRequest: () => boolean;
 }
 
 interface AllowedTransfer {
-    source: PeerProxy;
+    source: PeerNode;
     downloadBytesAllowed: number;
     allTelemetryBatchId: number;
     hostTelemetryBatchId: number;
@@ -55,7 +55,7 @@ interface NetworkManager {
     start(): void;
     stop(): void;
 
-    newRequest(peerProxy: PeerProxy, message: Message): OutRequest;
+    newRequest(peerNode: PeerNode, message: Message): OutRequest;
     
     registerRequestHandler(
         type: number,
@@ -63,43 +63,43 @@ interface NetworkManager {
     ): void;
     unregisterRequestHandler(type: number): void;
 
-    requestTransfer(source: PeerProxy, message: Message)
+    requestTransfer(source: PeerNode, message: Message)
     : Promise<AllowedTransfer>;
     
-    requestDownload(sources: PeerProxy[], bytes: number)
+    requestDownload(sources: PeerNode[], bytes: number)
     : Promise<AllowedTransfer[] | null>;
     
     newTelemetryId(): number;
-
     log(msg: string): void;
+    newTrafficManager(): TrafficManager;
 }
 
 class InRequest {
-    networkManager: NetworkManagerImpl
+    networkManager: NetworkManagerImpl;
     requestId: number;
-    peerProxy: PeerProxy;
+    source: PeerNode;
     message: Message;
     
     constructor(manager: NetworkManagerImpl,
-                peerProxy: PeerProxy,
+                source: PeerNode,
                 id: number, message: Message)
     {
         this.networkManager = manager;
         this.requestId = id;
-        this.peerProxy = peerProxy;
+        this.source = source;
         this.message = message;
     }
     
     sendResponse(message: Message): void {
         this.networkManager.log(`Send response, message ${message.type}, request ID ${this.requestId}`);
-        this.networkManager.send(message, this.requestId, this.peerProxy);
+        this.networkManager.send(message, this.requestId, this.source);
     }
 }
 
 class OutRequest {
     networkManager: NetworkManagerImpl;
     requestId: number;
-    peerProxy: PeerProxy;
+    dest: PeerNode;
     
     timeoutTimeout: NodeJS.Timeout | null;
     sendTimestamp: number | null = null;
@@ -110,12 +110,12 @@ class OutRequest {
     
     constructor(networkManager: NetworkManagerImpl,
                 requestId: number,
-                peerProxy: PeerProxy)
+                dest: PeerNode)
     {
         this.networkManager = networkManager;
         this.requestId = requestId;
-        this.peerProxy = peerProxy;
-
+        this.dest = dest;
+        
         this.timeoutTimeout = setTimeout(
             this.timeoutFn.bind(this), DEFAULT_TIMEOUT);
         
@@ -124,7 +124,7 @@ class OutRequest {
     
     sendRequest(message: Message): void {
         this.sendTimestamp = performance.now();
-        this.networkManager.send(message, this.requestId, this.peerProxy);
+        this.networkManager.send(message, this.requestId, this.dest);
     }
 
     getResponse(): Promise<Message | null> {
@@ -136,16 +136,14 @@ class OutRequest {
             });
         }
     }
-
+    
     handleMessage(message: Message): void {
         if (this.firstResponseTimestamp === null) {
             this.firstResponseTimestamp = performance.now();
-            this.peerProxy.trafficManager.notifyLatency(
+            this.dest.trafficManager.notifyLatency(
                 this.firstResponseTimestamp - this.sendTimestamp!);
 
-            // FIXME - this is not strictly accurate for many-response-packet
-            // requests; we should do a special case for data fetch requests:
-            this.peerProxy.trafficManager.notifyPacketLoss(0);
+            this.dest.trafficManager.notifyPacketLoss(0);
         }
         
         // Restart the timeout timer
@@ -186,7 +184,7 @@ class OutRequest {
         this.timeoutTimeout = null;
 
         if (this.firstResponseTimestamp === null)
-            this.peerProxy.trafficManager.notifyPacketLoss(1);
+            this.dest.trafficManager.notifyPacketLoss(1);
         
         if (this.resolverQueue.length > 0) {
             const resolve = this.resolverQueue.shift();
@@ -217,13 +215,11 @@ class NetworkManagerImpl {
     degradeDownstreamShaper: TrafficShaper | null = null;
     degradeUpstreamShaper: TrafficShaper | null = null;
 
-    constructor(proxyManager: ProxyManagerBase, logger: Logger, config: Config)
-    {
+    constructor(proxyManager: ProxyManagerBase, logger: Logger, config: Config) {
         if (config.thisHost === null) {
             let addresses = getLocalIPAddresses();
             if (addresses.length !== 1) {
-                throw new Error('Expected 1 local address, but found '
-                    + addresses.length);
+                throw new Error('Expected 1 local address, but found ' + addresses.length);
             }
             config.thisHost = addresses[0];
         }
@@ -273,17 +269,16 @@ class NetworkManagerImpl {
         }
     }
 
-    newRequest(peerProxy: PeerProxy, message: Message): OutRequest {
-        this.log(`Create request ${message} for ${peerProxy.ip}:${peerProxy.port}`);
+    newRequest(peerNode: PeerNode, message: Message): OutRequest {
+        this.log(`Create request ${message} for ${peerNode.ip}:${peerNode.port}`);
         const requestId = this.nextRequestId++;
-        const result = new OutRequest(this, requestId, peerProxy);
+        const result = new OutRequest(this, requestId, peerNode);
         result.sendRequest(message);
         return result;
     }
     
-    send(message: Message, requestId: number, peerProxy: PeerProxy)
-    : void {
-        this.log(`Send request ${message} to ${peerProxy.ip}:${peerProxy.port}`);
+    send(message: Message, requestId: number, peerNode: PeerNode): void {
+        this.log(`Send request ${message} to ${peerNode.ip}:${peerNode.port}`);
         const encodedContent = message.encode();
 
         const headerBuffer = Buffer.allocUnsafe(13);
@@ -299,8 +294,7 @@ class NetworkManagerImpl {
             this.allTrafficManager.upstreamTelemetryBatchId, offset);
         offset += 4;
 
-        const hostTrafficManager =
-            peerProxy.trafficManager as TrafficManagerImpl;
+        const hostTrafficManager = peerNode.trafficManager as TrafficManagerImpl;
         headerBuffer.writeInt32BE(
             hostTrafficManager.upstreamTelemetryBatchId, offset);
         offset += 4;
@@ -318,7 +312,7 @@ class NetworkManagerImpl {
 
         let send = () => {
             this.socket!.send(encodedMessage, 0, encodedMessage.length,
-                             peerProxy.port, peerProxy.ip,
+                             peerNode.port, peerNode.ip,
                              (error) => {
                                  if (error) {
                                      this.log(`Error sending message: ${error}`);
@@ -467,18 +461,19 @@ class NetworkManagerImpl {
 
         this.log(`Got packet from ${address}:${port}, msg ${message}`);
         
-        const peerProxy = this.proxyManager.getPeerProxy(address, port);
+        const peerNode = this.proxyManager.allPeerNodes.getPeerNode(
+            address, port);
         let inBytes = data.length + 28; // 28 for UDP header
         let allBytes = inBytes;
         const now = performance.now();
         
-        let telemetryInfo = peerProxy.telemetryInfo.get(allTelemetryId);
+        let telemetryInfo = peerNode.telemetryInfo.get(allTelemetryId);
         if (telemetryInfo)
             telemetryInfo.update(now, inBytes);
         else
             telemetryInfo = new TelemetryInfo(now);
 
-        telemetryInfo = peerProxy.telemetryInfo.get(hostTelemetryId)
+        telemetryInfo = peerNode.telemetryInfo.get(hostTelemetryId)
         if (telemetryInfo)
             telemetryInfo.update(now, inBytes);
         else
@@ -488,7 +483,7 @@ class NetworkManagerImpl {
         // we can detect downstream congestion
         this.allTrafficManager.notifyDownload(
             inBytes, allBytes, isInRequest);
-        peerProxy.trafficManager.notifyDownload(
+        peerNode.trafficManager.notifyDownload(
             inBytes, allBytes, isInRequest);
         
         if (isInRequest) {
@@ -496,10 +491,10 @@ class NetworkManagerImpl {
                 const handler = this.requestHandlers.get(message.type);
                 if (handler) {
                     this.log('  dispatch to InReq handler');
-                    const request = new InRequest(this, peerProxy,
+                    const request = new InRequest(this, peerNode,
                                                   requestId, message);
                     handler(request, message).catch(err =>
-                        this.log(`Exception from message handler for ${message} from ${peerProxy.ip}:${peerProxy.port}: ${err}`));
+                        this.log(`Exception from message handler for ${message} from ${peerNode.ip}:${peerNode.port}: ${err}`));
                 } else {
                     this.log( `No handler for ${message.type}`);
                 }
@@ -528,7 +523,7 @@ class NetworkManagerImpl {
         this.requestHandlers.delete(type);
     }
     
-    requestTransferNoDelay(source: PeerProxy, message: Message)
+    requestTransferNoDelay(source: PeerNode, message: Message)
     : AllowedTransfer | null {
         const allManager = this.allTrafficManager;
         const sourceManager = source.trafficManager as TrafficManagerImpl;
@@ -561,7 +556,7 @@ class NetworkManagerImpl {
         }
     }
 
-    requestDownloadNoDelay(sources: PeerProxy[],
+    requestDownloadNoDelay(sources: PeerNode[],
                            maxDownBytes: number)
     : AllowedTransfer[] | null {
         const allManager = this.allTrafficManager;
@@ -579,8 +574,8 @@ class NetworkManagerImpl {
         const upBytes = 28 + 6 + 56;
         const downHeaderBytes = 28 + 6 + 48;
         
-        for (let peerProxy of sources) {
-            let sourceManager = peerProxy.trafficManager as TrafficManagerImpl;
+        for (let peerNode of sources) {
+            let sourceManager = peerNode.trafficManager as TrafficManagerImpl;
                 
             if (!sourceManager.requestedDownstream.readyToGo(this.logger) ||
                 !sourceManager.upstream.readyToGo(this.logger))
@@ -613,7 +608,7 @@ class NetworkManagerImpl {
             sourceManager.upstream.consume(upBytes);
 
             result.push({
-                source: peerProxy,
+                source: peerNode,
                 downloadBytesAllowed: allowedBytes,
                 allTelemetryBatchId: allManager.upstreamTelemetryBatchId,
                 hostTelemetryBatchId: sourceManager.upstreamTelemetryBatchId,
@@ -630,12 +625,12 @@ class NetworkManagerImpl {
             return null;
     }
 
-    requestTransfer(source: PeerProxy, message: Message)
+    requestTransfer(source: PeerNode, message: Message)
     : Promise<AllowedTransfer> {
         this.log(`Request transfer to ${source.ip}:${source.port}`);
         return new Promise(resolve => {
             let newQueueEntry: QueuedTransfer = {
-                peerProxies: [source],
+                peerNodes: [source],
                 attemptRequest: () => {
                     let result = this.requestTransferNoDelay(
                         source, message);
@@ -652,11 +647,11 @@ class NetworkManagerImpl {
         });
     }
 
-    requestDownload(sources: PeerProxy[], maxBytes: number)
+    requestDownload(sources: PeerNode[], maxBytes: number)
     : Promise<AllowedTransfer[]> {
         return new Promise(resolve => {
             let newTransfer: QueuedTransfer = {
-                peerProxies: sources,
+                peerNodes: sources,
                 attemptRequest: () => {
                     let result = this.requestDownloadNoDelay(sources, maxBytes);
                     if (result) {
@@ -677,8 +672,8 @@ class NetworkManagerImpl {
         
         this.allTrafficManager.updateBudgets();
         for(let queuedRequest of this.requestQueue)
-            for(let peerProxy of queuedRequest.peerProxies)
-                peerProxy.trafficManager.updateBudgets();
+            for(let peerNode of queuedRequest.peerNodes)
+                peerNode.trafficManager.updateBudgets();
             
         this.requestQueue = this.requestQueue.filter(
             queuedRequest => !queuedRequest.attemptRequest());
@@ -699,17 +694,17 @@ class NetworkManagerImpl {
             throw new Error(`Wrong message type! ${rawMessage}`);
         const message = rawMessage as TelemetryFetchMessage;
 
-        const peerProxy = request.peerProxy;
-        const telemetryInfo = peerProxy.telemetryInfo.get(
+        const peerNode = request.source;
+        const telemetryInfo = peerNode.telemetryInfo.get(
             message.telemetryBatchId)
         if (!telemetryInfo) {
-            this.logger.log('telemetry', `Request from ${peerProxy.ip}:${peerProxy.port} for nonexistent telemetry ${message.telemetryBatchId}`);
+            this.logger.log('telemetry', `Request from ${peerNode.ip}:${peerNode.port} for nonexistent telemetry ${message.telemetryBatchId}`);
             return;
         }
 
         const telemetryMessage = new TelemetryFetchResponse(
             telemetryInfo.bytesSeen);
-        await this.requestTransfer(peerProxy, telemetryMessage);
+        await this.requestTransfer(peerNode, telemetryMessage);
         request.sendResponse(telemetryMessage);
     }
         
@@ -719,6 +714,10 @@ class NetworkManagerImpl {
 
     log(msg: string): void {
         this.logger.log('network', msg);
+    }
+
+    newTrafficManager(): TrafficManagerImpl {
+        return new TrafficManagerImpl(this, this.config);
     }
 }
 

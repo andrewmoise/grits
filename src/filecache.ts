@@ -6,7 +6,7 @@ import * as path from 'path';
 import { Mutex } from 'async-mutex';
 
 import { Config } from './config';
-import { PeerProxy, CachedFile } from './structures';
+import { CachedFile } from './structures';
 
 class FileCache {
     private cacheDir: string;

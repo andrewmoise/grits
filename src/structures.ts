@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import { promises as fsPromises } from 'fs';
 
+import { Config } from './config';
+import { NetworkManager } from './network';
 import { TrafficManager, TELEMETRY_CHECK_RATE } from './traffic';
 
 class TelemetryInfo {
@@ -24,7 +26,7 @@ class TelemetryInfo {
     }
 }
 
-class PeerProxy {
+class PeerNode {
     ip: string;
     port: number;
     lastSeen: Date | null;
@@ -56,6 +58,55 @@ class PeerProxy {
         const currentTime = new Date();
         return Math.floor(
             (currentTime.getTime() - this.lastSeen.getTime()) / 1000);
+    }
+}
+
+class AllPeerNodes {
+    peerNodes: Map<string, PeerNode>;
+
+    networkManager: NetworkManager;
+    config: Config;
+    
+    constructor(networkManager: NetworkManager, config: Config) {
+        this.peerNodes = new Map();
+
+        this.networkManager = networkManager;
+        this.config = config;
+    }
+
+    generateNodeKey(ip: string, port: number): string {
+        return `${ip}:${port}`;
+    }
+
+    getPeerNode(ip: string, port: number): PeerNode {
+        const key = this.generateNodeKey(ip, port);
+
+        let result = this.peerNodes.get(key);
+        if (result) return result;
+
+        // FIXME
+        console.log(`Unknown node ${ip}:${port}! For now we add it.`);
+        return this.addPeerNode(ip, port);
+    }
+
+    addPeerNode(ip: string, port: number): PeerNode {
+        const key = this.generateNodeKey(ip, port);
+        if (!this.peerNodes.has(key)) {
+            const trafficManager = this.networkManager.newTrafficManager();
+            const peerNode = new PeerNode(ip, port, trafficManager);
+            this.peerNodes.set(key, peerNode);
+            return peerNode;
+        } else {
+            throw new Error(
+                `Node with address ${ip} and port ${port} already exists.`
+            );
+        }
+    }
+
+    removePeerNode(ip: string, port: number) {
+        const key = this.generateNodeKey(ip, port);
+        if (this.peerNodes.has(key))
+            this.peerNodes.delete(key);
     }
 }
 
@@ -98,5 +149,7 @@ class FileRetrievalError extends Error {
 
 const DOWNLOAD_CHUNK_SIZE = 1400;
 
-export { PeerProxy, CachedFile, FileRetrievalError, TelemetryInfo,
-         DOWNLOAD_CHUNK_SIZE };
+export {
+    AllPeerNodes, PeerNode, CachedFile, FileRetrievalError, TelemetryInfo,
+    DOWNLOAD_CHUNK_SIZE
+};
