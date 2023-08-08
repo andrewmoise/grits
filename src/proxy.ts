@@ -117,6 +117,8 @@ abstract class ProxyManagerBase {
             this.thisProxy = this.addPeerProxy(
                 this.config.thisHost, this.config.thisPort);
         }
+
+        console.log(`Created, this is ${this.config.thisPort}, root is ${this.config.rootPort}`);
         
         this.proxyDataMap = new ProxyDataMap(config);
 
@@ -308,10 +310,10 @@ abstract class ProxyManagerBase {
         
         let fileProxies = this.proxyDataMap.fileAddrToProxy.get(fileAddr);
         let nodeInfo: Array<{ip: string, port: number}> = [];
-        
+
         if (fileProxies) {
             this.logger.log(message.transferId,
-                            `  Got ${fileProxies.length} hosts`);
+                            `  Found ${fileProxies.length} remote sources`);
 
             // Sort proxies by timestamp in descending order and take the most recent ones
             let recentProxies = fileProxies.sort(
@@ -322,9 +324,18 @@ abstract class ProxyManagerBase {
                 proxyData => ({ ip: proxyData.proxy.ip, port: proxyData.proxy.port }));
         } else {
             this.logger.log(message.transferId,
-                            `  Got nothing from lookup`);
+                            `  Got nothing from remote source lookup`);
 
             nodeInfo = [];
+        }
+
+        let localFile = await this.fileCache.readFile(fileAddr);
+        if (localFile) {
+            this.logger.log(message.transferId,
+                            '  Found in local storage');
+            
+            nodeInfo.push({ip: this.thisProxy.ip, port: this.thisProxy.port});
+            localFile.refCount--;
         }
 
         this.logger.log(message.transferId,
@@ -346,6 +357,10 @@ abstract class ProxyManagerBase {
         const refreshAge = this.config.dhtRefreshTime;
         
         for (const node of closestNodes) {
+            // Don't process if this is us
+            if (node == this.thisProxy)
+                continue;
+            
             // Don't process if we have a recent refresh timestamp
             const lastRefresh: Date|undefined =
                 node.dhtStoredData.get(cachedFile);

@@ -178,7 +178,9 @@ class DownloadInProgress {
 
     async populateAvailHosts(seedProxies: PeerProxy[]): Promise<void> {
         for(let proxy of seedProxies) {
+            this.log(`Populating, checking ${proxy.ip}:${proxy.port}`);
             if (proxy !== this.downloadManager.proxyManager.thisProxy) {
+                this.log('  yes');
                 let stepId = this.nextRunningStepId++;
                 this.runningSteps.set(
                     stepId, this.dhtLookupStep(proxy, stepId));
@@ -248,7 +250,7 @@ class DownloadInProgress {
         const network = this.downloadManager.proxyManager.networkManager;
         const message = new DhtLookupMessage(this.fileAddr, this.transferId);
 
-        for(let attempts = 0; attempts < 30; attempts++) {
+        for(let attempts = 0; attempts < 10; attempts++) {
             await network.requestTransfer(host, message);
             const request = network.newRequest(host, message);
             const response = await request.getResponse();
@@ -262,7 +264,8 @@ class DownloadInProgress {
             }
         }
 
-        throw new Error(`Couldn't communicate with ${host.ip}:${host.port}`);
+        this.log(`Couldn't communicate with ${host.ip}:${host.port}`);
+        return id;
     }
 
     async makeNewBurstsStep(stepId: number, localAvailHosts: PeerProxy[] | null)

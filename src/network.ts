@@ -1,6 +1,10 @@
 import * as dgram from 'dgram';
 import * as os from 'os';
+
 import { performance } from 'perf_hooks';
+
+import { promisify } from 'util';
+const sleep = promisify(setTimeout);
 
 import { Config } from './config';
 import { Logger } from './logger';
@@ -9,7 +13,7 @@ import { ProxyManagerBase } from './proxy';
 
 import {
     TrafficManagerImpl,
-    QUEUE_DEPTH_LIMIT, QUEUE_CHECK_RATE, QUEUE_MESSAGE_LIMIT,
+    QUEUE_DEPTH_LIMIT, QUEUE_CHECK_RATE, QUEUE_MESSAGE_LIMIT, TrafficShaper,
 } from "./traffic";
 
 import {
@@ -87,7 +91,7 @@ class InRequest {
     }
     
     sendResponse(message: Message): void {
-        this.networkManager.log(`Send response, message type ${message.type}`);
+        this.networkManager.log(`Send response, message ${message.type}, request ID ${this.requestId}`);
         this.networkManager.send(message, this.requestId, this.peerProxy);
     }
 }
@@ -210,6 +214,9 @@ class NetworkManagerImpl {
     requestQueue: QueuedTransfer[];
     processRequestQueueTimeout: NodeJS.Timeout | undefined;
 
+    degradeDownstreamShaper: TrafficShaper | null = null;
+    degradeUpstreamShaper: TrafficShaper | null = null;
+
     constructor(proxyManager: ProxyManagerBase, logger: Logger, config: Config)
     {
         if (config.thisHost === null) {
@@ -249,7 +256,7 @@ class NetworkManagerImpl {
 
         this.socket.on(
             'message',
-            this.handleIncomingPacket.bind(this));
+            this.degradeIncomingPacket.bind(this));
 
         this.registerRequestHandler(
             MessageType.TELEMETRY_FETCH_MESSAGE,
@@ -309,16 +316,84 @@ class NetworkManagerImpl {
             return;
         }
 
-        this.socket.send(encodedMessage, 0, encodedMessage.length,
-                         peerProxy.port, peerProxy.ip,
-                         (error) => {
-                             if (error) {
-                                 this.log(`Error sending message: ${error}`);
-                                 return;
-                             }
-                         });
+        let send = () => {
+            this.socket!.send(encodedMessage, 0, encodedMessage.length,
+                             peerProxy.port, peerProxy.ip,
+                             (error) => {
+                                 if (error) {
+                                     this.log(`Error sending message: ${error}`);
+                                     return;
+                                 }
+                             });
+        };
+
+        if (!this.config.degradeUpstreamSpeed) {
+            send();
+        } else {
+            if (!this.degradeUpstreamShaper)
+                this.degradeUpstreamShaper = new TrafficShaper(
+                    this.config.degradeUpstreamSpeed);
+
+            let delay = this.degradeBandwidthDelay(
+                encodedMessage.length, this.degradeUpstreamShaper,
+                this.config.degradeUpstreamSpeed,
+                this.config.degradeUpstreamQueue);
+            if (delay === null)
+                return;                
+                    
+            setTimeout(send, delay);
+        }
     }
 
+    degradeBandwidthDelay(
+        bytes: number, trafficShaper: TrafficShaper, maxSpeed: number,
+        queueDepth: number)
+    : number | null {
+        trafficShaper.updateBudget();
+        trafficShaper.maxSpeed = maxSpeed;
+        if (trafficShaper.bytesBudgeted + 28 + bytes > queueDepth) {
+            return null;
+        } else {
+            trafficShaper.consume(28 + bytes);
+            return trafficShaper.bytesBudgeted / maxSpeed * 1000;
+        }
+    }
+
+    degradeIncomingPacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
+        if (!this.config.degradeDownstreamSpeed
+            && !this.config.degradeLatency
+            && !this.config.degradeJitter
+            && !this.config.degradePacketLoss)
+        {
+            this.handleIncomingPacket(data, rinfo);
+        } else {
+            // We have some kind of degradation to apply.
+            let delay: number | null = 0;
+
+            if (this.config.degradeDownstreamSpeed) {
+                if (!this.degradeDownstreamShaper)
+                    this.degradeDownstreamShaper = new TrafficShaper(
+                        this.config.degradeDownstreamSpeed);
+
+                delay = this.degradeBandwidthDelay(
+                    data.length, this.degradeDownstreamShaper,
+                    this.config.degradeDownstreamSpeed,
+                    this.config.degradeDownstreamQueue);
+                if (delay === null)
+                    return;                
+            }
+
+            if (Math.random() < this.config.degradePacketLoss)
+                return;
+            
+            delay += this.config.degradeLatency;
+            delay += Math.random() * this.config.degradeJitter;
+
+            setTimeout(() => { this.handleIncomingPacket(data, rinfo) }, delay);
+        }
+
+    }
+    
     handleIncomingPacket(data: Buffer, rinfo: dgram.RemoteInfo): void {
         const { address, port } = rinfo;
 

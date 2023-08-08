@@ -19,18 +19,20 @@ export class Config {
     dhtRefreshTime: number = 8 * 60 * 60; // Seconds
     dhtExpiryTime: number = 24 * 60 * 60; // Seconds
     
-    // Download params
-    maxBursts: number = 5;
-    defaultBandwidth: number = 100 * 1024; // assumed bandwidth in bytes/s when no info
-    downloadTickPeriod: number = 100; // in ms
-    burstTimeout: number = 1000; // in ms
-    
     // Traffic configuration
     maxUpstreamSpeed: number = 100 * 1024;   // bytes per second
     maxDownstreamSpeed: number = 100 * 1024; // bytes per second
-
     performanceUpdateStiffness: number = 0.95;
     telemetryFetchRetries: number = 3;
+
+    // Degraded-network config
+    degradeUpstreamSpeed: number | null = null;
+    degradeUpstreamQueue: number = 10000;
+    degradeDownstreamSpeed: number | null = null;
+    degradeDownstreamQueue: number = 10000;
+    degradeLatency: number = 0;
+    degradeJitter: number = 0;
+    degradePacketLoss: number = 0;
     
     // Various less-relevant params
     maxProxyMapAge: number = 24 * 60 * 60; // In seconds

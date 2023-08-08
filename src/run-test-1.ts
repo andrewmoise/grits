@@ -6,6 +6,15 @@ import { Config } from './config';
 import { ProxyManager, RootProxyManager } from './proxy';
 import { HttpServer } from './web';
 import { DegradedNetworkManager } from './degraded';
+import { writeHeapSnapshot } from 'v8';
+
+//console.log('Init heap monitor');
+
+//setInterval(() => {
+//    let file = Date.now() + '.heapsnapshot';
+//    writeHeapSnapshot(file);
+//    console.log('Heap dump written to', file);
+//}, 15000);
 
 console.log('Run test load');
 
@@ -31,31 +40,35 @@ const rootConfig = new Config('127.0.0.1', 1787);
 rootConfig.thisPort = 1787;
 rootConfig.isRootNode = true;
 rootConfig.storageDirectory = path.join(dirPath, 'root');
+rootConfig.storageSize = 500 * 1024 * 1024;
 rootConfig.logFile = path.join(rootConfig.storageDirectory, 'grits.log');
+
+rootConfig.degradeDownstreamSpeed = 20000 + Math.random() * 80000;
+rootConfig.degradeUpstreamSpeed = 20000 + Math.random() * 80000;
+rootConfig.degradeLatency = 50 + Math.random() * 150;
+rootConfig.degradePacketLoss = Math.max(0, Math.random() - .8);
+
+console.log(`Root:`);
+console.log(`  Bandwidth ${rootConfig.degradeDownstreamSpeed}/${rootConfig.degradeUpstreamSpeed}, latency ${rootConfig.degradeLatency}, packet loss ${rootConfig.degradePacketLoss}`);
 
 const rootProxy = new RootProxyManager(rootConfig);
 
 console.log('    Ready to read images dir');
 
-fs.readdirSync(imageDir).forEach(file => {
-    const absolutePath = path.join(imageDir, file);
-    if (fs.statSync(absolutePath).isFile())
-        rootProxy.fileCache.addFile(absolutePath, null,
-                                    /* moveFile= */ false,
-                                    /* takeReference= */ true,
-                                    /* addInPlace= */ true,
-                                    /* addSize= */ false);
-});
+const allImages = fs.readdirSync(imageDir);
 
-rootProxy.networkManager = new DegradedNetworkManager(
-    rootProxy.networkManager, 50000, 10000, 50000, 10000, 25, 0);
+for (let j = 0; j < 100; j++) {
+    const randomImageIndex = Math.floor(Math.random() * allImages.length);
+    const imageFilename = allImages[randomImageIndex];
+    rootProxy.fileCache.addFile(path.join(imageDir, imageFilename), null, false, true);
+}
 
 proxyManagers.push(rootProxy);
 
 console.log('  Create other proxy managers');
 
 // Create configs for other nodes
-for (let i = 0; i < 5; i++) {
+for (let i = 1; i <= 5; i++) {
     const config = new Config('127.0.0.1', 1787);
     config.thisPort = 1800 + i;
     
@@ -66,23 +79,18 @@ for (let i = 0; i < 5; i++) {
 
     config.logFile = path.join(config.storageDirectory, 'grits.log');
     
-    const proxyManager = new ProxyManager(config);
-
-    let downBandwidth = 20000 + Math.random() * 80000;
-    let upBandwidth = 20000 + Math.random() * 80000;
-    let latency = 50 + Math.random() * 150;
-    let packetLossChance = Math.max(0, Math.random() - .8);
+    config.degradeDownstreamSpeed = 20000 + Math.random() * 80000;
+    config.degradeUpstreamSpeed = 20000 + Math.random() * 80000;
+    config.degradeLatency = 50 + Math.random() * 150;
+    config.degradePacketLoss = Math.max(0, Math.random() - .8);
 
     console.log(`Port ${config.thisPort}:`);
-    console.log(`  Bandwidth ${downBandwidth}/${upBandwidth}, latency ${latency}, packet loss ${packetLossChance}`);
-    let degraded = new DegradedNetworkManager(
-        proxyManager.networkManager,
-        downBandwidth, downBandwidth * 0.1,
-        upBandwidth, upBandwidth * 0.1,
-        latency, packetLossChance);
-    proxyManager.networkManager = degraded;
-    
+    console.log(`  Bandwidth ${config.degradeDownstreamSpeed}/${config.degradeUpstreamSpeed}, latency ${config.degradeLatency}, packet loss ${config.degradePacketLoss}`);
+
+    const proxyManager = new ProxyManager(config);
     proxyManagers.push(proxyManager);
+
+    console.log(`Adding proxy manager for ${proxyManager.thisProxy.port}, currently ${proxyManagers.length}`);
 }
 
 console.log('  Starting proxy managers');
@@ -94,6 +102,8 @@ console.log('  Starting proxy managers');
     }));
 
     for(let i=1; i<5; i++) {
+        console.log(`Connecting port ${12340+i} to proxy manager on ${proxyManagers[i].thisProxy.port} config ${proxyManagers[i].config.thisPort}`);
+        
         // Start the http service
         const httpServer = new HttpServer(proxyManagers[i], 12340 + i);
         httpServer.start();

@@ -191,6 +191,7 @@ class FileCache {
         }
     }
 
+    // FIXME - Can make non-async and touch in the background
     public async readFile(fileAddr: string)
         : Promise<CachedFile | null>
     {

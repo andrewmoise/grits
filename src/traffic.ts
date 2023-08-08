@@ -58,7 +58,7 @@ class TrafficShaper {
     public readyToGo(logger: Logger): boolean {
         logger.log(
             'traffic',
-            `    RTG ${this.bytesBudgeted} <= ${QUEUE_DEPTH_LIMIT} * ${this.maxSpeed}`);
+            `    RTG ${this.bytesBudgeted} <= ${QUEUE_DEPTH_LIMIT * this.maxSpeed}`);
         
         return this.bytesBudgeted <= QUEUE_DEPTH_LIMIT * this.maxSpeed;
     }
