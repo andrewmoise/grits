@@ -79,7 +79,7 @@ class AllPeerNodes {
         if (result) return result;
 
         // FIXME
-        console.log(`Unknown node ${ip}:${port}! For now we add it.`);
+        //console.log(`Unknown node ${ip}:${port}! For now we add it.`);
         return this.addPeerNode(ip, port);
     }
 

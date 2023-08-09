@@ -175,8 +175,7 @@ export class DataFetchMessage extends Message {
     }
 
     responseSize(): number {
-        // Nothing really wrong with it, but we don't expect this path to happen
-        throw new Error('Direct responseSize() for data fetch');
+        return 48 + this.length;
     }
 
     toString(): string {

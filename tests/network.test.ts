@@ -1,5 +1,5 @@
 import { Config } from '../src/config';
-import { ConsoleLogger } from '../src/logger';
+import { NullLogger } from '../src/logger';
 
 import {
     Message, HeartbeatMessage, HeartbeatResponse, MessageType
@@ -22,12 +22,12 @@ describe('NetworkManager', () => {
 
         const config1 = new Config('127.0.0.1', 1787);
         config1.thisPort = 1800;
-        const logger1 = new ConsoleLogger(config1);
+        const logger1 = new NullLogger();
         nm1 = new NetworkManagerImpl(peerNodes, logger1, config1);
 
         const config2 = new Config('127.0.0.1', 1787);
         config2.thisPort = 1801;
-        const logger2 = new ConsoleLogger(config2);
+        const logger2 = new NullLogger();
         nm2 = new NetworkManagerImpl(peerNodes, logger2, config2);
 
         nm1.start();
