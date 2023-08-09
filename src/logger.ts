@@ -91,8 +91,23 @@ class ConsoleLogger implements Logger {
     }
 }
 
+class NullLogger implements Logger {
+    async start(): Promise<void> {
+        // Nothing to initialize for NullLogger
+    }
+
+    log(segmentId: string, message: string): void {
+        // Discards the log messages
+    }
+
+    async stop(): Promise<void> {
+        // Nothing to clean up for NullLogger
+    }
+}
+
 export {
     Logger,
     LogfileLogger,
-    ConsoleLogger
+    ConsoleLogger,
+    NullLogger,
 };
