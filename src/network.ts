@@ -8,6 +8,7 @@ const sleep = promisify(setTimeout);
 
 import { Config } from './config';
 import { Logger } from './logger';
+
 import {
     AllPeerNodes, PeerNode, TelemetryInfo, DOWNLOAD_CHUNK_SIZE
 } from './structures';
@@ -106,8 +107,9 @@ class OutRequest {
     firstResponseTimestamp: number | null = null;
     
     messageQueue: Message[] = [];
-    resolverQueue: ((msg: Message | null) => void)[] = [];
-    
+    resolver: ((msg: Message | null) => void) | null = null;
+    isClosed: boolean = false;
+
     constructor(networkManager: NetworkManagerImpl,
                 requestId: number,
                 dest: PeerNode)
@@ -128,11 +130,18 @@ class OutRequest {
     }
 
     getResponse(): Promise<Message | null> {
+        if (this.isClosed) {
+            throw new Error("The request is already closed.");
+        }
+        if (this.resolver) {
+            throw new Error("Only one call to getResponse() can be pending.");
+        }
+        
         if (this.messageQueue.length > 0) {
             return Promise.resolve(this.messageQueue.shift()!);
         } else {
             return new Promise(resolve => {
-                this.resolverQueue.push(resolve);
+                this.resolver = resolve;
             });
         }
     }
@@ -140,11 +149,9 @@ class OutRequest {
     handleMessage(message: Message): void {
         if (this.firstResponseTimestamp === null) {
             this.firstResponseTimestamp = performance.now();
-            const peerTrafficManager = this.networkManager.getTrafficManager(
-                this.dest);
+            const peerTrafficManager = this.networkManager.getTrafficManager(this.dest);
             peerTrafficManager.notifyLatency(
                 this.firstResponseTimestamp - this.sendTimestamp!);
-
             peerTrafficManager.notifyPacketLoss(0);
         }
         
@@ -156,28 +163,28 @@ class OutRequest {
         }
 
         // Handle the message
-        if (this.resolverQueue.length > 0) {
-            const resolve = this.resolverQueue.shift();
-            if (resolve) {
-                resolve(message);
-            }
+        if (this.resolver) {
+            this.resolver(message);
+            this.resolver = null;
         } else {
             this.messageQueue.push(message);
         }
     }
     
     close(): void {
+        this.isClosed = true;
+
         // Clear the timeout
         if (this.timeoutTimeout) {
             clearTimeout(this.timeoutTimeout);
             this.timeoutTimeout = null;
         }
 
-        // Clear the resolver queue
-        const resolverQueue = this.resolverQueue;
-        this.resolverQueue = [];
-        for (let resolve of resolverQueue)
-            resolve(null);
+        // Resolve the resolver if any
+        if (this.resolver) {
+            this.resolver(null);
+            this.resolver = null;
+        }
 
         this.networkManager.outRequests.delete(this.requestId);
     }
@@ -185,15 +192,13 @@ class OutRequest {
     private timeoutFn() {
         this.timeoutTimeout = null;
 
-        if (this.firstResponseTimestamp === null)
-            this.networkManager.getTrafficManager(this.dest).notifyPacketLoss(
-                1);
+        if (this.firstResponseTimestamp === null) {
+            this.networkManager.getTrafficManager(this.dest).notifyPacketLoss(1);
+        }
         
-        if (this.resolverQueue.length > 0) {
-            const resolve = this.resolverQueue.shift();
-            if (resolve) {
-                resolve(null);
-            }
+        if (this.resolver) {
+            this.resolver(null);
+            this.resolver = null;
         }
     }
 }

@@ -88,13 +88,14 @@ export class HeartbeatResponse extends Message {
         let buffer = Buffer.alloc(40);
         let offset = 0;
         if (this.nodeMapFileAddr === null) {
-            HeartbeatResponse.zeroBuffer.copy(buffer, offset, offset, offset + 40);
+            HeartbeatResponse.zeroBuffer.copy(buffer, offset, offset,
+                                              offset + 40);
             offset += 40;
         } else {
             const [hash, size] = this.nodeMapFileAddr.split(':');
             const hashBuffer = Buffer.from(hash, 'hex');
             hashBuffer.copy(buffer, offset);
-            offset += hashBuffer.length;
+            offset += 32;
 
             const sizeBuffer = Buffer.alloc(8);
             sizeBuffer.writeBigUInt64BE(BigInt(size), 0);
