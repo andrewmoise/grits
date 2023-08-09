@@ -1,18 +1,22 @@
 import * as fs from 'fs';
-
 import { Config } from './config';
 
-class Logger {
+interface Logger {
+    start(): Promise<void>;
+    log(segmentId: string, message: string): void;
+    stop(): Promise<void>;
+}
+
+class LogfileLogger implements Logger {
     private fileHandle: fs.promises.FileHandle | null = null;
     private config: Config;
 
     private writeQueue: string[];
     private writeError: any | null;
     private writePromise: Promise<void> | null;
-    
+
     constructor(config: Config) {
         this.config = config;
-        
         this.writeQueue = [];
         this.writeError = null;
         this.writePromise = null;
@@ -53,11 +57,11 @@ class Logger {
         }
         this.writePromise = null;
     }
-    
+
     async stop(): Promise<void> {
         while (this.writePromise)
             await this.writePromise;
-            
+
         if (this.fileHandle) {
             await this.fileHandle.close();
             this.fileHandle = null;
@@ -65,6 +69,30 @@ class Logger {
     }
 }
 
+class ConsoleLogger implements Logger {
+    private config: Config;
+
+    constructor(config: Config) {
+        this.config = config;
+    }
+
+    async start(): Promise<void> {
+        // Nothing to initialize for ConsoleLogger
+    }
+
+    log(segmentId: string, message: string): void {
+        const formattedTimestamp = new Date().toISOString();
+        const formattedMessage = `${formattedTimestamp} ${segmentId} ${this.config.thisHost}:${this.config.thisPort} ${message}`;
+        console.log(formattedMessage);
+    }
+
+    async stop(): Promise<void> {
+        // Nothing to clean up for ConsoleLogger
+    }
+}
+
 export {
-    Logger
+    Logger,
+    LogfileLogger,
+    ConsoleLogger
 };

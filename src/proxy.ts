@@ -28,7 +28,7 @@ import {
 } from './network';
 
 import { BlobFinder } from './dht';
-import { Logger } from './logger';
+import { LogfileLogger } from './logger';
 import { TrafficManagerImpl } from './traffic';
 
 class ProxyDataMap {
@@ -100,7 +100,7 @@ abstract class ProxyManagerBase {
     
     constructor(config: Config) {
         this.config = config;
-        this.logger = new Logger(config);
+        this.logger = new LogfileLogger(config);
         this.allPeerNodes = new AllPeerNodes();
 
         this.networkManager = new NetworkManagerImpl(
