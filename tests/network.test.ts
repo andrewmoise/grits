@@ -58,7 +58,7 @@ describe('NetworkManager', () => {
 
         const response = await outRequest.getResponse();
         
-        expect(response instanceof HeartbeatResponse).toEqual(true);
+        expect(response).toBeInstanceOf(HeartbeatResponse);
     }, 10000); // setting timeout for 10 seconds
 
     it('should handle no response and return null', async () => {
