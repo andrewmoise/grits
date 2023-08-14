@@ -122,9 +122,10 @@ class TrafficManagerImpl implements TrafficManager {
                     throw new Error('Wrong response type!');
 
                 const response = rawResponse as TelemetryFetchResponse;
-                //this.upstream.maxSpeed +=
-                //    (1 - this.config.performanceUpdateStiffness)
-                //    * response.byteCount / TELEMETRY_CHECK_RATE;
+                if (this.config.dynamicSpeedAdjust)
+                    this.upstream.maxSpeed +=
+                        (1 - this.config.performanceUpdateStiffness)
+                        * response.byteCount / TELEMETRY_CHECK_RATE;
 
                 return;
             }
@@ -163,14 +164,16 @@ class TrafficManagerImpl implements TrafficManager {
             this.networkManager.log(
                 `  Averaging in ${bandwidth}`);
 
-            //this.requestedDownstream.maxSpeed *=
-            //    this.config.performanceUpdateStiffness;
-            //this.requestedDownstream.maxSpeed +=
-            //    bandwidth * (1 - this.config.performanceUpdateStiffness);
+            if (this.config.dynamicSpeedAdjust) {
+                this.requestedDownstream.maxSpeed *=
+                    this.config.performanceUpdateStiffness;
+                this.requestedDownstream.maxSpeed +=
+                    bandwidth * (1 - this.config.performanceUpdateStiffness);
             
-            //this.observedDownstream.maxSpeed =
-            //    this.requestedDownstream.maxSpeed;
-
+                this.observedDownstream.maxSpeed =
+                    this.requestedDownstream.maxSpeed;
+            }
+            
             // And again, we don't count the first packet's bytes
             this.downstreamBurstStart = now;
             this.downstreamByteCounter = 0;
@@ -215,15 +218,17 @@ class TrafficManagerImpl implements TrafficManager {
         const burstLength = (now - this.upstreamBurstStart) / 1000;
         
         if (burstLength >= UPSTREAM_TELEMETRY_CHECK_RATE) {
-            //this.upstream.maxSpeed *=
-            //    this.config.performanceUpdateStiffness;
+            if (this.config.dynamicSpeedAdjust) {
+                this.upstream.maxSpeed *=
+                    this.config.performanceUpdateStiffness;
 
-            const message = new TelemetryFetchMessage(
-                this.upstreamTelemetryBatchId);
+                const message = new TelemetryFetchMessage(
+                    this.upstreamTelemetryBatchId);
             
-            for (let peerNode of this.upstreamHosts)
-                this.recoverTelemetry(peerNode, message);
-
+                for (let peerNode of this.upstreamHosts)
+                    this.recoverTelemetry(peerNode, message);
+            }
+            
             this.upstreamBurstStart = 0;
         }
     }

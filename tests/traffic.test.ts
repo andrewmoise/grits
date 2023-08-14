@@ -26,6 +26,7 @@ describe('Traffic Management', () => {
 
         const config1 = new Config('127.0.0.1', 1787);
         config1.thisPort = BASE_PORT;
+        config1.dynamicSpeedAdjust = false;
         //config1.logFile = 'grits-1.log';
         const logger1 = new NullLogger();
         await logger1.start();
@@ -35,6 +36,7 @@ describe('Traffic Management', () => {
         config2.thisPort = BASE_PORT + 1;
         //config2.logFile = 'grits-2.log';
         config2.maxUpstreamSpeed = 10240;
+        config2.dynamicSpeedAdjust = false;
         const logger2 = new NullLogger();
         await logger2.start();
         nm2 = new NetworkManagerImpl(peerNodes, logger2, config2);
@@ -115,6 +117,7 @@ describe('Traffic Management', () => {
         config1.thisPort = BASE_PORT + 0;
         config1.maxDownstreamSpeed = 10240;
         config1.logFile = 'grits-1.log';
+        config1.dynamicSpeedAdjust = false;
         const logger1 = new LogfileLogger(config1);
         await logger1.start();
         nm1 = new NetworkManagerImpl(peerNodes, logger1, config1);
@@ -122,6 +125,7 @@ describe('Traffic Management', () => {
         const config2 = new Config('127.0.0.1', 1787);
         config2.thisPort = BASE_PORT + 1;
         config2.logFile = 'grits-2.log';
+        config2.dynamicSpeedAdjust = false;
         const logger2 = new LogfileLogger(config2);
         await logger2.start();
         nm2 = new NetworkManagerImpl(peerNodes, logger2, config2);

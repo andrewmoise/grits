@@ -20,6 +20,7 @@ export class Config {
     dhtExpiryTime: number = 24 * 60 * 60; // Seconds
     
     // Traffic configuration
+    dynamicSpeedAdjust: boolean = true;
     maxUpstreamSpeed: number = 100 * 1024;   // bytes per second
     maxDownstreamSpeed: number = 100 * 1024; // bytes per second
     performanceUpdateStiffness: number = 0.95;
