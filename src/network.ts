@@ -114,6 +114,8 @@ class OutRequest {
                 requestId: number,
                 dest: PeerNode)
     {
+        networkManager.log('OutRequest constructor');
+
         this.networkManager = networkManager;
         this.requestId = requestId;
         this.dest = dest;
@@ -125,11 +127,15 @@ class OutRequest {
     }
     
     sendRequest(message: Message): void {
+        this.networkManager.log('OutRequest sendRequest()');
+        
         this.sendTimestamp = performance.now();
         this.networkManager.send(message, this.requestId, this.dest);
     }
 
     getResponse(): Promise<Message | null> {
+        this.networkManager.log(`OutRequest getResponse() - queue len ${this.messageQueue.length}`);
+        
         if (this.isClosed) {
             throw new Error("The request is already closed.");
         }
@@ -147,6 +153,8 @@ class OutRequest {
     }
     
     handleMessage(message: Message): void {
+        this.networkManager.log('OutRequest handleMessage()');
+        
         if (this.firstResponseTimestamp === null) {
             this.firstResponseTimestamp = performance.now();
             const peerTrafficManager = this.networkManager.getTrafficManager(this.dest);
@@ -190,6 +198,8 @@ class OutRequest {
     }
 
     private timeoutFn() {
+        this.networkManager.log('OutRequest timeout!');
+        
         this.timeoutTimeout = null;
 
         if (this.firstResponseTimestamp === null) {
@@ -678,6 +688,7 @@ class NetworkManagerImpl {
     
     processRequestQueue(): void {
         this.log(`processRequestQueue(), ${this.requestQueue.length} waiting`);
+        this.log(`  all budget: ${this.allTrafficManager.requestedDownstream.bytesBudgeted} down, ${this.allTrafficManager.upstream.bytesBudgeted} up`);
         
         this.allTrafficManager.updateBudgets();
         for(let queuedRequest of this.requestQueue)

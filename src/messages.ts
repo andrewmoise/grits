@@ -1,5 +1,7 @@
 import { assert } from 'console';
 
+import { DOWNLOAD_CHUNK_SIZE } from './structures';
+
 export enum MessageType {
     HEARTBEAT_MESSAGE = 0,
     HEARTBEAT_RESPONSE = 1,
@@ -175,7 +177,8 @@ export class DataFetchMessage extends Message {
     }
 
     responseSize(): number {
-        return 48 + this.length;
+        return 48 * Math.max(1, Math.ceil(this.length / DOWNLOAD_CHUNK_SIZE))
+            + this.length;
     }
 
     toString(): string {

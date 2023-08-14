@@ -32,13 +32,11 @@ interface TrafficManager {
 class TrafficShaper {
     bytesBudgeted: number;
     lastUpdate: number;
-
     maxSpeed: number; // bytes per second
     
     constructor(initialMaxSpeed: number) {
         this.bytesBudgeted = 0;
         this.lastUpdate = performance.now();
-
         this.maxSpeed = initialMaxSpeed;
     }
 
@@ -46,7 +44,7 @@ class TrafficShaper {
         const now = performance.now();
         const deltaTime = (now - this.lastUpdate) / 1000;
         this.lastUpdate = now;
-
+        
         this.bytesBudgeted = Math.max(
             0, this.bytesBudgeted - this.maxSpeed * deltaTime);
     }
@@ -98,6 +96,8 @@ class TrafficManagerImpl implements TrafficManager {
 
         this.observedDownstream = new TrafficShaper(
             config.maxDownstreamSpeed);
+
+        this.networkManager.log(`Create TM - up ${config.maxUpstreamSpeed}, down ${config.maxDownstreamSpeed}`);
     }
 
     private async recoverTelemetry(peerNode: PeerNode,
@@ -122,9 +122,9 @@ class TrafficManagerImpl implements TrafficManager {
                     throw new Error('Wrong response type!');
 
                 const response = rawResponse as TelemetryFetchResponse;
-                this.upstream.maxSpeed +=
-                    (1 - this.config.performanceUpdateStiffness)
-                    * response.byteCount / TELEMETRY_CHECK_RATE;
+                //this.upstream.maxSpeed +=
+                //    (1 - this.config.performanceUpdateStiffness)
+                //    * response.byteCount / TELEMETRY_CHECK_RATE;
 
                 return;
             }
@@ -163,13 +163,13 @@ class TrafficManagerImpl implements TrafficManager {
             this.networkManager.log(
                 `  Averaging in ${bandwidth}`);
 
-            this.requestedDownstream.maxSpeed *=
-                this.config.performanceUpdateStiffness;
-            this.requestedDownstream.maxSpeed +=
-                bandwidth * (1 - this.config.performanceUpdateStiffness);
+            //this.requestedDownstream.maxSpeed *=
+            //    this.config.performanceUpdateStiffness;
+            //this.requestedDownstream.maxSpeed +=
+            //    bandwidth * (1 - this.config.performanceUpdateStiffness);
             
-            this.observedDownstream.maxSpeed =
-                this.requestedDownstream.maxSpeed;
+            //this.observedDownstream.maxSpeed =
+            //    this.requestedDownstream.maxSpeed;
 
             // And again, we don't count the first packet's bytes
             this.downstreamBurstStart = now;
@@ -215,8 +215,8 @@ class TrafficManagerImpl implements TrafficManager {
         const burstLength = (now - this.upstreamBurstStart) / 1000;
         
         if (burstLength >= UPSTREAM_TELEMETRY_CHECK_RATE) {
-            this.upstream.maxSpeed *=
-                this.config.performanceUpdateStiffness;
+            //this.upstream.maxSpeed *=
+            //    this.config.performanceUpdateStiffness;
 
             const message = new TelemetryFetchMessage(
                 this.upstreamTelemetryBatchId);
