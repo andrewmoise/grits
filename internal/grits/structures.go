@@ -25,13 +25,21 @@ func (fa *FileAddr) String() string {
 }
 
 type CachedFile struct {
-	Path     string
-	RefCount int
-	Address  FileAddr
+	Path        string
+	Size        uint64
+	RefCount    int
+	Address     *FileAddr
+	LastTouched time.Time
 }
 
 func NewCachedFile(path string, refCount int, fileAddr *FileAddr) *CachedFile {
-	return &CachedFile{path, refCount, *fileAddr}
+	return &CachedFile{
+		Path: path,
+		Size: fileAddr.Size,
+		RefCount: refCount,
+		Address: fileAddr,
+		LastTouched: time.Now(),
+	}
 }
 
 func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
