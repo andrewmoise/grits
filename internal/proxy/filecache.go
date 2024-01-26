@@ -3,13 +3,12 @@ package proxy
 import (
 	"crypto/sha256"
 	"fmt"
+	"grits/internal/grits"
 	"io"
-	"io/ioutil"
 	"os"
 	"sort"
 	"sync"
 	"time"
-	"grits/internal/grits"
 )
 
 type FileCache struct {
@@ -25,9 +24,9 @@ func NewFileCache(config *Config) *FileCache {
 	}
 
 	return &FileCache{
-		config:     config,
+		config:      config,
 		currentSize: 0,
-		files:      make(map[string]*grits.CachedFile),
+		files:       make(map[string]*grits.CachedFile),
 	}
 }
 
@@ -35,7 +34,7 @@ func NewFileCache(config *Config) *FileCache {
 func (fc *FileCache) ReadFile(fileAddr *grits.FileAddr) (*grits.CachedFile, error) {
 	fc.mtx.RLock()
 	defer fc.mtx.RUnlock()
-    
+
 	cachedFile, ok := fc.files[fileAddr.String()]
 	if !ok {
 		return nil, fmt.Errorf("file with address %s not found in cache", fileAddr.String())
@@ -45,20 +44,19 @@ func (fc *FileCache) ReadFile(fileAddr *grits.FileAddr) (*grits.CachedFile, erro
 	return cachedFile, nil
 }
 
-
 func (fc *FileCache) CreateTempFile(fileAddr *grits.FileAddr) (*os.File, error) {
 	filePath := "unknown"
 	if fileAddr != nil {
 		filePath = fileAddr.String()
 	}
-	
-	return ioutil.TempFile(fc.config.StorageDirectory, filePath)
+
+	return os.CreateTemp(fc.config.StorageDirectory, filePath)
 }
 
 func (fc *FileCache) FinalizeFile(tempFile *os.File) (*grits.CachedFile, error) {
 	// Close the file if not already closed by caller
 	tempFile.Close()
-	
+
 	hash, size, err := computeSHA256AndSize(tempFile.Name())
 	if err != nil {
 		return nil, err
@@ -81,7 +79,7 @@ func (fc *FileCache) FinalizeFile(tempFile *os.File) (*grits.CachedFile, error) 
 	if fc.currentSize > fc.config.StorageSize {
 		go fc.evictOldFiles()
 	}
-	
+
 	return cachedFile, nil
 }
 
@@ -96,7 +94,7 @@ func (fc *FileCache) AddLocalFile(srcPath string) (*grits.CachedFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	_, err = io.Copy(destFile, srcFile)
 	if err != nil {
 		destFile.Close()
@@ -150,7 +148,7 @@ func (fc *FileCache) evictOldFiles() {
 	if fc.currentSize <= fc.config.StorageSize {
 		return
 	}
-	
+
 	var sortedFiles []*grits.CachedFile
 
 	for _, file := range fc.files {
@@ -173,9 +171,8 @@ func (fc *FileCache) evictOldFiles() {
 		delete(fc.files, file.Address.String())
 
 		err := os.Remove(file.Path)
-		if (err != nil) {
+		if err != nil {
 			panic(fmt.Sprintf("Couldn't delete expired file %s from cache! %v", file.Path, err))
 		}
 	}
 }
-	
