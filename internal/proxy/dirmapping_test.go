@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +11,7 @@ func setupDirMapping(t *testing.T) (*DirMapping, *BlobStore, string, func()) {
 	t.Helper()
 
 	// Create a temporary directory for testing
-	dirPath, err := ioutil.TempDir("", "dirmapping_test")
+	dirPath, err := os.MkdirTemp("", "dirmapping_test")
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
@@ -20,8 +19,8 @@ func setupDirMapping(t *testing.T) (*DirMapping, *BlobStore, string, func()) {
 	// Set up a BlobStore with a temporary directory
 	blobStoreConfig := &Config{
 		StorageDirectory: dirPath,
-		StorageSize:      10 * 1024 * 1024,
-		StorageFreeSize:  8 * 1024 * 1024,
+		StorageSize:      10 * 1024 * 1024, // 10MB
+		StorageFreeSize:  8 * 1024 * 1024,  // 8MB
 	}
 	blobStore := NewBlobStore(blobStoreConfig)
 
@@ -43,7 +42,7 @@ func TestDirMapping_FileAddition(t *testing.T) {
 
 	// Create a new file in the monitored directory
 	filePath := filepath.Join(dirPath, "testfile.txt")
-	err := ioutil.WriteFile(filePath, []byte("hello world"), 0644)
+	err := os.WriteFile(filePath, []byte("hello world"), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
@@ -64,7 +63,7 @@ func TestDirMapping_FileDeletion(t *testing.T) {
 
 	// Create and then remove a file in the monitored directory
 	filePath := filepath.Join(dirPath, "testfile.txt")
-	err := ioutil.WriteFile(filePath, []byte("hello world"), 0644)
+	err := os.WriteFile(filePath, []byte("hello world"), 0644)
 	if err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
