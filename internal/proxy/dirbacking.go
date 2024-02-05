@@ -9,21 +9,21 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-type DirMapping struct {
+type DirBacking struct {
 	watcher   *fsnotify.Watcher
 	blobStore *BlobStore
 	dirPath   string
 	files     map[string]*grits.CachedFile // Map to track files
 }
 
-// Constructor to initialize DirMapping with the directory path and the BlobStore
-func NewDirMapping(dirPath string, blobStore *BlobStore) *DirMapping {
+// Constructor to initialize DirBacking with the directory path and the BlobStore
+func NewDirBacking(dirPath string, blobStore *BlobStore) *DirBacking {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatal("Failed to create watcher:", err)
 	}
 
-	return &DirMapping{
+	return &DirBacking{
 		watcher:   watcher,
 		blobStore: blobStore,
 		dirPath:   dirPath,
@@ -32,7 +32,7 @@ func NewDirMapping(dirPath string, blobStore *BlobStore) *DirMapping {
 }
 
 // Start begins monitoring the directory for changes
-func (dm *DirMapping) Start() {
+func (dm *DirBacking) Start() {
 	go dm.watch()
 
 	err := dm.watcher.Add(dm.dirPath)
@@ -44,7 +44,7 @@ func (dm *DirMapping) Start() {
 }
 
 // initialScan walks through the directory initially to add existing files
-func (dm *DirMapping) initialScan() {
+func (dm *DirBacking) initialScan() {
 	filepath.Walk(dm.dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			log.Println("Error accessing path:", path, "Error:", err)
@@ -58,7 +58,7 @@ func (dm *DirMapping) initialScan() {
 }
 
 // watch listens for file system events and handles them
-func (dm *DirMapping) watch() {
+func (dm *DirBacking) watch() {
 	for {
 		select {
 		case event, ok := <-dm.watcher.Events:
@@ -76,7 +76,7 @@ func (dm *DirMapping) watch() {
 }
 
 // handleEvent processes file creation, modification, and deletion events
-func (dm *DirMapping) handleEvent(event fsnotify.Event) {
+func (dm *DirBacking) handleEvent(event fsnotify.Event) {
 	log.Println("Event:", event)
 	if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
 		dm.addOrUpdateFile(event.Name)
@@ -86,7 +86,7 @@ func (dm *DirMapping) handleEvent(event fsnotify.Event) {
 }
 
 // addOrUpdateFile adds a new file to the BlobStore or updates an existing one
-func (dm *DirMapping) addOrUpdateFile(filePath string) {
+func (dm *DirBacking) addOrUpdateFile(filePath string) {
 	cachedFile, err := dm.blobStore.AddLocalFile(filePath)
 	if err != nil {
 		log.Println("Failed to add or update file in BlobStore:", err)
@@ -98,7 +98,7 @@ func (dm *DirMapping) addOrUpdateFile(filePath string) {
 }
 
 // removeFile handles the removal of a file from the BlobStore and internal tracking
-func (dm *DirMapping) removeFile(filePath string) {
+func (dm *DirBacking) removeFile(filePath string) {
 	if cachedFile, exists := dm.files[filePath]; exists {
 		dm.blobStore.Release(cachedFile)
 		delete(dm.files, filePath)
@@ -107,6 +107,6 @@ func (dm *DirMapping) removeFile(filePath string) {
 }
 
 // Stop stops the directory monitoring
-func (dm *DirMapping) Stop() {
+func (dm *DirBacking) Stop() {
 	dm.watcher.Close()
 }
