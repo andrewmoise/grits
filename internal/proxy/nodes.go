@@ -6,20 +6,9 @@ import (
 	"strings"
 )
 
-// NodeType represents the type of a FileNode.
-type NodeType int
-
-const (
-	NodeTypeUnknown NodeType = iota
-	NodeTypeBlob
-	NodeTypeTree
-)
-
 // FileNode represents a node in the file system structure, which can be a file or a directory.
 type FileNode struct {
-	Type     NodeType
-	Addr     *grits.FileAddr // Address of the CachedFile in BlobStore
-	Children map[string]*FileNode
+	Children map[string]*grits.CachedFile
 }
 
 // NewFileNode creates a new FileNode.
