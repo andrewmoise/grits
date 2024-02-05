@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-func setupDirMapping(t *testing.T) (*DirMapping, *BlobStore, string, func()) {
+func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, func()) {
 	t.Helper()
 
 	// Create a temporary directory for testing
-	dirPath, err := os.MkdirTemp("", "dirmapping_test")
+	dirPath, err := os.MkdirTemp("", "dirBacking_test")
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
@@ -24,21 +24,21 @@ func setupDirMapping(t *testing.T) (*DirMapping, *BlobStore, string, func()) {
 	}
 	blobStore := NewBlobStore(blobStoreConfig)
 
-	dirMapping := NewDirMapping(dirPath, blobStore)
+	dirBacking := NewDirBacking(dirPath, blobStore)
 
 	cleanup := func() {
-		dirMapping.Stop()
+		dirBacking.Stop()
 		os.RemoveAll(dirPath)
 	}
 
-	return dirMapping, blobStore, dirPath, cleanup
+	return dirBacking, blobStore, dirPath, cleanup
 }
 
-func TestDirMapping_FileAddition(t *testing.T) {
-	dirMapping, _, dirPath, cleanup := setupDirMapping(t)
+func TestDirBacking_FileAddition(t *testing.T) {
+	dirBacking, _, dirPath, cleanup := setupDirBacking(t)
 	defer cleanup()
 
-	dirMapping.Start()
+	dirBacking.Start()
 
 	// Create a new file in the monitored directory
 	filePath := filepath.Join(dirPath, "testfile.txt")
@@ -50,16 +50,16 @@ func TestDirMapping_FileAddition(t *testing.T) {
 	// Give some time for the file system watcher to detect the change
 	time.Sleep(1 * time.Second)
 
-	if _, exists := dirMapping.files[filePath]; !exists {
-		t.Errorf("File %s was not added to DirMapping", filePath)
+	if _, exists := dirBacking.files[filePath]; !exists {
+		t.Errorf("File %s was not added to DirBacking", filePath)
 	}
 }
 
-func TestDirMapping_FileDeletion(t *testing.T) {
-	dirMapping, _, dirPath, cleanup := setupDirMapping(t)
+func TestDirBacking_FileDeletion(t *testing.T) {
+	dirBacking, _, dirPath, cleanup := setupDirBacking(t)
 	defer cleanup()
 
-	dirMapping.Start()
+	dirBacking.Start()
 
 	// Create and then remove a file in the monitored directory
 	filePath := filepath.Join(dirPath, "testfile.txt")
@@ -72,9 +72,9 @@ func TestDirMapping_FileDeletion(t *testing.T) {
 	// Give some time for the file system watcher to detect the change
 	time.Sleep(1 * time.Second)
 
-	if _, exists := dirMapping.files[filePath]; exists {
-		t.Errorf("File %s was not removed from DirMapping", filePath)
+	if _, exists := dirBacking.files[filePath]; exists {
+		t.Errorf("File %s was not removed from DirBacking", filePath)
 	}
 }
 
-// Additional tests for file modification, and starting/stopping the DirMapping can be structured similarly.
+// Additional tests for file modification, and starting/stopping the DirBacking can be structured similarly.
