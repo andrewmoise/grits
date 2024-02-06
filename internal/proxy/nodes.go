@@ -1,167 +1,62 @@
 package proxy
 
 import (
-	"errors"
 	"grits/internal/grits"
-	"strings"
 )
 
-// FileNode represents a node in the file system structure, which can be a file or a directory.
 type FileNode struct {
-	Children map[string]*grits.CachedFile
+	ExportedBlob *grits.CachedFile          `json:"-"` // This field is ignored by the JSON package.
+	Children     map[string]*grits.FileAddr // Maps file names to their CachedFile
 }
 
 // NewFileNode creates a new FileNode.
-func NewFileNode(nodeType NodeType, addr *grits.FileAddr) *FileNode {
-	node := &FileNode{
-		Type: nodeType,
-		Addr: addr,
-	}
-	if nodeType == NodeTypeTree {
-		node.Children = make(map[string]*FileNode)
-	}
-	return node
-}
-
-func cloneFileNode(node *FileNode) *FileNode {
-	if node == nil {
-		return nil
-	}
-
-	if node.Type == NodeTypeBlob {
-		return &FileNode{
-			Type: node.Type,
-			Addr: node.Addr,
-		}
-	} else if node.Type == NodeTypeTree {
-		clone := &FileNode{
-			Type: node.Type,
-			Addr: nil,
-		}
-
-		clone.Children = make(map[string]*FileNode)
-		for name, child := range node.Children {
-			clone.Children[name] = child
-		}
-
-		return clone
-	} else {
-		// Can't happen
-		return nil
+func NewFileNode() *FileNode {
+	return &FileNode{
+		ExportedBlob: nil,
+		Children:     make(map[string]*grits.FileAddr),
 	}
 }
 
-// AddChild adds a child node to a directory node.
-func (fn *FileNode) AddChild(name string, child *FileNode) {
-	if fn.Type == NodeTypeTree {
-		fn.Children[name] = child
+func CloneFileNode(node *FileNode) *FileNode {
+	clone := &FileNode{
+		ExportedBlob: nil,
+		Children:     make(map[string]*grits.FileAddr),
 	}
+
+	for name, child := range node.Children {
+		clone.Children[name] = child
+	}
+
+	return clone
 }
 
-// GetChild retrieves a child node by name from a directory node.
-func (fn *FileNode) GetChild(name string) (*FileNode, bool) {
-	if fn.Type != NodeTypeTree {
-		return nil, false
+// AddFile adds a file to the FileNode.
+func (fn *FileNode) AddFile(name string, file *grits.CachedFile) {
+	if fn.ExportedBlob != nil {
+		panic("Trying to change finalized FileNode")
 	}
-	child, exists := fn.Children[name]
-	return child, exists
+	fn.Children[name] = file.Address
 }
 
-// RemoveChild removes a child node by name from a directory node.
-func (fn *FileNode) RemoveChild(name string) {
-	if fn.Type == NodeTypeTree {
-		delete(fn.Children, name)
-	}
+// GetFile retrieves a file by name from the FileNode.
+func (fn *FileNode) GetFile(name string) (*grits.FileAddr, bool) {
+	file, exists := fn.Children[name]
+	return file, exists
 }
 
-// Get searches for a file in the tree structure starting from the root node.
-// The path is a "/"-separated string representing the file's location in the tree.
-func Get(root *FileNode, path string) (*FileNode, error) {
-	// Split the path into parts
-	parts := strings.Split(path, "/")
-
-	// Start the recursive search from the root node
-	return findFileInNode(root, parts)
-}
-
-// findFileInNode is a helper function that performs the recursive search.
-func findFileInNode(node *FileNode, parts []string) (*FileNode, error) {
-	// Base case: if we've consumed all parts, we should be at the target file node
-	if len(parts) == 0 {
-		if node.Type == NodeTypeBlob {
-			return node, nil
-		}
-		return nil, errors.New("path does not point to a file")
+// RemoveFile removes a file by name from the FileNode.
+func (fn *FileNode) RemoveFile(name string) {
+	if fn.ExportedBlob != nil {
+		panic("Trying to change finalized FileNode")
 	}
-
-	// Recursive case: navigate down the tree
-	currentPart := parts[0]
-	if node.Type != NodeTypeTree || node.Children == nil {
-		return nil, errors.New("path leads to a non-directory before reaching the target")
-	}
-
-	childNode, exists := node.Children[currentPart]
-	if !exists {
-		return nil, errors.New("path segment not found in current directory: " + currentPart)
-	}
-
-	// Continue the search in the child node
-	return findFileInNode(childNode, parts[1:])
-}
-
-func Put(root *FileNode, path string, file *FileNode) error {
-	parts := strings.Split(path, "/")
-	return putFileInNode(root, parts, file)
-}
-
-func putFileInNode(node *FileNode, parts []string, file *FileNode) (*FileNode, error) {
-	if len(parts) == 0 {
-		return nil, errors.New("path is not deep enough")
-	}
-
-	var newChild *FileNode
-	var err error
-	if len(parts) == 1 {
-		newChild = file
-	} else {
-		newChild, err = putFileInNode(node, parts[1:], file)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	currentPart := parts[0]
-	newNode := cloneFileNode(node)
-	if newChild != nil {
-		newNode.Children[currentPart] = newChild
-	} else {
-		delete(newNode.Children, currentPart)
-	}
-
-	if len(parts) == 1 {
-		if node.Type != NodeTypeTree {
-			return errors.New("path does not point to a directory")
-		}
-		node.Children[currentPart] = file
-		return nil
-	}
-
-	if node.Type != NodeTypeTree || node.Children == nil {
-		return errors.New("path leads to a non-directory before reaching the target")
-	}
-
-	childNode, exists := node.Children[currentPart]
-	if !exists {
-		return errors.New("path segment not found in current directory: " + currentPart)
-	}
-
-	return putFileInNode(childNode, parts[1:], file)
+	delete(fn.Children, name)
 }
 
 // RevNode represents a revision, containing a snapshot of the content at a point in time.
 type RevNode struct {
-	Tree     *FileNode // The current state of the content
-	Previous *RevNode  // Pointer to the previous revision, nil if it's the first
+	ExportedBlob *grits.CachedFile
+	Tree         *FileNode // The current state of the content
+	Previous     *RevNode  // Pointer to the previous revision, nil if it's the first
 }
 
 // NewRevNode creates a new instance of RevNode.
