@@ -1,27 +1,29 @@
 package grits
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"time"
 )
 
 type FileAddr struct {
-	Hash []byte // This will hold the SHA-256 hash.
-	Size uint64  // 64-bit size.
+	Hash string // SHA-256 hash as a lowercase hexadecimal string.
+	Size uint64 // 64-bit size.
 }
 
-func NewFileAddr(hash []byte, size uint64) *FileAddr {
+// NewFileAddr creates a new FileAddr with a hash string and size.
+func NewFileAddr(hash string, size uint64) *FileAddr {
 	return &FileAddr{Hash: hash, Size: size}
 }
 
+// Equals checks if two FileAddr instances are equal.
 func (fa *FileAddr) Equals(other *FileAddr) bool {
-    return bytes.Equal(fa.Hash, other.Hash) && fa.Size == other.Size
+	return fa.Hash == other.Hash && fa.Size == other.Size
 }
 
+// String returns the string representation of FileAddr.
 func (fa *FileAddr) String() string {
-	return fmt.Sprintf("%x:%d", fa.Hash, fa.Size)
+	return fmt.Sprintf("%s:%d", fa.Hash, fa.Size)
 }
 
 type CachedFile struct {
@@ -32,16 +34,18 @@ type CachedFile struct {
 	LastTouched time.Time
 }
 
+// NewCachedFile creates a new CachedFile.
 func NewCachedFile(path string, refCount int, fileAddr *FileAddr) *CachedFile {
 	return &CachedFile{
-		Path: path,
-		Size: fileAddr.Size,
-		RefCount: refCount,
-		Address: fileAddr,
+		Path:        path,
+		Size:        fileAddr.Size,
+		RefCount:    refCount,
+		Address:     fileAddr,
 		LastTouched: time.Now(),
 	}
 }
 
+// Read reads a portion of the file.
 func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
 	file, err := os.Open(c.Path)
 	if err != nil {
@@ -57,6 +61,7 @@ func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
 	return buffer, nil
 }
 
+// Release decreases the reference count of the CachedFile.
 func (c *CachedFile) Release() {
 	c.RefCount -= 1
 }
