@@ -21,7 +21,6 @@ func TestFileNodeSerializationDeserialization(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		fileName := fmt.Sprintf("%d.txt", i)
 		filePath := filepath.Join(bs.config.StorageDirectory, fileName)
-		fmt.Printf("filePath: %s\n", filePath)
 		fileContent := []byte(fmt.Sprintf("file content %d", i))
 
 		if err := os.WriteFile(filePath, fileContent, 0644); err != nil {

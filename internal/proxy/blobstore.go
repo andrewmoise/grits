@@ -133,7 +133,6 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*grits.CachedFile, error) {
 
 	// Since the data block does not exist, store it
 	destPath := filepath.Join(bs.config.StorageDirectory, fileAddr.String())
-	fmt.Printf("write 1: %s\n", destPath)
 
 	if err := os.WriteFile(destPath, data, 0644); err != nil {
 		return nil, fmt.Errorf("error writing data block to store: %v", err)

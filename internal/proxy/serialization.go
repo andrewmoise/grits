@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -28,8 +27,6 @@ func (bs *BlobStore) SerializeFileNode(fn *FileNode) error {
 	}
 	defer os.Remove(tempFile.Name()) // Ensure the temporary file is removed after use.
 	defer tempFile.Close()
-
-	fmt.Printf("write 0: %s\n", tempFilePath)
 
 	// Write the serialized data to the temporary file.
 	if _, err := tempFile.Write(data); err != nil {
