@@ -15,16 +15,57 @@ import (
 
 type BlobStore struct {
 	config      *Config
+	storePath   string
 	files       map[string]*grits.CachedFile
 	mtx         sync.RWMutex
-	currentSize uint64 // Add this line
+	currentSize uint64
 }
 
 func NewBlobStore(config *Config) *BlobStore {
-	return &BlobStore{
+	bs := &BlobStore{
 		config: config,
 		files:  make(map[string]*grits.CachedFile),
 	}
+
+	// Initialize the BlobStore by scanning the existing files in the storePath
+	err := bs.scanAndLoadExistingFiles()
+	if err != nil {
+		fmt.Printf("Error initializing BlobStore with existing files: %v\n", err)
+		// Handle error (e.g., log it, panic, etc.), depending on your application's needs
+	}
+
+	return bs
+}
+
+func (bs *BlobStore) scanAndLoadExistingFiles() error {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	return filepath.Walk(bs.config.StorageDirectory, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err // return error to stop the walk
+		}
+		if !info.IsDir() {
+			hash, size, err := computeSHA256AndSize(path)
+			if err != nil {
+				return err // continue scanning other files even if one fails
+			}
+
+			// Construct the file address from its hash
+			fileAddr := grits.NewFileAddr(hash, size)
+			relativePath, _ := filepath.Rel(bs.config.StorageDirectory, path)
+
+			// Create a CachedFile object and add it to the map
+			bs.files[relativePath] = &grits.CachedFile{
+				Path:        path,
+				Size:        size,
+				RefCount:    0, // Initially, no references to the file
+				Address:     fileAddr,
+				LastTouched: info.ModTime(),
+			}
+		}
+		return nil
+	})
 }
 
 func (bs *BlobStore) ReadFile(fileAddr *grits.FileAddr) (*grits.CachedFile, error) {

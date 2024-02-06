@@ -2,11 +2,8 @@ package proxy
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"sync"
-
-	"grits/internal/grits"
 )
 
 type WikiBacking struct {
@@ -53,50 +50,4 @@ func (wb *WikiBacking) SaveData() error {
 	defer file.Close()
 
 	return json.NewEncoder(file).Encode(wb.currentRev)
-}
-
-// CommitChange commits a series of file changes to the WikiBacking, creating a new revision.
-// Changes is a map where key is the file name, and value is the path to the new file content
-// or nil to indicate deletion.
-func (wb *WikiBacking) CommitChange(changes map[string]*grits.CachedFile) error {
-	wb.mutex.Lock()
-	defer wb.mutex.Unlock()
-
-	// Clone the current tree to a new tree
-	newTree := wb.cloneCurrentTree()
-
-	// Apply changes to the new tree
-	for name, cachedFile := range changes {
-		if cachedFile == nil {
-			// Handle deletion
-			newTree.RemoveChild(name)
-		} else {
-			// Handle addition or update
-			newNode := NewFileNode(NodeTypeBlob, cachedFile.Address)
-			newTree.AddChild(name, newNode)
-		}
-	}
-
-	// Create a new revision
-	newRev := NewRevNode(newTree, wb.currentRev)
-	wb.currentRev = newRev
-
-	return wb.SaveData() // Persist changes after modification.
-}
-
-// RetrieveFileNode retrieves the FileNode for a given name at the current revision.
-func (wb *WikiBacking) RetrieveFileNode(name string) (*FileNode, error) {
-	wb.mutex.RLock()
-	defer wb.mutex.RUnlock()
-
-	if wb.currentRev == nil {
-		return nil, fmt.Errorf("no current revision exists")
-	}
-
-	node, exists := wb.currentRev.Tree.GetChild(name)
-	if !exists {
-		return nil, fmt.Errorf("file with name %s does not exist", name)
-	}
-
-	return node, nil
 }
