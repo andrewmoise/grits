@@ -7,19 +7,21 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"grits/internal/grits"
 )
 
 func TestFileNodeSerializationDeserialization(t *testing.T) {
 	bs, cleanup := setupBlobStore(t)
 	defer cleanup()
 
-	// Create FileNode
-	originalNode := NewFileNode()
+	m := make(map[string]*grits.FileAddr)
 
 	// Populate it with some children
 	for i := 0; i < 10; i++ {
 		fileName := fmt.Sprintf("%d.txt", i)
 		filePath := filepath.Join(bs.config.StorageDirectory, fileName)
+		fmt.Printf("filePath: %s\n", filePath)
 		fileContent := []byte(fmt.Sprintf("file content %d", i))
 
 		if err := os.WriteFile(filePath, fileContent, 0644); err != nil {
@@ -30,7 +32,13 @@ func TestFileNodeSerializationDeserialization(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AddLocalFile failed for file %s: %v", fileName, err)
 		}
-		originalNode.AddFile(fileName, cachedFile)
+		m[fileName] = cachedFile.Address
+	}
+
+	// Create FileNode
+	originalNode, err := bs.CreateFileNode(m)
+	if err != nil {
+		t.Fatalf("CreateFileNode failed: %v", err)
 	}
 
 	// Serialize the FileNode to JSON

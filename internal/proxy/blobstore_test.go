@@ -9,20 +9,25 @@ import (
 func setupBlobStore(t *testing.T) (*BlobStore, func()) {
 	t.Helper()
 
+	tempDir, err := os.MkdirTemp("", "blobstore_test")
+	if err != nil {
+		t.Fatalf("Failed to create temporary directory: %v", err)
+	}
+
 	// Assuming default values are appropriate for testing.
 	// Adjust if necessary.
 	config := NewConfig("default_root_host", 1234)
-	config.StorageDirectory = filepath.Join(os.TempDir(), "blobstore_test")
+	config.StorageDirectory = filepath.Join(tempDir, "blob")
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
 
-	err := os.MkdirAll(config.StorageDirectory, 0755)
+	err = os.MkdirAll(config.StorageDirectory, 0755)
 	if err != nil {
 		t.Fatalf("Failed to create storage directory: %v", err)
 	}
 
 	cleanup := func() {
-		os.RemoveAll(config.StorageDirectory)
+		os.RemoveAll(tempDir)
 	}
 
 	bs := NewBlobStore(config)

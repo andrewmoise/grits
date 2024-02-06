@@ -7,11 +7,17 @@ import (
 )
 
 func TestNameStore(t *testing.T) {
-	ns := NewNameStore()
+	bs, cleanup := setupBlobStore(t)
+	defer cleanup()
+
+	ns, err := NewNameStore(bs)
+	if err != nil {
+		t.Fatalf("NewNameStore failed: %v", err)
+	}
 
 	// Test adding a name-blob association
 	name := "example"
-	addr := &grits.FileAddr{Hash: []byte("hash"), Size: 1234}
+	addr := &grits.FileAddr{Hash: "hash", Size: 1234}
 	ns.MapNameToBlob(name, addr)
 
 	// Test resolving the name

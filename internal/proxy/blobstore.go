@@ -15,9 +15,8 @@ import (
 
 type BlobStore struct {
 	config      *Config
-	storePath   string
-	files       map[string]*grits.CachedFile
-	mtx         sync.RWMutex
+	files       map[string]*grits.CachedFile // All files in the store
+	mtx         sync.RWMutex                 // Mutex for thread-safe access
 	currentSize uint64
 }
 
@@ -27,11 +26,11 @@ func NewBlobStore(config *Config) *BlobStore {
 		files:  make(map[string]*grits.CachedFile),
 	}
 
-	// Initialize the BlobStore by scanning the existing files in the storePath
+	// Initialize the BlobStore by scanning the existing files in the storage path
 	err := bs.scanAndLoadExistingFiles()
 	if err != nil {
 		fmt.Printf("Error initializing BlobStore with existing files: %v\n", err)
-		// Handle error (e.g., log it, panic, etc.), depending on your application's needs
+		return nil
 	}
 
 	return bs
@@ -83,24 +82,21 @@ func (bs *BlobStore) ReadFile(fileAddr *grits.FileAddr) (*grits.CachedFile, erro
 }
 
 func (bs *BlobStore) AddLocalFile(srcPath string) (*grits.CachedFile, error) {
-	hash, size, err := computeSHA256AndSize(srcPath)
+	hashStr, size, err := computeSHA256AndSize(srcPath)
 	if err != nil {
 		return nil, err
 	}
-	fileAddr := grits.NewFileAddr(hash, size)
+	fileAddr := grits.NewFileAddr(hashStr, size) // Assuming NewFileAddr now accepts a string hash
 
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	// Check if file already exists in the store
 	if cachedFile, exists := bs.files[fileAddr.String()]; exists {
-		// Increment RefCount since the file is being accessed
 		cachedFile.RefCount++
 		return cachedFile, nil
 	}
 
-	// Create a new CachedFile for new files
-	destPath := filepath.Join(bs.config.StorageDirectory, fileAddr.String())
+	destPath := filepath.Join(bs.config.StorageDirectory, hashStr) // Use hashStr directly
 	if err := copyFile(srcPath, destPath); err != nil {
 		return nil, err
 	}
@@ -108,13 +104,54 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*grits.CachedFile, error) {
 	cachedFile := &grits.CachedFile{
 		Path:        destPath,
 		Size:        size,
-		RefCount:    1, // Initialize RefCount to 1 for new files
+		RefCount:    1,
 		Address:     fileAddr,
 		LastTouched: time.Now(),
 	}
 
 	bs.files[fileAddr.String()] = cachedFile
 	bs.currentSize += size
+	return cachedFile, nil
+}
+
+func (bs *BlobStore) AddDataBlock(data []byte) (*grits.CachedFile, error) {
+	// Compute hash and size of the data
+	hash := computeSHA256(data)
+	size := uint64(len(data))
+
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	fileAddr := grits.NewFileAddr(hash, size)
+
+	// Check if the data block already exists in the store
+	if cachedFile, exists := bs.files[fileAddr.String()]; exists {
+		// Increment RefCount since the file is being accessed
+		cachedFile.RefCount++
+		return cachedFile, nil
+	}
+
+	// Since the data block does not exist, store it
+	destPath := filepath.Join(bs.config.StorageDirectory, fileAddr.String())
+	fmt.Printf("write 1: %s\n", destPath)
+
+	if err := os.WriteFile(destPath, data, 0644); err != nil {
+		return nil, fmt.Errorf("error writing data block to store: %v", err)
+	}
+
+	// Create a new CachedFile for the data block
+	cachedFile := &grits.CachedFile{
+		Path:        destPath,
+		Size:        size,
+		RefCount:    1, // Initialize RefCount to 1 for new data blocks
+		Address:     fileAddr,
+		LastTouched: time.Now(),
+	}
+
+	// Add the new data block to the files map
+	bs.files[fileAddr.String()] = cachedFile
+	bs.currentSize += size
+
 	return cachedFile, nil
 }
 
@@ -132,20 +169,28 @@ func (bs *BlobStore) Release(cachedFile *grits.CachedFile) {
 	}
 }
 
-func computeSHA256AndSize(path string) ([]byte, uint64, error) {
+// computeSHA256 takes a byte slice and returns its SHA-256 hash as a lowercase hexadecimal string.
+func computeSHA256(data []byte) string {
+	hasher := sha256.New()
+	hasher.Write(data)                        // Write data into the hasher
+	return fmt.Sprintf("%x", hasher.Sum(nil)) // Compute the SHA-256 checksum and format it as a hex string
+}
+
+// computeSHA256AndSize computes the SHA-256 hash of the file's contents and its size, returning the hash as a hex string.
+func computeSHA256AndSize(path string) (string, uint64, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, 0, err
+		return "", 0, err
 	}
 	defer file.Close()
 
 	hasher := sha256.New()
 	size, err := io.Copy(hasher, file)
 	if err != nil {
-		return nil, 0, err
+		return "", 0, err
 	}
 
-	return hasher.Sum(nil), uint64(size), nil
+	return fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size), nil // Return hash as hex string
 }
 
 func (bs *BlobStore) evictOldFiles() {
