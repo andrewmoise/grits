@@ -3,6 +3,8 @@ package grits
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -14,6 +16,25 @@ type FileAddr struct {
 // NewFileAddr creates a new FileAddr with a hash string and size.
 func NewFileAddr(hash string, size uint64) *FileAddr {
 	return &FileAddr{Hash: hash, Size: size}
+}
+
+func NewFileAddrFromString(addrStr string) (*FileAddr, error) {
+	// Split the address into hash and size
+	parts := strings.SplitN(addrStr, ":", 2)
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("Invalid file address format - %s", addrStr)
+	}
+	hash, sizeStr := parts[0], parts[1]
+
+	// Convert size from string to uint64
+	size, err := strconv.ParseUint(sizeStr, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("Invalid file size - %s", sizeStr)
+	}
+
+	// Create FileAddr from extracted hash and size
+	fileAddr := &FileAddr{Hash: hash, Size: size}
+	return fileAddr, nil
 }
 
 // Equals checks if two FileAddr instances are equal.
