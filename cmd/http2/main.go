@@ -7,9 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
 )
 
 func main() {
@@ -26,11 +24,7 @@ func main() {
 	contentDir := "content/"
 
 	bs := proxy.NewBlobStore(config)
-	ns, err := proxy.NewNameStore(bs)
-	if err != nil {
-		fmt.Printf("Error creating NameStore: %v\n", err)
-		return
-	}
+	m := make(map[string]*grits.FileAddr)
 
 	err = filepath.Walk(contentDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -45,7 +39,7 @@ func main() {
 			}
 
 			fmt.Printf("Mapped %s to %s\n", path, file.Address.String())
-			ns.MapNameToBlob(info.Name(), file.Address)
+			m[info.Name()] = file.Address
 		}
 		return nil
 	})
@@ -53,6 +47,20 @@ func main() {
 		fmt.Printf("Error walking through content directory: %v\n", err)
 		return
 	}
+
+	fn, err := bs.CreateFileNode(m)
+	if err != nil {
+		fmt.Printf("Failed to create FileNode: %v\n", err)
+		return
+	}
+
+	rn, err := bs.CreateRevNode(fn, nil)
+	if err != nil {
+		fmt.Printf("Failed to create RevNode: %v\n", err)
+		return
+	}
+
+	ns := proxy.NewNameStore(rn)
 
 	//http.HandleFunc("/grits/v1/auth", handleLogin)
 	http.HandleFunc("/grits/v1/sha256/", handleSHA256(bs))
@@ -75,38 +83,23 @@ func handleSHA256(bs *proxy.BlobStore) http.HandlerFunc {
 			return
 		}
 
-		// Split the address into hash and size
-		parts := strings.SplitN(addrStr, ":", 2)
-		if len(parts) != 2 {
+		fileAddr, err := grits.NewFileAddrFromString(addrStr)
+		if err != nil {
 			http.Error(w, "Invalid file address format", http.StatusBadRequest)
 			return
 		}
-		hash, sizeStr := parts[0], parts[1]
-
-		// Convert size from string to uint64
-		size, err := strconv.ParseUint(sizeStr, 10, 64)
-		if err != nil {
-			http.Error(w, "Invalid file size", http.StatusBadRequest)
-			return
-		}
-
-		// Create FileAddr from extracted hash and size
-		fileAddr := &grits.FileAddr{Hash: hash, Size: size}
 
 		// Try to read the file from the blob store using the full address
-		cachedFile, err := bs.ReadFile(fileAddr)
+		var cachedFile *grits.CachedFile
+		cachedFile, err = bs.ReadFile(fileAddr)
 		if err != nil {
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
 		defer bs.Release(cachedFile)
 
-		// Update LastTouched and touch the file on disk
-		cachedFile.LastTouched = time.Now()
-		os.Chtimes(cachedFile.Path, time.Now(), time.Now())
-
-		// Serve the file
 		http.ServeFile(w, r, cachedFile.Path)
+		bs.Touch(cachedFile)
 	}
 }
 
@@ -124,23 +117,23 @@ func handleName(bs *proxy.BlobStore, ns *proxy.NameStore) http.HandlerFunc {
 			return
 		}
 
-		addr, exists := ns.ResolveName(name)
-		if !exists {
+		// Resolve the name to a file address
+		fa := ns.ResolveName(name)
+		if fa == nil {
 			http.Error(w, "Name not found", http.StatusNotFound)
 			return
 		}
 
-		cachedFile, err := bs.ReadFile(addr)
+		// Try to read the file from the blob store using the resolved address
+		cf, err := bs.ReadFile(fa)
 		if err != nil {
-			http.Error(w, "File not found", http.StatusNotFound)
+			http.Error(w, "File not found in blob storage!", http.StatusNotFound)
 			return
 		}
-		defer bs.Release(cachedFile)
+		defer bs.Release(cf)
 
 		// Update LastTouched and touch the file on disk
-		cachedFile.LastTouched = time.Now()
-		os.Chtimes(cachedFile.Path, time.Now(), time.Now())
-
-		http.ServeFile(w, r, cachedFile.Path)
+		http.ServeFile(w, r, cf.Path)
+		bs.Touch(cf)
 	}
 }

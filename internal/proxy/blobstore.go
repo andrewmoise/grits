@@ -154,18 +154,19 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*grits.CachedFile, error) {
 	return cachedFile, nil
 }
 
+func (bs *BlobStore) Touch(cf *grits.CachedFile) {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	cf.LastTouched = time.Now()
+	os.Chtimes(cf.Path, time.Now(), time.Now())
+}
+
 func (bs *BlobStore) Release(cachedFile *grits.CachedFile) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
 	cachedFile.RefCount--
-	if cachedFile.RefCount <= 0 {
-		// Optional: Remove the file from the store if RefCount drops to 0
-		delete(bs.files, cachedFile.Address.String())
-		// Consider deleting the file from disk if no longer needed
-		os.Remove(cachedFile.Path)
-		bs.currentSize -= cachedFile.Size
-	}
 }
 
 // computeSHA256 takes a byte slice and returns its SHA-256 hash as a lowercase hexadecimal string.
