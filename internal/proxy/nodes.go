@@ -128,70 +128,48 @@ func (bs *BlobStore) CreateRevNode(tree *FileNode, previous *RevNode) (*RevNode,
 	}, nil
 }
 
-// FetchRevNode retrieves a RevNode from the blob store using its address.
 func (bs *BlobStore) FetchRevNode(addr *grits.FileAddr) (*RevNode, error) {
 	cf, err := bs.ReadFile(addr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", addr.Hash, err)
 	}
+	// Ensure that cf.Release() is called if an error occurs.
+	// This setup only calls Release if an error happens.
+	defer func() {
+		if err != nil {
+			cf.Release()
+		}
+	}()
 
 	data, err := os.ReadFile(cf.Path)
 	if err != nil {
-		cf.Release()
 		return nil, fmt.Errorf("error reading file at %s: %v", cf.Path, err)
 	}
 
 	var ref map[string]string
 	if err := json.Unmarshal(data, &ref); err != nil {
-		cf.Release()
 		return nil, fmt.Errorf("error unmarshaling JSON from file at %s: %v", cf.Path, err)
 	}
 
-	rn := &RevNode{}
+	rn := &RevNode{ExportedBlob: cf}
 
-	previousStr, exists := ref["previous"]
-	if exists {
-		var previousAddr *grits.FileAddr
-		previousAddr, err = grits.NewFileAddrFromString(previousStr)
-		if err != nil {
-			cf.Release()
-			return nil, fmt.Errorf("error creating addr: %v", err)
-		}
-
+	if previousStr, exists := ref["previous"]; exists {
+		previousAddr, _ := grits.NewFileAddrFromString(previousStr)
 		rn.Previous, err = bs.FetchRevNode(previousAddr)
 		if err != nil {
-			cf.Release()
-			return nil, fmt.Errorf("error fetching previous revnode: %v", err)
+			return nil, fmt.Errorf("error fetching previous RevNode: %v", err)
 		}
-	} else {
-		rn.Previous = nil
 	}
 
-	var treeStr string
-	treeStr, exists = ref["tree"]
-	if exists {
-		var treeAddr *grits.FileAddr
-		treeAddr, err = grits.NewFileAddrFromString(treeStr)
-		if err != nil {
-			if rn.Previous != nil {
-				rn.Previous.ExportedBlob.Release()
-			}
-			cf.Release()
-			return nil, fmt.Errorf("error creating addr: %v", err)
-		}
-
+	if treeStr, exists := ref["tree"]; exists {
+		treeAddr, _ := grits.NewFileAddrFromString(treeStr)
 		rn.Tree, err = bs.FetchFileNode(treeAddr)
 		if err != nil {
-			if rn.Previous != nil {
-				rn.Previous.ExportedBlob.Release()
-			}
-			cf.Release()
-			return nil, fmt.Errorf("error fetching tree: %v", err)
+			return nil, fmt.Errorf("error fetching FileNode: %v", err)
 		}
-	} else {
-		rn.Tree = nil
 	}
 
-	rn.ExportedBlob = cf
+	// If we reach here, all fetches were successful; no need to cleanup.
+	err = nil // This ensures that deferred cleanup won't trigger.
 	return rn, nil
 }
