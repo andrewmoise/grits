@@ -14,26 +14,10 @@ type FileNode struct {
 	Children     map[string]*grits.FileAddr // Maps file names to their CachedFile
 }
 
-// AddFile adds a file to the FileNode.
-func (fn *FileNode) AddFile(name string, file *grits.CachedFile) {
-	if fn.ExportedBlob != nil {
-		panic("Trying to change finalized FileNode")
-	}
-	fn.Children[name] = file.Address
-}
-
 // GetFile retrieves a file by name from the FileNode.
 func (fn *FileNode) GetFile(name string) (*grits.FileAddr, bool) {
 	file, exists := fn.Children[name]
 	return file, exists
-}
-
-// RemoveFile removes a file by name from the FileNode.
-func (fn *FileNode) RemoveFile(name string) {
-	if fn.ExportedBlob != nil {
-		panic("Trying to change finalized FileNode")
-	}
-	delete(fn.Children, name)
 }
 
 // FetchFileNode retrieves a FileNode from the blob store using its hash.
@@ -70,7 +54,8 @@ func (bs *BlobStore) CreateFileNode(children map[string]*grits.FileAddr) (*FileN
 		return nil, fmt.Errorf("error storing FileNode: %v", err)
 	}
 
-	//bs.fileNodes[node.ExportedBlob.Address.String()] = node // Cache it
+	// ???
+
 	return node, nil
 }
 
