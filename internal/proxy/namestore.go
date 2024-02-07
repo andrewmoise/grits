@@ -21,6 +21,65 @@ func NewNameStore(rn *RevNode) *NameStore {
 	}
 }
 
+func (ns *NameStore) GetRoot() *RevNode {
+	ns.mtx.RLock()
+	defer ns.mtx.RUnlock()
+
+	if ns.root == nil {
+		return nil
+	}
+
+	return ns.root
+}
+
+func (ns *NameStore) CloneRoot() map[string]*grits.FileAddr {
+	ns.mtx.RLock()
+	defer ns.mtx.RUnlock()
+
+	if ns.root == nil {
+		return nil
+	}
+
+	m := make(map[string]*grits.FileAddr)
+	for k, v := range ns.root.Tree.Children {
+		m[k] = v
+	}
+
+	return m
+}
+
+func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*grits.FileAddr) error) error {
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
+
+	// Clone the current root's children for modification
+	newRoot := ns.CloneRoot()
+	if newRoot == nil {
+		newRoot = make(map[string]*grits.FileAddr)
+	}
+
+	// Call the passed function to get the modified version of children
+	err := modifyFn(newRoot)
+	if err != nil {
+		return fmt.Errorf("failed to modify root children: %w", err)
+	}
+
+	// Create a new FileNode with the modified children
+	fn, err := bs.CreateFileNode(newRoot)
+	if err != nil {
+		return fmt.Errorf("failed to create new FileNode: %w", err)
+	}
+
+	// Create a new RevNode with the new FileNode and set it as the new root
+	rn, err := bs.CreateRevNode(fn, ns.root)
+	if err != nil {
+		return fmt.Errorf("failed to create new RevNode: %w", err)
+	}
+
+	ns.root = rn
+	return nil
+}
+
 func (ns *NameStore) ResolveName(name string) *grits.FileAddr {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()

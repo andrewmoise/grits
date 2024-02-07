@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"grits/internal/grits"
 	"grits/internal/proxy"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -64,7 +65,8 @@ func main() {
 
 	//http.HandleFunc("/grits/v1/auth", handleLogin)
 	http.HandleFunc("/grits/v1/sha256/", handleSHA256(bs))
-	http.HandleFunc("/grits/v1/name/", handleName(bs, ns))
+	http.HandleFunc("/grits/v1/namespace/", handleNamespace(bs, ns))
+	http.HandleFunc("/grits/v1/root/", handleRoot(ns))
 
 	http.ListenAndServe(":1787", nil)
 }
@@ -103,37 +105,130 @@ func handleSHA256(bs *proxy.BlobStore) http.HandlerFunc {
 	}
 }
 
-func handleName(bs *proxy.BlobStore, ns *proxy.NameStore) http.HandlerFunc {
+func handleRoot(ns *proxy.NameStore) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
 			return
 		}
 
-		// Extract name from URL
-		name := strings.TrimPrefix(r.URL.Path, "/grits/v1/name/")
-		if name == "" {
-			http.Error(w, "Missing name", http.StatusBadRequest)
+		// Extract account name from URL
+		account := strings.TrimPrefix(r.URL.Path, "/grits/v1/root/")
+		if account == "" {
+			http.Error(w, "Missing account name", http.StatusBadRequest)
 			return
 		}
 
-		// Resolve the name to a file address
-		fa := ns.ResolveName(name)
-		if fa == nil {
-			http.Error(w, "Name not found", http.StatusNotFound)
+		// For now, only 'root' account is supported
+		if account != "root" {
+			http.Error(w, "Only 'root' account is supported for now", http.StatusForbidden)
 			return
 		}
 
-		// Try to read the file from the blob store using the resolved address
-		cf, err := bs.ReadFile(fa)
-		if err != nil {
-			http.Error(w, "File not found in blob storage!", http.StatusNotFound)
+		rn := ns.GetRoot() // Assuming GetRoot() method exists and returns *grits.FileAddr
+		if rn == nil {
+			http.Error(w, "Root namespace not found", http.StatusNotFound)
 			return
 		}
-		defer bs.Release(cf)
 
-		// Update LastTouched and touch the file on disk
-		http.ServeFile(w, r, cf.Path)
-		bs.Touch(cf)
+		fn := rn.Tree
+		if fn == nil {
+			http.Error(w, "Root namespace tree not found", http.StatusNotFound)
+			return
+		}
+
+		fa := fn.ExportedBlob.Address
+
+		// Return the address of the root blob as a simple string
+		w.Write([]byte(fa.String()))
 	}
+}
+
+func handleNamespace(bs *proxy.BlobStore, ns *proxy.NameStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Extract account name from URL
+		path := strings.TrimPrefix(r.URL.Path, "/grits/v1/namespace/")
+		if path == "" {
+			http.Error(w, "Missing account name", http.StatusBadRequest)
+			return
+		}
+
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) < 2 {
+			http.Error(w, "Incomplete namespace path", http.StatusBadRequest)
+			return
+		}
+
+		account, path := parts[0], parts[1]
+		if account != "root" {
+			http.Error(w, "Only 'root' account is supported for now", http.StatusForbidden)
+			return
+		}
+
+		switch r.Method {
+		case http.MethodGet:
+			handleNamespaceGet(bs, ns, path, w, r)
+		case http.MethodPut:
+			// Handle PUT request: write new file content to the namespace
+			handleNamespacePut(bs, ns, path, w, r)
+		case http.MethodDelete:
+			// Handle DELETE request: remove file from the namespace
+			handleNamespaceDelete(bs, ns, path, w, r)
+		default:
+			http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
+		}
+	}
+}
+
+func handleNamespaceGet(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+	rn := ns.GetRoot()
+	if rn == nil {
+		http.Error(w, "Root namespace not found", http.StatusNotFound)
+		return
+	}
+
+	fn := rn.Tree
+	if fn == nil {
+		http.Error(w, "Root namespace tree not found", http.StatusNotFound)
+		return
+	}
+
+	fa, exists := fn.Children[path]
+	if !exists {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+
+	// Resolve the file address and redirect to the file
+	http.Redirect(w, r, "/grits/v1/sha256/"+fa.String(), http.StatusFound)
+}
+
+func handleNamespacePut(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+	// Read the file content from the request body
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		return
+	}
+
+	// Store the file content in the blob store
+	cf, err := bs.AddDataBlock(data)
+	if err != nil {
+		http.Error(w, "Failed to store file content", http.StatusInternalServerError)
+		return
+	}
+
+	ns.ReviseRoot(bs, func(m map[string]*grits.FileAddr) error {
+		m[path] = cf.Address
+		return nil
+	})
+
+	cf.Release()
+}
+
+func handleNamespaceDelete(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+	ns.ReviseRoot(bs, func(m map[string]*grits.FileAddr) error {
+		delete(m, path)
+		return nil
+	})
 }
