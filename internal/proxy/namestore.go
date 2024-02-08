@@ -31,10 +31,7 @@ func (ns *NameStore) GetRoot() *RevNode {
 	return ns.root
 }
 
-func (ns *NameStore) CloneRoot() map[string]*grits.FileAddr {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
-
+func (ns *NameStore) cloneRoot() map[string]*grits.FileAddr {
 	if ns.root == nil {
 		return nil
 	}
@@ -52,7 +49,7 @@ func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*grits.F
 	defer ns.mtx.Unlock()
 
 	// Clone the current root's children for modification
-	newRoot := ns.CloneRoot()
+	newRoot := ns.cloneRoot()
 	if newRoot == nil {
 		newRoot = make(map[string]*grits.FileAddr)
 	}
