@@ -29,7 +29,7 @@ func NewBlobStore(config *Config) *BlobStore {
 	// Initialize the BlobStore by scanning the existing files in the storage path
 	err := bs.scanAndLoadExistingFiles()
 	if err != nil {
-		fmt.Printf("Error initializing BlobStore with existing files: %v\n", err)
+		fmt.Printf("Can't read existing BlobStore files: %v\n", err)
 		return nil
 	}
 
