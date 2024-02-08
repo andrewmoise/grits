@@ -20,6 +20,7 @@ func setupBlobStore(t *testing.T) (*BlobStore, func()) {
 	config.StorageDirectory = filepath.Join(tempDir, "blob")
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
+	config.NamespaceStoreFile = filepath.Join(tempDir, "namespace_store.json")
 
 	err = os.MkdirAll(config.StorageDirectory, 0755)
 	if err != nil {

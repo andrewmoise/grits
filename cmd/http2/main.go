@@ -13,21 +13,53 @@ import (
 
 func main() {
 	config := proxy.NewConfig("default_root_host", 1234)
-	config.StorageDirectory = filepath.Join(os.TempDir(), "blobstore_test")
+
+	config.StorageDirectory = "store/sha256"
 	config.StorageSize = 100 * 1024 * 1024    // 100MB for testing
 	config.StorageFreeSize = 80 * 1024 * 1024 // 80MB for testing
+
+	config.NamespaceStoreFile = "store/namespace_store.json"
 
 	err := os.MkdirAll(config.StorageDirectory, 0755)
 	if err != nil {
 		panic("Failed to create storage directory")
 	}
 
+	bs := proxy.NewBlobStore(config)
+
+	var ns *proxy.NameStore
+
+	info, err := os.Stat(config.NamespaceStoreFile)
+	if err != nil {
+		ns, err = initStore(bs)
+		if err != nil {
+			panic("Failed to initialize namespace store")
+		}
+	} else {
+		if info.IsDir() {
+			panic("Namespace store file is a directory")
+		}
+
+		ns, err = bs.DeserializeNameStore()
+		if err != nil {
+			panic("Failed to deserialize namespace store")
+		}
+	}
+
+	//http.HandleFunc("/grits/v1/auth", handleLogin)
+	http.HandleFunc("/grits/v1/sha256/", handleSHA256(bs))
+	http.HandleFunc("/grits/v1/namespace/", handleNamespace(bs, ns))
+	http.HandleFunc("/grits/v1/root/", handleRoot(ns))
+
+	http.ListenAndServe(":1787", nil)
+}
+
+func initStore(bs *proxy.BlobStore) (*proxy.NameStore, error) {
 	contentDir := "content/"
 
-	bs := proxy.NewBlobStore(config)
 	m := make(map[string]*grits.FileAddr)
 
-	err = filepath.Walk(contentDir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(contentDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -45,30 +77,21 @@ func main() {
 		return nil
 	})
 	if err != nil {
-		fmt.Printf("Error walking through content directory: %v\n", err)
-		return
+		return nil, err
 	}
 
 	fn, err := bs.CreateFileNode(m)
 	if err != nil {
-		fmt.Printf("Failed to create FileNode: %v\n", err)
-		return
+		return nil, err
 	}
 
 	rn, err := bs.CreateRevNode(fn, nil)
 	if err != nil {
-		fmt.Printf("Failed to create RevNode: %v\n", err)
-		return
+		return nil, err
 	}
 
 	ns := proxy.NewNameStore(rn)
-
-	//http.HandleFunc("/grits/v1/auth", handleLogin)
-	http.HandleFunc("/grits/v1/sha256/", handleSHA256(bs))
-	http.HandleFunc("/grits/v1/namespace/", handleNamespace(bs, ns))
-	http.HandleFunc("/grits/v1/root/", handleRoot(ns))
-
-	http.ListenAndServe(":1787", nil)
+	return ns, nil
 }
 
 func handleSHA256(bs *proxy.BlobStore) http.HandlerFunc {
@@ -224,6 +247,8 @@ func handleNamespacePut(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w
 	})
 
 	cf.Release()
+
+	bs.SerializeNameStore(ns)
 }
 
 func handleNamespaceDelete(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
@@ -231,4 +256,6 @@ func handleNamespaceDelete(bs *proxy.BlobStore, ns *proxy.NameStore, path string
 		delete(m, path)
 		return nil
 	})
+
+	bs.SerializeNameStore(ns)
 }
