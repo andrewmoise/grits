@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -43,13 +42,12 @@ func TestNameStoreSerialization(t *testing.T) {
 	ns := NewNameStore(rn)
 
 	// Serialize the NameStore
-	if err := SerializeNameStore(ns, tempDir); err != nil {
+	if err := bs.SerializeNameStore(ns); err != nil {
 		t.Fatalf("Failed to serialize NameStore: %v", err)
 	}
 
 	// Deserialize the NameStore
-	deserializedFilePath := filepath.Join(tempDir, "namestore.json")
-	deserializedNS, err := DeserializeNameStore(deserializedFilePath, bs)
+	deserializedNS, err := bs.DeserializeNameStore()
 	if err != nil {
 		t.Fatalf("Failed to deserialize NameStore: %v", err)
 	}

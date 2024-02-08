@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"grits/internal/grits"
@@ -99,7 +98,7 @@ func (ns *NameStore) ResolveName(name string) *grits.FileAddr {
 	return ns.root.Tree.Children[name]
 }
 
-func SerializeNameStore(ns *NameStore, storageDirectory string) error {
+func (bs *BlobStore) SerializeNameStore(ns *NameStore) error {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
@@ -113,8 +112,8 @@ func SerializeNameStore(ns *NameStore, storageDirectory string) error {
 		return fmt.Errorf("failed to serialize NameStore: %w", err)
 	}
 
-	tempFileName := filepath.Join(storageDirectory, "namestore.json.tmp")
-	finalFileName := filepath.Join(storageDirectory, "namestore.json")
+	tempFileName := bs.config.NamespaceStoreFile + "-new"
+	finalFileName := bs.config.NamespaceStoreFile
 
 	if err := os.WriteFile(tempFileName, data, 0644); err != nil {
 		return fmt.Errorf("failed to write NameStore to temp file: %w", err)
@@ -127,7 +126,9 @@ func SerializeNameStore(ns *NameStore, storageDirectory string) error {
 	return nil
 }
 
-func DeserializeNameStore(filePath string, bs *BlobStore) (*NameStore, error) {
+func (bs *BlobStore) DeserializeNameStore() (*NameStore, error) {
+	filePath := bs.config.NamespaceStoreFile
+
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read NameStore file: %w", err)
