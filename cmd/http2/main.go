@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -20,14 +21,14 @@ func main() {
 
 	// Check if the configuration file exists
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
-		fmt.Printf("Configuration file does not exist: %s\n", configFile)
+		log.Printf("Configuration file does not exist: %s\n", configFile)
 		os.Exit(1) // Exit with an error code
 	}
 
 	// Load the configuration
 	config := proxy.NewConfig()
 	if err := config.LoadFromFile(configFile); err != nil {
-		fmt.Printf("Failed to load configuration: %v\n", err)
+		log.Printf("Failed to load configuration: %v\n", err)
 		os.Exit(1) // Exit with an error code
 	}
 
@@ -48,7 +49,7 @@ func main() {
 
 	go func() {
 		if err := srv.Run(); err != nil {
-			fmt.Printf("Server error: %v\n", err)
+			log.Printf("Server error: %v\n", err)
 		}
 	}()
 
@@ -59,6 +60,6 @@ func main() {
 
 	fmt.Println("Shutting down server...")
 	if err := srv.Stop(ctx); err != nil {
-		fmt.Printf("Server forced to shutdown: %v\n", err)
+		log.Printf("Server forced to shutdown: %v\n", err)
 	}
 }

@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"sync"
 
@@ -51,8 +52,8 @@ func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*grits.F
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	fmt.Printf("ReviseRoot; starting hash is %s\n", ns.root.ExportedBlob.Address.String())
-	fmt.Printf("  file hash is %s\n", ns.root.Tree.ExportedBlob.Address.String())
+	log.Printf("ReviseRoot; starting hash is %s\n", ns.root.ExportedBlob.Address.String())
+	log.Printf("  file hash is %s\n", ns.root.Tree.ExportedBlob.Address.String())
 
 	// Clone the current root's children for modification
 	newRoot := ns.cloneRoot()
@@ -78,8 +79,8 @@ func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*grits.F
 		return fmt.Errorf("failed to create new RevNode: %w", err)
 	}
 
-	fmt.Printf("ReviseRoot; ending hash is %s\n", rn.ExportedBlob.Address.String())
-	fmt.Printf("  file hash is %s\n", rn.Tree.ExportedBlob.Address.String())
+	log.Printf("ReviseRoot; ending hash is %s\n", rn.ExportedBlob.Address.String())
+	log.Printf("  file hash is %s\n", rn.Tree.ExportedBlob.Address.String())
 
 	ns.root = rn
 	return nil

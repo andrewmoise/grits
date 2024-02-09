@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"testing"
@@ -25,14 +26,14 @@ func setupTestServer(t *testing.T) (*server.Server, func()) {
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
 
-	fmt.Printf("Created temp directory: %s\n", tempDir)
+	log.Printf("Created temp directory: %s\n", tempDir)
 
 	s, err := server.NewServer(config)
 	if err != nil {
 		t.Fatalf("Failed to initialize server: %v", err)
 	}
 
-	fmt.Printf("Server initialized\n")
+	log.Printf("Server initialized\n")
 
 	cleanup := func() {
 		os.RemoveAll(tempDir)
@@ -66,9 +67,9 @@ func TestFileOperations(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Creating PUT request failed: %v", err)
 		}
-		fmt.Printf("Creating file %d\n", i)
+		log.Printf("Creating file %d\n", i)
 		resp, err := http.DefaultClient.Do(req)
-		fmt.Printf("File %d created\n", i)
+		log.Printf("File %d created\n", i)
 		if err != nil {
 			t.Fatalf("PUT request failed: %v", err)
 		}
@@ -78,7 +79,7 @@ func TestFileOperations(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	fmt.Printf("Files created\n")
+	log.Printf("Files created\n")
 
 	// 2. Get the list of files
 
@@ -114,12 +115,12 @@ func TestFileOperations(t *testing.T) {
 		return
 	}
 
-	fmt.Printf("Files listed\n")
+	log.Printf("Files listed\n")
 
 	count := 0
 
 	for name, hash := range files {
-		fmt.Printf("%s -> %s\n", name, hash)
+		log.Printf("%s -> %s\n", name, hash)
 
 		url = fmt.Sprintf("%s/grits/v1/sha256/%s", baseURL, hash)
 		resp, err := http.Get(url)
@@ -222,12 +223,12 @@ func TestFileOperations(t *testing.T) {
 		return
 	}
 
-	fmt.Printf("Files listed\n")
+	log.Printf("Files listed\n")
 
 	count = 0
 
 	for name, hash := range files {
-		fmt.Printf("%s -> %s\n", name, hash)
+		log.Printf("%s -> %s\n", name, hash)
 
 		if name == "3" {
 			t.Errorf("File 3 should have been deleted")

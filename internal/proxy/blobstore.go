@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -30,14 +31,14 @@ func NewBlobStore(config *Config) *BlobStore {
 	bs.storageDir = config.VarPath("blobs")
 	// Ensure storage directory exists
 	if err := os.MkdirAll(bs.storageDir, 0755); err != nil {
-		fmt.Printf("Failed to create storage directory: %v\n", err)
+		log.Printf("Failed to create storage directory: %v\n", err)
 		return nil
 	}
 
 	// Initialize the BlobStore by scanning the existing files in the storage path
 	err := bs.scanAndLoadExistingFiles()
 	if err != nil {
-		fmt.Printf("Can't read existing BlobStore files: %v\n", err)
+		log.Printf("Can't read existing BlobStore files: %v\n", err)
 		return nil
 	}
 
@@ -55,7 +56,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 		if !info.IsDir() {
 			hash, size, err := computeSHA256AndSize(path)
 			if err != nil {
-				fmt.Printf("Error computing hash and size for file %s: %v\n", path, err)
+				log.Printf("Error computing hash and size for file %s: %v\n", path, err)
 				return err // continue scanning other files even if one fails
 			}
 
@@ -64,7 +65,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 			relativePath, _ := filepath.Rel(bs.storageDir, path)
 
 			if relativePath != fileAddr.String() {
-				fmt.Printf("File %s seems not to be a blob. Skipping...\n", path)
+				log.Printf("File %s seems not to be a blob. Skipping...\n", path)
 				return nil
 			}
 
