@@ -20,12 +20,10 @@ func setupTestServer(t *testing.T) (*server.Server, func()) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	config := proxy.NewConfig("test_host", 1234)
-	config.VarDirectory = tempDir
+	config := proxy.NewConfig()
+	config.ServerDir = tempDir
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
-
-	//os.MkdirAll(tempDir, 0755)
 
 	fmt.Printf("Created temp directory: %s\n", tempDir)
 

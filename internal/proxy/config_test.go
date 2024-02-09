@@ -28,7 +28,7 @@ func TestConfig_LoadFromFile(t *testing.T) {
 	testFile.Close() // Close the file
 
 	// Create a new Config and load from the test file.
-	config := NewConfig("localhost", 8080)
+	config := NewConfig()
 	if err := config.LoadFromFile(testFile.Name()); err != nil {
 		t.Fatalf("Failed to load config: %v", err)
 	}

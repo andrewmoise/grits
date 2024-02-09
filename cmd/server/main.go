@@ -11,8 +11,8 @@ import (
 )
 
 func main() {
-	config := proxy.NewConfig("127.0.0.1", 1787)
-	config.VarDirectory = "var"
+	config := proxy.NewConfig()
+	config.ServerDir = "."
 
 	// FIXME - need to rewrite
 	handler := setupFileServerHandler("") //config.StorageDirectory)

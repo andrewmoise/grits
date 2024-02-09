@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -16,12 +15,12 @@ func setupBlobStore(t *testing.T) (*BlobStore, func()) {
 
 	// Assuming default values are appropriate for testing.
 	// Adjust if necessary.
-	config := NewConfig("default_root_host", 1234)
-	config.VarDirectory = tempDir
+	config := NewConfig()
+	config.ServerDir = tempDir
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
 
-	err = os.MkdirAll(config.VarDirectory, 0755)
+	err = os.MkdirAll(config.VarPath("."), 0755)
 	if err != nil {
 		t.Fatalf("Failed to create storage directory: %v", err)
 	}
@@ -38,7 +37,7 @@ func TestBlobStore_AddLocalFile(t *testing.T) {
 	bs, cleanup := setupBlobStore(t)
 	defer cleanup()
 
-	srcPath := filepath.Join(bs.config.VarDirectory, "test.txt")
+	srcPath := bs.config.VarPath("test.txt")
 	content := []byte("hello world")
 	err := os.WriteFile(srcPath, content, 0644)
 	if err != nil {
@@ -60,7 +59,7 @@ func TestBlobStore_ReadFile(t *testing.T) {
 	defer cleanup()
 
 	// Setup file in BlobStore
-	srcPath := filepath.Join(bs.config.VarDirectory, "test.txt")
+	srcPath := bs.config.VarPath("test.txt")
 	content := []byte("hello world")
 	err := os.WriteFile(srcPath, content, 0644)
 	if err != nil {
@@ -88,7 +87,7 @@ func TestBlobStore_Release(t *testing.T) {
 	defer cleanup()
 
 	// Setup file in BlobStore
-	srcPath := filepath.Join(bs.config.VarDirectory, "test_release.txt")
+	srcPath := bs.config.VarPath("test_release.txt")
 	content := []byte("test release")
 	err := os.WriteFile(srcPath, content, 0644)
 	if err != nil {
