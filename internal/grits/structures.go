@@ -82,11 +82,6 @@ func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
 	return buffer, nil
 }
 
-// Release decreases the reference count of the CachedFile.
-func (c *CachedFile) Release() {
-	c.RefCount -= 1
-}
-
 const DownloadChunkSize = 1400
 
 type Peer struct {

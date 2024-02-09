@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
 	"time"
@@ -24,14 +25,20 @@ func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, func()) {
 	}
 	blobStore := NewBlobStore(blobStoreConfig)
 
-	dirBacking := NewDirBacking(dirPath, blobStore)
+	srcPath := path.Join(dirPath, "src")
+	destPath := path.Join(dirPath, "dest")
+
+	os.Mkdir(srcPath, 0755)
+	os.Mkdir(destPath, 0755)
+
+	dirBacking := NewDirBacking(srcPath, destPath, blobStore)
 
 	cleanup := func() {
 		dirBacking.Stop()
 		os.RemoveAll(dirPath)
 	}
 
-	return dirBacking, blobStore, dirPath, cleanup
+	return dirBacking, blobStore, srcPath, cleanup
 }
 
 func TestDirBacking_FileAddition(t *testing.T) {

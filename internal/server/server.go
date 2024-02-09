@@ -59,7 +59,7 @@ func NewServer(config *proxy.Config) (*Server, error) {
 	}
 
 	for _, mirror := range config.DirMirrors {
-		dirBacking := proxy.NewDirBacking(mirror.SourceDir, bs)
+		dirBacking := proxy.NewDirBacking(mirror.SourceDir, filepath.Join(config.VarDirectory, "mirror"), bs)
 		srv.DirBackings = append(srv.DirBackings, dirBacking)
 	}
 
@@ -322,7 +322,7 @@ func handleNamespacePut(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w
 		return nil
 	})
 
-	cf.Release()
+	bs.Release(cf)
 
 	bs.SerializeNameStore(ns)
 }

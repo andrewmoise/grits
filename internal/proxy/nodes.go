@@ -137,7 +137,7 @@ func (bs *BlobStore) FetchRevNode(addr *grits.FileAddr) (*RevNode, error) {
 	// This setup only calls Release if an error happens.
 	defer func() {
 		if err != nil {
-			cf.Release()
+			bs.Release(cf)
 		}
 	}()
 
