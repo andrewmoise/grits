@@ -18,12 +18,20 @@ type BlobStore struct {
 	files       map[string]*grits.CachedFile // All files in the store
 	mtx         sync.RWMutex                 // Mutex for thread-safe access
 	currentSize uint64
+	storageDir  string
 }
 
 func NewBlobStore(config *Config) *BlobStore {
 	bs := &BlobStore{
 		config: config,
 		files:  make(map[string]*grits.CachedFile),
+	}
+
+	bs.storageDir = filepath.Join(config.VarDirectory, "blobs")
+	// Ensure storage directory exists
+	if err := os.MkdirAll(bs.storageDir, 0755); err != nil {
+		fmt.Printf("Failed to create storage directory: %v\n", err)
+		return nil
 	}
 
 	// Initialize the BlobStore by scanning the existing files in the storage path
@@ -40,7 +48,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	return filepath.Walk(bs.config.StorageDirectory, func(path string, info os.FileInfo, err error) error {
+	return filepath.Walk(bs.storageDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err // return error to stop the walk
 		}
@@ -52,7 +60,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 
 			// Construct the file address from its hash
 			fileAddr := grits.NewFileAddr(hash, size)
-			relativePath, _ := filepath.Rel(bs.config.StorageDirectory, path)
+			relativePath, _ := filepath.Rel(bs.storageDir, path)
 
 			// Create a CachedFile object and add it to the map
 			bs.files[relativePath] = &grits.CachedFile{
@@ -96,7 +104,7 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*grits.CachedFile, error) {
 		return cachedFile, nil
 	}
 
-	destPath := filepath.Join(bs.config.StorageDirectory, hashStr) // Use hashStr directly
+	destPath := filepath.Join(bs.storageDir, hashStr) // Use hashStr directly
 	if err := copyFile(srcPath, destPath); err != nil {
 		return nil, err
 	}
@@ -132,7 +140,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*grits.CachedFile, error) {
 	}
 
 	// Since the data block does not exist, store it
-	destPath := filepath.Join(bs.config.StorageDirectory, fileAddr.String())
+	destPath := filepath.Join(bs.storageDir, fileAddr.String())
 
 	if err := os.WriteFile(destPath, data, 0644); err != nil {
 		return nil, fmt.Errorf("error writing data block to store: %v", err)

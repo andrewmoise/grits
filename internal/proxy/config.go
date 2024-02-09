@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 )
 
@@ -21,12 +22,12 @@ type Config struct {
 	RootPort   int    `json:"RootPort"`
 	LogFile    string `json:"LogFile"`
 
+	// Base directory for variable data
+	VarDirectory string `json:"VarDirectory"`
+
 	// Storage configuration
-	StorageDirectory      string `json:"StorageDirectory"`
-	StorageSize           uint64 `json:"StorageSize"`
-	StorageFreeSize       uint64 `json:"StorageFreeSize"`
-	TempDownloadDirectory string `json:"TempDownloadDirectory"`
-	NamespaceStoreFile    string `json:"NamespaceStoreFile"`
+	StorageSize     uint64 `json:"StorageSize"`
+	StorageFreeSize uint64 `json:"StorageFreeSize"`
 
 	// Directories to cache
 	DirMirrors []DirMirrorConfig `json:"DirMirrors"`
@@ -55,13 +56,9 @@ func NewConfig(rootHost string, rootPort int) *Config {
 		RootHost:   rootHost,
 		RootPort:   rootPort,
 
-		LogFile: "grits.log",
-
-		StorageDirectory:      "cache",
-		StorageSize:           20 * 1024 * 1024,
-		StorageFreeSize:       18 * 1024 * 1024,
-		TempDownloadDirectory: "tmp-download",
-		NamespaceStoreFile:    "namespace_store.json",
+		VarDirectory:    "/var/lib/grits",
+		StorageSize:     20 * 1024 * 1024,
+		StorageFreeSize: 18 * 1024 * 1024,
 
 		DirMirrors: []DirMirrorConfig{},
 
@@ -77,6 +74,10 @@ func NewConfig(rootHost string, rootPort int) *Config {
 		RootUpdatePeerListPeriod: 8,
 		RootProxyDropTimeout:     180,
 	}
+}
+
+func (c *Config) VarPath(path string) string {
+	return filepath.Join(c.VarDirectory, path)
 }
 
 // LoadFromFile updates the configuration values based on a provided JSON configuration file.

@@ -9,6 +9,9 @@ import (
 	"grits/internal/grits"
 )
 
+// FIXME - Maybe we need more than one of these to be allowed
+const SaveFile = "namespace_store.json"
+
 type NameStore struct {
 	root *RevNode
 	mtx  sync.RWMutex
@@ -115,8 +118,8 @@ func (bs *BlobStore) SerializeNameStore(ns *NameStore) error {
 		return fmt.Errorf("failed to serialize NameStore: %w", err)
 	}
 
-	tempFileName := bs.config.NamespaceStoreFile + "-new"
-	finalFileName := bs.config.NamespaceStoreFile
+	tempFileName := bs.config.VarPath(SaveFile + "-new")
+	finalFileName := bs.config.VarPath(SaveFile)
 
 	if err := os.WriteFile(tempFileName, data, 0644); err != nil {
 		return fmt.Errorf("failed to write NameStore to temp file: %w", err)
@@ -130,7 +133,7 @@ func (bs *BlobStore) SerializeNameStore(ns *NameStore) error {
 }
 
 func (bs *BlobStore) DeserializeNameStore() (*NameStore, error) {
-	filePath := bs.config.NamespaceStoreFile
+	filePath := bs.config.VarPath(SaveFile)
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {

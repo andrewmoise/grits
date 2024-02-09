@@ -18,9 +18,9 @@ func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, func()) {
 
 	// Set up a BlobStore with a temporary directory
 	blobStoreConfig := &Config{
-		StorageDirectory: dirPath,
-		StorageSize:      10 * 1024 * 1024, // 10MB
-		StorageFreeSize:  8 * 1024 * 1024,  // 8MB
+		VarDirectory:    dirPath,
+		StorageSize:     10 * 1024 * 1024, // 10MB
+		StorageFreeSize: 8 * 1024 * 1024,  // 8MB
 	}
 	blobStore := NewBlobStore(blobStoreConfig)
 
