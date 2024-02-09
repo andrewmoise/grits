@@ -13,12 +13,12 @@ import (
 	"time"
 )
 
-// Server holds the configuration and state of the web server.
 type Server struct {
-	Config     *proxy.Config
-	BlobStore  *proxy.BlobStore
-	NameStore  *proxy.NameStore
-	HTTPServer *http.Server
+	Config      *proxy.Config
+	BlobStore   *proxy.BlobStore
+	NameStore   *proxy.NameStore
+	HTTPServer  *http.Server
+	DirBackings []*proxy.DirBacking
 }
 
 // NewServer initializes and returns a new Server instance.
@@ -53,10 +53,16 @@ func NewServer(config *proxy.Config) (*Server, error) {
 		NameStore: ns,
 		HTTPServer: &http.Server{
 			Addr: ":1787",
-			// Handler: nil, // Set this if your handlers are not using http.DefaultServeMux
 		},
+		DirBackings: make([]*proxy.DirBacking, 0),
 	}
-	srv.setupRoutes() // Assuming you have a method to setup your routes
+
+	for _, mirror := range config.DirMirrors {
+		dirBacking := proxy.NewDirBacking(mirror.SourceDir, bs)
+		srv.DirBackings = append(srv.DirBackings, dirBacking)
+	}
+
+	srv.setupRoutes()
 	return srv, nil
 }
 
@@ -67,17 +73,27 @@ func (s *Server) setupRoutes() {
 	// If you're not using http.DefaultServeMux, set your custom mux in s.HTTPServer.Handler
 }
 
-func (s *Server) Start() {
-	go func() {
-		if err := s.HTTPServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fmt.Printf("HTTP server ListenAndServe: %v\n", err)
-		}
-	}()
+func (s *Server) Run() error {
+	for _, db := range s.DirBackings {
+		db.Start()
+	}
+
+	err := s.HTTPServer.ListenAndServe()
+	if err == http.ErrServerClosed {
+		err = nil
+	}
+
+	for _, db := range s.DirBackings {
+		db.Stop()
+	}
+
+	return err
 }
 
-func (s *Server) Run() error {
-	// This will block
-	return s.HTTPServer.ListenAndServe()
+func (s *Server) Start() {
+	go func() {
+		s.Run()
+	}()
 }
 
 func (s *Server) Stop() error {
