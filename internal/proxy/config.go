@@ -54,8 +54,8 @@ func NewConfig() *Config {
 		RootHost:                 "",
 		RootPort:                 0,
 		ServerDir:                ".", // Default server directory is the current directory
-		StorageSize:              20 * 1024 * 1024,
-		StorageFreeSize:          18 * 1024 * 1024,
+		StorageSize:              100 * 1024 * 1024,
+		StorageFreeSize:          80 * 1024 * 1024,
 		DirMirrors:               []DirMirrorConfig{},
 		DhtNotifyNumber:          5,
 		DhtNotifyPeriod:          20,
@@ -74,7 +74,6 @@ func (c *Config) VarPath(path string) string {
 	return filepath.Join(c.ServerDir, "var", path)
 }
 
-// LoadFromFile updates the configuration values based on a provided JSON configuration file.
 func (c *Config) LoadFromFile(filename string) error {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -93,6 +92,11 @@ func (c *Config) LoadFromFile(filename string) error {
 	typeConfig := valConfig.Type()
 
 	for key, value := range data {
+		if key == "DirMirrors" {
+			// Handle DirMirrors separately
+			continue
+		}
+
 		fieldValue := valConfig.FieldByName(key)
 		if !fieldValue.IsValid() {
 			return errors.New("invalid field name: " + key)
@@ -108,13 +112,25 @@ func (c *Config) LoadFromFile(filename string) error {
 		requiredType := field.Type
 
 		val := reflect.ValueOf(value)
-
 		if val.Type().ConvertibleTo(requiredType) {
 			valConverted := val.Convert(requiredType)
 			fieldValue.Set(valConverted)
 		} else {
 			return errors.New("type mismatch for field: " + key)
 		}
+	}
+
+	// Manually decode DirMirrors if present
+	if dirMirrorsData, ok := data["DirMirrors"]; ok {
+		dirMirrorsJSON, err := json.Marshal(dirMirrorsData)
+		if err != nil {
+			return err
+		}
+		var dirMirrors []DirMirrorConfig
+		if err := json.Unmarshal(dirMirrorsJSON, &dirMirrors); err != nil {
+			return err
+		}
+		c.DirMirrors = dirMirrors
 	}
 
 	return nil

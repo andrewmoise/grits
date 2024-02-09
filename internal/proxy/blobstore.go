@@ -55,12 +55,18 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 		if !info.IsDir() {
 			hash, size, err := computeSHA256AndSize(path)
 			if err != nil {
+				fmt.Printf("Error computing hash and size for file %s: %v\n", path, err)
 				return err // continue scanning other files even if one fails
 			}
 
 			// Construct the file address from its hash
 			fileAddr := grits.NewFileAddr(hash, size)
 			relativePath, _ := filepath.Rel(bs.storageDir, path)
+
+			if relativePath != fileAddr.String() {
+				fmt.Printf("File %s seems not to be a blob. Skipping...\n", path)
+				return nil
+			}
 
 			// Create a CachedFile object and add it to the map
 			bs.files[relativePath] = &grits.CachedFile{
@@ -104,7 +110,7 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*grits.CachedFile, error) {
 		return cachedFile, nil
 	}
 
-	destPath := filepath.Join(bs.storageDir, hashStr) // Use hashStr directly
+	destPath := filepath.Join(bs.storageDir, fileAddr.String())
 	if err := copyFile(srcPath, destPath); err != nil {
 		return nil, err
 	}

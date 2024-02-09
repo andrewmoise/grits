@@ -58,7 +58,7 @@ func NewServer(config *proxy.Config) (*Server, error) {
 	}
 
 	for _, mirror := range config.DirMirrors {
-		dirBacking := proxy.NewDirBacking(mirror.SourceDir, config.VarPath("mirror"), bs)
+		dirBacking := proxy.NewDirBacking(mirror.SourceDir, mirror.CacheLinksDir, bs)
 		srv.DirBackings = append(srv.DirBackings, dirBacking)
 	}
 

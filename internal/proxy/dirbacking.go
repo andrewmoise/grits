@@ -65,11 +65,22 @@ func (db *DirBacking) initialScan() {
 				return err
 			}
 			srcPath := filepath.Join(db.srcPath, relPath)
-			if _, err := os.Stat(srcPath); os.IsNotExist(err) {
-				fmt.Printf("File %s does not exist in source\n", srcPath)
+
+			destInfo, err := os.Stat(destPath)
+			if err != nil {
+				log.Println("Error accessing path:", destPath, "Error:", err)
+				return err
+			}
+
+			srcInfo, err := os.Stat(srcPath)
+			if err != nil && err != os.ErrNotExist {
+				log.Println("Error accessing path:", srcPath, "Error:", err)
+				return err
+			}
+
+			if os.IsNotExist(err) || destInfo.ModTime().Before(srcInfo.ModTime()) {
 				// Here you might delete the file in destPath or mark it for deletion
-				// log.Printf("Deleting outdated file in destination: %s\n", destPath)
-				// os.Remove(destPath)
+				fmt.Printf("Want to delete outdated file in destination: %s\n", destPath)
 			}
 		}
 		return nil
@@ -82,23 +93,7 @@ func (db *DirBacking) initialScan() {
 			return err
 		}
 		if !info.IsDir() {
-			relPath, err := filepath.Rel(db.srcPath, srcPath)
-			if err != nil {
-				log.Println("Error calculating relative path:", err)
-				return err
-			}
-			destPath := filepath.Join(db.destPath, relPath)
-
-			srcInfo, err := os.Stat(srcPath)
-			if err != nil {
-				log.Println("Error accessing path:", srcPath, "Error:", err)
-				return err
-			}
-
-			destInfo, err := os.Stat(destPath)
-			if os.IsNotExist(err) || destInfo.ModTime().Before(srcInfo.ModTime()) {
-				db.addOrUpdateFile(srcPath)
-			}
+			db.addOrUpdateFile(srcPath)
 		}
 		return nil
 	})
@@ -167,6 +162,7 @@ func (db *DirBacking) addOrUpdateFile(srcPath string) error {
 	// Copy the file to the destination directory
 	destPath := filepath.Join(db.destPath, relPath)
 	err = os.WriteFile(destPath, []byte(cachedFile.Address.String()), 0644)
+	fmt.Printf("File %s copied to destination\n", destPath)
 	return err
 }
 

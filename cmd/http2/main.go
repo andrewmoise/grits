@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -13,14 +14,27 @@ import (
 )
 
 func main() {
-	config := proxy.NewConfig()
-	config.ServerDir = "."
-	config.StorageSize = 100 * 1024 * 1024
-	config.StorageFreeSize = 80 * 1024 * 1024
+	var configFile string
+	flag.StringVar(&configFile, "c", "./grits.cfg", "Path to configuration file")
+	flag.Parse()
 
+	// Check if the configuration file exists
+	if _, err := os.Stat(configFile); os.IsNotExist(err) {
+		fmt.Printf("Configuration file does not exist: %s\n", configFile)
+		os.Exit(1) // Exit with an error code
+	}
+
+	// Load the configuration
+	config := proxy.NewConfig()
+	if err := config.LoadFromFile(configFile); err != nil {
+		fmt.Printf("Failed to load configuration: %v\n", err)
+		os.Exit(1) // Exit with an error code
+	}
+
+	// Proceed to create server directory and server initialization
 	err := os.MkdirAll(config.VarPath("."), 0755)
 	if err != nil {
-		panic("Failed to create storage directory")
+		panic(fmt.Sprintf("Failed to create server directory: %v", err))
 	}
 
 	srv, err := server.NewServer(config)
@@ -28,22 +42,18 @@ func main() {
 		panic(fmt.Sprintf("Failed to initialize server: %v", err))
 	}
 
-	// Create a channel to listen for interrupt or termination signals
+	// Setup signal handling for a graceful shutdown
 	signals := make(chan os.Signal, 1)
-	// Notify the channel on SIGINT and SIGTERM
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start the server in a goroutine so that it doesn't block
 	go func() {
 		if err := srv.Run(); err != nil {
 			fmt.Printf("Server error: %v\n", err)
 		}
 	}()
 
-	// Block until we receive a signal
 	<-signals
 
-	// Create a context to attempt a graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
