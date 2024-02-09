@@ -13,12 +13,12 @@ import (
 )
 
 func main() {
-	config := proxy.NewConfig("default_root_host", 1234)
-	config.VarDirectory = "var"
+	config := proxy.NewConfig()
+	config.ServerDir = "."
 	config.StorageSize = 100 * 1024 * 1024
 	config.StorageFreeSize = 80 * 1024 * 1024
 
-	err := os.MkdirAll(config.VarDirectory, 0755)
+	err := os.MkdirAll(config.VarPath("."), 0755)
 	if err != nil {
 		panic("Failed to create storage directory")
 	}

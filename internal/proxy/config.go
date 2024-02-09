@@ -8,22 +8,16 @@ import (
 	"reflect"
 )
 
-type DirMirrorConfig struct {
-	SourceDir     string `json:"SourceDir"`
-	CacheLinksDir string `json:"CacheLinksDir"`
-}
-
 type Config struct {
-	// General proxy configuration
+	// General networking configuration
 	ThisHost   string `json:"ThisHost"`
 	ThisPort   int    `json:"ThisPort"`
 	IsRootNode bool   `json:"IsRootNode"`
 	RootHost   string `json:"RootHost"`
 	RootPort   int    `json:"RootPort"`
-	LogFile    string `json:"LogFile"`
 
-	// Base directory for variable data
-	VarDirectory string `json:"VarDirectory"`
+	// File locations
+	ServerDir string `json:"ServerDir"`
 
 	// Storage configuration
 	StorageSize     uint64 `json:"StorageSize"`
@@ -32,14 +26,13 @@ type Config struct {
 	// Directories to cache
 	DirMirrors []DirMirrorConfig `json:"DirMirrors"`
 
-	// DHT params
+	// Nitty-gritty DHT tuning
 	DhtNotifyNumber     int `json:"DhtNotifyNumber"`
 	DhtNotifyPeriod     int `json:"DhtNotifyPeriod"`
 	DhtMaxResponseNodes int `json:"DhtMaxResponseNodes"`
 	DhtRefreshTime      int `json:"DhtRefreshTime"`
 	DhtExpiryTime       int `json:"DhtExpiryTime"`
 
-	// Nitty-gritty replication tuning
 	MaxProxyMapAge           int `json:"MaxProxyMapAge"`
 	ProxyMapCleanupPeriod    int `json:"ProxyMapCleanupPeriod"`
 	ProxyHeartbeatPeriod     int `json:"ProxyHeartbeatPeriod"`
@@ -47,27 +40,28 @@ type Config struct {
 	RootProxyDropTimeout     int `json:"RootProxyDropTimeout"`
 }
 
+type DirMirrorConfig struct {
+	SourceDir     string `json:"SourceDir"`
+	CacheLinksDir string `json:"CacheLinksDir"`
+}
+
 // NewConfig creates a new configuration instance with default values.
-func NewConfig(rootHost string, rootPort int) *Config {
+func NewConfig() *Config {
 	return &Config{
-		ThisHost:   "127.0.0.1",
-		ThisPort:   1787,
-		IsRootNode: false,
-		RootHost:   rootHost,
-		RootPort:   rootPort,
-
-		VarDirectory:    "/var/lib/grits",
-		StorageSize:     20 * 1024 * 1024,
-		StorageFreeSize: 18 * 1024 * 1024,
-
-		DirMirrors: []DirMirrorConfig{},
-
-		DhtNotifyNumber:     5,
-		DhtNotifyPeriod:     20,
-		DhtMaxResponseNodes: 10,
-		DhtRefreshTime:      8 * 60 * 60,
-		DhtExpiryTime:       24 * 60 * 60,
-
+		ThisHost:                 "127.0.0.1",
+		ThisPort:                 1787,
+		IsRootNode:               false,
+		RootHost:                 "",
+		RootPort:                 0,
+		ServerDir:                ".", // Default server directory is the current directory
+		StorageSize:              20 * 1024 * 1024,
+		StorageFreeSize:          18 * 1024 * 1024,
+		DirMirrors:               []DirMirrorConfig{},
+		DhtNotifyNumber:          5,
+		DhtNotifyPeriod:          20,
+		DhtMaxResponseNodes:      10,
+		DhtRefreshTime:           8 * 60 * 60,
+		DhtExpiryTime:            24 * 60 * 60,
 		MaxProxyMapAge:           24 * 60 * 60,
 		ProxyMapCleanupPeriod:    60 * 60,
 		ProxyHeartbeatPeriod:     10,
@@ -77,7 +71,7 @@ func NewConfig(rootHost string, rootPort int) *Config {
 }
 
 func (c *Config) VarPath(path string) string {
-	return filepath.Join(c.VarDirectory, path)
+	return filepath.Join(c.ServerDir, "var", path)
 }
 
 // LoadFromFile updates the configuration values based on a provided JSON configuration file.
