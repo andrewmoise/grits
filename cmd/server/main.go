@@ -12,9 +12,10 @@ import (
 
 func main() {
 	config := proxy.NewConfig("127.0.0.1", 1787)
-	config.StorageDirectory = "content"
+	config.VarDirectory = "var"
 
-	handler := setupFileServerHandler(config.StorageDirectory)
+	// FIXME - need to rewrite
+	handler := setupFileServerHandler("") //config.StorageDirectory)
 	server := http3.Server{
 		Addr:    fmt.Sprintf("%s:%d", config.ThisHost, config.ThisPort),
 		Handler: handler,

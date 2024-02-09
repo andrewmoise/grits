@@ -1,18 +1,17 @@
 package proxy
 
 import (
-	"io/ioutil"
 	"os"
 	"testing"
 )
 
 func TestConfig_LoadFromFile(t *testing.T) {
 	// Create a temporary JSON config file for testing.
-	testFile, err := ioutil.TempFile("", "config-*.json")
+	testFile, err := os.CreateTemp("", "config-*.json")
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %v", err)
 	}
-	defer os.Remove(testFile.Name())
+	defer os.Remove(testFile.Name()) // Clean up the file after
 
 	// JSON content for the test
 	jsonContent := `
@@ -21,12 +20,12 @@ func TestConfig_LoadFromFile(t *testing.T) {
 	"ThisPort": 9000
 }
 	`
-	
+
 	if _, err := testFile.Write([]byte(jsonContent)); err != nil {
-		testFile.Close()
+		testFile.Close() // Make sure to close the file handle on error
 		t.Fatalf("Failed to write to temp file: %v", err)
 	}
-	testFile.Close()
+	testFile.Close() // Close the file
 
 	// Create a new Config and load from the test file.
 	config := NewConfig("localhost", 8080)

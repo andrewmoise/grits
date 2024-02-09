@@ -30,7 +30,8 @@ func NewServer(config *proxy.Config) (*Server, error) {
 
 	var ns *proxy.NameStore
 
-	info, err := os.Stat(config.NamespaceStoreFile)
+	// FIXME - Duplicated
+	info, err := os.Stat(config.VarPath("namespace_store.json"))
 	if err != nil {
 		ns, err = initStore(bs)
 		if err != nil {
@@ -70,7 +71,6 @@ func (s *Server) setupRoutes() {
 	http.HandleFunc("/grits/v1/sha256/", s.handleSHA256())
 	http.HandleFunc("/grits/v1/namespace/", s.handleNamespace())
 	http.HandleFunc("/grits/v1/root/", s.handleRoot())
-	// If you're not using http.DefaultServeMux, set your custom mux in s.HTTPServer.Handler
 }
 
 func (s *Server) Run() error {

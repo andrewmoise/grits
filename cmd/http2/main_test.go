@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"grits/internal/proxy"
@@ -20,12 +19,11 @@ func setupTestServer(t *testing.T) (*server.Server, func()) {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
 	config := proxy.NewConfig("test_host", 1234)
-	config.StorageDirectory = filepath.Join(tempDir, "blobstore_test")
+	config.VarDirectory = tempDir
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
-	config.NamespaceStoreFile = filepath.Join(tempDir, "namespace_store.json")
 
-	os.MkdirAll(config.StorageDirectory, 0755)
+	//os.MkdirAll(tempDir, 0755)
 
 	fmt.Printf("Created temp directory: %s\n", tempDir)
 
