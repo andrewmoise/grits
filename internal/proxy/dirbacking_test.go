@@ -2,13 +2,13 @@ package proxy
 
 import (
 	"os"
-	"path"
 	"path/filepath"
 	"testing"
-	"time"
+
+	"grits/internal/grits"
 )
 
-func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, func()) {
+func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, string, func()) {
 	t.Helper()
 
 	// Create a temporary directory for testing
@@ -25,8 +25,8 @@ func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, func()) {
 	}
 	blobStore := NewBlobStore(blobStoreConfig)
 
-	srcPath := path.Join(dirPath, "src")
-	destPath := path.Join(dirPath, "dest")
+	srcPath := filepath.Join(dirPath, "src")
+	destPath := filepath.Join(dirPath, "dest")
 
 	os.Mkdir(srcPath, 0755)
 	os.Mkdir(destPath, 0755)
@@ -38,50 +38,54 @@ func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, func()) {
 		os.RemoveAll(dirPath)
 	}
 
-	return dirBacking, blobStore, srcPath, cleanup
+	return dirBacking, blobStore, srcPath, destPath, cleanup
 }
 
-func TestDirBacking_FileAddition(t *testing.T) {
-	dirBacking, _, dirPath, cleanup := setupDirBacking(t)
+func TestDirBacking_Synchronization(t *testing.T) {
+	dirBacking, blobStore, srcPath, destPath, cleanup := setupDirBacking(t)
 	defer cleanup()
 
-	dirBacking.Start()
-
-	// Create a new file in the monitored directory
-	filePath := filepath.Join(dirPath, "testfile.txt")
-	err := os.WriteFile(filePath, []byte("hello world"), 0644)
-	if err != nil {
+	// Create a new file in the source directory
+	srcFilePath := filepath.Join(srcPath, "testfile.txt")
+	expectedContent := []byte("hello world")
+	if err := os.WriteFile(srcFilePath, expectedContent, 0644); err != nil {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	// Give some time for the file system watcher to detect the change
-	time.Sleep(1 * time.Second)
-
-	if _, exists := dirBacking.files[filePath]; !exists {
-		t.Errorf("File %s was not added to DirBacking", filePath)
-	}
-}
-
-func TestDirBacking_FileDeletion(t *testing.T) {
-	dirBacking, _, dirPath, cleanup := setupDirBacking(t)
-	defer cleanup()
-
+	// Start DirBacking to synchronize files
 	dirBacking.Start()
 
-	// Create and then remove a file in the monitored directory
-	filePath := filepath.Join(dirPath, "testfile.txt")
-	err := os.WriteFile(filePath, []byte("hello world"), 0644)
+	// Verify that the file is in the BlobStore and the destination file exists
+	destFilePath := filepath.Join(destPath, "testfile.txt")
+	if _, err := os.Stat(destFilePath); os.IsNotExist(err) {
+		t.Fatalf("Expected file %s does not exist in destination directory", destFilePath)
+	}
+
+	// Read the address from the destination file and verify it's in the BlobStore
+	addressContent, err := os.ReadFile(destFilePath)
 	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
+		t.Fatalf("Failed to read destination file address: %v", err)
 	}
-	os.Remove(filePath)
 
-	// Give some time for the file system watcher to detect the change
-	time.Sleep(1 * time.Second)
-
-	if _, exists := dirBacking.files[filePath]; exists {
-		t.Errorf("File %s was not removed from DirBacking", filePath)
+	fileAddr, err := grits.NewFileAddrFromString(string(addressContent))
+	if err != nil {
+		t.Fatalf("Invalid file address format in destination file: %v", err)
 	}
+
+	cachedFile, err := blobStore.ReadFile(fileAddr)
+	if err != nil {
+		t.Fatalf("File with address %s not found in BlobStore", fileAddr.String())
+	}
+
+	// Verify the content of the cached file matches the expected content
+	actualContent, err := os.ReadFile(cachedFile.Path)
+	if err != nil {
+		t.Fatalf("Failed to read cached file content: %v", err)
+	}
+	if string(actualContent) != string(expectedContent) {
+		t.Errorf("Cached file content mismatch. Expected: %s, got: %s", string(expectedContent), string(actualContent))
+	}
+
+	// Test for modification and deletion follows similar structure
+	// Remember to perform cleanup and verify the results after each operation
 }
-
-// Additional tests for file modification, and starting/stopping the DirBacking can be structured similarly.
