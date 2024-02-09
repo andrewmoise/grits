@@ -32,41 +32,41 @@ func NewDirBacking(dirPath string, blobStore *BlobStore) *DirBacking {
 }
 
 // Start begins monitoring the directory for changes
-func (dm *DirBacking) Start() {
-	go dm.watch()
+func (db *DirBacking) Start() {
+	go db.watch()
 
-	err := dm.watcher.Add(dm.dirPath)
+	err := db.watcher.Add(db.dirPath)
 	if err != nil {
 		log.Fatal("Failed to add directory to watcher:", err)
 	}
 
-	dm.initialScan()
+	db.initialScan()
 }
 
 // initialScan walks through the directory initially to add existing files
-func (dm *DirBacking) initialScan() {
-	filepath.Walk(dm.dirPath, func(path string, info os.FileInfo, err error) error {
+func (db *DirBacking) initialScan() {
+	filepath.Walk(db.dirPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			log.Println("Error accessing path:", path, "Error:", err)
 			return err
 		}
 		if !info.IsDir() {
-			dm.addOrUpdateFile(path)
+			db.addOrUpdateFile(path)
 		}
 		return nil
 	})
 }
 
 // watch listens for file system events and handles them
-func (dm *DirBacking) watch() {
+func (db *DirBacking) watch() {
 	for {
 		select {
-		case event, ok := <-dm.watcher.Events:
+		case event, ok := <-db.watcher.Events:
 			if !ok {
 				return
 			}
-			dm.handleEvent(event)
-		case err, ok := <-dm.watcher.Errors:
+			db.handleEvent(event)
+		case err, ok := <-db.watcher.Errors:
 			if !ok {
 				return
 			}
@@ -76,37 +76,37 @@ func (dm *DirBacking) watch() {
 }
 
 // handleEvent processes file creation, modification, and deletion events
-func (dm *DirBacking) handleEvent(event fsnotify.Event) {
+func (db *DirBacking) handleEvent(event fsnotify.Event) {
 	log.Println("Event:", event)
 	if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
-		dm.addOrUpdateFile(event.Name)
+		db.addOrUpdateFile(event.Name)
 	} else if event.Op&fsnotify.Remove == fsnotify.Remove {
-		dm.removeFile(event.Name)
+		db.removeFile(event.Name)
 	}
 }
 
 // addOrUpdateFile adds a new file to the BlobStore or updates an existing one
-func (dm *DirBacking) addOrUpdateFile(filePath string) {
-	cachedFile, err := dm.blobStore.AddLocalFile(filePath)
+func (db *DirBacking) addOrUpdateFile(filePath string) {
+	cachedFile, err := db.blobStore.AddLocalFile(filePath)
 	if err != nil {
 		log.Println("Failed to add or update file in BlobStore:", err)
 		return
 	}
 
-	dm.files[filePath] = cachedFile
+	db.files[filePath] = cachedFile
 	log.Printf("File %s added/updated in BlobStore", filePath)
 }
 
 // removeFile handles the removal of a file from the BlobStore and internal tracking
-func (dm *DirBacking) removeFile(filePath string) {
-	if cachedFile, exists := dm.files[filePath]; exists {
-		dm.blobStore.Release(cachedFile)
-		delete(dm.files, filePath)
+func (db *DirBacking) removeFile(filePath string) {
+	if cachedFile, exists := db.files[filePath]; exists {
+		db.blobStore.Release(cachedFile)
+		delete(db.files, filePath)
 		log.Printf("File %s removed from BlobStore", filePath)
 	}
 }
 
 // Stop stops the directory monitoring
-func (dm *DirBacking) Stop() {
-	dm.watcher.Close()
+func (db *DirBacking) Stop() {
+	db.watcher.Close()
 }

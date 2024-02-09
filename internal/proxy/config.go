@@ -7,6 +7,11 @@ import (
 	"reflect"
 )
 
+type DirMirrorConfig struct {
+	SourceDir     string `json:"SourceDir"`
+	CacheLinksDir string `json:"CacheLinksDir"`
+}
+
 type Config struct {
 	// General proxy configuration
 	ThisHost   string `json:"ThisHost"`
@@ -23,6 +28,9 @@ type Config struct {
 	TempDownloadDirectory string `json:"TempDownloadDirectory"`
 	NamespaceStoreFile    string `json:"NamespaceStoreFile"`
 
+	// Directories to cache
+	DirMirrors []DirMirrorConfig `json:"DirMirrors"`
+
 	// DHT params
 	DhtNotifyNumber     int `json:"DhtNotifyNumber"`
 	DhtNotifyPeriod     int `json:"DhtNotifyPeriod"`
@@ -30,7 +38,7 @@ type Config struct {
 	DhtRefreshTime      int `json:"DhtRefreshTime"`
 	DhtExpiryTime       int `json:"DhtExpiryTime"`
 
-	// Various less-relevant params
+	// Nitty-gritty replication tuning
 	MaxProxyMapAge           int `json:"MaxProxyMapAge"`
 	ProxyMapCleanupPeriod    int `json:"ProxyMapCleanupPeriod"`
 	ProxyHeartbeatPeriod     int `json:"ProxyHeartbeatPeriod"`
@@ -54,6 +62,8 @@ func NewConfig(rootHost string, rootPort int) *Config {
 		StorageFreeSize:       18 * 1024 * 1024,
 		TempDownloadDirectory: "tmp-download",
 		NamespaceStoreFile:    "namespace_store.json",
+
+		DirMirrors: []DirMirrorConfig{},
 
 		DhtNotifyNumber:     5,
 		DhtNotifyPeriod:     20,
