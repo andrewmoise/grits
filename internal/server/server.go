@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 type Server struct {
@@ -96,10 +95,7 @@ func (s *Server) Start() {
 	}()
 }
 
-func (s *Server) Stop() error {
-	// Create a context to attempt a graceful shutdown within a timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+func (s *Server) Stop(ctx context.Context) error {
 	return s.HTTPServer.Shutdown(ctx)
 }
 
