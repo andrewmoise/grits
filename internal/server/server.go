@@ -314,10 +314,28 @@ func handleNamespacePut(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w
 func handleNamespaceDelete(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	fmt.Printf("Received DELETE request for file: %s\n", path)
 
-	ns.ReviseRoot(bs, func(m map[string]*grits.FileAddr) error {
+	err := ns.ReviseRoot(bs, func(m map[string]*grits.FileAddr) error {
+		// Check if the key exists in the map
+		if _, exists := m[path]; !exists {
+			// If the key does not exist, return an error indicating the file was not found
+			return fmt.Errorf("file not found: %s", path)
+		}
+
+		// If the key exists, delete it from the map
 		delete(m, path)
 		return nil
 	})
 
-	bs.SerializeNameStore(ns)
+	// If an error occurred during the revision, write an error response
+	if err != nil {
+		fmt.Printf("Error deleting file: %v\n", err)
+		http.Error(w, fmt.Sprintf("Error deleting file: %v", err), http.StatusNotFound)
+		return
+	}
+
+	// If the deletion was successful, serialize the updated NameStore
+	if serializeErr := bs.SerializeNameStore(ns); serializeErr != nil {
+		fmt.Printf("Error serializing NameStore after deletion: %v\n", serializeErr)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
