@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 )
@@ -134,6 +135,6 @@ func listFiles() {
 	}
 
 	for name, hash := range files {
-		fmt.Printf("%s -> %s\n", name, hash)
+		log.Printf("%s -> %s\n", name, hash)
 	}
 }

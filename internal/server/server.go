@@ -6,6 +6,7 @@ import (
 	"grits/internal/grits"
 	"grits/internal/proxy"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -133,7 +134,7 @@ func initDemoStore(bs *proxy.BlobStore) (*proxy.NameStore, error) {
 				return err
 			}
 
-			fmt.Printf("Mapped %s to %s\n", path, file.Address.String())
+			log.Printf("Mapped %s to %s\n", path, file.Address.String())
 			m[info.Name()] = file.Address
 		}
 		return nil
@@ -158,7 +159,7 @@ func initDemoStore(bs *proxy.BlobStore) (*proxy.NameStore, error) {
 
 func (s *Server) handleSHA256() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("Received request: %s\n", r.URL.Path)
+		log.Printf("Received request: %s\n", r.URL.Path)
 
 		if r.Method != http.MethodGet {
 			http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
@@ -194,7 +195,7 @@ func (s *Server) handleSHA256() http.HandlerFunc {
 
 func (s *Server) handleRoot() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("Received request: %s\n", r.URL.Path)
+		log.Printf("Received request: %s\n", r.URL.Path)
 
 		if r.Method != http.MethodGet {
 			http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
@@ -235,7 +236,7 @@ func (s *Server) handleRoot() http.HandlerFunc {
 
 func (s *Server) handleNamespace() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("Received request: %s\n", r.URL.Path)
+		log.Printf("Received request: %s\n", r.URL.Path)
 
 		// Extract account name from URL
 		path := strings.TrimPrefix(r.URL.Path, "/grits/v1/namespace/")
@@ -272,7 +273,7 @@ func (s *Server) handleNamespace() http.HandlerFunc {
 }
 
 func handleNamespaceGet(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Received GET request for file: %s\n", path)
+	log.Printf("Received GET request for file: %s\n", path)
 
 	rn := ns.GetRoot()
 	if rn == nil {
@@ -297,7 +298,7 @@ func handleNamespaceGet(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w
 }
 
 func handleNamespacePut(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Received PUT request for file: %s\n", path)
+	log.Printf("Received PUT request for file: %s\n", path)
 
 	// Read the file content from the request body
 	data, err := io.ReadAll(r.Body)
@@ -324,7 +325,7 @@ func handleNamespacePut(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w
 }
 
 func handleNamespaceDelete(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("Received DELETE request for file: %s\n", path)
+	log.Printf("Received DELETE request for file: %s\n", path)
 
 	err := ns.ReviseRoot(bs, func(m map[string]*grits.FileAddr) error {
 		// Check if the key exists in the map
@@ -340,14 +341,14 @@ func handleNamespaceDelete(bs *proxy.BlobStore, ns *proxy.NameStore, path string
 
 	// If an error occurred during the revision, write an error response
 	if err != nil {
-		fmt.Printf("Error deleting file: %v\n", err)
+		log.Printf("Error deleting file: %v\n", err)
 		http.Error(w, fmt.Sprintf("Error deleting file: %v", err), http.StatusNotFound)
 		return
 	}
 
 	// If the deletion was successful, serialize the updated NameStore
 	if serializeErr := bs.SerializeNameStore(ns); serializeErr != nil {
-		fmt.Printf("Error serializing NameStore after deletion: %v\n", serializeErr)
+		log.Printf("Error serializing NameStore after deletion: %v\n", serializeErr)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }

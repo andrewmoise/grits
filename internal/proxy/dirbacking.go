@@ -80,7 +80,7 @@ func (db *DirBacking) initialScan() {
 
 			if os.IsNotExist(err) || destInfo.ModTime().Before(srcInfo.ModTime()) {
 				// Here you might delete the file in destPath or mark it for deletion
-				fmt.Printf("Want to delete outdated file in destination: %s\n", destPath)
+				log.Printf("Want to delete outdated file in destination: %s\n", destPath)
 			}
 		}
 		return nil
@@ -162,7 +162,7 @@ func (db *DirBacking) addOrUpdateFile(srcPath string) error {
 	// Copy the file to the destination directory
 	destPath := filepath.Join(db.destPath, relPath)
 	err = os.WriteFile(destPath, []byte(cachedFile.Address.String()), 0644)
-	fmt.Printf("File %s copied to destination\n", destPath)
+	log.Printf("File %s copied to destination\n", destPath)
 	return err
 }
 
