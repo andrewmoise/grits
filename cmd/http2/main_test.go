@@ -2,12 +2,14 @@ package main_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"grits/internal/proxy"
 	"grits/internal/server"
@@ -42,19 +44,20 @@ func setupTestServer(t *testing.T) (*server.Server, func()) {
 }
 
 func TestFileOperations(t *testing.T) {
+	// Setup
 	baseURL := "http://localhost:1787"
-
-	fmt.Printf("Running test with base URL: %s\n", baseURL)
-
 	s, cleanup := setupTestServer(t)
 	defer cleanup()
-
-	fmt.Printf("Server initialized\n")
-
 	s.Start()
-	defer s.Stop()
 
-	fmt.Printf("Server started\n")
+	// Ensure graceful shutdown and capture any errors
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	defer func() {
+		if err := s.Stop(ctx); err != nil {
+			t.Logf("Server shutdown error: %v", err)
+		}
+	}()
 
 	// 1. Create 5 files
 
