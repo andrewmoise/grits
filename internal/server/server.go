@@ -17,6 +17,7 @@ type Server struct {
 	BlobStore   *proxy.BlobStore
 	NameStore   *proxy.NameStore
 	HTTPServer  *http.Server
+	Mux         *http.ServeMux
 	DirBackings []*proxy.DirBacking
 }
 
@@ -52,9 +53,10 @@ func NewServer(config *proxy.Config) (*Server, error) {
 		BlobStore: bs,
 		NameStore: ns,
 		HTTPServer: &http.Server{
-			Addr: ":1787",
+			Addr: ":" + fmt.Sprintf("%d", config.ThisPort),
 		},
 		DirBackings: make([]*proxy.DirBacking, 0),
+		Mux:         http.NewServeMux(),
 	}
 
 	for _, mirror := range config.DirMirrors {
@@ -67,9 +69,14 @@ func NewServer(config *proxy.Config) (*Server, error) {
 }
 
 func (s *Server) setupRoutes() {
-	http.HandleFunc("/grits/v1/sha256/", s.handleSHA256())
-	http.HandleFunc("/grits/v1/namespace/", s.handleNamespace())
-	http.HandleFunc("/grits/v1/root/", s.handleRoot())
+	s.Mux.HandleFunc("/grits/v1/sha256/", s.handleSHA256())
+	s.Mux.HandleFunc("/grits/v1/namespace/", s.handleNamespace())
+	s.Mux.HandleFunc("/grits/v1/root/", s.handleRoot())
+
+	// Ensure HTTPServer.Handler is set to use this Mux
+	s.HTTPServer.Handler = s.Mux
+
+	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", http.FileServer(http.Dir(s.Config.ServerPath("client")))))
 }
 
 func (s *Server) Run() error {

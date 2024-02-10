@@ -49,6 +49,8 @@ func (db *DirBacking) Start() {
 
 // initialScan walks through the directory initially to add existing files
 func (db *DirBacking) initialScan() {
+	os.MkdirAll(db.destPath, 0755)
+
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
@@ -162,8 +164,12 @@ func (db *DirBacking) addOrUpdateFile(srcPath string) error {
 	// Copy the file to the destination directory
 	destPath := filepath.Join(db.destPath, relPath)
 	err = os.WriteFile(destPath, []byte(cachedFile.Address.String()), 0644)
+	if err != nil {
+		return fmt.Errorf("Error copying file to destination: %v", err)
+	}
+
 	log.Printf("File %s copied to destination\n", destPath)
-	return err
+	return nil
 }
 
 // removeFile handles the removal of a file from the BlobStore and internal tracking
