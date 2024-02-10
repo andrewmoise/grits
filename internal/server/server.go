@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -31,9 +30,9 @@ func NewServer(config *proxy.Config) (*Server, error) {
 	var ns *proxy.NameStore
 
 	// FIXME - Duplicated
-	info, err := os.Stat(config.VarPath("namespace_store.json"))
+	info, err := os.Stat(config.ServerPath("var/namespace_store.json"))
 	if err != nil {
-		ns, err = initStore(bs)
+		ns, err = initStore(bs, "var/namespace_store.json")
 		if err != nil {
 			return nil, fmt.Errorf("Failed to initialize namespace store: %v", err)
 		}
@@ -42,7 +41,7 @@ func NewServer(config *proxy.Config) (*Server, error) {
 			return nil, fmt.Errorf("Namespace store file is a directory")
 		}
 
-		ns, err = bs.DeserializeNameStore()
+		ns, err = bs.DeserializeNameStore("var/namespace_store.json")
 		if err != nil {
 			return nil, fmt.Errorf("Failed to deserialize namespace store: %v", err)
 		}
@@ -100,7 +99,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	return s.HTTPServer.Shutdown(ctx)
 }
 
-func initStore(bs *proxy.BlobStore) (*proxy.NameStore, error) {
+func initStore(bs *proxy.BlobStore, nameStoreFile string) (*proxy.NameStore, error) {
 	m := make(map[string]*grits.FileAddr)
 
 	fn, err := bs.CreateFileNode(m)
@@ -113,47 +112,7 @@ func initStore(bs *proxy.BlobStore) (*proxy.NameStore, error) {
 		return nil, err
 	}
 
-	ns := proxy.NewNameStore(rn)
-	return ns, nil
-}
-
-func initDemoStore(bs *proxy.BlobStore) (*proxy.NameStore, error) {
-	contentDir := "content/"
-
-	m := make(map[string]*grits.FileAddr)
-
-	err := filepath.Walk(contentDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() {
-			var file *grits.CachedFile
-
-			file, err = bs.AddLocalFile(path)
-			if err != nil {
-				return err
-			}
-
-			log.Printf("Mapped %s to %s\n", path, file.Address.String())
-			m[info.Name()] = file.Address
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	fn, err := bs.CreateFileNode(m)
-	if err != nil {
-		return nil, err
-	}
-
-	rn, err := bs.CreateRevNode(fn, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	ns := proxy.NewNameStore(rn)
+	ns := proxy.NewNameStore(rn, nameStoreFile)
 	return ns, nil
 }
 

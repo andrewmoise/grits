@@ -10,17 +10,16 @@ import (
 	"grits/internal/grits"
 )
 
-// FIXME - Maybe we need more than one of these to be allowed
-const SaveFile = "namespace_store.json"
-
 type NameStore struct {
-	root *RevNode
-	mtx  sync.RWMutex
+	root     *RevNode
+	mtx      sync.RWMutex
+	saveFile string
 }
 
-func NewNameStore(rn *RevNode) *NameStore {
+func NewNameStore(rn *RevNode, saveFile string) *NameStore {
 	return &NameStore{
-		root: rn,
+		root:     rn,
+		saveFile: saveFile,
 	}
 }
 
@@ -119,8 +118,8 @@ func (bs *BlobStore) SerializeNameStore(ns *NameStore) error {
 		return fmt.Errorf("failed to serialize NameStore: %w", err)
 	}
 
-	tempFileName := bs.config.VarPath(SaveFile + "-new")
-	finalFileName := bs.config.VarPath(SaveFile)
+	tempFileName := bs.config.ServerPath(ns.saveFile + "-new")
+	finalFileName := bs.config.ServerPath(ns.saveFile)
 
 	if err := os.WriteFile(tempFileName, data, 0644); err != nil {
 		return fmt.Errorf("failed to write NameStore to temp file: %w", err)
@@ -133,8 +132,8 @@ func (bs *BlobStore) SerializeNameStore(ns *NameStore) error {
 	return nil
 }
 
-func (bs *BlobStore) DeserializeNameStore() (*NameStore, error) {
-	filePath := bs.config.VarPath(SaveFile)
+func (bs *BlobStore) DeserializeNameStore(saveFile string) (*NameStore, error) {
+	filePath := bs.config.ServerPath(saveFile)
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
@@ -163,5 +162,5 @@ func (bs *BlobStore) DeserializeNameStore() (*NameStore, error) {
 		return nil, fmt.Errorf("failed to fetch root RevNode: %w", err)
 	}
 
-	return &NameStore{root: rootRevNode}, nil
+	return &NameStore{root: rootRevNode, saveFile: saveFile}, nil
 }

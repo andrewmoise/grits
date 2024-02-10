@@ -28,7 +28,7 @@ func NewBlobStore(config *Config) *BlobStore {
 		files:  make(map[string]*grits.CachedFile),
 	}
 
-	bs.storageDir = config.VarPath("blobs")
+	bs.storageDir = config.ServerPath("var/blobs")
 	// Ensure storage directory exists
 	if err := os.MkdirAll(bs.storageDir, 0755); err != nil {
 		log.Printf("Failed to create storage directory: %v\n", err)

@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -15,9 +16,11 @@ import (
 )
 
 func main() {
-	var configFile string
-	flag.StringVar(&configFile, "c", "./grits.cfg", "Path to configuration file")
+	var workingDir string
+	flag.StringVar(&workingDir, "d", ".", "Working directory for server")
 	flag.Parse()
+
+	configFile := filepath.Join(workingDir, "grits.cfg") // Configuration file path
 
 	// Check if the configuration file exists
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
@@ -26,14 +29,15 @@ func main() {
 	}
 
 	// Load the configuration
-	config := proxy.NewConfig()
+	config := proxy.NewConfig() // Adjust NewConfig to not require parameters
 	if err := config.LoadFromFile(configFile); err != nil {
 		log.Printf("Failed to load configuration: %v\n", err)
 		os.Exit(1) // Exit with an error code
 	}
+	config.ServerDir = workingDir // Ensure server directory is set
 
-	// Proceed to create server directory and server initialization
-	err := os.MkdirAll(config.VarPath("."), 0755)
+	// Ensure the server directory exists
+	err := os.MkdirAll(config.ServerDir, 0755)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create server directory: %v", err))
 	}
