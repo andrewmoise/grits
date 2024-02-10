@@ -39,7 +39,7 @@ func TestNameStoreSerialization(t *testing.T) {
 		t.Fatalf("Failed to create RevNode: %v", err)
 	}
 
-	ns := NewNameStore(rn)
+	ns := NewNameStore(rn, "var/namestore")
 
 	// Serialize the NameStore
 	if err := bs.SerializeNameStore(ns); err != nil {
@@ -47,7 +47,7 @@ func TestNameStoreSerialization(t *testing.T) {
 	}
 
 	// Deserialize the NameStore
-	deserializedNS, err := bs.DeserializeNameStore()
+	deserializedNS, err := bs.DeserializeNameStore("var/namestore")
 	if err != nil {
 		t.Fatalf("Failed to deserialize NameStore: %v", err)
 	}

@@ -17,7 +17,7 @@ type Config struct {
 	RootPort   int    `json:"RootPort"`
 
 	// File locations
-	ServerDir string `json:"ServerDir"`
+	ServerDir string `json:"-"`
 
 	// Storage configuration
 	StorageSize     uint64 `json:"StorageSize"`
@@ -70,8 +70,8 @@ func NewConfig() *Config {
 	}
 }
 
-func (c *Config) VarPath(path string) string {
-	return filepath.Join(c.ServerDir, "var", path)
+func (c *Config) ServerPath(path string) string {
+	return filepath.Join(c.ServerDir, path)
 }
 
 func (c *Config) LoadFromFile(filename string) error {

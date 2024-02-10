@@ -20,7 +20,7 @@ func setupBlobStore(t *testing.T) (*BlobStore, func()) {
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
 
-	err = os.MkdirAll(config.VarPath("."), 0755)
+	err = os.MkdirAll(config.ServerPath("var"), 0755)
 	if err != nil {
 		t.Fatalf("Failed to create storage directory: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestBlobStore_AddLocalFile(t *testing.T) {
 	bs, cleanup := setupBlobStore(t)
 	defer cleanup()
 
-	srcPath := bs.config.VarPath("test.txt")
+	srcPath := bs.config.ServerPath("var/test.txt")
 	content := []byte("hello world")
 	err := os.WriteFile(srcPath, content, 0644)
 	if err != nil {
@@ -59,7 +59,7 @@ func TestBlobStore_ReadFile(t *testing.T) {
 	defer cleanup()
 
 	// Setup file in BlobStore
-	srcPath := bs.config.VarPath("test.txt")
+	srcPath := bs.config.ServerPath("var/test.txt")
 	content := []byte("hello world")
 	err := os.WriteFile(srcPath, content, 0644)
 	if err != nil {
@@ -87,7 +87,7 @@ func TestBlobStore_Release(t *testing.T) {
 	defer cleanup()
 
 	// Setup file in BlobStore
-	srcPath := bs.config.VarPath("test_release.txt")
+	srcPath := bs.config.ServerPath("var/test_release.txt")
 	content := []byte("test release")
 	err := os.WriteFile(srcPath, content, 0644)
 	if err != nil {
