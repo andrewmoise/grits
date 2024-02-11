@@ -68,15 +68,37 @@ func NewServer(config *proxy.Config) (*Server, error) {
 	return srv, nil
 }
 
+// corsMiddleware is a middleware function that adds CORS headers to the response.
+func corsMiddleware(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:1787") // Or "*" for a public API
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		// If it's an OPTIONS request, respond with OK status and return
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		handler(w, r)
+	}
+}
+
 func (s *Server) setupRoutes() {
-	s.Mux.HandleFunc("/grits/v1/sha256/", s.handleSHA256())
-	s.Mux.HandleFunc("/grits/v1/namespace/", s.handleNamespace())
-	s.Mux.HandleFunc("/grits/v1/root/", s.handleRoot())
+	s.Mux.HandleFunc("/grits/v1/sha256/", corsMiddleware(s.handleSHA256()))
+	s.Mux.HandleFunc("/grits/v1/namespace/", corsMiddleware(s.handleNamespace()))
+	s.Mux.HandleFunc("/grits/v1/root/", corsMiddleware(s.handleRoot()))
 
-	// Ensure HTTPServer.Handler is set to use this Mux
+	// Special handling for serving the Service Worker JS from the root
+	s.Mux.HandleFunc("/service-worker.js", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, s.Config.ServerPath("client/service-worker.js"))
+	}))
+
+	// Handling client files with CORS enabled
+	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", corsMiddleware(http.FileServer(http.Dir(s.Config.ServerPath("client"))).ServeHTTP)))
+
 	s.HTTPServer.Handler = s.Mux
-
-	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", http.FileServer(http.Dir(s.Config.ServerPath("client")))))
 }
 
 func (s *Server) Run() error {
@@ -125,7 +147,7 @@ func initStore(bs *proxy.BlobStore, nameStoreFile string) (*proxy.NameStore, err
 
 func (s *Server) handleSHA256() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request: %s\n", r.URL.Path)
+		log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
 
 		if r.Method != http.MethodGet {
 			http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
