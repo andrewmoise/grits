@@ -13,21 +13,40 @@ self.addEventListener('fetch', event => {
     const url = new URL(request.url);
 
     console.log('Service Worker intercepted fetch event for:', url.href);
+    console.log('  Cache prefix is: ', AppConfig.cachePrefix);
 
-    // Check if we've received AppConfig and if the request URL starts with the cachePrefix
     if (AppConfig.cachePrefix && url.href.startsWith(AppConfig.cachePrefix)) {
-        console.log('Service Worker handling cache request:', url.href)
+        console.log('Service Worker handling cache request:', url.href);
 
-        const cachePrefixLength = new URL(AppConfig.cachePrefix).pathname.length;
-        const pathAfterPrefix = url.pathname.substring(cachePrefixLength);
-        const [hash, length] = pathAfterPrefix.split(':');
-        const lengthNum = parseInt(length, 10);
+        // Correctly pass the async function to event.respondWith
+        event.respondWith((async () => {
+            await delay(3000); // 3000 ms delay
+            console.log('Handling fetch after delay:', url.href);
 
-        if (hash && !isNaN(lengthNum)) {
-            event.respondWith(handleCacheFetch(request, AppConfig.cachePrefix, hash, lengthNum));
-        }
+            const cachePrefixLength = new URL(AppConfig.cachePrefix).pathname.length;
+            const pathAfterPrefix = url.pathname.substring(cachePrefixLength);
+            const [hash, length] = pathAfterPrefix.split(':');
+            const lengthNum = parseInt(length, 10);
+
+            if (hash && !isNaN(lengthNum)) {
+                console.log("  match");
+                // Ensure handleCacheFetch is returned
+                return handleCacheFetch(request, AppConfig.cachePrefix, hash, lengthNum);
+            } else {
+                // If conditions fail, return a fetch to the network as a fallback
+                return fetch(request);
+            }
+        })());
+    } else {
+        console.log('Service Worker skipping cache handling:', url.href);
+        // For other cases, just fetch normally
+        event.respondWith(fetch(request));
     }
 });
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 async function handleCacheFetch(request, prefix, hash, length) {
     // Try to match in the browser cache first using the original request URL

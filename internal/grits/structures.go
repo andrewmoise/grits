@@ -1,10 +1,12 @@
 package grits
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -82,66 +84,166 @@ func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
 	return buffer, nil
 }
 
-const DownloadChunkSize = 1400
-
 type Peer struct {
-	Ip            string
-	Port          int
-	LastSeen      time.Time
-	DhtStoredData map[*CachedFile]time.Time
+	IPv4Address string    `json:"ipv4Address"`
+	IPv6Address string    `json:"ipv6Address"`
+	Port        int       `json:"port"`
+	IsNat       bool      `json:"isNat"`
+	Token       string    `json:"token"`
+	LastSeen    time.Time `json:"-"`
 }
 
-func NewPeer(ip string, port int) *Peer {
-	return &Peer{ip, port, time.Time{}, make(map[*CachedFile]time.Time)}
+func NewPeer(ipv4Address, ipv6Address string, port int, isNat bool) *Peer {
+	return &Peer{
+		IPv4Address: ipv4Address,
+		IPv6Address: ipv6Address,
+		Port:        port,
+		IsNat:       isNat,
+		LastSeen:    time.Now(),
+	}
 }
 
 func (p *Peer) UpdateLastSeen() {
 	p.LastSeen = time.Now()
 }
 
-func (p *Peer) TimeSinceSeen() int {
+func (p *Peer) TimeSinceSeen() time.Duration {
 	if p.LastSeen.IsZero() {
 		return -1
 	}
-	currentTime := time.Now()
-	return int(currentTime.Sub(p.LastSeen).Seconds())
+	return time.Since(p.LastSeen)
 }
 
+// AllPeers holds mappings from IP addresses to peers.
 type AllPeers struct {
 	Peers map[string]*Peer
+	lock  sync.RWMutex
 }
 
+// NewAllPeers creates a new AllPeers instance.
 func NewAllPeers() *AllPeers {
-	return &AllPeers{make(map[string]*Peer)}
-}
-
-func (a *AllPeers) GenerateNodeKey(ip string, port int) string {
-	return fmt.Sprintf("%s:%d", ip, port)
-}
-
-func (a *AllPeers) GetPeer(ip string, port int) (*Peer, error) {
-	key := a.GenerateNodeKey(ip, port)
-	result, exists := a.Peers[key]
-	if exists {
-		return result, nil
-	} else {
-		return a.AddPeer(ip, port)
+	return &AllPeers{
+		Peers: make(map[string]*Peer),
 	}
 }
 
-func (a *AllPeers) AddPeer(ip string, port int) (*Peer, error) {
-	key := a.GenerateNodeKey(ip, port)
-	_, exists := a.Peers[key]
-	if !exists {
-		peerNode := NewPeer(ip, port)
-		a.Peers[key] = peerNode
-		return peerNode, nil
-	} else {
-		return nil, fmt.Errorf("Node with address %s and port %d already exists.", ip, port)
+// AddPeer adds a peer to the appropriate IP address maps.
+func (ap *AllPeers) AddPeer(peer *Peer) {
+	ap.lock.Lock()
+	defer ap.lock.Unlock()
+
+	ap.Peers[peer.Token] = peer
+}
+
+// GetPeerByIPv4 returns a peer by its IPv4 address.
+func (ap *AllPeers) GetPeer(token string) (*Peer, bool) {
+	ap.lock.RLock()
+	defer ap.lock.RUnlock()
+
+	peer, exists := ap.Peers[token]
+	return peer, exists
+}
+
+// RemovePeer removes a peer from the IP address maps.
+func (ap *AllPeers) RemovePeer(peer *Peer) {
+	ap.lock.Lock()
+	defer ap.lock.Unlock()
+
+	delete(ap.Peers, peer.Token)
+}
+
+// Serialize serializes the list of peers to JSON.
+func (ap *AllPeers) Serialize() ([]byte, error) {
+	ap.lock.Lock()
+	defer ap.lock.Unlock()
+
+	peersList := make([]*Peer, 0, len(ap.Peers))
+	for _, peer := range ap.Peers {
+		peersList = append(peersList, peer)
+	}
+
+	return json.Marshal(peersList)
+}
+
+// Deserialize loads the list of peers from JSON.
+func (ap *AllPeers) Deserialize(data []byte) error {
+	ap.lock.Lock()
+	defer ap.lock.Unlock()
+
+	var peersList []*Peer
+	if err := json.Unmarshal(data, &peersList); err != nil {
+		return err
+	}
+
+	// Clear existing peers map to avoid duplicates
+	ap.Peers = make(map[string]*Peer)
+
+	// Re-populate the map with deserialized peer data
+	for _, peer := range peersList {
+		if peer.IPv4Address != "" {
+			ap.Peers[peer.IPv4Address] = peer
+		}
+		if peer.IPv6Address != "" {
+			ap.Peers[peer.IPv6Address] = peer
+		}
+	}
+
+	return nil
+}
+
+type BlobReference struct {
+	Peers map[*Peer]time.Time // Maps Peer URL to the timestamp of the latest announcement.
+}
+
+// NewBlobReference creates a new BlobReference instance.
+func NewBlobReference() *BlobReference {
+	return &BlobReference{
+		Peers: make(map[*Peer]time.Time),
 	}
 }
 
-func (a *AllPeers) RemovePeer(ip string, port int) {
-	key := a.GenerateNodeKey(ip, port)
-	delete(a.Peers, key)
+// AddPeer adds or updates a peer and its announcement timestamp in the BlobReference.
+func (br *BlobReference) AddPeer(peer *Peer) {
+	br.Peers[peer] = time.Now()
+}
+
+// RemovePeer removes a peer from the BlobReference.
+func (br *BlobReference) RemovePeer(peer *Peer) {
+	delete(br.Peers, peer)
+}
+
+// AllData manages all data known to the network, mapping data addresses to BlobReferences.
+type AllData struct {
+	Data map[string]*BlobReference
+	lock sync.Mutex
+}
+
+// NewAllData creates a new AllData instance.
+func NewAllData() *AllData {
+	return &AllData{
+		Data: make(map[string]*BlobReference),
+	}
+}
+
+// AddData adds or updates a data entry with a peer URL.
+func (ad *AllData) AddData(fileAddr string, peer *Peer) {
+	ad.lock.Lock()
+	defer ad.lock.Unlock()
+
+	// If the file address is not yet known, initialize its BlobReference.
+	if _, exists := ad.Data[fileAddr]; !exists {
+		ad.Data[fileAddr] = NewBlobReference()
+	}
+	ad.Data[fileAddr].AddPeer(peer)
+}
+
+// RemovePeerFromData removes a peer from all data entries where it's listed.
+func (ad *AllData) RemovePeerFromData(peer *Peer) {
+	ad.lock.Lock()
+	defer ad.lock.Unlock()
+
+	// Iterate over all data entries and remove the peer URL from each.
+	for _, blobRef := range ad.Data {
+		blobRef.RemovePeer(peer)
+	}
 }
