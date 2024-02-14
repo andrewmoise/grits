@@ -17,7 +17,7 @@ if ('serviceWorker' in navigator) {
     } else {
         // No Service Worker is controlling the page, proceed to register
         window.addEventListener('load', function() {
-            navigator.serviceWorker.register('/service-worker.js').then(function(registration) {
+            navigator.serviceWorker.register('/grits/v1/service-worker.js').then(function(registration) {
                 console.log('ServiceWorker registration successful with scope: ', registration.scope);
 
                 // Listen for the service worker to be ready, then post message

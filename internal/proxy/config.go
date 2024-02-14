@@ -10,11 +10,12 @@ import (
 
 type Config struct {
 	// General networking configuration
-	ThisHost   string `json:"ThisHost"`
-	ThisPort   int    `json:"ThisPort"`
-	IsRootNode bool   `json:"IsRootNode"`
-	RootHost   string `json:"RootHost"`
-	RootPort   int    `json:"RootPort"`
+	ThisHost    string `json:"ThisHost"`
+	ThisPort    int    `json:"ThisPort"`
+	IsRootNode  bool   `json:"IsRootNode"`
+	RootHost    string `json:"RootHost"`
+	RootPort    int    `json:"RootPort"`
+	ServerToken string `json:"ServerToken"`
 
 	// File locations
 	ServerDir string `json:"-"`
@@ -53,20 +54,21 @@ func NewConfig() *Config {
 		IsRootNode:               false,
 		RootHost:                 "",
 		RootPort:                 0,
-		ServerDir:                ".", // Default server directory is the current directory
-		StorageSize:              100 * 1024 * 1024,
-		StorageFreeSize:          80 * 1024 * 1024,
-		DirMirrors:               []DirMirrorConfig{},
-		DhtNotifyNumber:          5,
-		DhtNotifyPeriod:          20,
-		DhtMaxResponseNodes:      10,
+		ServerToken:              "",
+		ServerDir:                ".",
+		StorageSize:              100 * 1024 * 1024,   // Max size of data
+		StorageFreeSize:          80 * 1024 * 1024,    // Size to clean down to when overfull
+		DirMirrors:               []DirMirrorConfig{}, // Dirs to put in the blob cache
+		DhtNotifyNumber:          5,                   // # of peers to notify in the DHT
+		DhtNotifyPeriod:          20,                  // # of seconds between DHT notifications
+		DhtMaxResponseNodes:      10,                  // Max # of nodes to return in a DHT response
 		DhtRefreshTime:           8 * 60 * 60,
 		DhtExpiryTime:            24 * 60 * 60,
 		MaxProxyMapAge:           24 * 60 * 60,
 		ProxyMapCleanupPeriod:    60 * 60,
-		ProxyHeartbeatPeriod:     10,
-		RootUpdatePeerListPeriod: 8,
-		RootProxyDropTimeout:     180,
+		ProxyHeartbeatPeriod:     5 * 60, // # of seconds between proxy heartbeats
+		RootUpdatePeerListPeriod: 6 * 60, // ?
+		RootProxyDropTimeout:     6 * 60, // # of seconds before root drops a proxy
 	}
 }
 
