@@ -5,13 +5,13 @@ import (
 	"log"
 	"net/http"
 
-	"grits/internal/proxy"
+	"grits/internal/grits"
 
 	"github.com/quic-go/quic-go/http3"
 )
 
 func main() {
-	config := proxy.NewConfig()
+	config := grits.NewConfig()
 	config.ServerDir = "."
 
 	// FIXME - need to rewrite

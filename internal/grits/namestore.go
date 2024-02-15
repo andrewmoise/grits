@@ -1,4 +1,4 @@
-package proxy
+package grits
 
 import (
 	"encoding/json"
@@ -6,8 +6,6 @@ import (
 	"log"
 	"os"
 	"sync"
-
-	"grits/internal/grits"
 )
 
 type NameStore struct {
@@ -34,12 +32,12 @@ func (ns *NameStore) GetRoot() *RevNode {
 	return ns.root
 }
 
-func (ns *NameStore) cloneRoot() map[string]*grits.FileAddr {
+func (ns *NameStore) cloneRoot() map[string]*FileAddr {
 	if ns.root == nil {
 		return nil
 	}
 
-	m := make(map[string]*grits.FileAddr)
+	m := make(map[string]*FileAddr)
 	for k, v := range ns.root.Tree.Children {
 		m[k] = v
 	}
@@ -47,7 +45,7 @@ func (ns *NameStore) cloneRoot() map[string]*grits.FileAddr {
 	return m
 }
 
-func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*grits.FileAddr) error) error {
+func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*FileAddr) error) error {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -57,7 +55,7 @@ func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*grits.F
 	// Clone the current root's children for modification
 	newRoot := ns.cloneRoot()
 	if newRoot == nil {
-		newRoot = make(map[string]*grits.FileAddr)
+		newRoot = make(map[string]*FileAddr)
 	}
 
 	// Call the passed function to get the modified version of children
@@ -85,7 +83,7 @@ func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*grits.F
 	return nil
 }
 
-func (ns *NameStore) ResolveName(name string) *grits.FileAddr {
+func (ns *NameStore) ResolveName(name string) *FileAddr {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
@@ -150,8 +148,8 @@ func (bs *BlobStore) DeserializeNameStore(saveFile string) (*NameStore, error) {
 		return nil, fmt.Errorf("root address not found in NameStore reference")
 	}
 
-	var rootAddr *grits.FileAddr
-	rootAddr, err = grits.NewFileAddrFromString(rootStr)
+	var rootAddr *FileAddr
+	rootAddr, err = NewFileAddrFromString(rootStr)
 	if err != nil {
 		return nil, fmt.Errorf("error creating addr: %v", err)
 	}

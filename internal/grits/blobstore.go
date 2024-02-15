@@ -1,4 +1,4 @@
-package proxy
+package grits
 
 import (
 	"crypto/sha256"
@@ -10,14 +10,12 @@ import (
 	"sort"
 	"sync"
 	"time"
-
-	"grits/internal/grits"
 )
 
 type BlobStore struct {
 	config      *Config
-	files       map[string]*grits.CachedFile // All files in the store
-	mtx         sync.RWMutex                 // Mutex for thread-safe access
+	files       map[string]*CachedFile // All files in the store
+	mtx         sync.RWMutex           // Mutex for thread-safe access
 	currentSize uint64
 	storageDir  string
 }
@@ -25,7 +23,7 @@ type BlobStore struct {
 func NewBlobStore(config *Config) *BlobStore {
 	bs := &BlobStore{
 		config: config,
-		files:  make(map[string]*grits.CachedFile),
+		files:  make(map[string]*CachedFile),
 	}
 
 	bs.storageDir = config.ServerPath("var/blobs")
@@ -61,7 +59,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 			}
 
 			// Construct the file address from its hash
-			fileAddr := grits.NewFileAddr(hash, size)
+			fileAddr := NewFileAddr(hash, size)
 			relativePath, _ := filepath.Rel(bs.storageDir, path)
 
 			if relativePath != fileAddr.String() {
@@ -70,7 +68,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 			}
 
 			// Create a CachedFile object and add it to the map
-			bs.files[relativePath] = &grits.CachedFile{
+			bs.files[relativePath] = &CachedFile{
 				Path:        path,
 				Size:        size,
 				RefCount:    0, // Initially, no references to the file
@@ -82,7 +80,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 	})
 }
 
-func (bs *BlobStore) ReadFile(fileAddr *grits.FileAddr) (*grits.CachedFile, error) {
+func (bs *BlobStore) ReadFile(fileAddr *FileAddr) (*CachedFile, error) {
 	bs.mtx.RLock()
 	defer bs.mtx.RUnlock()
 
@@ -96,12 +94,12 @@ func (bs *BlobStore) ReadFile(fileAddr *grits.FileAddr) (*grits.CachedFile, erro
 	return cachedFile, nil
 }
 
-func (bs *BlobStore) AddLocalFile(srcPath string) (*grits.CachedFile, error) {
+func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
 	hashStr, size, err := computeSHA256AndSize(srcPath)
 	if err != nil {
 		return nil, err
 	}
-	fileAddr := grits.NewFileAddr(hashStr, size) // Assuming NewFileAddr now accepts a string hash
+	fileAddr := NewFileAddr(hashStr, size) // Assuming NewFileAddr now accepts a string hash
 
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
@@ -116,7 +114,7 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*grits.CachedFile, error) {
 		return nil, err
 	}
 
-	cachedFile := &grits.CachedFile{
+	cachedFile := &CachedFile{
 		Path:        destPath,
 		Size:        size,
 		RefCount:    1,
@@ -129,7 +127,7 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*grits.CachedFile, error) {
 	return cachedFile, nil
 }
 
-func (bs *BlobStore) AddDataBlock(data []byte) (*grits.CachedFile, error) {
+func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	// Compute hash and size of the data
 	hash := computeSHA256(data)
 	size := uint64(len(data))
@@ -137,7 +135,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*grits.CachedFile, error) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	fileAddr := grits.NewFileAddr(hash, size)
+	fileAddr := NewFileAddr(hash, size)
 
 	// Check if the data block already exists in the store
 	if cachedFile, exists := bs.files[fileAddr.String()]; exists {
@@ -154,7 +152,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*grits.CachedFile, error) {
 	}
 
 	// Create a new CachedFile for the data block
-	cachedFile := &grits.CachedFile{
+	cachedFile := &CachedFile{
 		Path:        destPath,
 		Size:        size,
 		RefCount:    1, // Initialize RefCount to 1 for new data blocks
@@ -169,7 +167,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*grits.CachedFile, error) {
 	return cachedFile, nil
 }
 
-func (bs *BlobStore) Touch(cf *grits.CachedFile) {
+func (bs *BlobStore) Touch(cf *CachedFile) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
@@ -177,7 +175,7 @@ func (bs *BlobStore) Touch(cf *grits.CachedFile) {
 	os.Chtimes(cf.Path, time.Now(), time.Now())
 }
 
-func (bs *BlobStore) Release(cachedFile *grits.CachedFile) {
+func (bs *BlobStore) Release(cachedFile *CachedFile) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
@@ -216,7 +214,7 @@ func (bs *BlobStore) evictOldFiles() {
 		return
 	}
 
-	var sortedFiles []*grits.CachedFile
+	var sortedFiles []*CachedFile
 
 	for _, file := range bs.files {
 		sortedFiles = append(sortedFiles, file)

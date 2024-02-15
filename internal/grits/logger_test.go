@@ -1,4 +1,4 @@
-package proxy
+package grits
 
 import (
 	"bytes"
@@ -30,32 +30,32 @@ func TestBasicLogging(t *testing.T) {
 }
 
 func TestLoggingAfterStop(t *testing.T) {
-    // Backup the original stderr
-    originalStderr := os.Stderr
+	// Backup the original stderr
+	originalStderr := os.Stderr
 
-    // Create a reader and writer pair using os.Pipe
-    r, w, _ := os.Pipe()
+	// Create a reader and writer pair using os.Pipe
+	r, w, _ := os.Pipe()
 
-    // Redirect stderr to the writer part of the pipe
-    os.Stderr = w
+	// Redirect stderr to the writer part of the pipe
+	os.Stderr = w
 
-    logger := NewLogger()
-    logger.Start()
-    logger.Stop()
+	logger := NewLogger()
+	logger.Start()
+	logger.Stop()
 
-    testMessage := "This message goes to stderr."
-    logger.Log("test", testMessage)
+	testMessage := "This message goes to stderr."
+	logger.Log("test", testMessage)
 
-    // Reset stderr back to its original value and close the writer
-    os.Stderr = originalStderr
-    w.Close()
+	// Reset stderr back to its original value and close the writer
+	os.Stderr = originalStderr
+	w.Close()
 
-    // Read from the reader part of the pipe to capture the data written to stderr
-    var buf bytes.Buffer
-    io.Copy(&buf, r)
-    r.Close()
+	// Read from the reader part of the pipe to capture the data written to stderr
+	var buf bytes.Buffer
+	io.Copy(&buf, r)
+	r.Close()
 
-    assert.Contains(t, buf.String(), testMessage)
+	assert.Contains(t, buf.String(), testMessage)
 }
 
 func TestConcurrency(t *testing.T) {
@@ -103,4 +103,3 @@ func TestPanicOnStopWithoutStart(t *testing.T) {
 		logger.Stop()
 	})
 }
-

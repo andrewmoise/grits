@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"grits/internal/grits"
-	"grits/internal/proxy"
 	"net/http"
 	"os"
 	"sync"
@@ -13,14 +12,14 @@ import (
 
 type Server struct {
 	// Core stuff
-	Config    *proxy.Config
-	BlobStore *proxy.BlobStore
-	NameStore *proxy.NameStore
+	Config    *grits.Config
+	BlobStore *grits.BlobStore
+	NameStore *grits.NameStore
 
 	// HTTP stuff
 	HTTPServer  *http.Server
 	Mux         *http.ServeMux
-	DirBackings []*proxy.DirBacking
+	DirBackings []*grits.DirBacking
 
 	// DHT stuff
 	Peers           grits.AllPeers // To store information about known peers
@@ -30,13 +29,13 @@ type Server struct {
 }
 
 // NewServer initializes and returns a new Server instance.
-func NewServer(config *proxy.Config) (*Server, error) {
-	bs := proxy.NewBlobStore(config)
+func NewServer(config *grits.Config) (*Server, error) {
+	bs := grits.NewBlobStore(config)
 	if bs == nil {
 		return nil, fmt.Errorf("failed to initialize blob store")
 	}
 
-	var ns *proxy.NameStore
+	var ns *grits.NameStore
 
 	// FIXME - Duplicated
 	info, err := os.Stat(config.ServerPath("var/namespace_store.json"))
@@ -64,12 +63,12 @@ func NewServer(config *proxy.Config) (*Server, error) {
 		HTTPServer: &http.Server{
 			Addr: ":" + fmt.Sprintf("%d", config.ThisPort),
 		},
-		DirBackings: make([]*proxy.DirBacking, 0),
+		DirBackings: make([]*grits.DirBacking, 0),
 		Mux:         http.NewServeMux(),
 	}
 
 	for _, mirror := range config.DirMirrors {
-		dirBacking := proxy.NewDirBacking(mirror.SourceDir, mirror.CacheLinksDir, bs)
+		dirBacking := grits.NewDirBacking(mirror.SourceDir, mirror.CacheLinksDir, bs)
 		srv.DirBackings = append(srv.DirBackings, dirBacking)
 	}
 
@@ -104,7 +103,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	return s.HTTPServer.Shutdown(ctx)
 }
 
-func initStore(bs *proxy.BlobStore, nameStoreFile string) (*proxy.NameStore, error) {
+func initStore(bs *grits.BlobStore, nameStoreFile string) (*grits.NameStore, error) {
 	m := make(map[string]*grits.FileAddr)
 
 	fn, err := bs.CreateFileNode(m)
@@ -117,6 +116,6 @@ func initStore(bs *proxy.BlobStore, nameStoreFile string) (*proxy.NameStore, err
 		return nil, err
 	}
 
-	ns := proxy.NewNameStore(rn, nameStoreFile)
+	ns := grits.NewNameStore(rn, nameStoreFile)
 	return ns, nil
 }

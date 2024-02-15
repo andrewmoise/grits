@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"grits/internal/proxy"
+	"grits/internal/grits"
 	"grits/internal/server"
 )
 
@@ -21,7 +21,7 @@ func setupTestServer(t *testing.T) (*server.Server, func()) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	config := proxy.NewConfig()
+	config := grits.NewConfig()
 	config.ServerDir = tempDir
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing

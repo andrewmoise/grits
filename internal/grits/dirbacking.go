@@ -1,8 +1,7 @@
-package proxy
+package grits
 
 import (
 	"fmt"
-	"grits/internal/grits"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,7 +15,7 @@ type DirBacking struct {
 	blobStore *BlobStore
 	srcPath   string
 	destPath  string
-	files     map[string]*grits.CachedFile // Map to track files
+	files     map[string]*CachedFile // Map to track files
 	mtx       sync.Mutex
 }
 
@@ -32,7 +31,7 @@ func NewDirBacking(srcPath string, destPath string, blobStore *BlobStore) *DirBa
 		blobStore: blobStore,
 		srcPath:   srcPath,
 		destPath:  destPath,
-		files:     make(map[string]*grits.CachedFile),
+		files:     make(map[string]*CachedFile),
 	}
 }
 

@@ -1,4 +1,4 @@
-package proxy
+package grits
 
 import (
 	"os"
@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"testing"
 	"time"
-
-	"grits/internal/grits"
 )
 
 func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, string, func()) {
@@ -85,7 +83,7 @@ func TestDirBacking_FileOperations(t *testing.T) {
 	verifyFileContent(t, destPath, "file4.txt", "Content for file 4", blobStore)     // file4 should be created
 }
 
-func verifyFileContent(t *testing.T, destPath, filename, expectedContent string, blobStore *BlobStore) *grits.FileAddr {
+func verifyFileContent(t *testing.T, destPath, filename, expectedContent string, blobStore *BlobStore) *FileAddr {
 	t.Helper()
 
 	destFilePath := filepath.Join(destPath, filename)
@@ -94,7 +92,7 @@ func verifyFileContent(t *testing.T, destPath, filename, expectedContent string,
 		t.Fatalf("Failed to read destination file address for %s: %v", filename, err)
 	}
 
-	fileAddr, err := grits.NewFileAddrFromString(string(addressContent))
+	fileAddr, err := NewFileAddrFromString(string(addressContent))
 	if err != nil {
 		t.Fatalf("Invalid file address format in destination file for %s: %v", filename, err)
 	}
@@ -116,7 +114,7 @@ func verifyFileContent(t *testing.T, destPath, filename, expectedContent string,
 	return fileAddr
 }
 
-func verifyFileAbsent(t *testing.T, destPath, filename string, blobStore *BlobStore, goneAddr *grits.FileAddr) {
+func verifyFileAbsent(t *testing.T, destPath, filename string, blobStore *BlobStore, goneAddr *FileAddr) {
 	t.Helper()
 
 	destFilePath := filepath.Join(destPath, filename)
