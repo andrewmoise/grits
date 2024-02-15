@@ -1,11 +1,9 @@
-package proxy
+package grits
 
 import (
 	"os"
 	"reflect"
 	"testing"
-
-	"grits/internal/grits"
 )
 
 // TestNameStoreSerialization ensures that a NameStore can be serialized and deserialized correctly.
@@ -23,8 +21,8 @@ func TestNameStoreSerialization(t *testing.T) {
 
 	// Add a mock FileAddr to the NameStore for testing
 	// Assuming you have a way to add entries to the NameStore
-	testAddr := &grits.FileAddr{Hash: "testhash", Size: 1234}
-	m := make(map[string]*grits.FileAddr)
+	testAddr := &FileAddr{Hash: "testhash", Size: 1234}
+	m := make(map[string]*FileAddr)
 	m["test"] = testAddr
 
 	var fn *FileNode

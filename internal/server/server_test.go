@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"grits/internal/proxy"
+	"grits/internal/grits"
 )
 
 func startHubNode(serverDir string, port int) *Server {
-	config := proxy.NewConfig()
+	config := grits.NewConfig()
 	config.ThisPort = port
 	config.IsRootNode = true
 	hubServer, err := NewServer(config)
@@ -27,7 +27,7 @@ func startHubNode(serverDir string, port int) *Server {
 }
 
 func startEdgeNode(serverDir string, port int, rootHost string, rootPort int) *Server {
-	config := proxy.NewConfig()
+	config := grits.NewConfig()
 	config.ThisPort = port
 	config.RootHost = rootHost
 	config.RootPort = rootPort

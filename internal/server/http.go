@@ -3,7 +3,6 @@ package server
 import (
 	"fmt"
 	"grits/internal/grits"
-	"grits/internal/proxy"
 	"io"
 	"log"
 	"net/http"
@@ -177,7 +176,7 @@ func (s *Server) handleNamespace() http.HandlerFunc {
 	}
 }
 
-func handleNamespaceGet(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
 	rn := ns.GetRoot()
@@ -202,7 +201,7 @@ func handleNamespaceGet(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w
 	http.Redirect(w, r, "/grits/v1/sha256/"+fa.String(), http.StatusFound)
 }
 
-func handleNamespacePut(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received PUT request for file: %s\n", path)
 
 	// Read the file content from the request body
@@ -229,7 +228,7 @@ func handleNamespacePut(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w
 	bs.SerializeNameStore(ns)
 }
 
-func handleNamespaceDelete(bs *proxy.BlobStore, ns *proxy.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespaceDelete(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received DELETE request for file: %s\n", path)
 
 	err := ns.ReviseRoot(bs, func(m map[string]*grits.FileAddr) error {

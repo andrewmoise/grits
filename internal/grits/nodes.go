@@ -1,27 +1,25 @@
-package proxy
+package grits
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
-
-	"grits/internal/grits"
 )
 
 type FileNode struct {
-	ExportedBlob *grits.CachedFile          `json:"-"` // This field is ignored by the JSON package.
-	Children     map[string]*grits.FileAddr // Maps file names to their CachedFile
+	ExportedBlob *CachedFile          `json:"-"` // This field is ignored by the JSON package.
+	Children     map[string]*FileAddr // Maps file names to their CachedFile
 }
 
 // GetFile retrieves a file by name from the FileNode.
-func (fn *FileNode) GetFile(name string) (*grits.FileAddr, bool) {
+func (fn *FileNode) GetFile(name string) (*FileAddr, bool) {
 	file, exists := fn.Children[name]
 	return file, exists
 }
 
 // CreateFileNode creates a FileNode with the specified children,
 // serializes it, stores it in the blob store, and caches it.
-func (bs *BlobStore) CreateFileNode(children map[string]*grits.FileAddr) (*FileNode, error) {
+func (bs *BlobStore) CreateFileNode(children map[string]*FileAddr) (*FileNode, error) {
 	m := make(map[string]string)
 	for k, v := range children {
 		m[k] = v.String()
@@ -32,7 +30,7 @@ func (bs *BlobStore) CreateFileNode(children map[string]*grits.FileAddr) (*FileN
 		return nil, fmt.Errorf("failed to serialize NameStore: %w", err)
 	}
 
-	var cf *grits.CachedFile
+	var cf *CachedFile
 	cf, err = bs.AddDataBlock(data)
 	if err != nil {
 		return nil, fmt.Errorf("error storing FileNode: %v", err)
@@ -44,7 +42,7 @@ func (bs *BlobStore) CreateFileNode(children map[string]*grits.FileAddr) (*FileN
 	}, nil
 }
 
-func (bs *BlobStore) FetchFileNode(addr *grits.FileAddr) (*FileNode, error) {
+func (bs *BlobStore) FetchFileNode(addr *FileAddr) (*FileNode, error) {
 	cf, err := bs.ReadFile(addr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", addr.Hash, err)
@@ -60,9 +58,9 @@ func (bs *BlobStore) FetchFileNode(addr *grits.FileAddr) (*FileNode, error) {
 		return nil, fmt.Errorf("error unmarshaling JSON from file at %s: %v", cf.Path, err)
 	}
 
-	m := make(map[string]*grits.FileAddr)
+	m := make(map[string]*FileAddr)
 	for k, v := range ref {
-		fa, err := grits.NewFileAddrFromString(v)
+		fa, err := NewFileAddrFromString(v)
 		if err != nil {
 			return nil, fmt.Errorf("error creating addr: %v", err)
 		}
@@ -76,8 +74,8 @@ func (bs *BlobStore) FetchFileNode(addr *grits.FileAddr) (*FileNode, error) {
 
 }
 
-func (fn *FileNode) CloneChildren() map[string]*grits.FileAddr {
-	clone := make(map[string]*grits.FileAddr)
+func (fn *FileNode) CloneChildren() map[string]*FileAddr {
+	clone := make(map[string]*FileAddr)
 	for k, v := range fn.Children {
 		clone[k] = v
 	}
@@ -86,9 +84,9 @@ func (fn *FileNode) CloneChildren() map[string]*grits.FileAddr {
 
 // RevNode represents a revision, containing a snapshot of the content at a point in time.
 type RevNode struct {
-	ExportedBlob *grits.CachedFile `json:"-"`
-	Tree         *FileNode         // The current state of the content
-	Previous     *RevNode          // Pointer to the previous revision, nil if it's the first
+	ExportedBlob *CachedFile `json:"-"`
+	Tree         *FileNode   // The current state of the content
+	Previous     *RevNode    // Pointer to the previous revision, nil if it's the first
 }
 
 // NewRevNode creates a new instance of RevNode.
@@ -115,7 +113,7 @@ func (bs *BlobStore) CreateRevNode(tree *FileNode, previous *RevNode) (*RevNode,
 		return nil, fmt.Errorf("failed to serialize NameStore: %w", err)
 	}
 
-	var cf *grits.CachedFile
+	var cf *CachedFile
 	cf, err = bs.AddDataBlock(data)
 	if err != nil {
 		return nil, fmt.Errorf("error storing FileNode: %v", err)
@@ -128,7 +126,7 @@ func (bs *BlobStore) CreateRevNode(tree *FileNode, previous *RevNode) (*RevNode,
 	}, nil
 }
 
-func (bs *BlobStore) FetchRevNode(addr *grits.FileAddr) (*RevNode, error) {
+func (bs *BlobStore) FetchRevNode(addr *FileAddr) (*RevNode, error) {
 	cf, err := bs.ReadFile(addr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", addr.Hash, err)
@@ -154,7 +152,7 @@ func (bs *BlobStore) FetchRevNode(addr *grits.FileAddr) (*RevNode, error) {
 	rn := &RevNode{ExportedBlob: cf}
 
 	if previousStr, exists := ref["previous"]; exists {
-		previousAddr, _ := grits.NewFileAddrFromString(previousStr)
+		previousAddr, _ := NewFileAddrFromString(previousStr)
 		rn.Previous, err = bs.FetchRevNode(previousAddr)
 		if err != nil {
 			return nil, fmt.Errorf("error fetching previous RevNode: %v", err)
@@ -162,7 +160,7 @@ func (bs *BlobStore) FetchRevNode(addr *grits.FileAddr) (*RevNode, error) {
 	}
 
 	if treeStr, exists := ref["tree"]; exists {
-		treeAddr, _ := grits.NewFileAddrFromString(treeStr)
+		treeAddr, _ := NewFileAddrFromString(treeStr)
 		rn.Tree, err = bs.FetchFileNode(treeAddr)
 		if err != nil {
 			return nil, fmt.Errorf("error fetching FileNode: %v", err)

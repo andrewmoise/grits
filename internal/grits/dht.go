@@ -1,4 +1,4 @@
-package proxy
+package grits
 
 import (
 	"crypto/sha256"
@@ -6,15 +6,13 @@ import (
 	"encoding/hex"
 	"fmt"
 	"sort"
-
-	"grits/internal/grits"
 )
 
 // BlobFinder finds the closest peers for a given file address.
 type BlobFinder struct {
 	SortedPeers []struct {
 		Index uint64
-		Peer  *grits.Peer
+		Peer  *Peer
 	}
 }
 
@@ -24,7 +22,7 @@ func NewBlobFinder() *BlobFinder {
 }
 
 // convertPeerToInteger converts a PeerNode into an integer by hashing its IP and port.
-func convertPeerToInteger(peer *grits.Peer) uint64 {
+func convertPeerToInteger(peer *Peer) uint64 {
 	hasher := sha256.New()
 	hasher.Write([]byte(fmt.Sprintf("%s:evenly distribute hash, please", peer.Token)))
 	hash := hasher.Sum(nil)
@@ -40,16 +38,16 @@ func convertFileAddrToInteger(fileAddr string) uint64 {
 }
 
 // UpdatePeers updates the internal sorted list of peers.
-func (bf *BlobFinder) UpdatePeers(allPeers *grits.AllPeers) {
+func (bf *BlobFinder) UpdatePeers(allPeers *AllPeers) {
 	bf.SortedPeers = make([]struct {
 		Index uint64
-		Peer  *grits.Peer
+		Peer  *Peer
 	}, 0, len(allPeers.Peers))
 
 	for _, peer := range allPeers.Peers {
 		bf.SortedPeers = append(bf.SortedPeers, struct {
 			Index uint64
-			Peer  *grits.Peer
+			Peer  *Peer
 		}{
 			Index: convertPeerToInteger(peer),
 			Peer:  peer,
@@ -62,7 +60,7 @@ func (bf *BlobFinder) UpdatePeers(allPeers *grits.AllPeers) {
 }
 
 // GetClosestPeers finds the n closest peers to a given file address.
-func (bf *BlobFinder) GetClosestPeers(fileAddr *grits.FileAddr, n int) ([]*grits.Peer, error) {
+func (bf *BlobFinder) GetClosestPeers(fileAddr *FileAddr, n int) ([]*Peer, error) {
 	if len(bf.SortedPeers) == 0 {
 		return nil, fmt.Errorf("no peers")
 	}
@@ -79,7 +77,7 @@ func (bf *BlobFinder) GetClosestPeers(fileAddr *grits.FileAddr, n int) ([]*grits
 		}
 	}
 
-	var result []*grits.Peer
+	var result []*Peer
 	i, j := left, 0
 	for j < n {
 		index := i % len(bf.SortedPeers)
@@ -99,7 +97,7 @@ func (bf *BlobFinder) GetClosestPeers(fileAddr *grits.FileAddr, n int) ([]*grits
 }
 
 // containsPeer checks if a slice of *Peer contains a specific *Peer.
-func containsPeer(slice []*grits.Peer, item *grits.Peer) bool {
+func containsPeer(slice []*Peer, item *Peer) bool {
 	for _, a := range slice {
 		if a == item {
 			return true

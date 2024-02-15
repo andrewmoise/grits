@@ -3,7 +3,7 @@ package server
 import (
 	"bytes"
 	"fmt"
-	"grits/internal/proxy"
+	"grits/internal/grits"
 	"log"
 	"os"
 	"path/filepath"
@@ -84,7 +84,7 @@ func TestServerInteraction(t *testing.T) {
 	}
 
 	// Initialize and start the first server
-	config1 := proxy.NewConfig()
+	config1 := grits.NewConfig()
 	config1.ServerDir = projectDir
 	config1.ThisPort = 1787
 
@@ -106,10 +106,10 @@ func TestServerInteraction(t *testing.T) {
 	}
 
 	// Initialize and start the second server
-	config2 := proxy.NewConfig()
+	config2 := grits.NewConfig()
 	config2.ServerDir = tempDir2
 	config2.ThisPort = 1788
-	config2.DirMirrors = append(config2.DirMirrors, proxy.DirMirrorConfig{
+	config2.DirMirrors = append(config2.DirMirrors, grits.DirMirrorConfig{
 		SourceDir:     contentDir2,
 		CacheLinksDir: filepath.Join(tempDir2, "cache_links"),
 	})

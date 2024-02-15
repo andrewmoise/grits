@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"grits/internal/proxy"
+	"grits/internal/grits"
 	"grits/internal/server"
 )
 
@@ -29,7 +29,7 @@ func main() {
 	}
 
 	// Load the configuration
-	config := proxy.NewConfig() // Adjust NewConfig to not require parameters
+	config := grits.NewConfig() // Adjust NewConfig to not require parameters
 	if err := config.LoadFromFile(configFile); err != nil {
 		log.Printf("Failed to load configuration: %v\n", err)
 		os.Exit(1) // Exit with an error code
