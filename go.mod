@@ -3,6 +3,7 @@ module grits
 go 1.21.0
 
 require (
+	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
@@ -13,6 +14,7 @@ require (
 	github.com/quic-go/quic-go v0.41.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/stretchr/testify v1.8.4 // indirect
+	github.com/tebeka/selenium v0.9.9 // indirect
 	go.uber.org/mock v0.3.0 // indirect
 	golang.org/x/crypto v0.4.0 // indirect
 	golang.org/x/exp v0.0.0-20221205204356-47842c84f3db // indirect

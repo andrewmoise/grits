@@ -33,7 +33,7 @@ type Server struct {
 func NewServer(config *proxy.Config) (*Server, error) {
 	bs := proxy.NewBlobStore(config)
 	if bs == nil {
-		return nil, fmt.Errorf("Failed to initialize blob store")
+		return nil, fmt.Errorf("failed to initialize blob store")
 	}
 
 	var ns *proxy.NameStore
@@ -43,16 +43,16 @@ func NewServer(config *proxy.Config) (*Server, error) {
 	if err != nil {
 		ns, err = initStore(bs, "var/namespace_store.json")
 		if err != nil {
-			return nil, fmt.Errorf("Failed to initialize namespace store: %v", err)
+			return nil, fmt.Errorf("failed to initialize namespace store: %v", err)
 		}
 	} else {
 		if info.IsDir() {
-			return nil, fmt.Errorf("Namespace store file is a directory")
+			return nil, fmt.Errorf("namespace store file is a directory")
 		}
 
 		ns, err = bs.DeserializeNameStore("var/namespace_store.json")
 		if err != nil {
-			return nil, fmt.Errorf("Failed to deserialize namespace store: %v", err)
+			return nil, fmt.Errorf("failed to deserialize namespace store: %v", err)
 		}
 	}
 
