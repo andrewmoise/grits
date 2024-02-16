@@ -5,16 +5,13 @@ import (
 	"fmt"
 	"grits/internal/grits"
 	"net/http"
-	"os"
 	"sync"
-	"time"
 )
 
 type Server struct {
 	// Core stuff
 	Config    *grits.Config
 	BlobStore *grits.BlobStore
-	NameStore *grits.NameStore
 
 	// HTTP stuff
 	HTTPServer  *http.Server
@@ -22,10 +19,12 @@ type Server struct {
 	DirBackings []*grits.DirBacking
 
 	// DHT stuff
-	Peers           grits.AllPeers // To store information about known peers
-	PeerLock        sync.Mutex     // Protects access to Peers
-	HeartbeatTicker *time.Ticker   // Ticker for sending heartbeat
-	AnnounceTicker  *time.Ticker   // Ticker for announcing files
+	Peers    grits.AllPeers // To store information about known peers
+	PeerLock sync.Mutex     // Protects access to Peers
+
+	// Account stuff
+	AccountStores map[string]*grits.NameStore
+	AccountLock   sync.RWMutex // Protects access to AccountStores
 }
 
 // NewServer initializes and returns a new Server instance.
@@ -35,36 +34,22 @@ func NewServer(config *grits.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to initialize blob store")
 	}
 
-	var ns *grits.NameStore
-
-	// FIXME - Duplicated
-	info, err := os.Stat(config.ServerPath("var/namespace_store.json"))
-	if err != nil {
-		ns, err = initStore(bs, "var/namespace_store.json")
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize namespace store: %v", err)
-		}
-	} else {
-		if info.IsDir() {
-			return nil, fmt.Errorf("namespace store file is a directory")
-		}
-
-		ns, err = bs.DeserializeNameStore("var/namespace_store.json")
-		if err != nil {
-			return nil, fmt.Errorf("failed to deserialize namespace store: %v", err)
-		}
-	}
-
 	srv := &Server{
 		Config:    config,
 		BlobStore: bs,
-		NameStore: ns,
 
 		HTTPServer: &http.Server{
 			Addr: ":" + fmt.Sprintf("%d", config.ThisPort),
 		},
 		DirBackings: make([]*grits.DirBacking, 0),
 		Mux:         http.NewServeMux(),
+
+		AccountStores: make(map[string]*grits.NameStore),
+	}
+
+	err := srv.LoadAccounts()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load accounts: %v", err)
 	}
 
 	for _, mirror := range config.DirMirrors {
@@ -103,7 +88,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	return s.HTTPServer.Shutdown(ctx)
 }
 
-func initStore(bs *grits.BlobStore, nameStoreFile string) (*grits.NameStore, error) {
+func initStore(bs *grits.BlobStore) (*grits.NameStore, error) {
 	m := make(map[string]*grits.FileAddr)
 
 	fn, err := bs.CreateFileNode(m)
@@ -116,6 +101,6 @@ func initStore(bs *grits.BlobStore, nameStoreFile string) (*grits.NameStore, err
 		return nil, err
 	}
 
-	ns := grits.NewNameStore(rn, nameStoreFile)
+	ns := grits.NewNameStore(rn)
 	return ns, nil
 }

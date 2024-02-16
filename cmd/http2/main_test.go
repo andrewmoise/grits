@@ -61,7 +61,7 @@ func TestFileOperations(t *testing.T) {
 	// 1. Create 5 files
 
 	for i := 1; i <= 5; i++ {
-		url := fmt.Sprintf("%s/grits/v1/namespace/root/%d", baseURL, i)
+		url := fmt.Sprintf("%s/grits/v1/home/root/%d", baseURL, i)
 		content := fmt.Sprintf("Test data %d", i)
 		req, err := http.NewRequest(http.MethodPut, url, bytes.NewBufferString(content))
 		if err != nil {
@@ -74,7 +74,7 @@ func TestFileOperations(t *testing.T) {
 			t.Fatalf("PUT request failed: %v", err)
 		}
 		if resp.StatusCode != http.StatusOK {
-			t.Errorf("Expected OK status; got %d", resp.StatusCode)
+			t.Fatalf("Expected OK status; got %d", resp.StatusCode)
 		}
 		resp.Body.Close()
 	}
@@ -83,7 +83,7 @@ func TestFileOperations(t *testing.T) {
 
 	// 2. Get the list of files
 
-	url := fmt.Sprintf("%s/grits/v1/root/root", baseURL)
+	url := fmt.Sprintf("%s/grits/v1/home/root", baseURL)
 	resp, err := http.Get(url)
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
@@ -94,14 +94,15 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Expected OK status; got %d", resp.StatusCode)
 	}
 
-	bodyBytes, err := io.ReadAll(resp.Body)
+	var rootData map[string]string
+	err = json.NewDecoder(resp.Body).Decode(&rootData)
 	if err != nil {
-		fmt.Println("Error reading root namespace response:", err)
-		return
+		t.Fatalf("Error decoding root namespace response: %v", err)
 	}
-	rootHash := string(bodyBytes)
 
-	url = fmt.Sprintf("%s/grits/v1/sha256/%s", baseURL, rootHash)
+	treeAddr := rootData["tree"]
+
+	url = fmt.Sprintf("%s/grits/v1/sha256/%s", baseURL, treeAddr)
 	listResp, err := http.Get(url)
 	if err != nil {
 		fmt.Println("Error listing files:", err)
@@ -152,7 +153,7 @@ func TestFileOperations(t *testing.T) {
 
 	// 3. Delete file 3
 
-	url = fmt.Sprintf("%s/grits/v1/namespace/root/3", baseURL)
+	url = fmt.Sprintf("%s/grits/v1/home/root/3", baseURL)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		t.Fatalf("Creating DELETE request failed: %v", err)
@@ -171,7 +172,7 @@ func TestFileOperations(t *testing.T) {
 
 	// 4. Overwrite file 5
 
-	url = fmt.Sprintf("%s/grits/v1/namespace/root/5", baseURL)
+	url = fmt.Sprintf("%s/grits/v1/home/root/5", baseURL)
 	content := "Overwritten test data 5"
 	req, err = http.NewRequest(http.MethodPut, url, bytes.NewBufferString(content))
 	if err != nil {
@@ -191,7 +192,7 @@ func TestFileOperations(t *testing.T) {
 
 	// 5. Final listing and verification of files and their content
 
-	url = fmt.Sprintf("%s/grits/v1/root/root", baseURL)
+	url = fmt.Sprintf("%s/grits/v1/home/root", baseURL)
 	resp, err = http.Get(url)
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
@@ -202,14 +203,14 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Expected OK status; got %d", resp.StatusCode)
 	}
 
-	bodyBytes, err = io.ReadAll(resp.Body)
+	err = json.NewDecoder(resp.Body).Decode(&rootData)
 	if err != nil {
-		fmt.Println("Error reading root namespace response:", err)
-		return
+		t.Fatalf("Error decoding root namespace response: %v", err)
 	}
-	rootHash = string(bodyBytes)
 
-	url = fmt.Sprintf("%s/grits/v1/sha256/%s", baseURL, rootHash)
+	treeAddr = rootData["tree"]
+
+	url = fmt.Sprintf("%s/grits/v1/sha256/%s", baseURL, treeAddr)
 	listResp, err = http.Get(url)
 	if err != nil {
 		fmt.Println("Error listing files:", err)
@@ -218,7 +219,7 @@ func TestFileOperations(t *testing.T) {
 	defer listResp.Body.Close()
 
 	files = make(map[string]string)
-	if err = json.NewDecoder(listResp.Body).Decode(&files); err != nil {
+	if err := json.NewDecoder(listResp.Body).Decode(&files); err != nil {
 		fmt.Println("Error decoding file list:", err)
 		return
 	}

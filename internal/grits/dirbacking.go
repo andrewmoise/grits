@@ -157,14 +157,14 @@ func (db *DirBacking) addOrUpdateFile(srcPath string) error {
 
 	relPath, err := filepath.Rel(db.srcPath, srcPath)
 	if err != nil {
-		return fmt.Errorf("Error calculating relative path: %v", err)
+		return fmt.Errorf("error calculating relative path: %v", err)
 	}
 
 	// Copy the file to the destination directory
 	destPath := filepath.Join(db.destPath, relPath)
 	err = os.WriteFile(destPath, []byte(cachedFile.Address.String()), 0644)
 	if err != nil {
-		return fmt.Errorf("Error copying file to destination: %v", err)
+		return fmt.Errorf("error copying file to destination: %v", err)
 	}
 
 	log.Printf("File %s copied to destination\n", destPath)
@@ -180,14 +180,14 @@ func (db *DirBacking) removeFile(filePath string) error {
 
 		relPath, err := filepath.Rel(db.srcPath, filePath)
 		if err != nil {
-			return fmt.Errorf("Error calculating relative path: %v", err)
+			return fmt.Errorf("error calculating relative path: %v", err)
 		}
 
 		// Remove the file from the destination directory
 		destPath := filepath.Join(db.destPath, relPath)
 		err = os.Remove(destPath)
 		if err != nil {
-			return fmt.Errorf("Error removing file from destination: %v", err)
+			return fmt.Errorf("error removing file from destination: %v", err)
 		}
 	}
 

@@ -144,7 +144,7 @@ func TestServerInteraction(t *testing.T) {
 			"--no-sandbox",
 			"--disable-dev-shm-usage",
 			"--disable-gpu",
-			//"--headless",
+			"--headless",
 			"--window-size=800x600",
 			"--incognito",
 		},
