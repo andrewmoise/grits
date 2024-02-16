@@ -40,9 +40,8 @@ func (s *Server) tokenAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) setupRoutes() {
-	s.Mux.HandleFunc("/grits/v1/sha256/", corsMiddleware(s.handleSHA256()))
-	s.Mux.HandleFunc("/grits/v1/namespace/", corsMiddleware(s.handleNamespace()))
-	s.Mux.HandleFunc("/grits/v1/root/", corsMiddleware(s.handleRoot()))
+	s.Mux.HandleFunc("/grits/v1/sha256/", corsMiddleware(s.handleSha256))
+	s.Mux.HandleFunc("/grits/v1/home/", corsMiddleware(s.handleHome))
 
 	// Special handling for serving the Service Worker JS from the root
 	s.Mux.HandleFunc("/grits/v1/service-worker.js", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -61,119 +60,100 @@ func (s *Server) setupRoutes() {
 	s.HTTPServer.Handler = s.Mux
 }
 
-func (s *Server) handleSHA256() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
+func (s *Server) handleSha256(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
 
-		if r.Method != http.MethodGet {
-			http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
-			return
-		}
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
+		return
+	}
 
-		// Extract file address from URL, expecting format "{hash}:{size}"
-		addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/sha256/")
-		if addrStr == "" {
-			http.Error(w, "Missing file address", http.StatusBadRequest)
-			return
-		}
+	// Extract file address from URL, expecting format "{hash}:{size}"
+	addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/sha256/")
+	if addrStr == "" {
+		http.Error(w, "Missing file address", http.StatusBadRequest)
+		return
+	}
 
-		fileAddr, err := grits.NewFileAddrFromString(addrStr)
-		if err != nil {
-			http.Error(w, "Invalid file address format", http.StatusBadRequest)
-			return
-		}
+	fileAddr, err := grits.NewFileAddrFromString(addrStr)
+	if err != nil {
+		http.Error(w, "Invalid file address format", http.StatusBadRequest)
+		return
+	}
 
-		// Try to read the file from the blob store using the full address
-		var cachedFile *grits.CachedFile
-		cachedFile, err = s.BlobStore.ReadFile(fileAddr)
-		if err != nil {
-			http.Error(w, "File not found", http.StatusNotFound)
-			return
-		}
-		defer s.BlobStore.Release(cachedFile)
+	// Try to read the file from the blob store using the full address
+	var cachedFile *grits.CachedFile
+	cachedFile, err = s.BlobStore.ReadFile(fileAddr)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	defer s.BlobStore.Release(cachedFile)
 
-		http.ServeFile(w, r, cachedFile.Path)
-		s.BlobStore.Touch(cachedFile)
+	http.ServeFile(w, r, cachedFile.Path)
+	s.BlobStore.Touch(cachedFile)
+}
+
+// handleHome manages requests for account-specific namespaces
+func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
+	// Extract account name and filepath from the URL
+	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/grits/v1/home/"), "/", 2)
+
+	if len(parts) < 1 {
+		http.Error(w, "Invalid request path", http.StatusBadRequest)
+		return
+	}
+
+	accountName := parts[0]
+
+	fmt.Printf("Received request for account: %s\n", accountName)
+
+	s.AccountLock.Lock()
+	ns, exists := s.AccountStores[accountName]
+	s.AccountLock.Unlock()
+
+	if !exists {
+		http.Error(w, "Account not found", http.StatusNotFound)
+		return
+	}
+
+	if len(parts) == 1 {
+		handleNamespaceGetRaw(s.BlobStore, ns, w, r)
+		return
+	}
+
+	filePath := parts[1]
+	fmt.Printf("Received request for file: %s\n", filePath)
+
+	switch r.Method {
+	case http.MethodGet:
+		handleNamespaceGet(s.BlobStore, ns, filePath, w, r)
+	case http.MethodPut:
+		handleNamespacePut(s.BlobStore, ns, filePath, w, r)
+	case http.MethodDelete:
+		handleNamespaceDelete(s.BlobStore, ns, filePath, w, r)
+	default:
+		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
 	}
 }
 
-func (s *Server) handleRoot() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request: %s\n", r.URL.Path)
+func handleNamespaceGetRaw(bs *grits.BlobStore, ns *grits.NameStore, w http.ResponseWriter, r *http.Request) {
+	log.Printf("Received GET request for file root\n")
 
-		if r.Method != http.MethodGet {
-			http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
-			return
-		}
-
-		// Extract account name from URL
-		account := strings.TrimPrefix(r.URL.Path, "/grits/v1/root/")
-		if account == "" {
-			http.Error(w, "Missing account name", http.StatusBadRequest)
-			return
-		}
-
-		// For now, only 'root' account is supported
-		if account != "root" {
-			http.Error(w, "Only 'root' account is supported for now", http.StatusForbidden)
-			return
-		}
-
-		rn := s.NameStore.GetRoot() // Assuming GetRoot() method exists and returns *grits.FileAddr
-		if rn == nil {
-			http.Error(w, "Root namespace not found", http.StatusNotFound)
-			return
-		}
-
-		fn := rn.Tree
-		if fn == nil {
-			http.Error(w, "Root namespace tree not found", http.StatusNotFound)
-			return
-		}
-
-		fa := fn.ExportedBlob.Address
-
-		// Return the address of the root blob as a simple string
-		w.Write([]byte(fa.String()))
+	rn := ns.GetRoot()
+	if rn == nil {
+		http.Error(w, "Root namespace not found", http.StatusNotFound)
+		return
 	}
-}
 
-func (s *Server) handleNamespace() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("Received request: %s\n", r.URL.Path)
-
-		// Extract account name from URL
-		path := strings.TrimPrefix(r.URL.Path, "/grits/v1/namespace/")
-		if path == "" {
-			http.Error(w, "Missing account name", http.StatusBadRequest)
-			return
-		}
-
-		parts := strings.SplitN(path, "/", 2)
-		if len(parts) < 2 {
-			http.Error(w, "Incomplete namespace path", http.StatusBadRequest)
-			return
-		}
-
-		account, path := parts[0], parts[1]
-		if account != "root" {
-			http.Error(w, "Only 'root' account is supported for now", http.StatusForbidden)
-			return
-		}
-
-		switch r.Method {
-		case http.MethodGet:
-			handleNamespaceGet(s.BlobStore, s.NameStore, path, w, r)
-		case http.MethodPut:
-			// Handle PUT request: write new file content to the namespace
-			handleNamespacePut(s.BlobStore, s.NameStore, path, w, r)
-		case http.MethodDelete:
-			// Handle DELETE request: remove file from the namespace
-			handleNamespaceDelete(s.BlobStore, s.NameStore, path, w, r)
-		default:
-			http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
-		}
+	fn := rn.Tree
+	if fn == nil {
+		http.Error(w, "Root namespace tree not found", http.StatusNotFound)
+		return
 	}
+
+	fa := rn.ExportedBlob.Address
+	http.Redirect(w, r, "/grits/v1/sha256/"+fa.String(), http.StatusFound)
 }
 
 func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
@@ -204,6 +184,11 @@ func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received PUT request for file: %s\n", path)
 
+	if path == "" || path == "/" {
+		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
+		return
+	}
+
 	// Read the file content from the request body
 	data, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -224,8 +209,6 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	})
 
 	bs.Release(cf)
-
-	bs.SerializeNameStore(ns)
 }
 
 func handleNamespaceDelete(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
@@ -248,12 +231,6 @@ func handleNamespaceDelete(bs *grits.BlobStore, ns *grits.NameStore, path string
 		log.Printf("Error deleting file: %v\n", err)
 		http.Error(w, fmt.Sprintf("Error deleting file: %v", err), http.StatusNotFound)
 		return
-	}
-
-	// If the deletion was successful, serialize the updated NameStore
-	if serializeErr := bs.SerializeNameStore(ns); serializeErr != nil {
-		log.Printf("Error serializing NameStore after deletion: %v\n", serializeErr)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
 }
 

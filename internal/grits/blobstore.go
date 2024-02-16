@@ -147,6 +147,8 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	// Since the data block does not exist, store it
 	destPath := filepath.Join(bs.storageDir, fileAddr.String())
 
+	fmt.Printf("Writing file for data block to store: %s\n", destPath)
+
 	if err := os.WriteFile(destPath, data, 0644); err != nil {
 		return nil, fmt.Errorf("error writing data block to store: %v", err)
 	}
