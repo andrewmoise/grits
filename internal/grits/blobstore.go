@@ -1,7 +1,6 @@
 package grits
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -52,25 +51,22 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 			return err // return error to stop the walk
 		}
 		if !info.IsDir() {
-			hash, size, err := computeSHA256AndSize(path)
+			fileAddr, err := ComputeFileAddr(path)
 			if err != nil {
 				log.Printf("Error computing hash and size for file %s: %v\n", path, err)
 				return err // continue scanning other files even if one fails
 			}
 
-			// Construct the file address from its hash
-			fileAddr := NewFileAddr(hash, size)
 			relativePath, _ := filepath.Rel(bs.storageDir, path)
 
 			if relativePath != fileAddr.String() {
-				log.Printf("File %s seems not to be a blob. Skipping...\n", path)
+				log.Printf("File %s seems not to be a blob %s != %s. Skipping...\n", path, relativePath, fileAddr.String())
 				return nil
 			}
 
 			// Create a CachedFile object and add it to the map
 			bs.files[relativePath] = &CachedFile{
 				Path:        path,
-				Size:        size,
 				RefCount:    0, // Initially, no references to the file
 				Address:     fileAddr,
 				LastTouched: info.ModTime(),
@@ -95,11 +91,10 @@ func (bs *BlobStore) ReadFile(fileAddr *FileAddr) (*CachedFile, error) {
 }
 
 func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
-	hashStr, size, err := computeSHA256AndSize(srcPath)
+	fileAddr, err := ComputeFileAddr(srcPath)
 	if err != nil {
 		return nil, err
 	}
-	fileAddr := NewFileAddr(hashStr, size) // Assuming NewFileAddr now accepts a string hash
 
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
@@ -116,26 +111,25 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
 
 	cachedFile := &CachedFile{
 		Path:        destPath,
-		Size:        size,
 		RefCount:    1,
 		Address:     fileAddr,
 		LastTouched: time.Now(),
 	}
 
 	bs.files[fileAddr.String()] = cachedFile
-	bs.currentSize += size
+	bs.currentSize += fileAddr.Size
 	return cachedFile, nil
 }
 
-func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
+func (bs *BlobStore) AddDataBlock(data []byte, ext string) (*CachedFile, error) {
 	// Compute hash and size of the data
-	hash := computeSHA256(data)
+	hash := ComputeSHA256(data)
 	size := uint64(len(data))
 
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	fileAddr := NewFileAddr(hash, size)
+	fileAddr := NewFileAddr(hash, size, ext)
 
 	// Check if the data block already exists in the store
 	if cachedFile, exists := bs.files[fileAddr.String()]; exists {
@@ -156,7 +150,6 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	// Create a new CachedFile for the data block
 	cachedFile := &CachedFile{
 		Path:        destPath,
-		Size:        size,
 		RefCount:    1, // Initialize RefCount to 1 for new data blocks
 		Address:     fileAddr,
 		LastTouched: time.Now(),
@@ -182,30 +175,6 @@ func (bs *BlobStore) Release(cachedFile *CachedFile) {
 	defer bs.mtx.Unlock()
 
 	cachedFile.RefCount--
-}
-
-// computeSHA256 takes a byte slice and returns its SHA-256 hash as a lowercase hexadecimal string.
-func computeSHA256(data []byte) string {
-	hasher := sha256.New()
-	hasher.Write(data)                        // Write data into the hasher
-	return fmt.Sprintf("%x", hasher.Sum(nil)) // Compute the SHA-256 checksum and format it as a hex string
-}
-
-// computeSHA256AndSize computes the SHA-256 hash of the file's contents and its size, returning the hash as a hex string.
-func computeSHA256AndSize(path string) (string, uint64, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return "", 0, err
-	}
-	defer file.Close()
-
-	hasher := sha256.New()
-	size, err := io.Copy(hasher, file)
-	if err != nil {
-		return "", 0, err
-	}
-
-	return fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size), nil // Return hash as hex string
 }
 
 func (bs *BlobStore) evictOldFiles() {
@@ -234,7 +203,7 @@ func (bs *BlobStore) evictOldFiles() {
 			continue
 		}
 
-		bs.currentSize -= file.Size
+		bs.currentSize -= file.Address.Size
 		delete(bs.files, file.Address.String())
 
 		err := os.Remove(file.Path)

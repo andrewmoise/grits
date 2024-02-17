@@ -31,7 +31,7 @@ func (bs *BlobStore) CreateFileNode(children map[string]*FileAddr) (*FileNode, e
 	}
 
 	var cf *CachedFile
-	cf, err = bs.AddDataBlock(data)
+	cf, err = bs.AddDataBlock(data, ".json")
 	if err != nil {
 		return nil, fmt.Errorf("error storing FileNode: %v", err)
 	}
@@ -114,7 +114,7 @@ func (bs *BlobStore) CreateRevNode(tree *FileNode, previous *RevNode) (*RevNode,
 	}
 
 	var cf *CachedFile
-	cf, err = bs.AddDataBlock(data)
+	cf, err = bs.AddDataBlock(data, ".json")
 	if err != nil {
 		return nil, fmt.Errorf("error storing FileNode: %v", err)
 	}
