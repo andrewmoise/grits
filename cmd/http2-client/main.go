@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 )
 
 func main() {
@@ -25,116 +26,181 @@ func main() {
 		}
 		getFile(os.Args[2], os.Args[3])
 	case "put":
-		if len(os.Args) != 4 {
-			fmt.Println("Usage: client put <local-name> <remote-name>")
+		recursive := false
+		startIndex := 2
+		if os.Args[2] == "-r" {
+			recursive = true
+			startIndex++
+		}
+		if len(os.Args) < startIndex+2 {
+			fmt.Println("Usage: client put [-r] <local-name> <remote-name>")
 			os.Exit(1)
 		}
-		putFile(os.Args[2], os.Args[3])
+		localName := os.Args[startIndex]
+		remoteName := os.Args[startIndex+1]
+		if recursive {
+			err := putDirectoryRecursively(localName, remoteName)
+			if err != nil {
+				fmt.Println("Error:", err)
+				os.Exit(1)
+			}
+		} else {
+			err := putFile(localName, remoteName)
+			if err != nil {
+				fmt.Println("Error:", err)
+				os.Exit(1)
+			}
+		}
 	case "rm":
 		if len(os.Args) < 3 {
 			fmt.Println("Usage: client rm <remote-name> ...")
 			os.Exit(1)
 		}
-		removeFiles(os.Args[2:])
+		err := removeFiles(os.Args[2:])
+		if err != nil {
+			fmt.Println("Error:", err)
+			os.Exit(1)
+		}
 	case "ls":
-		listFiles()
+		err := listFiles()
+		if err != nil {
+			fmt.Println("Error:", err)
+			os.Exit(1)
+		}
 	default:
 		fmt.Println("Unknown command:", command)
 		os.Exit(1)
 	}
 }
 
-func getFile(remoteName, localName string) {
-	resp, err := http.Get("http://localhost:1787/grits/v1/namespace/" + remoteName)
+func getFile(remoteName, localName string) error {
+	resp, err := http.Get("http://localhost:1787/grits/v1/home/root/" + remoteName)
 	if err != nil {
-		fmt.Println("Error getting file:", err)
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
 	localFile, err := os.Create(localName)
 	if err != nil {
-		fmt.Println("Error creating local file:", err)
-		return
+		return err
 	}
 	defer localFile.Close()
 
 	_, err = io.Copy(localFile, resp.Body)
 	if err != nil {
-		fmt.Println("Error saving file:", err)
+		return err
 	}
+
+	return nil
 }
 
-func putFile(localName, remoteName string) {
+func putFile(localName, remoteName string) error {
 	file, err := os.Open(localName)
 	if err != nil {
-		fmt.Println("Error opening local file:", err)
-		return
+		return err
 	}
 	defer file.Close()
 
-	resp, err := http.Post("http://localhost:1787/grits/v1/namespace/"+remoteName, "application/octet-stream", file)
+	// Create a new PUT request
+	req, err := http.NewRequest(http.MethodPut, "http://localhost:1787/grits/v1/home/root/"+remoteName, file)
 	if err != nil {
-		fmt.Println("Error uploading file:", err)
-		return
+		return err
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	// Send the request using an http.Client
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
 	}
 	defer resp.Body.Close()
 
-	fmt.Println("File uploaded successfully")
+	// Check the response status code
+	if resp.StatusCode != http.StatusOK {
+		// You might also want to read the response body for error details here
+		return fmt.Errorf("failed to upload file: %s (%d)", remoteName, resp.StatusCode)
+	}
+
+	return nil
 }
 
-func removeFiles(remoteNames []string) {
-	for _, remoteName := range remoteNames {
-		req, err := http.NewRequest(http.MethodDelete, "http://localhost:1787/grits/v1/namespace/"+remoteName, nil)
+func putDirectoryRecursively(localDir, remoteDir string) error {
+	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			fmt.Println("Error creating request:", err)
-			continue
+			return err
+		}
+		if !info.IsDir() {
+			localPath := path
+			remotePath := filepath.Join(remoteDir, path[len(localDir):])
+			err := putFile(localPath, remotePath)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	return err
+}
+
+func removeFiles(remoteNames []string) error {
+	for _, remoteName := range remoteNames {
+		req, err := http.NewRequest(http.MethodDelete, "http://localhost:1787/grits/v1/home/root/"+remoteName, nil)
+		if err != nil {
+			return err
 		}
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
-			fmt.Println("Error deleting file:", err)
-			continue
+			return err
 		}
 		resp.Body.Close()
 
-		if resp.StatusCode == http.StatusOK {
-			fmt.Println("File removed:", remoteName)
-		} else {
-			fmt.Println("Failed to remove file:", remoteName)
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("failed to remove file: %s (%d)", remoteName, resp.StatusCode)
 		}
 	}
+
+	return nil
 }
 
-func listFiles() {
-	resp, err := http.Get("http://localhost:1787/grits/v1/root/root")
+func listFiles() error {
+	resp, err := http.Get("http://localhost:1787/grits/v1/home/root")
 	if err != nil {
-		fmt.Println("Error fetching root namespace:", err)
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Println("Error reading root namespace response:", err)
-		return
+	// Read and parse the JSON response
+	var rootObj map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&rootObj); err != nil {
+		return err
 	}
-	rootHash := string(bodyBytes)
 
-	listResp, err := http.Get("http://localhost:1787/grits/v1/sha256/" + rootHash)
+	// Extract the 'tree' member as a string
+	treeValue, ok := rootObj["tree"].(string)
+	if !ok {
+		return fmt.Errorf("'tree' member is not a string or missing in the response")
+	}
+
+	listResp, err := http.Get("http://localhost:1787/grits/v1/sha256/" + treeValue)
 	if err != nil {
-		fmt.Println("Error listing files:", err)
-		return
+		return err
 	}
 	defer listResp.Body.Close()
+	if listResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to retrieve file list: %d", listResp.StatusCode)
+	}
 
 	var files map[string]string
 	if err := json.NewDecoder(listResp.Body).Decode(&files); err != nil {
-		fmt.Println("Error decoding file list:", err)
-		return
+		return err
 	}
 
 	for name, hash := range files {
 		log.Printf("%s -> %s\n", name, hash)
 	}
+
+	return nil
 }

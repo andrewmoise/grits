@@ -13,7 +13,7 @@ import (
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:1787") // Or "*" for a public API
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		// If it's an OPTIONS request, respond with OK status and return
@@ -106,7 +106,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 
 	accountName := parts[0]
 
-	fmt.Printf("Received request for account: %s\n", accountName)
+	log.Printf("Received request for account: %s\n", accountName)
 
 	s.AccountLock.Lock()
 	ns, exists := s.AccountStores[accountName]
@@ -123,7 +123,8 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filePath := parts[1]
-	fmt.Printf("Received request for file: %s\n", filePath)
+	log.Printf("Received request for file: %s\n", filePath)
+	log.Printf("Method is %s\n", r.Method)
 
 	switch r.Method {
 	case http.MethodGet:
