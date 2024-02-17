@@ -51,11 +51,7 @@ func main() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		if err := srv.Run(); err != nil {
-			log.Printf("Server error: %v\n", err)
-		}
-	}()
+	srv.Start()
 
 	<-signals
 
