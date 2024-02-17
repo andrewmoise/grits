@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 )
 
@@ -197,8 +198,11 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 		return
 	}
 
+	// Extract the file extension, including the leading dot
+	ext := filepath.Ext(path)
+
 	// Store the file content in the blob store
-	cf, err := bs.AddDataBlock(data)
+	cf, err := bs.AddDataBlock(data, ext)
 	if err != nil {
 		http.Error(w, "Failed to store file content", http.StatusInternalServerError)
 		return

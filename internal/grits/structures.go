@@ -1,9 +1,12 @@
 package grits
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,47 +14,79 @@ import (
 )
 
 type FileAddr struct {
-	Hash string // SHA-256 hash as a lowercase hexadecimal string.
-	Size uint64 // 64-bit size.
+	Hash      string // SHA-256 hash as a lowercase hexadecimal string.
+	Size      uint64 // 64-bit size.
+	Extension string // File extension, including the leading dot.
 }
 
-// NewFileAddr creates a new FileAddr with a hash string and size.
-func NewFileAddr(hash string, size uint64) *FileAddr {
-	return &FileAddr{Hash: hash, Size: size}
+// NewFileAddr creates a new FileAddr with a hash string, size, and extension.
+func NewFileAddr(hash string, size uint64, extension string) *FileAddr {
+	return &FileAddr{Hash: hash, Size: size, Extension: extension}
 }
 
+// NewFileAddrFromString creates a FileAddr from a string format "hash-size.extension" or "hash-size" for no extension.
 func NewFileAddrFromString(addrStr string) (*FileAddr, error) {
-	// Split the address into hash and size
-	parts := strings.SplitN(addrStr, ":", 2)
+	parts := strings.SplitN(addrStr, "-", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid file address format - %s", addrStr)
 	}
-	hash, sizeStr := parts[0], parts[1]
 
-	// Convert size from string to uint64
+	hash := parts[0]
+	sizeExt := strings.SplitN(parts[1], ".", 2)
+	sizeStr := sizeExt[0]
+	var extension string
+	if len(sizeExt) == 2 {
+		extension = "." + sizeExt[1]
+	}
+
 	size, err := strconv.ParseUint(sizeStr, 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid file size - %s", sizeStr)
 	}
 
-	// Create FileAddr from extracted hash and size
-	fileAddr := &FileAddr{Hash: hash, Size: size}
-	return fileAddr, nil
+	return NewFileAddr(hash, size, extension), nil
 }
 
-// Equals checks if two FileAddr instances are equal.
-func (fa *FileAddr) Equals(other *FileAddr) bool {
-	return fa.Hash == other.Hash && fa.Size == other.Size
+// ComputeSHA256 takes a byte slice and returns its SHA-256 hash as a lowercase hexadecimal string.
+func ComputeSHA256(data []byte) string {
+	hasher := sha256.New()
+	hasher.Write(data)                        // Write data into the hasher
+	return fmt.Sprintf("%x", hasher.Sum(nil)) // Compute the SHA-256 checksum and format it as a hex string
 }
 
-// String returns the string representation of FileAddr.
+// String returns the string representation of FileAddr, including the extension if present.
 func (fa *FileAddr) String() string {
-	return fmt.Sprintf("%s:%d", fa.Hash, fa.Size)
+	return fmt.Sprintf("%s-%d%s", fa.Hash, fa.Size, fa.Extension)
+}
+
+// Equals checks if two FileAddr instances are equal, including their extensions.
+func (fa *FileAddr) Equals(other *FileAddr) bool {
+	return fa.Hash == other.Hash && fa.Size == other.Size && fa.Extension == other.Extension
+}
+
+// computeFileAddr computes the SHA-256 hash, size, and file extension for an existing file,
+// and returns a new FileAddr instance based on these parameters.
+func ComputeFileAddr(path string) (*FileAddr, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	size, err := io.Copy(hasher, file)
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract the file extension, including the leading dot
+	ext := filepath.Ext(path)
+
+	return NewFileAddr(fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size), ext), nil
 }
 
 type CachedFile struct {
 	Path        string
-	Size        uint64
 	RefCount    int
 	Address     *FileAddr
 	LastTouched time.Time
@@ -61,7 +96,6 @@ type CachedFile struct {
 func NewCachedFile(path string, refCount int, fileAddr *FileAddr) *CachedFile {
 	return &CachedFile{
 		Path:        path,
-		Size:        fileAddr.Size,
 		RefCount:    refCount,
 		Address:     fileAddr,
 		LastTouched: time.Now(),
