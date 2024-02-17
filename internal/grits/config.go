@@ -21,8 +21,9 @@ type Config struct {
 	ServerDir string `json:"-"`
 
 	// Storage configuration
-	StorageSize     uint64 `json:"StorageSize"`
-	StorageFreeSize uint64 `json:"StorageFreeSize"`
+	StorageSize         uint64 `json:"StorageSize"`
+	StorageFreeSize     uint64 `json:"StorageFreeSize"`
+	NamespaceSavePeriod int    `json:"NamespaceSavePeriod"`
 
 	// Directories to cache
 	DirMirrors []DirMirrorConfig `json:"DirMirrors"`
@@ -49,19 +50,24 @@ type DirMirrorConfig struct {
 // NewConfig creates a new configuration instance with default values.
 func NewConfig() *Config {
 	return &Config{
-		ThisHost:                 "127.0.0.1",
-		ThisPort:                 1787,
-		IsRootNode:               false,
-		RootHost:                 "",
-		RootPort:                 0,
-		ServerToken:              "",
-		ServerDir:                ".",
-		StorageSize:              100 * 1024 * 1024,   // Max size of data
-		StorageFreeSize:          80 * 1024 * 1024,    // Size to clean down to when overfull
-		DirMirrors:               []DirMirrorConfig{}, // Dirs to put in the blob cache
-		DhtNotifyNumber:          5,                   // # of peers to notify in the DHT
-		DhtNotifyPeriod:          20,                  // # of seconds between DHT notifications
-		DhtMaxResponseNodes:      10,                  // Max # of nodes to return in a DHT response
+		ThisHost:   "127.0.0.1",
+		ThisPort:   1787,
+		IsRootNode: false,
+		RootHost:   "",
+		RootPort:   0,
+
+		ServerToken: "",
+		ServerDir:   ".",
+
+		StorageSize:         100 * 1024 * 1024, // Max size of data
+		StorageFreeSize:     80 * 1024 * 1024,  // Size to clean down to when overfull
+		NamespaceSavePeriod: 30,                // # of seconds between namespace checkpoints
+
+		DirMirrors: []DirMirrorConfig{}, // Dirs to put in the blob cache
+
+		DhtNotifyNumber:          5,  // # of peers to notify in the DHT
+		DhtNotifyPeriod:          20, // # of seconds between DHT notifications
+		DhtMaxResponseNodes:      10, // Max # of nodes to return in a DHT response
 		DhtRefreshTime:           8 * 60 * 60,
 		DhtExpiryTime:            24 * 60 * 60,
 		MaxProxyMapAge:           24 * 60 * 60,

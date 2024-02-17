@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"grits/internal/grits"
+	"log"
 	"net/http"
 	"sync"
+	"time"
 )
 
 type Server struct {
@@ -25,6 +27,10 @@ type Server struct {
 	// Account stuff
 	AccountStores map[string]*grits.NameStore
 	AccountLock   sync.RWMutex // Protects access to AccountStores
+
+	// Periodic tasks
+	taskStop chan struct{}
+	taskWg   sync.WaitGroup
 }
 
 // NewServer initializes and returns a new Server instance.
@@ -45,6 +51,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 		Mux:         http.NewServeMux(),
 
 		AccountStores: make(map[string]*grits.NameStore),
+		taskStop:      make(chan struct{}),
 	}
 
 	err := srv.LoadAccounts()
@@ -58,24 +65,35 @@ func NewServer(config *grits.Config) (*Server, error) {
 	}
 
 	srv.setupRoutes()
+
 	return srv, nil
 }
 
-func (s *Server) Run() error {
+func (s *Server) Run() {
 	for _, db := range s.DirBackings {
 		db.Start()
 	}
+
+	s.AddPeriodicTask(time.Duration(s.Config.NamespaceSavePeriod)*time.Second, s.SaveAccounts)
 
 	err := s.HTTPServer.ListenAndServe()
 	if err == http.ErrServerClosed {
 		err = nil
 	}
+	if err != nil {
+		log.Printf("HTTP server error: %v\n", err)
+	}
+
+	s.StopPeriodicTasks()
+
+	err = s.SaveAccounts()
+	if err != nil {
+		log.Printf("Failed to save accounts: %v\n", err)
+	}
 
 	for _, db := range s.DirBackings {
 		db.Stop()
 	}
-
-	return err
 }
 
 func (s *Server) Start() {
