@@ -92,11 +92,7 @@ func TestServerInteraction(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Failed to initialize server 1: %v", err)
 	}
-	go func() {
-		if err := srv1.Run(); err != nil {
-			log.Printf("Server 1 error: %v\n", err)
-		}
-	}()
+	srv1.Start()
 
 	dir, err = os.Getwd()
 	if err != nil {
@@ -118,11 +114,7 @@ func TestServerInteraction(t *testing.T) {
 	if err != nil {
 		log.Fatalf("Failed to initialize server 2: %v", err)
 	}
-	go func() {
-		if err := srv2.Run(); err != nil {
-			log.Printf("Server 2 error: %v\n", err)
-		}
-	}()
+	srv2.Start()
 
 	// Allow some time for servers to start
 	time.Sleep(1 * time.Second)
