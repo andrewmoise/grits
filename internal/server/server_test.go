@@ -17,6 +17,8 @@ func startHubNode(serverDir string, port int) *Server {
 	config := grits.NewConfig()
 	config.ThisPort = port
 	config.IsRootNode = true
+	config.ServerDir = serverDir
+
 	hubServer, err := NewServer(config)
 	if err != nil {
 		log.Fatalf("Failed to start hub node: %v", err)
@@ -31,6 +33,8 @@ func startEdgeNode(serverDir string, port int, rootHost string, rootPort int) *S
 	config.ThisPort = port
 	config.RootHost = rootHost
 	config.RootPort = rootPort
+	config.ServerDir = serverDir
+
 	edgeServer, err := NewServer(config)
 	if err != nil {
 		log.Fatalf("Failed to start edge node on port %d: %v", port, err)
