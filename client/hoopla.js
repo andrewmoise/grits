@@ -42,14 +42,14 @@ export class Context {
     async loadFunction(functionName) {
         try {
             // Retrieve the hash reference for the function
-            const hash = await this.gritsStore.ref(`home/root/bin/${functionName}.js`);
+            const hash = await this.gritsStore.ref(`file/bin/${functionName}.js`);
             if (this.commandCache.has(hash)) {
                 // If the command is already cached, return the execute function
                 return this.commandCache.get(hash).execute;
             }
 
             // If not in cache, fetch the actual function code by hash
-            const codeArrayBuffer = await this.gritsStore.get(`sha256/${hash}`);
+            const codeArrayBuffer = await this.gritsStore.get(`blob/${hash}`);
             const codeText = new TextDecoder().decode(codeArrayBuffer);
             // Assume codeText evaluates to a command object
             const command = eval(codeText);
@@ -219,7 +219,7 @@ export class GritsStore {
         }
 
         // Extract the hash part from the redirect URL
-        const hashMatch = response.url.match(/\/sha256\/([^\/]+)$/);
+        const hashMatch = response.url.match(/\/blob\/([^\/]+)$/);
         if (!hashMatch) {
             throw new Error('Failed to extract hash from redirect URL');
         }

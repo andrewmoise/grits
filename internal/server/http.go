@@ -20,7 +20,7 @@ func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		// Set cache headers based on the request path
-		if strings.HasPrefix(r.URL.Path, "/grits/v1/sha256/") {
+		if strings.HasPrefix(r.URL.Path, "/grits/v1/blob/") {
 			// Indicate that the content can be cached indefinitely
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
@@ -54,8 +54,9 @@ func (s *Server) tokenAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) setupRoutes() {
-	s.Mux.HandleFunc("/grits/v1/sha256/", corsMiddleware(s.handleSha256))
-	s.Mux.HandleFunc("/grits/v1/home/", corsMiddleware(s.handleHome))
+	s.Mux.HandleFunc("/grits/v1/blob/", corsMiddleware(s.handleBlob))
+	s.Mux.HandleFunc("/grits/v1/file/", corsMiddleware(s.handleFile))
+	s.Mux.HandleFunc("/grits/v1/tree", corsMiddleware(s.handleTree))
 
 	// Special handling for serving the Service Worker JS from the root
 	s.Mux.HandleFunc("/grits/v1/service-worker.js", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -74,7 +75,7 @@ func (s *Server) setupRoutes() {
 	s.HTTPServer.Handler = s.Mux
 }
 
-func (s *Server) handleSha256(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
 
 	if r.Method != http.MethodGet {
@@ -83,7 +84,7 @@ func (s *Server) handleSha256(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract file address from URL, expecting format "{hash}:{size}"
-	addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/sha256/")
+	addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
 	if addrStr == "" {
 		http.Error(w, "Missing file address", http.StatusBadRequest)
 		return
@@ -108,52 +109,22 @@ func (s *Server) handleSha256(w http.ResponseWriter, r *http.Request) {
 	s.BlobStore.Touch(cachedFile)
 }
 
-// handleHome manages requests for account-specific namespaces
-func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-	// Extract account name and filepath from the URL
-	parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/grits/v1/home/"), "/", 2)
+func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
 
-	if len(parts) < 1 {
-		http.Error(w, "Invalid request path", http.StatusBadRequest)
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
 		return
 	}
 
-	accountName := parts[0]
-
-	log.Printf("Received request for account: %s\n", accountName)
-
+	accountName := "root"
 	s.AccountLock.Lock()
 	ns, exists := s.AccountStores[accountName]
 	s.AccountLock.Unlock()
-
 	if !exists {
 		http.Error(w, "Account not found", http.StatusNotFound)
 		return
 	}
-
-	if len(parts) == 1 {
-		handleNamespaceGetRaw(s.BlobStore, ns, w, r)
-		return
-	}
-
-	filePath := parts[1]
-	log.Printf("Received request for file: %s\n", filePath)
-	log.Printf("Method is %s\n", r.Method)
-
-	switch r.Method {
-	case http.MethodGet:
-		handleNamespaceGet(s.BlobStore, ns, filePath, w, r)
-	case http.MethodPut:
-		handleNamespacePut(s.BlobStore, ns, filePath, w, r)
-	case http.MethodDelete:
-		handleNamespaceDelete(s.BlobStore, ns, filePath, w, r)
-	default:
-		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
-	}
-}
-
-func handleNamespaceGetRaw(bs *grits.BlobStore, ns *grits.NameStore, w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received GET request for file root\n")
 
 	rn := ns.GetRoot()
 	if rn == nil {
@@ -168,7 +139,36 @@ func handleNamespaceGetRaw(bs *grits.BlobStore, ns *grits.NameStore, w http.Resp
 	}
 
 	fa := rn.ExportedBlob.Address
-	http.Redirect(w, r, "/grits/v1/sha256/"+fa.String(), http.StatusFound)
+	http.Redirect(w, r, "/grits/v1/blob/"+fa.String(), http.StatusFound)
+}
+
+// handleFile manages requests for account-specific namespaces
+func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
+	// Extract account name and filepath from the URL
+	filePath := strings.TrimPrefix(r.URL.Path, "/grits/v1/file/")
+	accountName := "root"
+
+	s.AccountLock.Lock()
+	ns, exists := s.AccountStores[accountName]
+	s.AccountLock.Unlock()
+	if !exists {
+		http.Error(w, "Account not found", http.StatusNotFound)
+		return
+	}
+
+	log.Printf("Received request for file: %s\n", filePath)
+	log.Printf("Method is %s\n", r.Method)
+
+	switch r.Method {
+	case http.MethodGet:
+		handleNamespaceGet(s.BlobStore, ns, filePath, w, r)
+	case http.MethodPut:
+		handleNamespacePut(s.BlobStore, ns, filePath, w, r)
+	case http.MethodDelete:
+		handleNamespaceDelete(s.BlobStore, ns, filePath, w, r)
+	default:
+		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
+	}
 }
 
 func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
@@ -195,7 +195,7 @@ func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	log.Printf("Success; we redirect to %s\n", fa.String())
 
 	// Resolve the file address and redirect to the file
-	http.Redirect(w, r, "/grits/v1/sha256/"+fa.String(), http.StatusFound)
+	http.Redirect(w, r, "/grits/v1/blob/"+fa.String(), http.StatusFound)
 }
 
 func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {

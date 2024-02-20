@@ -1,6 +1,6 @@
 window.AppConfig = {
-    peers: ["http://localhost:1788/grits/v1/sha256/"],
-    cachePrefix: "http://localhost:1787/grits/v1/sha256/"
+    peers: ["http://localhost:1788/grits/v1/blob/"],
+    cachePrefix: "http://localhost:1787/grits/v1/blob/"
 };
 
 if ('serviceWorker' in navigator) {
