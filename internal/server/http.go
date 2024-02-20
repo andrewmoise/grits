@@ -13,9 +13,22 @@ import (
 // corsMiddleware is a middleware function that adds CORS headers to the response.
 func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:1787") // Or "*" for a public API
+		log.Printf("Received %s request (port %d): %s\n", r.Method, 1787, r.URL.Path)
+
+		w.Header().Set("Access-Control-Allow-Origin", "http://localhost:1787/") // Or "*" for a public API
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		// Set cache headers based on the request path
+		if strings.HasPrefix(r.URL.Path, "/grits/v1/sha256/") {
+			// Indicate that the content can be cached indefinitely
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			// Advise clients to revalidate every time
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			w.Header().Set("Pragma", "no-cache") // For compatibility with HTTP/1.0
+			w.Header().Set("Expires", "0")
+		}
 
 		// If it's an OPTIONS request, respond with OK status and return
 		if r.Method == "OPTIONS" {
@@ -178,6 +191,8 @@ func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
+
+	log.Printf("Success; we redirect to %s\n", fa.String())
 
 	// Resolve the file address and redirect to the file
 	http.Redirect(w, r, "/grits/v1/sha256/"+fa.String(), http.StatusFound)
