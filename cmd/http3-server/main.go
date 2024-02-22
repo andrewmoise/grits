@@ -15,7 +15,7 @@ func main() {
 	config.ServerDir = "."
 
 	// FIXME - need to rewrite
-	handler := setupFileServerHandler("") //config.StorageDirectory)
+	handler := setupFileServerHandler("")
 	server := http3.Server{
 		Addr:    fmt.Sprintf("%s:%d", config.ThisHost, config.ThisPort),
 		Handler: handler,
@@ -30,14 +30,6 @@ func main() {
 
 func setupFileServerHandler(storageDir string) http.Handler {
 	mux := http.NewServeMux()
-
-	// Serve files from the specified directory
-	//fileServer := http.FileServer(http.Dir(storageDir))
-
-	//mux.HandleFunc("/grits/sha256/", func(w http.ResponseWriter, r *http.Request) {
-	// Strip the leading "/grits/sha256/" part of the URL path and serve the file
-	//http.StripPrefix("/grits/sha256/", fileServer).ServeHTTP(w, r)
-	//})
 
 	mux.HandleFunc("/grits/sha256/", func(w http.ResponseWriter, r *http.Request) {
 		filePath := fmt.Sprintf("%s/%s", storageDir, r.URL.Path[len("/grits/sha256/"):])
