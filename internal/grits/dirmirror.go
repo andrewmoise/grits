@@ -10,6 +10,14 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// DirMirror defines the interface for directory mirroring operations
+type DirMirror interface {
+	Start()
+	Stop()
+	handleEvent(event fsnotify.Event)
+	initialScan()
+}
+
 type DirToBlobsMirror struct {
 	watcher   *fsnotify.Watcher
 	blobStore *BlobStore
