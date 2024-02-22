@@ -43,8 +43,11 @@ type Config struct {
 }
 
 type DirMirrorConfig struct {
+	Type          string `json:"Type"`
 	SourceDir     string `json:"SourceDir"`
-	CacheLinksDir string `json:"CacheLinksDir"`
+	CacheLinksDir string `json:"CacheLinksDir,omitempty"`
+	DestBranch    string `json:"DestBranch,omitempty"`
+	DestPath      string `json:"DestPath,omitempty"`
 }
 
 // NewConfig creates a new configuration instance with default values.

@@ -16,9 +16,9 @@ type Server struct {
 	BlobStore *grits.BlobStore
 
 	// HTTP stuff
-	HTTPServer  *http.Server
-	Mux         *http.ServeMux
-	DirBackings []*grits.DirBacking
+	HTTPServer *http.Server
+	Mux        *http.ServeMux
+	DirMirrors []*grits.DirToBlobsMirror
 
 	// DHT stuff
 	Peers    grits.AllPeers // To store information about known peers
@@ -47,8 +47,8 @@ func NewServer(config *grits.Config) (*Server, error) {
 		HTTPServer: &http.Server{
 			Addr: ":" + fmt.Sprintf("%d", config.ThisPort),
 		},
-		DirBackings: make([]*grits.DirBacking, 0),
-		Mux:         http.NewServeMux(),
+		DirMirrors: make([]*grits.DirToBlobsMirror, 0),
+		Mux:        http.NewServeMux(),
 
 		AccountStores: make(map[string]*grits.NameStore),
 		taskStop:      make(chan struct{}),
@@ -60,8 +60,8 @@ func NewServer(config *grits.Config) (*Server, error) {
 	}
 
 	for _, mirror := range config.DirMirrors {
-		dirBacking := grits.NewDirBacking(mirror.SourceDir, mirror.CacheLinksDir, bs)
-		srv.DirBackings = append(srv.DirBackings, dirBacking)
+		DirMirror := grits.NewDirToBlobsMirror(mirror.SourceDir, mirror.CacheLinksDir, bs)
+		srv.DirMirrors = append(srv.DirMirrors, DirMirror)
 	}
 
 	srv.setupRoutes()
@@ -70,7 +70,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 }
 
 func (s *Server) Run() {
-	for _, db := range s.DirBackings {
+	for _, db := range s.DirMirrors {
 		db.Start()
 	}
 
@@ -91,7 +91,7 @@ func (s *Server) Run() {
 		log.Printf("Failed to save accounts: %v\n", err)
 	}
 
-	for _, db := range s.DirBackings {
+	for _, db := range s.DirMirrors {
 		db.Stop()
 	}
 }

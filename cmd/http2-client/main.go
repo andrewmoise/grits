@@ -74,7 +74,7 @@ func main() {
 }
 
 func getFile(remoteName, localName string) error {
-	resp, err := http.Get("http://localhost:1787/grits/v1/home/root/" + remoteName)
+	resp, err := http.Get("http://localhost:1787/grits/v1/file/" + remoteName)
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func putFile(localName, remoteName string) error {
 	defer file.Close()
 
 	// Create a new PUT request
-	req, err := http.NewRequest(http.MethodPut, "http://localhost:1787/grits/v1/home/root/"+remoteName, file)
+	req, err := http.NewRequest(http.MethodPut, "http://localhost:1787/grits/v1/file/"+remoteName, file)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func putDirectoryRecursively(localDir, remoteDir string) error {
 
 func removeFiles(remoteNames []string) error {
 	for _, remoteName := range remoteNames {
-		req, err := http.NewRequest(http.MethodDelete, "http://localhost:1787/grits/v1/home/root/"+remoteName, nil)
+		req, err := http.NewRequest(http.MethodDelete, "http://localhost:1787/grits/v1/file/"+remoteName, nil)
 		if err != nil {
 			return err
 		}
@@ -166,7 +166,7 @@ func removeFiles(remoteNames []string) error {
 }
 
 func listFiles() error {
-	resp, err := http.Get("http://localhost:1787/grits/v1/home/root")
+	resp, err := http.Get("http://localhost:1787/grits/v1/tree")
 	if err != nil {
 		return err
 	}
@@ -184,7 +184,7 @@ func listFiles() error {
 		return fmt.Errorf("'tree' member is not a string or missing in the response")
 	}
 
-	listResp, err := http.Get("http://localhost:1787/grits/v1/sha256/" + treeValue)
+	listResp, err := http.Get("http://localhost:1787/grits/v1/blob/" + treeValue)
 	if err != nil {
 		return err
 	}
