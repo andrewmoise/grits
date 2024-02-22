@@ -18,7 +18,7 @@ type Server struct {
 	// HTTP stuff
 	HTTPServer *http.Server
 	Mux        *http.ServeMux
-	DirMirrors []*grits.DirToBlobsMirror
+	DirMirrors []grits.DirMirror
 
 	// DHT stuff
 	Peers    grits.AllPeers // To store information about known peers
@@ -47,7 +47,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 		HTTPServer: &http.Server{
 			Addr: ":" + fmt.Sprintf("%d", config.ThisPort),
 		},
-		DirMirrors: make([]*grits.DirToBlobsMirror, 0),
+		DirMirrors: make([]grits.DirMirror, 0),
 		Mux:        http.NewServeMux(),
 
 		AccountStores: make(map[string]*grits.NameStore),
