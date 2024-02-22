@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, string, func()) {
+func setupDirToBlobsMirror(t *testing.T) (*DirToBlobsMirror, *BlobStore, string, string, func()) {
 	t.Helper()
 
 	// Create a temporary directory for testing
-	dirPath, err := os.MkdirTemp("", "dirBacking_test")
+	dirPath, err := os.MkdirTemp("", "DirToBlobsMirror_test")
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
@@ -31,18 +31,18 @@ func setupDirBacking(t *testing.T) (*DirBacking, *BlobStore, string, string, fun
 	os.Mkdir(srcPath, 0755)
 	os.Mkdir(destPath, 0755)
 
-	dirBacking := NewDirBacking(srcPath, destPath, blobStore)
+	DirToBlobsMirror := NewDirToBlobsMirror(srcPath, destPath, blobStore)
 
 	cleanup := func() {
-		dirBacking.Stop()
+		DirToBlobsMirror.Stop()
 		os.RemoveAll(dirPath)
 	}
 
-	return dirBacking, blobStore, srcPath, destPath, cleanup
+	return DirToBlobsMirror, blobStore, srcPath, destPath, cleanup
 }
 
-func TestDirBacking_FileOperations(t *testing.T) {
-	dirBacking, blobStore, srcPath, destPath, cleanup := setupDirBacking(t)
+func TestDirToBlobsMirror_FileOperations(t *testing.T) {
+	DirToBlobsMirror, blobStore, srcPath, destPath, cleanup := setupDirToBlobsMirror(t)
 	defer cleanup()
 
 	// Step 1: Create files 1, 2, and 3 in the source directory
@@ -54,10 +54,10 @@ func TestDirBacking_FileOperations(t *testing.T) {
 		}
 	}
 
-	// Start DirBacking to synchronize files
-	dirBacking.Start()
+	// Start DirToBlobsMirror to synchronize files
+	DirToBlobsMirror.Start()
 
-	// Allow some time for DirBacking to process the files
+	// Allow some time for DirToBlobsMirror to process the files
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify initial files are synchronized correctly
@@ -74,7 +74,7 @@ func TestDirBacking_FileOperations(t *testing.T) {
 		t.Fatalf("Failed to create file 4: %v", err)
 	}
 
-	// Allow some time for DirBacking to process the changes
+	// Allow some time for DirToBlobsMirror to process the changes
 	time.Sleep(100 * time.Millisecond)
 
 	// Verify final state of files

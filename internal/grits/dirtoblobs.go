@@ -10,7 +10,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-type DirBacking struct {
+type DirToBlobsMirror struct {
 	watcher   *fsnotify.Watcher
 	blobStore *BlobStore
 	srcPath   string
@@ -19,14 +19,14 @@ type DirBacking struct {
 	mtx       sync.Mutex
 }
 
-// Constructor to initialize DirBacking with the directory path and the BlobStore
-func NewDirBacking(srcPath string, destPath string, blobStore *BlobStore) *DirBacking {
+// Constructor to initialize DirToBlobsMirror with the directory path and the BlobStore
+func NewDirToBlobsMirror(srcPath string, destPath string, blobStore *BlobStore) *DirToBlobsMirror {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatal("Failed to create watcher:", err)
 	}
 
-	return &DirBacking{
+	return &DirToBlobsMirror{
 		watcher:   watcher,
 		blobStore: blobStore,
 		srcPath:   srcPath,
@@ -35,7 +35,7 @@ func NewDirBacking(srcPath string, destPath string, blobStore *BlobStore) *DirBa
 	}
 }
 
-func (db *DirBacking) Start() {
+func (db *DirToBlobsMirror) Start() {
 	go db.watch()
 
 	err := db.watcher.Add(db.srcPath)
@@ -47,7 +47,7 @@ func (db *DirBacking) Start() {
 }
 
 // initialScan walks through the directory initially to add existing files
-func (db *DirBacking) initialScan() {
+func (db *DirToBlobsMirror) initialScan() {
 	os.MkdirAll(db.destPath, 0755)
 
 	db.mtx.Lock()
@@ -101,7 +101,7 @@ func (db *DirBacking) initialScan() {
 }
 
 // watch listens for file system events and handles them
-func (db *DirBacking) watch() {
+func (db *DirToBlobsMirror) watch() {
 	for {
 		select {
 		case event, ok := <-db.watcher.Events:
@@ -119,7 +119,7 @@ func (db *DirBacking) watch() {
 }
 
 // handleEvent processes file creation, modification, and deletion events
-func (db *DirBacking) handleEvent(event fsnotify.Event) {
+func (db *DirToBlobsMirror) handleEvent(event fsnotify.Event) {
 	log.Println("Event:", event)
 	if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
 		db.mtx.Lock()
@@ -141,7 +141,7 @@ func (db *DirBacking) handleEvent(event fsnotify.Event) {
 }
 
 // addOrUpdateFile adds a new file to the BlobStore or updates an existing one
-func (db *DirBacking) addOrUpdateFile(srcPath string) error {
+func (db *DirToBlobsMirror) addOrUpdateFile(srcPath string) error {
 	cachedFile, err := db.blobStore.AddLocalFile(srcPath)
 	if err != nil {
 		return err
@@ -172,7 +172,7 @@ func (db *DirBacking) addOrUpdateFile(srcPath string) error {
 }
 
 // removeFile handles the removal of a file from the BlobStore and internal tracking
-func (db *DirBacking) removeFile(filePath string) error {
+func (db *DirToBlobsMirror) removeFile(filePath string) error {
 	if cachedFile, exists := db.files[filePath]; exists {
 		db.blobStore.Release(cachedFile)
 		delete(db.files, filePath)
@@ -195,6 +195,6 @@ func (db *DirBacking) removeFile(filePath string) error {
 }
 
 // Stop stops the directory monitoring
-func (db *DirBacking) Stop() {
+func (db *DirToBlobsMirror) Stop() {
 	db.watcher.Close()
 }
