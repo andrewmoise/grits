@@ -11,12 +11,6 @@ type NameStore struct {
 	mtx  sync.RWMutex
 }
 
-func NewNameStore(rn *RevNode) *NameStore {
-	return &NameStore{
-		root: rn,
-	}
-}
-
 func (ns *NameStore) GetRoot() *RevNode {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
@@ -98,7 +92,26 @@ func (ns *NameStore) ResolveName(name string) *FileAddr {
 	return ns.root.Tree.Children[name]
 }
 
-func (bs *BlobStore) DeserializeNameStore(rootAddr *FileAddr) (*NameStore, error) {
+func EmptyNameStore(bs *BlobStore) (*NameStore, error) {
+	m := make(map[string]*FileAddr)
+
+	fn, err := bs.CreateFileNode(m)
+	if err != nil {
+		return nil, err
+	}
+
+	rn, err := bs.CreateRevNode(fn, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	ns := &NameStore{
+		root: rn,
+	}
+	return ns, nil
+}
+
+func DeserializeNameStore(bs *BlobStore, rootAddr *FileAddr) (*NameStore, error) {
 	// Fetch and deserialize the root RevNode based on its address
 	rootRevNode, err := bs.FetchRevNode(rootAddr)
 	if err != nil {

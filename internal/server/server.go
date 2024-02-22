@@ -105,20 +105,3 @@ func (s *Server) Start() {
 func (s *Server) Stop(ctx context.Context) error {
 	return s.HTTPServer.Shutdown(ctx)
 }
-
-func initStore(bs *grits.BlobStore) (*grits.NameStore, error) {
-	m := make(map[string]*grits.FileAddr)
-
-	fn, err := bs.CreateFileNode(m)
-	if err != nil {
-		return nil, err
-	}
-
-	rn, err := bs.CreateRevNode(fn, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	ns := grits.NewNameStore(rn)
-	return ns, nil
-}

@@ -30,7 +30,7 @@ func TestNamespacePersistence(t *testing.T) {
 	// Populate test content.
 
 	testAccountName := "test"
-	ns, err := initStore(srv.BlobStore)
+	ns, err := grits.EmptyNameStore(srv.BlobStore)
 	if err != nil {
 		t.Fatalf("Failed to create namespace: %v", err)
 	}
