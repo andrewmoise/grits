@@ -26,7 +26,7 @@ type Config struct {
 	NamespaceSavePeriod int    `json:"NamespaceSavePeriod"`
 
 	// Directories to cache
-	DirMirrors []DirMirrorConfig `json:"DirMirrors"`
+	DirMirrors []DirMirrorConfig `json:"Mirrors"`
 
 	// Nitty-gritty DHT tuning
 	DhtNotifyNumber     int `json:"DhtNotifyNumber"`
@@ -103,7 +103,7 @@ func (c *Config) LoadFromFile(filename string) error {
 	typeConfig := valConfig.Type()
 
 	for key, value := range data {
-		if key == "DirMirrors" {
+		if key == "Mirrors" {
 			// Handle DirMirrors separately
 			continue
 		}
@@ -132,7 +132,7 @@ func (c *Config) LoadFromFile(filename string) error {
 	}
 
 	// Manually decode DirMirrors if present
-	if dirMirrorsData, ok := data["DirMirrors"]; ok {
+	if dirMirrorsData, ok := data["Mirrors"]; ok {
 		dirMirrorsJSON, err := json.Marshal(dirMirrorsData)
 		if err != nil {
 			return err

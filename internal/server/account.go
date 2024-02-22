@@ -8,7 +8,7 @@ import (
 )
 
 func (s *Server) CreateAccounts() error {
-	rootStore, err := initStore(s.BlobStore)
+	rootStore, err := grits.EmptyNameStore(s.BlobStore)
 	if err != nil {
 		return fmt.Errorf("failed to create root store: %v", err)
 	}
@@ -41,7 +41,7 @@ func (s *Server) LoadAccounts() error {
 			return fmt.Errorf("failed to parse root address for %s: %v", account, err)
 		}
 
-		ns, err := s.BlobStore.DeserializeNameStore(rootAddr)
+		ns, err := grits.DeserializeNameStore(s.BlobStore, rootAddr)
 		if err != nil {
 			return fmt.Errorf("failed to deserialize name store for %s: %v", account, err)
 		}

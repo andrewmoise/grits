@@ -5,10 +5,14 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
 )
+
+/////
+// Base interface
 
 // DirMirror defines the interface for directory mirroring operations
 type DirMirror interface {
@@ -18,28 +22,40 @@ type DirMirror interface {
 	initialScan()
 }
 
-type DirToBlobsMirror struct {
-	watcher   *fsnotify.Watcher
-	blobStore *BlobStore
-	srcPath   string
-	destPath  string
-	files     map[string]*CachedFile // Map to track files
-	mtx       sync.Mutex
+type DirMirrorBase struct {
+	watcher *fsnotify.Watcher
+	srcPath string
+	files   map[string]*CachedFile // File reference tracking
+	mtx     sync.Mutex
 }
 
-// Constructor to initialize DirToBlobsMirror with the directory path and the BlobStore
-func NewDirToBlobsMirror(srcPath string, destPath string, blobStore *BlobStore) *DirToBlobsMirror {
+func NewDirMirrorBase(srcPath string) *DirMirrorBase {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatal("Failed to create watcher:", err)
 	}
 
+	return &DirMirrorBase{
+		watcher: watcher,
+		srcPath: srcPath,
+		files:   make(map[string]*CachedFile),
+	}
+}
+
+/////
+// DirToBlobsMirror
+
+type DirToBlobsMirror struct {
+	*DirMirrorBase // Embedding DirMirrorBase
+	bs             *BlobStore
+	destPath       string
+}
+
+func NewDirToBlobsMirror(srcPath, destPath string, blobStore *BlobStore) *DirToBlobsMirror {
 	return &DirToBlobsMirror{
-		watcher:   watcher,
-		blobStore: blobStore,
-		srcPath:   srcPath,
-		destPath:  destPath,
-		files:     make(map[string]*CachedFile),
+		DirMirrorBase: NewDirMirrorBase(srcPath),
+		bs:            blobStore,
+		destPath:      destPath,
 	}
 }
 
@@ -150,14 +166,14 @@ func (db *DirToBlobsMirror) handleEvent(event fsnotify.Event) {
 
 // addOrUpdateFile adds a new file to the BlobStore or updates an existing one
 func (db *DirToBlobsMirror) addOrUpdateFile(srcPath string) error {
-	cachedFile, err := db.blobStore.AddLocalFile(srcPath)
+	cachedFile, err := db.bs.AddLocalFile(srcPath)
 	if err != nil {
 		return err
 	}
 
 	prevFile, exists := db.files[srcPath]
 	if exists {
-		db.blobStore.Release(prevFile)
+		db.bs.Release(prevFile)
 	}
 
 	db.files[srcPath] = cachedFile
@@ -182,7 +198,7 @@ func (db *DirToBlobsMirror) addOrUpdateFile(srcPath string) error {
 // removeFile handles the removal of a file from the BlobStore and internal tracking
 func (db *DirToBlobsMirror) removeFile(filePath string) error {
 	if cachedFile, exists := db.files[filePath]; exists {
-		db.blobStore.Release(cachedFile)
+		db.bs.Release(cachedFile)
 		delete(db.files, filePath)
 		log.Printf("File %s removed from BlobStore", filePath)
 
@@ -205,4 +221,190 @@ func (db *DirToBlobsMirror) removeFile(filePath string) error {
 // Stop stops the directory monitoring
 func (db *DirToBlobsMirror) Stop() {
 	db.watcher.Close()
+}
+
+/////
+// DirToTreeMirror
+
+type DirToTreeMirror struct {
+	*DirMirrorBase // Embedding DirMirrorBase
+
+	destPath string
+	bs       *BlobStore
+	ns       *NameStore
+}
+
+func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore, nameStore *NameStore) *DirToTreeMirror {
+	log.Printf("Creating DirToTreeMirror for %s -> %s\n", srcPath, destPath)
+
+	return &DirToTreeMirror{
+		DirMirrorBase: NewDirMirrorBase(srcPath),
+		destPath:      destPath,
+		bs:            blobStore,
+		ns:            nameStore,
+	}
+}
+
+func (dt *DirToTreeMirror) Start() {
+	log.Printf("Starting DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.destPath)
+
+	go dt.watch()
+
+	err := dt.watcher.Add(dt.srcPath)
+	if err != nil {
+		log.Fatal("Failed to add directory to watcher:", err)
+	}
+
+	dt.initialScan()
+}
+
+// initialScan walks through the directory initially to add existing files
+func (dt *DirToTreeMirror) initialScan() {
+	log.Printf("Initial scan for DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.destPath)
+
+	dt.mtx.Lock()
+	defer dt.mtx.Unlock()
+
+	dt.ns.ReviseRoot(dt.bs, func(m map[string]*FileAddr) error {
+		// Delete keys with prefix dt.destPath
+		for key := range m {
+			if strings.HasPrefix(key, dt.destPath) {
+				log.Printf("  Deleting key %s\n", key)
+
+				delete(m, key)
+			}
+		}
+
+		// Walk through the filesystem starting at dt.srcPath
+		err := filepath.Walk(dt.srcPath, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err // Propagate the error upwards
+			}
+
+			if !info.IsDir() {
+				log.Printf("  Adding file %s\n", path)
+
+				// Process the file
+				cf, err := dt.bs.AddLocalFile(path)
+				if err != nil {
+					return err // Propagate the error upwards
+				}
+
+				// Compute the relative path from srcPath to this file
+				relativePath, err := filepath.Rel(dt.srcPath, path)
+				if err != nil {
+					dt.bs.Release(cf)
+					return err // Propagate the error upwards
+				}
+
+				// Construct the key for the map m
+				key := filepath.Join(dt.destPath, relativePath)
+
+				// Update the map with the new file address
+				m[key] = cf.Address
+				dt.files[path] = cf
+			}
+
+			return nil // Continue walking
+		})
+
+		return err // Return any error encountered during filepath.Walk
+	})
+}
+
+// watch listens for file system events and handles them
+func (dt *DirToTreeMirror) watch() {
+	for {
+		select {
+		case event, ok := <-dt.watcher.Events:
+			if !ok {
+				return
+			}
+			dt.handleEvent(event)
+		case err, ok := <-dt.watcher.Errors:
+			if !ok {
+				return
+			}
+			log.Println("Watcher error:", err)
+		}
+	}
+}
+
+// handleEvent processes file creation, modification, and deletion events
+func (dt *DirToTreeMirror) handleEvent(event fsnotify.Event) {
+	log.Println("DTM Event:", event)
+	if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
+		dt.mtx.Lock()
+		defer dt.mtx.Unlock()
+
+		err := dt.addOrUpdateFile(event.Name)
+		if err != nil {
+			fmt.Println("Error adding/updating file:", err)
+		}
+	} else if event.Op&fsnotify.Remove == fsnotify.Remove {
+		dt.mtx.Lock()
+		defer dt.mtx.Unlock()
+
+		err := dt.removeFile(event.Name)
+		if err != nil {
+			fmt.Println("Error removing file:", err)
+		}
+	}
+}
+
+// addOrUpdateFile adds a new file to the BlobStore or updates an existing one
+func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string) error {
+	cachedFile, err := dt.bs.AddLocalFile(srcPath)
+	if err != nil {
+		return err
+	}
+
+	prevFile, exists := dt.files[srcPath]
+	if exists {
+		dt.bs.Release(prevFile)
+	}
+
+	dt.ns.ReviseRoot(dt.bs, func(m map[string]*FileAddr) error {
+		relPath, err := filepath.Rel(dt.srcPath, srcPath)
+		if err != nil {
+			return fmt.Errorf("error calculating relative path: %v", err)
+		}
+
+		// Construct the key for the map m
+		key := filepath.Join(dt.destPath, relPath)
+		m[key] = cachedFile.Address
+		return nil
+	})
+
+	dt.files[srcPath] = cachedFile
+	log.Printf("File %s added/updated in BlobStore", srcPath)
+	return nil
+}
+
+// removeFile handles the removal of a file from the BlobStore and internal tracking
+func (dt *DirToTreeMirror) removeFile(filePath string) error {
+	if cachedFile, exists := dt.files[filePath]; exists {
+		dt.bs.Release(cachedFile)
+		delete(dt.files, filePath)
+		log.Printf("File %s removed from BlobStore", filePath)
+
+		relPath, err := filepath.Rel(dt.srcPath, filePath)
+		if err != nil {
+			return fmt.Errorf("error calculating relative path: %v", err)
+		}
+
+		dt.ns.ReviseRoot(dt.bs, func(m map[string]*FileAddr) error {
+			// Construct the key for the map m
+			key := filepath.Join(dt.destPath, relPath)
+			delete(m, key)
+			return nil
+		})
+	}
+
+	return nil
+}
+
+// Stop stops the directory monitoring
+func (dt *DirToTreeMirror) Stop() {
+	dt.watcher.Close()
 }
