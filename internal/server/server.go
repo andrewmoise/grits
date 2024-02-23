@@ -6,6 +6,7 @@ import (
 	"grits/internal/grits"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -59,9 +60,22 @@ func NewServer(config *grits.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to load accounts: %v", err)
 	}
 
-	for _, mirror := range config.DirMirrors {
-		DirMirror := grits.NewDirToBlobsMirror(mirror.SourceDir, mirror.CacheLinksDir, bs)
-		srv.DirMirrors = append(srv.DirMirrors, DirMirror)
+	for _, mirrorConfig := range config.DirMirrors {
+		switch mirrorConfig.Type {
+		case "DirToBlobs":
+			dirMirror := grits.NewDirToBlobsMirror(mirrorConfig.SourceDir, mirrorConfig.CacheLinksDir, bs)
+			srv.DirMirrors = append(srv.DirMirrors, dirMirror)
+		case "DirToTree":
+			destPath := mirrorConfig.DestPath
+			if strings.HasPrefix(destPath, "/") {
+				destPath = destPath[1:]
+			}
+
+			dirMirror := grits.NewDirToTreeMirror(mirrorConfig.SourceDir, destPath, bs, srv.AccountStores["root"])
+			srv.DirMirrors = append(srv.DirMirrors, dirMirror)
+		default:
+			return nil, fmt.Errorf("unsupported dir mirror type: %s", mirrorConfig.Type)
+		}
 	}
 
 	srv.setupRoutes()

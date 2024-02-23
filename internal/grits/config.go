@@ -46,7 +46,6 @@ type DirMirrorConfig struct {
 	Type          string `json:"Type"`
 	SourceDir     string `json:"SourceDir"`
 	CacheLinksDir string `json:"CacheLinksDir,omitempty"`
-	DestBranch    string `json:"DestBranch,omitempty"`
 	DestPath      string `json:"DestPath,omitempty"`
 }
 
