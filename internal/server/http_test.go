@@ -106,6 +106,7 @@ func TestServerInteraction(t *testing.T) {
 	config2.ServerDir = tempDir2
 	config2.ThisPort = 1788
 	config2.DirMirrors = append(config2.DirMirrors, grits.DirMirrorConfig{
+		Type:          "DirToBlob",
 		SourceDir:     contentDir2,
 		CacheLinksDir: filepath.Join(tempDir2, "cache_links"),
 	})
