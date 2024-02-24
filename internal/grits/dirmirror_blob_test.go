@@ -1,6 +1,7 @@
 package grits
 
 import (
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -31,7 +32,12 @@ func setupDirToBlobsMirror(t *testing.T) (*DirToBlobsMirror, *BlobStore, string,
 	os.Mkdir(srcPath, 0755)
 	os.Mkdir(destPath, 0755)
 
-	DirToBlobsMirror := NewDirToBlobsMirror(srcPath, destPath, blobStore)
+	log.Printf("--- Start test\n")
+
+	DirToBlobsMirror, error := NewDirToBlobsMirror(srcPath, destPath, blobStore)
+	if error != nil {
+		t.Fatalf("Failed to create DirToBlobsMirror: %v", error)
+	}
 
 	cleanup := func() {
 		DirToBlobsMirror.Stop()
@@ -44,6 +50,8 @@ func setupDirToBlobsMirror(t *testing.T) (*DirToBlobsMirror, *BlobStore, string,
 func TestDirToBlobsMirror_FileOperations(t *testing.T) {
 	DirToBlobsMirror, blobStore, srcPath, destPath, cleanup := setupDirToBlobsMirror(t)
 	defer cleanup()
+
+	log.Printf("--- Create files\n")
 
 	// Step 1: Create files 1, 2, and 3 in the source directory
 	for i := 1; i <= 3; i++ {
@@ -60,10 +68,14 @@ func TestDirToBlobsMirror_FileOperations(t *testing.T) {
 	// Allow some time for DirToBlobsMirror to process the files
 	time.Sleep(100 * time.Millisecond)
 
+	log.Printf("--- Verify initial files\n")
+
 	// Verify initial files are synchronized correctly
 	verifyFileContent(t, destPath, "file1.txt", "Content for file 1", blobStore)
 	goneAddr := verifyFileContent(t, destPath, "file2.txt", "Content for file 2", blobStore)
 	verifyFileContent(t, destPath, "file3.txt", "Content for file 3", blobStore)
+
+	log.Printf("--- Make modifications\n")
 
 	// Step 2: Delete file 2, overwrite file 3, create a new file 4
 	os.Remove(filepath.Join(srcPath, "file2.txt"))
@@ -76,6 +88,8 @@ func TestDirToBlobsMirror_FileOperations(t *testing.T) {
 
 	// Allow some time for DirToBlobsMirror to process the changes
 	time.Sleep(100 * time.Millisecond)
+
+	log.Printf("--- Verify modifications\n")
 
 	// Verify final state of files
 	verifyFileAbsent(t, destPath, "file2.txt", blobStore, goneAddr)                  // file2 should be deleted

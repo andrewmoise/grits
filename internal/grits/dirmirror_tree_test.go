@@ -2,6 +2,7 @@ package grits
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path"
 	"path/filepath"
@@ -33,13 +34,21 @@ func TestDirToTreeMirror(t *testing.T) {
 
 	destPath := "mirrorDest"
 
+	log.Printf("--- Start test\n")
+
 	// Instantiate and start DirToTreeMirror
-	dirMirror := NewDirToTreeMirror(srcPath, destPath, blobStore, nameStore)
+	dirMirror, error := NewDirToTreeMirror(srcPath, destPath, blobStore, nameStore)
+	if error != nil {
+		t.Fatalf("Failed to create DirToTreeMirror: %v", error)
+	}
+
 	dirMirror.Start()
 	defer dirMirror.Stop()
 
 	// Allow some time for the initial scan to complete
 	time.Sleep(1 * time.Second)
+
+	log.Printf("--- Initial add\n")
 
 	// Create additional files
 	for i := 1; i <= 5; i++ {
@@ -52,6 +61,8 @@ func TestDirToTreeMirror(t *testing.T) {
 
 	// Allow some time for changes to be detected and processed
 	time.Sleep(1 * time.Second)
+
+	log.Printf("--- Check initial add\n")
 
 	// Verify files are added to NameStore
 	for i := 1; i <= 5; i++ {
@@ -67,6 +78,8 @@ func TestDirToTreeMirror(t *testing.T) {
 		blobStore.Release(file)
 	}
 
+	log.Printf("--- Modifications\n")
+
 	// Delete one file and overwrite another
 	os.Remove(filepath.Join(srcPath, "file3.txt"))
 
@@ -75,6 +88,8 @@ func TestDirToTreeMirror(t *testing.T) {
 
 	// Allow some time for changes to be detected and processed
 	time.Sleep(1 * time.Second)
+
+	log.Printf("--- Check modifications\n")
 
 	// Verify file3.txt is removed from NameStore
 	fa := nameStore.ResolveName(path.Join(destPath, "file3.txt"))
@@ -102,4 +117,50 @@ func TestDirToTreeMirror(t *testing.T) {
 	if string(updatedContent) != newContent {
 		t.Errorf("file5.txt content does not match: expected %q, got %q", newContent, string(updatedContent))
 	}
+
+	log.Printf("--- Subdirectory operations\n")
+
+	// Create a subdirectory and a file within it
+	subDirPath := filepath.Join(srcPath, "subdir")
+	if err := os.Mkdir(subDirPath, 0755); err != nil {
+		t.Fatalf("Failed to create subdirectory: %v", err)
+	}
+
+	subFileName := filepath.Join(subDirPath, "subfile1.txt")
+	subFileContent := "Content for subfile 1"
+	if err := os.WriteFile(subFileName, []byte(subFileContent), 0644); err != nil {
+		t.Fatalf("Failed to create file in subdirectory: %v", err)
+	}
+
+	// Allow some time for changes to be detected and processed
+	time.Sleep(1 * time.Second)
+
+	log.Printf("--- Check subdirectory add\n")
+
+	// Verify the subdirectory file is added to NameStore
+	subFa := nameStore.ResolveName(path.Join(destPath, "subdir", "subfile1.txt"))
+	if subFa == nil {
+		t.Fatalf("Failed to resolve subdir/subfile1.txt in NameStore")
+	}
+
+	subFile, err := blobStore.ReadFile(subFa)
+	if err != nil {
+		t.Fatalf("Failed to read subdir/subfile1.txt from BlobStore: %v", err)
+	}
+	blobStore.Release(subFile)
+
+	// Optional: Delete the subdirectory file and verify removal
+	os.Remove(subFileName)
+
+	// Allow some time for changes to be detected and processed
+	time.Sleep(1 * time.Second)
+
+	log.Printf("--- Check subdirectory file removal\n")
+
+	// Verify subdirectory file is removed from NameStore
+	subFaRemoved := nameStore.ResolveName(path.Join(destPath, "subdir", "subfile1.txt"))
+	if subFaRemoved != nil {
+		t.Fatalf("subdir/subfile1.txt should have been removed from NameStore")
+	}
+
 }

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/fsnotify/fsnotify"
+	"github.com/rjeczalik/notify"
 )
 
 /////
@@ -16,29 +16,24 @@ import (
 
 // DirMirror defines the interface for directory mirroring operations
 type DirMirror interface {
-	Start()
-	Stop()
-	handleEvent(event fsnotify.Event)
+	Start() error
+	Stop() error
+	handleEvent(ei notify.EventInfo)
 	initialScan()
 }
 
 type DirMirrorBase struct {
-	watcher *fsnotify.Watcher
-	srcPath string
-	files   map[string]*CachedFile // File reference tracking
-	mtx     sync.Mutex
+	eventChan chan notify.EventInfo // Channel for notify events
+	srcPath   string
+	files     map[string]*CachedFile // File reference tracking
+	mtx       sync.Mutex
 }
 
 func NewDirMirrorBase(srcPath string) *DirMirrorBase {
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Fatal("Failed to create watcher:", err)
-	}
-
 	return &DirMirrorBase{
-		watcher: watcher,
-		srcPath: srcPath,
-		files:   make(map[string]*CachedFile),
+		eventChan: make(chan notify.EventInfo, 10), // Buffer can be adjusted as needed
+		srcPath:   srcPath,
+		files:     make(map[string]*CachedFile),
 	}
 }
 
@@ -51,23 +46,40 @@ type DirToBlobsMirror struct {
 	destPath       string
 }
 
-func NewDirToBlobsMirror(srcPath, destPath string, blobStore *BlobStore) *DirToBlobsMirror {
-	return &DirToBlobsMirror{
-		DirMirrorBase: NewDirMirrorBase(srcPath),
-		bs:            blobStore,
-		destPath:      destPath,
+func NewDirToBlobsMirror(srcPath, destPath string, blobStore *BlobStore) (*DirToBlobsMirror, error) {
+	realSrcPath, err := filepath.EvalSymlinks(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to evaluate source path: %v", err)
 	}
+
+	err = os.MkdirAll(destPath, 0755)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create destination directory: %v", err)
+	}
+
+	realDestPath, err := filepath.EvalSymlinks(destPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to evaluate destination path: %v", err)
+	}
+
+	return &DirToBlobsMirror{
+		DirMirrorBase: NewDirMirrorBase(realSrcPath),
+		bs:            blobStore,
+		destPath:      realDestPath,
+	}, nil
 }
 
-func (db *DirToBlobsMirror) Start() {
+func (db *DirToBlobsMirror) Start() error {
+	log.Printf("Starting DirToBlobsMirror for %s -> %s\n", db.srcPath, db.destPath)
+
+	// Setup recursive watch
+	if err := notify.Watch(db.srcPath+"/...", db.eventChan, notify.All); err != nil {
+		return fmt.Errorf("failed to watch directory: %v", err)
+	}
 	go db.watch()
 
-	err := db.watcher.Add(db.srcPath)
-	if err != nil {
-		log.Fatal("Failed to add directory to watcher:", err)
-	}
-
 	db.initialScan()
+	return nil
 }
 
 // initialScan walks through the directory initially to add existing files
@@ -126,40 +138,34 @@ func (db *DirToBlobsMirror) initialScan() {
 
 // watch listens for file system events and handles them
 func (db *DirToBlobsMirror) watch() {
-	for {
-		select {
-		case event, ok := <-db.watcher.Events:
-			if !ok {
-				return
-			}
-			db.handleEvent(event)
-		case err, ok := <-db.watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Println("Watcher error:", err)
-		}
+	for ei := range db.eventChan {
+		log.Printf("Event received: %s on path: %s\n", ei.Event(), ei.Path())
+		db.handleEvent(ei)
 	}
 }
 
 // handleEvent processes file creation, modification, and deletion events
-func (db *DirToBlobsMirror) handleEvent(event fsnotify.Event) {
-	log.Println("Event:", event)
-	if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
-		db.mtx.Lock()
-		defer db.mtx.Unlock()
+func (db *DirToBlobsMirror) handleEvent(ei notify.EventInfo) {
+	switch ei.Event() {
+	case notify.Create, notify.Write:
+		// For create and write events, check if the path is not a directory before proceeding
+		if fileInfo, err := os.Stat(ei.Path()); err == nil && !fileInfo.IsDir() {
+			log.Printf("File created or modified: %s\n", ei.Path())
 
-		err := db.addOrUpdateFile(event.Name)
-		if err != nil {
-			fmt.Println("Error adding/updating file:", err)
+			db.mtx.Lock()
+			defer db.mtx.Unlock()
+			if err := db.addOrUpdateFile(ei.Path()); err != nil {
+				log.Printf("Error adding/updating file: %v", err)
+			}
 		}
-	} else if event.Op&fsnotify.Remove == fsnotify.Remove {
+	case notify.Remove:
+		// For remove events, proceed without stat-ing since the file no longer exists
+		log.Printf("File removed: %s\n", ei.Path())
+
 		db.mtx.Lock()
 		defer db.mtx.Unlock()
-
-		err := db.removeFile(event.Name)
-		if err != nil {
-			fmt.Println("Error removing file:", err)
+		if err := db.removeFile(ei.Path()); err != nil {
+			log.Printf("Error removing file: %v", err)
 		}
 	}
 }
@@ -184,8 +190,13 @@ func (db *DirToBlobsMirror) addOrUpdateFile(srcPath string) error {
 		return fmt.Errorf("error calculating relative path: %v", err)
 	}
 
+	log.Printf("DB srcPath: %s, srcPath: %s, relPath: %s\n", db.srcPath, srcPath, relPath)
+
 	// Copy the file to the destination directory
 	destPath := filepath.Join(db.destPath, relPath)
+
+	log.Printf("Copying file %s to destination %s\n", srcPath, destPath)
+
 	err = os.WriteFile(destPath, []byte(cachedFile.Address.String()), 0644)
 	if err != nil {
 		return fmt.Errorf("error copying file to destination: %v", err)
@@ -219,8 +230,9 @@ func (db *DirToBlobsMirror) removeFile(filePath string) error {
 }
 
 // Stop stops the directory monitoring
-func (db *DirToBlobsMirror) Stop() {
-	db.watcher.Close()
+func (db *DirToBlobsMirror) Stop() error {
+	notify.Stop(db.eventChan)
+	return nil
 }
 
 /////
@@ -234,28 +246,42 @@ type DirToTreeMirror struct {
 	ns       *NameStore
 }
 
-func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore, nameStore *NameStore) *DirToTreeMirror {
+func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore, nameStore *NameStore) (*DirToTreeMirror, error) {
 	log.Printf("Creating DirToTreeMirror for %s -> %s\n", srcPath, destPath)
 
+	realSrcPath, error := filepath.EvalSymlinks(srcPath)
+	if error != nil {
+		return nil, fmt.Errorf("failed to evaluate source path: %v", error)
+	}
+
+	err := os.MkdirAll(destPath, 0755)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create destination directory: %v", err)
+	}
+
+	realDestPath, error := filepath.EvalSymlinks(destPath)
+	if error != nil {
+		return nil, fmt.Errorf("failed to evaluate destination path: %v", error)
+	}
+
 	return &DirToTreeMirror{
-		DirMirrorBase: NewDirMirrorBase(srcPath),
-		destPath:      destPath,
+		DirMirrorBase: NewDirMirrorBase(realSrcPath),
+		destPath:      realDestPath,
 		bs:            blobStore,
 		ns:            nameStore,
-	}
+	}, nil
 }
 
-func (dt *DirToTreeMirror) Start() {
+func (dt *DirToTreeMirror) Start() error {
 	log.Printf("Starting DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.destPath)
 
+	if err := notify.Watch(dt.srcPath+"/...", dt.eventChan, notify.All); err != nil {
+		return fmt.Errorf("Failed to watch directory: %v", err)
+	}
 	go dt.watch()
 
-	err := dt.watcher.Add(dt.srcPath)
-	if err != nil {
-		log.Fatal("Failed to add directory to watcher:", err)
-	}
-
 	dt.initialScan()
+	return nil
 }
 
 // initialScan walks through the directory initially to add existing files
@@ -314,46 +340,45 @@ func (dt *DirToTreeMirror) initialScan() {
 
 // watch listens for file system events and handles them
 func (dt *DirToTreeMirror) watch() {
-	for {
-		select {
-		case event, ok := <-dt.watcher.Events:
-			if !ok {
-				return
-			}
-			dt.handleEvent(event)
-		case err, ok := <-dt.watcher.Errors:
-			if !ok {
-				return
-			}
-			log.Println("Watcher error:", err)
-		}
+	log.Printf("Watching for DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.destPath)
+
+	for ei := range dt.eventChan {
+		dt.handleEvent(ei)
 	}
 }
 
 // handleEvent processes file creation, modification, and deletion events
-func (dt *DirToTreeMirror) handleEvent(event fsnotify.Event) {
-	log.Println("DTM Event:", event)
-	if event.Op&fsnotify.Write == fsnotify.Write || event.Op&fsnotify.Create == fsnotify.Create {
-		dt.mtx.Lock()
-		defer dt.mtx.Unlock()
+func (dt *DirToTreeMirror) handleEvent(ei notify.EventInfo) {
+	switch ei.Event() {
+	case notify.Create, notify.Write:
+		// Only proceed with stat for create and write events to check for a regular file
+		if fileInfo, err := os.Stat(ei.Path()); err == nil && !fileInfo.IsDir() {
+			log.Printf("File created or modified: %s\n", ei.Path())
 
-		err := dt.addOrUpdateFile(event.Name)
-		if err != nil {
-			fmt.Println("Error adding/updating file:", err)
+			dt.mtx.Lock()
+			defer dt.mtx.Unlock()
+			if err := dt.addOrUpdateFile(ei.Path()); err != nil {
+				log.Printf("Error adding/updating file: %v", err)
+			}
 		}
-	} else if event.Op&fsnotify.Remove == fsnotify.Remove {
+	case notify.Remove:
+		// Skip stat for remove events as the file is already removed
+		log.Printf("File removed: %s\n", ei.Path())
+
 		dt.mtx.Lock()
 		defer dt.mtx.Unlock()
-
-		err := dt.removeFile(event.Name)
-		if err != nil {
-			fmt.Println("Error removing file:", err)
+		if err := dt.removeFile(ei.Path()); err != nil {
+			log.Printf("Error removing file: %v", err)
 		}
 	}
 }
 
 // addOrUpdateFile adds a new file to the BlobStore or updates an existing one
 func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string) error {
+	//if srcPath != "" {
+	//	return nil
+	//}
+
 	cachedFile, err := dt.bs.AddLocalFile(srcPath)
 	if err != nil {
 		return err
@@ -405,6 +430,7 @@ func (dt *DirToTreeMirror) removeFile(filePath string) error {
 }
 
 // Stop stops the directory monitoring
-func (dt *DirToTreeMirror) Stop() {
-	dt.watcher.Close()
+func (dt *DirToTreeMirror) Stop() error {
+	notify.Stop(dt.eventChan)
+	return nil
 }
