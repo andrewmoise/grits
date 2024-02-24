@@ -63,7 +63,11 @@ func NewServer(config *grits.Config) (*Server, error) {
 	for _, mirrorConfig := range config.DirMirrors {
 		switch mirrorConfig.Type {
 		case "DirToBlobs":
-			dirMirror := grits.NewDirToBlobsMirror(mirrorConfig.SourceDir, mirrorConfig.CacheLinksDir, bs)
+			dirMirror, error := grits.NewDirToBlobsMirror(mirrorConfig.SourceDir, mirrorConfig.CacheLinksDir, bs)
+			if error != nil {
+				return nil, fmt.Errorf("failed to create DirToBlobsMirror: %v", error)
+			}
+
 			srv.DirMirrors = append(srv.DirMirrors, dirMirror)
 		case "DirToTree":
 			destPath := mirrorConfig.DestPath
@@ -71,7 +75,11 @@ func NewServer(config *grits.Config) (*Server, error) {
 				destPath = destPath[1:]
 			}
 
-			dirMirror := grits.NewDirToTreeMirror(mirrorConfig.SourceDir, destPath, bs, srv.AccountStores["root"])
+			dirMirror, error := grits.NewDirToTreeMirror(mirrorConfig.SourceDir, destPath, bs, srv.AccountStores["root"])
+			if error != nil {
+				return nil, fmt.Errorf("failed to create DirToTreeMirror: %v", error)
+			}
+
 			srv.DirMirrors = append(srv.DirMirrors, dirMirror)
 		default:
 			return nil, fmt.Errorf("unsupported dir mirror type: %s", mirrorConfig.Type)
