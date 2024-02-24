@@ -192,10 +192,16 @@ func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 		return
 	}
 
-	log.Printf("Success; we redirect to %s\n", fa.String())
+	// Try to read the file from the blob store using the full address
+	cachedFile, err := bs.ReadFile(fa)
+	if err != nil {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	defer bs.Release(cachedFile)
 
-	// Resolve the file address and redirect to the file
-	http.Redirect(w, r, "/grits/v1/blob/"+fa.String(), http.StatusFound)
+	http.ServeFile(w, r, cachedFile.Path)
+	bs.Touch(cachedFile)
 }
 
 func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
