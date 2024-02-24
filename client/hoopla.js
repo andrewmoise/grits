@@ -1,55 +1,61 @@
 /*****
  Example Usage:
 
- ```javascript
-let gritsStore;
-let context;
- import('/grits/v1/home/root/bin/hoopla.js').then(module => {
-    // Now you can use GritsStore and Context
-    gritsStore = new module.GritsStore('http://localhost:1787/grits/v1/');
-    context = new module.Context(gritsStore);
+let hoo;
 
-    // Use context as needed
+import('/grits/v1/file/client/grits.js').then(module => {
+    import('/grits/v1/file/client/hoopla.js').then(hooplaModule => {
+        const context = new module.Context('http://localhost:1787/grits/v1/');
+        hoo = new hooplaModule.Shell(context);
+    }).catch(console.error);
 }).catch(console.error);
 
-context.dummy(1);
+hoo.dummy(1);
 
-
-// Dynamically import the module and use top-level await
-const hooplaModule = await import('https://localhost:1787/grits/v1/client/hoopla.js');
-
-// Assuming GritsStore is initialized or imported elsewhere
-const gritsStore = new GritsStore('https://localhost:1787/grits/v1/');
-
-// Instantiate a Context object
-const context = new hooplaModule.Context(gritsStore);
-
-// Now you can use the context
+// Ultimate WIP goal:
 
 context.fetch('https://html5up.net/solid-state/download').unzip().put('solid-state');
 
-```
 
 */
 
-export class Context {
-    constructor(gritsStore) {
-        this.gritsStore = gritsStore; // Store the GritsStore instance
+
+export class Shell {
+    constructor(context) {
+        this.context = context;
         this.commandCache = new Map(); // Cache for command maps, keyed by hash
-        return createContextProxy(this); // Automatically return a proxied version of Context
+        this.jobs = []
+        return createShellProxy(this); // Automatically return a proxied version of Shell
     }
 
     async loadFunction(functionName) {
         try {
+            const codeRequest = await fetch(`http://localhost:1787/grits/v1/file/client/bin/${functionName}.js`);
+            if (!codeRequest.ok) {
+                throw new Error(`HTTP error, status = ${codeRequest.status}`);
+            }
+
+            const codeText = await codeRequest.text();
+            const command = eval(codeText);
+            
+            return command.execute;
+        } catch (error) {
+            console.error(`Failed to load command ${functionName}:`, error);
+            throw error;
+        }
+    }
+
+    async loadFunctionFromGrits(functionName) {
+        try {
             // Retrieve the hash reference for the function
-            const hash = await this.gritsStore.ref(`file/bin/${functionName}.js`);
+            const hash = await this.context.ref(`file/bin/${functionName}.js`);
             if (this.commandCache.has(hash)) {
                 // If the command is already cached, return the execute function
                 return this.commandCache.get(hash).execute;
             }
 
             // If not in cache, fetch the actual function code by hash
-            const codeArrayBuffer = await this.gritsStore.get(`blob/${hash}`);
+            const codeArrayBuffer = await this.context.load(`blob/${hash}`);
             const codeText = new TextDecoder().decode(codeArrayBuffer);
             // Assume codeText evaluates to a command object
             const command = eval(codeText);
@@ -62,13 +68,21 @@ export class Context {
             throw error;
         }
     }
+
+    r(index) {
+        return this.jobs[index].prevValue;
+    }
 }
 
-function createContextProxy(context) {
-    return new Proxy(context, {
+function createShellProxy(shell) {
+    return new Proxy(shell, {
         get(target, prop, receiver) {
-            if (prop in target) {
-                return target[prop]; // Return the property directly
+            if (prop === 'toString') {
+                return () => `Shell Proxy with ${target.jobs.length} jobs`;
+            } else if (prop === Symbol.toPrimitive) {
+                return (hint) => hint === "string" ? `Shell Proxy: ${target.jobs.length} jobs` : undefined;
+            } else if (prop in target) {
+                return typeof target[prop] === 'function' ? target[prop].bind(target) : target[prop];
             } else {
                 // If the method is unknown, return a function that initializes a new Job
                 return (...args) => {
@@ -82,18 +96,30 @@ function createContextProxy(context) {
     });
 }
 
+const JobState = {
+    NOT_STARTED: 'not started',
+    RUNNING: 'running',
+    ERROR: 'error',
+    ABORTED: 'aborted',
+    DONE: 'done',
+};
+
 export class Job {
-    constructor(context) {
-        this.context = context;
+    constructor(shell) {
+        this.shell = shell;
         this.steps = []; // To hold [functionName, argsArray] pairs
-        this.ready = false; // Flag to indicate readiness to execute
+        this.state = JobState.NOT_STARTED;
+        this.promise = null; // Promise to hold the result of the job
+
+        this.jobIndex = shell.jobs.length;
+        shell.jobs.push(this);
 
         return createJobProxy(this); // Automatically return a proxied version of Job
     }
 
     // Method to add a step to the job
     addStep(functionName, argsArray) {
-        console.log("Adding step to ", this.steps, ":", functionName, argsArray)
+        console.log("Adding step to ", this.steps, ":", functionName, argsArray);
         this.steps.push([functionName, argsArray]);
         return this; // Allow chaining
     }
@@ -101,18 +127,31 @@ export class Job {
     // Method to execute the job
     async execute() {
         // Wait for the job to be ready
-        while (!this.ready) {
+        while (this.state == JobState.NOT_STARTED) {
             await new Promise(resolve => setTimeout(resolve, 0));
         }
 
+        console.log(`[${this.jobIndex}] ${this.steps.map(j => j[0]).join(' ')}`);
+
         let prevValue = null;
 
-        while (this.steps.length > 0) {
-            // Take the first step from the queue
-            const [functionName, argsArray] = this.steps.shift();
-            const func = await this.context.loadFunction(functionName);
-            // Execute the function with the provided arguments
-            prevValue = await func(this, prevValue, argsArray);
+        try {
+            while (this.steps.length > 0) {
+                // Take the first step from the queue
+                const [functionName, argsArray] = this.steps.shift();
+                const func = await this.shell.loadFunction(functionName);
+                // Execute the function with the provided arguments
+                prevValue = await func(this, prevValue, argsArray);
+            }
+            if (prevValue !== null) {
+                console.log(prevValue);
+            }
+            console.log(`[${this.jobIndex}] Done`);
+            this.state = JobState.DONE;
+        } catch (error) {
+            console.error(`[${this.jobIndex}] Error:`, error);
+            this.state = JobState.ERROR;
+            throw error;
         }
 
         return prevValue; // Return the result of the last executed function
@@ -120,19 +159,33 @@ export class Job {
 
     // Placeholder method to set the job as ready and start execution
     start() {
-        this.execute().then(result => {
+        (this.promise = this.execute()).then(result => {
             console.log("Job completed with result:", result);
         }).catch(error => {
             console.error("Job execution failed:", error);
         });
-        this.ready = true;
+        this.state = JobState.RUNNING;
+    }
+
+    // Returns the promise of the job's completion
+    p() {
+        return this.promise;
+    }
+
+    // Await the result of the job
+    async r() {
+        return await this.promise;
     }
 }
 
 function createJobProxy(job) {
     return new Proxy(job, {
         get(target, prop, receiver) {
-            if (prop in target) {
+            if (prop === 'toString') {
+                return () => `Job Proxy #${target.jobIndex}: ${target.state} with ${target.steps.length} steps`;
+            } else if (prop === Symbol.toPrimitive) {
+                return (hint) => hint === "string" ? `Job Proxy #${target.jobIndex}: ${target.state}, ${target.steps.length} steps` : undefined;
+            } else if (prop in target) {
                 return target[prop]; // Return the property directly
             } else {
                 // Handle dynamic step addition
@@ -143,86 +196,4 @@ function createJobProxy(job) {
             }
         }
     });
-}
-
-/*****
- Example Usage:
-
- ```javascript
- const gritsStore = new GritsStore('https://localhost:17871/grits/v1/');
- 
- // Get a bytestream
- gritsStore.get('some/path/file.txt')
-   .then(data => {
-       console.log(data); // ArrayBuffer of file content
-   })
-   .catch(console.error);
- 
- // Put a bytestream
- const byteArray = new Uint8Array([/your data here *\/]).buffer;
- gritsStore.put('some/path/file.txt', byteArray)
-   .then(response => {
-       console.log(response); // Response from the PUT request
-   })
-   .catch(console.error);
- 
- // Get a reference hash
- gritsStore.ref('some/path/file.txt')
-   .then(hash => {
-       console.log(hash); // Hash part of the URL
-   })
-   .catch(console.error);
- ```
-
- */
-
-
-export class GritsStore {
-    constructor(root) {
-        this.root = root;
-    }
-
-    async get(path) {
-        const url = `${this.root}${path}`;
-        console.log(`get for ${url}`)
-
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.arrayBuffer(); // Return the response body as an ArrayBuffer
-    }
-
-    async put(path, bytearray) {
-        const url = `${this.root}${path}`;
-        console.log(`put for ${url}`)
-        const response = await fetch(url, {
-            method: 'PUT',
-            body: bytearray, // Assuming bytearray is an instance of ArrayBuffer or similar
-            headers: {
-                'Content-Type': 'application/octet-stream', // or the correct MIME type
-            },
-        });
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        return response.text(); // Return the response text, or you might want to return something else
-    }
-
-    async ref(path) {
-        const url = `${this.root}${path}`;
-        console.log(`ref for ${url}`)
-        const response = await fetch(url);
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        // Extract the hash part from the redirect URL
-        const hashMatch = response.url.match(/\/blob\/([^\/]+)$/);
-        if (!hashMatch) {
-            throw new Error('Failed to extract hash from redirect URL');
-        }
-        return hashMatch[1]; // Return the hash part of the URL
-    }
 }
