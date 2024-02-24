@@ -1,5 +1,5 @@
 ({
-    'execute': async (context, prevValue, argsArray) => {
+    'execute': async (shell, prevValue, argsArray) => {
         console.log("Executing dummy function with args:", argsArray);
 
         if (argsArray.length === 0) {
