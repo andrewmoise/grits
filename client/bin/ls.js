@@ -7,15 +7,8 @@
         }
 
         try {
-            console.log("Executing .ls()");
-            console.log(`  shell is ${job.shell}`);
-            console.log(` shell.context is ${job.shell.context}`)
-            console.log(` shell.context.tree is ${job.shell.context.tree}`)
- 
-            const tree = await job.shell.context.tree(); // Fetch the file tree
-            const filenames = Object.keys(tree); // Extract filenames (keys) from the tree
-            console.log("Files:", filenames);
-            return filenames; // Return the list of filenames
+            const tree = await job.shell.storage.tree(); // Fetch the file tree
+            return tree
         } catch (error) {
             console.error("Error executing .ls():", error);
             throw error;
