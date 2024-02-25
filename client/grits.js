@@ -3,7 +3,7 @@
 /*****
  Example Usage:
 
- const gritsStore = new Context('https://localhost:17871/grits/v1/');
+ const gritsStore = new Storage('https://localhost:17871/grits/v1/');
  
  // Get a bytestream
  gritsStore.get('some/path/file.txt')
@@ -30,7 +30,7 @@
  */
 
 
- export class Context {
+ export class Storage {
     constructor(root) {
         this.root = root;
     }

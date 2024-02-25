@@ -5,8 +5,8 @@ let hoo;
 
 import('/grits/v1/file/client/grits.js').then(module => {
     import('/grits/v1/file/client/hoopla.js').then(hooplaModule => {
-        const context = new module.Context('http://localhost:1787/grits/v1/');
-        hoo = new hooplaModule.Shell(context);
+        const storage = new module.Storage('http://localhost:1787/grits/v1/');
+        hoo = new hooplaModule.Shell(storage);
     }).catch(console.error);
 }).catch(console.error);
 
@@ -14,15 +14,15 @@ hoo.dummy(1);
 
 // Ultimate WIP goal:
 
-context.fetch('https://html5up.net/solid-state/download').unzip().put('solid-state');
+hoo.fetch('https://html5up.net/solid-state/download').unzip().put('solid-state');
 
 
 */
 
 
 export class Shell {
-    constructor(context) {
-        this.context = context;
+    constructor(storage) {
+        this.storage = storage;
         this.commandCache = new Map(); // Cache for command maps, keyed by hash
         this.jobs = []
         return createShellProxy(this); // Automatically return a proxied version of Shell
@@ -48,14 +48,14 @@ export class Shell {
     async loadFunctionFromGrits(functionName) {
         try {
             // Retrieve the hash reference for the function
-            const hash = await this.context.ref(`file/bin/${functionName}.js`);
+            const hash = await this.storage.ref(`file/bin/${functionName}.js`);
             if (this.commandCache.has(hash)) {
                 // If the command is already cached, return the execute function
                 return this.commandCache.get(hash).execute;
             }
 
             // If not in cache, fetch the actual function code by hash
-            const codeArrayBuffer = await this.context.load(`blob/${hash}`);
+            const codeArrayBuffer = await this.storage.load(`blob/${hash}`);
             const codeText = new TextDecoder().decode(codeArrayBuffer);
             // Assume codeText evaluates to a command object
             const command = eval(codeText);
