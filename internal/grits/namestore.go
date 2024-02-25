@@ -22,54 +22,39 @@ func (ns *NameStore) GetRoot() *RevNode {
 	return ns.root
 }
 
-func (ns *NameStore) cloneRoot() map[string]*FileAddr {
-	if ns.root == nil {
-		return nil
-	}
-
-	m := make(map[string]*FileAddr)
-	for k, v := range ns.root.Tree.Children {
-		m[k] = v
-	}
-
-	return m
-}
-
-func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func(map[string]*FileAddr) error) error {
+func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func([]*FileNode) ([]*FileNode, error)) error {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
 	log.Printf("ReviseRoot; starting hash is %s\n", ns.root.ExportedBlob.Address.String())
 	log.Printf("  file hash is %s\n", ns.root.Tree.ExportedBlob.Address.String())
 
-	// Clone the current root's children for modification
-	newRoot := ns.cloneRoot()
-	if newRoot == nil {
-		newRoot = make(map[string]*FileAddr)
-	}
+	// Assuming ns.root.Tree is a *DirNode
+	// Prepare the current children slice for modification
+	currentChildren := ns.root.Tree.Children // This is already a slice of *FileNode
 
 	// Call the passed function to get the modified version of children
-	err := modifyFn(newRoot)
+	modifiedChildren, err := modifyFn(currentChildren)
 	if err != nil {
 		return fmt.Errorf("failed to modify root children: %w", err)
 	}
 
-	// Create a new FileNode with the modified children
-	fn, err := bs.CreateFileNode(newRoot)
+	// Create a new DirNode with the modified children
+	newDirNode, err := bs.CreateDirNode(modifiedChildren)
 	if err != nil {
-		return fmt.Errorf("failed to create new FileNode: %w", err)
+		return fmt.Errorf("failed to create new DirNode: %w", err)
 	}
 
-	// Create a new RevNode with the new FileNode and set it as the new root
-	rn, err := bs.CreateRevNode(fn, ns.root)
+	// Create a new RevNode with the new DirNode and set it as the new root
+	newRevNode, err := bs.CreateRevNode(newDirNode, ns.root)
 	if err != nil {
 		return fmt.Errorf("failed to create new RevNode: %w", err)
 	}
 
-	log.Printf("ReviseRoot; ending hash is %s\n", rn.ExportedBlob.Address.String())
-	log.Printf("  file hash is %s\n", rn.Tree.ExportedBlob.Address.String())
+	log.Printf("ReviseRoot; ending hash is %s\n", newRevNode.ExportedBlob.Address.String())
+	log.Printf("  dir hash is %s\n", newRevNode.Tree.ExportedBlob.Address.String())
 
-	ns.root = rn
+	ns.root = newRevNode
 	return nil
 }
 
@@ -89,13 +74,16 @@ func (ns *NameStore) ResolveName(name string) *FileAddr {
 		return nil
 	}
 
-	return ns.root.Tree.Children[name]
+	child, exists := ns.root.Tree.ChildrenMap[name]
+	if !exists {
+		return nil
+	}
+
+	return child.FileAddr
 }
 
 func EmptyNameStore(bs *BlobStore) (*NameStore, error) {
-	m := make(map[string]*FileAddr)
-
-	fn, err := bs.CreateFileNode(m)
+	fn, err := bs.CreateDirNode(make([]*FileNode, 0))
 	if err != nil {
 		return nil, err
 	}

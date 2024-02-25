@@ -6,43 +6,96 @@ import (
 	"os"
 )
 
+// A file
+
 type FileNode struct {
-	ExportedBlob *CachedFile          `json:"-"` // This field is ignored by the JSON package.
-	Children     map[string]*FileAddr // Maps file names to their CachedFile
+	Type     string    `json:"type"`
+	Name     string    `json:"name"`
+	FileAddr *FileAddr `json:"hash"` // Updated to use FileAddr type
 }
 
-// GetFile retrieves a file by name from the FileNode.
-func (fn *FileNode) GetFile(name string) (*FileAddr, bool) {
-	file, exists := fn.Children[name]
+// Custom JSON marshaling to maintain string format in JSON
+func (fn *FileNode) MarshalJSON() ([]byte, error) {
+	type Alias FileNode
+	return json.Marshal(&struct {
+		FileAddr string `json:"hash"`
+		*Alias
+	}{
+		FileAddr: fn.FileAddr.String(), // Serialize FileAddr as string
+		Alias:    (*Alias)(fn),
+	})
+}
+
+// Custom JSON unmarshaling to handle FileAddr string format
+func (fn *FileNode) UnmarshalJSON(data []byte) error {
+	type Alias FileNode
+	aux := &struct {
+		FileAddr string `json:"hash"`
+		*Alias
+	}{
+		Alias: (*Alias)(fn),
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	fileAddr, err := NewFileAddrFromString(aux.FileAddr)
+	if err != nil {
+		return err
+	}
+	fn.FileAddr = fileAddr
+	return nil
+}
+
+// NewFileNode creates a new instance of FileNode with a FileAddr
+func NewFileNode(name string, fileAddr *FileAddr) *FileNode {
+	return &FileNode{
+		Type:     "file",
+		Name:     name,
+		FileAddr: fileAddr,
+	}
+}
+
+// A directory
+
+type DirNode struct {
+	Children     []*FileNode          `json:"children"`
+	ChildrenMap  map[string]*FileNode `json:"-"`
+	ExportedBlob *CachedFile          `json:"-"`
+}
+
+func (dn *DirNode) GetFile(name string) (*FileNode, bool) {
+	file, exists := dn.ChildrenMap[name]
 	return file, exists
 }
 
-// CreateFileNode creates a FileNode with the specified children,
-// serializes it, stores it in the blob store, and caches it.
-func (bs *BlobStore) CreateFileNode(children map[string]*FileAddr) (*FileNode, error) {
-	m := make(map[string]string)
-	for k, v := range children {
-		m[k] = v.String()
+func (bs *BlobStore) CreateDirNode(children []*FileNode) (*DirNode, error) {
+	dn := &DirNode{Children: children}
+	dn.ChildrenMap = make(map[string]*FileNode)
+
+	for _, child := range children {
+		if _, exists := dn.ChildrenMap[child.Name]; exists {
+			// Duplicate found
+			return nil, fmt.Errorf("duplicate file name found: %s", child.Name)
+		}
+		dn.ChildrenMap[child.Name] = child
 	}
 
-	data, err := json.MarshalIndent(m, "", "  ")
+	data, err := json.MarshalIndent(dn, "", "  ")
 	if err != nil {
-		return nil, fmt.Errorf("failed to serialize NameStore: %w", err)
+		return nil, fmt.Errorf("failed to serialize DirNode: %w", err)
 	}
 
-	var cf *CachedFile
-	cf, err = bs.AddDataBlock(data, ".json")
+	cf, err := bs.AddDataBlock(data, ".json")
 	if err != nil {
-		return nil, fmt.Errorf("error storing FileNode: %v", err)
+		return nil, fmt.Errorf("error storing DirNode: %v", err)
 	}
 
-	return &FileNode{
-		ExportedBlob: cf,
-		Children:     children,
-	}, nil
+	dn.ExportedBlob = cf
+	return dn, nil
 }
 
-func (bs *BlobStore) FetchFileNode(addr *FileAddr) (*FileNode, error) {
+func (bs *BlobStore) FetchDirNode(addr *FileAddr) (*DirNode, error) {
 	cf, err := bs.ReadFile(addr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", addr.Hash, err)
@@ -53,44 +106,42 @@ func (bs *BlobStore) FetchFileNode(addr *FileAddr) (*FileNode, error) {
 		return nil, fmt.Errorf("error reading file at %s: %v", cf.Path, err)
 	}
 
-	var ref map[string]string
-	if err := json.Unmarshal(data, &ref); err != nil {
+	var dn DirNode
+	if err := json.Unmarshal(data, &dn); err != nil {
 		return nil, fmt.Errorf("error unmarshaling JSON from file at %s: %v", cf.Path, err)
 	}
 
-	m := make(map[string]*FileAddr)
-	for k, v := range ref {
-		fa, err := NewFileAddrFromString(v)
-		if err != nil {
-			return nil, fmt.Errorf("error creating addr: %v", err)
+	dn.ChildrenMap = make(map[string]*FileNode)
+	for _, child := range dn.Children {
+		if _, exists := dn.ChildrenMap[child.Name]; exists {
+			// Duplicate found
+			return nil, fmt.Errorf("duplicate file name found: %s", child.Name)
 		}
-		m[k] = fa
+		dn.ChildrenMap[child.Name] = child
 	}
 
-	return &FileNode{
-		ExportedBlob: cf,
-		Children:     m,
-	}, nil
-
-}
-
-func (fn *FileNode) CloneChildren() map[string]*FileAddr {
-	clone := make(map[string]*FileAddr)
-	for k, v := range fn.Children {
-		clone[k] = v
+	nameSet := make(map[string]struct{}) // Use an empty struct to minimize memory usage
+	for _, child := range dn.Children {
+		if _, exists := nameSet[child.Name]; exists {
+			// Duplicate found
+			return nil, fmt.Errorf("duplicate file name found: %s", child.Name)
+		}
+		nameSet[child.Name] = struct{}{}
 	}
-	return clone
+
+	dn.ExportedBlob = cf
+	return &dn, nil
 }
 
 // RevNode represents a revision, containing a snapshot of the content at a point in time.
 type RevNode struct {
 	ExportedBlob *CachedFile `json:"-"`
-	Tree         *FileNode   // The current state of the content
+	Tree         *DirNode    // The current state of the content
 	Previous     *RevNode    // Pointer to the previous revision, nil if it's the first
 }
 
 // NewRevNode creates a new instance of RevNode.
-func NewRevNode(previous *RevNode, tree *FileNode) *RevNode {
+func NewRevNode(previous *RevNode, tree *DirNode) *RevNode {
 	return &RevNode{
 		Tree:     tree,
 		Previous: previous,
@@ -99,7 +150,7 @@ func NewRevNode(previous *RevNode, tree *FileNode) *RevNode {
 
 // CreateRevNode creates a RevNode with the specified FileNode as its tree,
 // serializes it, stores it in the blob store, and caches it.
-func (bs *BlobStore) CreateRevNode(tree *FileNode, previous *RevNode) (*RevNode, error) {
+func (bs *BlobStore) CreateRevNode(tree *DirNode, previous *RevNode) (*RevNode, error) {
 	m := make(map[string]string)
 	if previous != nil {
 		m["previous"] = previous.ExportedBlob.Address.String()
@@ -161,7 +212,7 @@ func (bs *BlobStore) FetchRevNode(addr *FileAddr) (*RevNode, error) {
 
 	if treeStr, exists := ref["tree"]; exists {
 		treeAddr, _ := NewFileAddrFromString(treeStr)
-		rn.Tree, err = bs.FetchFileNode(treeAddr)
+		rn.Tree, err = bs.FetchDirNode(treeAddr)
 		if err != nil {
 			return nil, fmt.Errorf("error fetching FileNode: %v", err)
 		}
