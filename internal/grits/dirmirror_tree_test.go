@@ -42,7 +42,10 @@ func TestDirToTreeMirror(t *testing.T) {
 		t.Fatalf("Failed to create DirToTreeMirror: %v", error)
 	}
 
-	dirMirror.Start()
+	err = dirMirror.Start()
+	if err != nil {
+		t.Fatalf("Failed to start DirToTreeMirror: %v", err)
+	}
 	defer dirMirror.Stop()
 
 	// Allow some time for the initial scan to complete

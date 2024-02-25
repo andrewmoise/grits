@@ -63,10 +63,13 @@ func TestDirToBlobsMirror_FileOperations(t *testing.T) {
 	}
 
 	// Start DirToBlobsMirror to synchronize files
-	DirToBlobsMirror.Start()
+	err := DirToBlobsMirror.Start()
+	if err != nil {
+		t.Fatalf("Failed to start DirToBlobsMirror: %v", err)
+	}
 
 	// Allow some time for DirToBlobsMirror to process the files
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	log.Printf("--- Verify initial files\n")
 
@@ -87,7 +90,7 @@ func TestDirToBlobsMirror_FileOperations(t *testing.T) {
 	}
 
 	// Allow some time for DirToBlobsMirror to process the changes
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	log.Printf("--- Verify modifications\n")
 
