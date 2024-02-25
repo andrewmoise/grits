@@ -95,6 +95,9 @@ func (db *DirToBlobsMirror) initialScan() {
 			log.Println("Error accessing path:", destPath, "Error:", err)
 			return err
 		}
+
+		log.Printf("Checking file %s\n", destPath)
+
 		if !info.IsDir() {
 			relPath, err := filepath.Rel(db.destPath, destPath)
 			if err != nil {
@@ -130,7 +133,10 @@ func (db *DirToBlobsMirror) initialScan() {
 			return err
 		}
 		if !info.IsDir() {
-			db.addOrUpdateFile(srcPath)
+			err := db.addOrUpdateFile(srcPath)
+			if err != nil {
+				log.Println("Error adding/updating file:", err)
+			}
 		}
 		return nil
 	})
@@ -138,6 +144,7 @@ func (db *DirToBlobsMirror) initialScan() {
 
 // watch listens for file system events and handles them
 func (db *DirToBlobsMirror) watch() {
+	log.Printf("Watching for DirToBlobsMirror for %s -> %s\n", db.srcPath, db.destPath)
 	for ei := range db.eventChan {
 		log.Printf("Event received: %s on path: %s\n", ei.Event(), ei.Path())
 		db.handleEvent(ei)
@@ -276,7 +283,7 @@ func (dt *DirToTreeMirror) Start() error {
 	log.Printf("Starting DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.destPath)
 
 	if err := notify.Watch(dt.srcPath+"/...", dt.eventChan, notify.All); err != nil {
-		return fmt.Errorf("Failed to watch directory: %v", err)
+		return fmt.Errorf("failed to watch directory: %v", err)
 	}
 	go dt.watch()
 
@@ -284,20 +291,21 @@ func (dt *DirToTreeMirror) Start() error {
 	return nil
 }
 
-// initialScan walks through the directory initially to add existing files
 func (dt *DirToTreeMirror) initialScan() {
 	log.Printf("Initial scan for DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.destPath)
 
 	dt.mtx.Lock()
 	defer dt.mtx.Unlock()
 
-	dt.ns.ReviseRoot(dt.bs, func(m map[string]*FileAddr) error {
-		// Delete keys with prefix dt.destPath
-		for key := range m {
-			if strings.HasPrefix(key, dt.destPath) {
-				log.Printf("  Deleting key %s\n", key)
+	dt.ns.ReviseRoot(dt.bs, func(children []*FileNode) ([]*FileNode, error) {
+		newChildren := make([]*FileNode, 0, len(children))
 
-				delete(m, key)
+		// Filter out files with prefix dt.destPath from the current children
+		for _, child := range children {
+			if !strings.HasPrefix(child.Name, dt.destPath) {
+				newChildren = append(newChildren, child)
+			} else {
+				log.Printf("  Deleting file %s\n", child.Name)
 			}
 		}
 
@@ -323,18 +331,19 @@ func (dt *DirToTreeMirror) initialScan() {
 					return err // Propagate the error upwards
 				}
 
-				// Construct the key for the map m
+				// Construct the FileNode for the new file
 				key := filepath.Join(dt.destPath, relativePath)
+				fileNode := NewFileNode(key, cf.Address) // Assuming NewFileNode signature matches your requirements
 
-				// Update the map with the new file address
-				m[key] = cf.Address
+				// Add the new FileNode to the slice
+				newChildren = append(newChildren, fileNode)
 				dt.files[path] = cf
 			}
 
 			return nil // Continue walking
 		})
 
-		return err // Return any error encountered during filepath.Walk
+		return newChildren, err // Return the modified slice and any error encountered during filepath.Walk
 	})
 }
 
@@ -373,12 +382,7 @@ func (dt *DirToTreeMirror) handleEvent(ei notify.EventInfo) {
 	}
 }
 
-// addOrUpdateFile adds a new file to the BlobStore or updates an existing one
 func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string) error {
-	//if srcPath != "" {
-	//	return nil
-	//}
-
 	cachedFile, err := dt.bs.AddLocalFile(srcPath)
 	if err != nil {
 		return err
@@ -389,16 +393,34 @@ func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string) error {
 		dt.bs.Release(prevFile)
 	}
 
-	dt.ns.ReviseRoot(dt.bs, func(m map[string]*FileAddr) error {
+	dt.ns.ReviseRoot(dt.bs, func(children []*FileNode) ([]*FileNode, error) {
 		relPath, err := filepath.Rel(dt.srcPath, srcPath)
 		if err != nil {
-			return fmt.Errorf("error calculating relative path: %v", err)
+			return nil, fmt.Errorf("error calculating relative path: %v", err)
 		}
 
-		// Construct the key for the map m
-		key := filepath.Join(dt.destPath, relPath)
-		m[key] = cachedFile.Address
-		return nil
+		// Construct the new FileNode for the file
+		newFileNode := NewFileNode(filepath.Join(dt.destPath, relPath), cachedFile.Address)
+
+		// Check if the file already exists in the slice and replace or append as necessary
+		updatedChildren := make([]*FileNode, 0, len(children)+1) // +1 in case we need to add a new file
+		found := false
+		for _, child := range children {
+			if child.Name == newFileNode.Name {
+				// Replace existing file node
+				updatedChildren = append(updatedChildren, newFileNode)
+				found = true
+			} else {
+				// Keep existing file node
+				updatedChildren = append(updatedChildren, child)
+			}
+		}
+		if !found {
+			// Append new file node if it wasn't found (and replaced) among existing ones
+			updatedChildren = append(updatedChildren, newFileNode)
+		}
+
+		return updatedChildren, nil
 	})
 
 	dt.files[srcPath] = cachedFile
@@ -406,7 +428,6 @@ func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string) error {
 	return nil
 }
 
-// removeFile handles the removal of a file from the BlobStore and internal tracking
 func (dt *DirToTreeMirror) removeFile(filePath string) error {
 	if cachedFile, exists := dt.files[filePath]; exists {
 		dt.bs.Release(cachedFile)
@@ -418,11 +439,25 @@ func (dt *DirToTreeMirror) removeFile(filePath string) error {
 			return fmt.Errorf("error calculating relative path: %v", err)
 		}
 
-		dt.ns.ReviseRoot(dt.bs, func(m map[string]*FileAddr) error {
-			// Construct the key for the map m
-			key := filepath.Join(dt.destPath, relPath)
-			delete(m, key)
-			return nil
+		dt.ns.ReviseRoot(dt.bs, func(children []*FileNode) ([]*FileNode, error) {
+			// Prepare a new slice for the children, excluding the one to be removed
+			updatedChildren := make([]*FileNode, 0, len(children))
+			keyToRemove := filepath.Join(dt.destPath, relPath)
+
+			found := false
+			for _, child := range children {
+				if child.Name != keyToRemove {
+					updatedChildren = append(updatedChildren, child)
+				} else {
+					found = true
+				}
+			}
+
+			if !found {
+				log.Printf("File %s not found in current revision; no removal needed", filePath)
+			}
+
+			return updatedChildren, nil
 		})
 	}
 

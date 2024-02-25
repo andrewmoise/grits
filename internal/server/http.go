@@ -180,20 +180,20 @@ func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 		return
 	}
 
-	fn := rn.Tree
-	if fn == nil {
+	dn := rn.Tree
+	if dn == nil {
 		http.Error(w, "Root namespace tree not found", http.StatusNotFound)
 		return
 	}
 
-	fa, exists := fn.Children[path]
+	fn, exists := dn.ChildrenMap[path]
 	if !exists {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
 	// Try to read the file from the blob store using the full address
-	cachedFile, err := bs.ReadFile(fa)
+	cachedFile, err := bs.ReadFile(fn.FileAddr)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
@@ -229,9 +229,29 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 		return
 	}
 
-	ns.ReviseRoot(bs, func(m map[string]*grits.FileAddr) error {
-		m[path] = cf.Address
-		return nil
+	ns.ReviseRoot(bs, func(children []*grits.FileNode) ([]*grits.FileNode, error) {
+		// Construct the FileNode for the new or updated file
+		newFileNode := grits.NewFileNode(path, cf.Address) // Ensure this matches your constructor
+
+		// Check if the file already exists in the slice and replace or append as necessary
+		updatedChildren := make([]*grits.FileNode, 0, len(children)+1) // +1 in case we add a new file
+		found := false
+		for _, child := range children {
+			if child.Name == newFileNode.Name {
+				// Replace existing file node with new info
+				updatedChildren = append(updatedChildren, newFileNode)
+				found = true
+			} else {
+				// Keep existing file node
+				updatedChildren = append(updatedChildren, child)
+			}
+		}
+		if !found {
+			// Append new file node if it wasn't found among existing ones
+			updatedChildren = append(updatedChildren, newFileNode)
+		}
+
+		return updatedChildren, nil
 	})
 
 	bs.Release(cf)
@@ -240,24 +260,41 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 func handleNamespaceDelete(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received DELETE request for file: %s\n", path)
 
-	err := ns.ReviseRoot(bs, func(m map[string]*grits.FileAddr) error {
-		// Check if the key exists in the map
-		if _, exists := m[path]; !exists {
-			// If the key does not exist, return an error indicating the file was not found
-			return fmt.Errorf("file not found: %s", path)
-		}
+	fileNotFound := true // Assume file not found by default
 
-		// If the key exists, delete it from the map
-		delete(m, path)
-		return nil
+	err := ns.ReviseRoot(bs, func(children []*grits.FileNode) ([]*grits.FileNode, error) {
+		updatedChildren := make([]*grits.FileNode, 0, len(children))
+		for _, child := range children {
+			if child.Name != path {
+				// Keep all files that do not match the path
+				updatedChildren = append(updatedChildren, child)
+			} else {
+				// If we find the file, it's not a 'file not found' situation
+				fileNotFound = false
+			}
+		}
+		// If after scanning, the file to delete wasn't found, return an error
+		if fileNotFound {
+			return nil, fmt.Errorf("file not found: %s", path)
+		}
+		// Return the updated slice without the deleted file
+		return updatedChildren, nil
 	})
 
-	// If an error occurred during the revision, write an error response
+	// If an error occurred during the revision
 	if err != nil {
-		log.Printf("Error deleting file: %v\n", err)
-		http.Error(w, fmt.Sprintf("Error deleting file: %v", err), http.StatusNotFound)
+		log.Printf("Error processing DELETE request: %v\n", err)
+		if fileNotFound {
+			http.Error(w, "File not found", http.StatusNotFound)
+		} else {
+			http.Error(w, fmt.Sprintf("Error deleting file: %v", err), http.StatusInternalServerError)
+		}
 		return
 	}
+
+	// If the file was successfully deleted, you can return an appropriate success response
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "File deleted successfully")
 }
 
 func (s *Server) handleHeartbeat() http.HandlerFunc {

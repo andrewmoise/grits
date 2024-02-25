@@ -44,12 +44,17 @@ func TestNamespacePersistence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to add data block: %v", err)
 		}
-		// FIXME -- do we need to release here? Not relevant for the test environment
-		// but it will be for other things
+		// Considering the context, explicit release might not be necessary here
+		// But ensure proper resource management in non-test environments
 
-		err = ns.ReviseRoot(srv.BlobStore, func(files map[string]*grits.FileAddr) error {
-			files[block] = cf.Address
-			return nil
+		err = ns.ReviseRoot(srv.BlobStore, func(children []*grits.FileNode) ([]*grits.FileNode, error) {
+			// Construct the new FileNode for the block
+			newFileNode := grits.NewFileNode(block, cf.Address) // Ensure constructor matches your setup
+
+			// Append the new FileNode to children, since this is adding blocks
+			updatedChildren := append(children, newFileNode)
+
+			return updatedChildren, nil
 		})
 		if err != nil {
 			t.Fatalf("Failed to revise root: %v", err)
