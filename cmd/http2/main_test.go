@@ -61,7 +61,7 @@ func TestFileOperations(t *testing.T) {
 	// 1. Create 5 files
 
 	for i := 1; i <= 5; i++ {
-		url := fmt.Sprintf("%s/grits/v1/file/%d", baseURL, i)
+		url := fmt.Sprintf("%s/grits/v1/content/root/%d", baseURL, i)
 		content := fmt.Sprintf("Test data %d", i)
 		req, err := http.NewRequest(http.MethodPut, url, bytes.NewBufferString(content))
 		if err != nil {
@@ -153,7 +153,7 @@ func TestFileOperations(t *testing.T) {
 
 	// 3. Delete file 3
 
-	url = fmt.Sprintf("%s/grits/v1/file/3", baseURL)
+	url = fmt.Sprintf("%s/grits/v1/content/root/3", baseURL)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		t.Fatalf("Creating DELETE request failed: %v", err)
@@ -172,7 +172,7 @@ func TestFileOperations(t *testing.T) {
 
 	// 4. Overwrite file 5
 
-	url = fmt.Sprintf("%s/grits/v1/file/5", baseURL)
+	url = fmt.Sprintf("%s/grits/v1/content/root/5", baseURL)
 	content := "Overwritten test data 5"
 	req, err = http.NewRequest(http.MethodPut, url, bytes.NewBufferString(content))
 	if err != nil {

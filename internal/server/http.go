@@ -55,7 +55,7 @@ func (s *Server) tokenAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) setupRoutes() {
 	s.Mux.HandleFunc("/grits/v1/blob/", corsMiddleware(s.handleBlob))
-	s.Mux.HandleFunc("/grits/v1/file/", corsMiddleware(s.handleFile))
+	s.Mux.HandleFunc("/grits/v1/content/root/", corsMiddleware(s.handleContent))
 	s.Mux.HandleFunc("/grits/v1/tree", corsMiddleware(s.handleTree))
 
 	// Special handling for serving the Service Worker JS from the root
@@ -143,9 +143,9 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFile manages requests for account-specific namespaces
-func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleContent(w http.ResponseWriter, r *http.Request) {
 	// Extract account name and filepath from the URL
-	filePath := strings.TrimPrefix(r.URL.Path, "/grits/v1/file/")
+	filePath := strings.TrimPrefix(r.URL.Path, "/grits/v1/content/root/")
 	accountName := "root"
 
 	s.AccountLock.Lock()
