@@ -2,10 +2,11 @@
  Example Usage:
 
 let hoo;
+let storage;
 
-import('/grits/v1/file/client/grits.js').then(module => {
-    import('/grits/v1/file/client/hoopla.js').then(hooplaModule => {
-        const storage = new module.Storage('http://localhost:1787/grits/v1/');
+import('/grits/v1/content/root/client/grits.js').then(module => {
+    import('/grits/v1/content/root/client/hoopla.js').then(hooplaModule => {
+        storage = new module.Storage('http://localhost:1787/grits/v1/');
         hoo = new hooplaModule.Shell(storage);
     }).catch(console.error);
 }).catch(console.error);
@@ -30,7 +31,7 @@ export class Shell {
 
     async loadFunction(functionName) {
         try {
-            const codeRequest = await fetch(`http://localhost:1787/grits/v1/file/client/bin/${functionName}.js`);
+            const codeRequest = await fetch(`http://localhost:1787/grits/v1/content/root/client/bin/${functionName}.js`);
             if (!codeRequest.ok) {
                 throw new Error(`HTTP error, status = ${codeRequest.status}`);
             }
@@ -38,30 +39,6 @@ export class Shell {
             const codeText = await codeRequest.text();
             const command = eval(codeText);
             
-            return command.execute;
-        } catch (error) {
-            console.error(`Failed to load command ${functionName}:`, error);
-            throw error;
-        }
-    }
-
-    async loadFunctionFromGrits(functionName) {
-        try {
-            // Retrieve the hash reference for the function
-            const hash = await this.storage.ref(`file/bin/${functionName}.js`);
-            if (this.commandCache.has(hash)) {
-                // If the command is already cached, return the execute function
-                return this.commandCache.get(hash).execute;
-            }
-
-            // If not in cache, fetch the actual function code by hash
-            const codeArrayBuffer = await this.storage.load(`blob/${hash}`);
-            const codeText = new TextDecoder().decode(codeArrayBuffer);
-            // Assume codeText evaluates to a command object
-            const command = eval(codeText);
-
-            // Cache the loaded command
-            this.commandCache.set(hash, command);
             return command.execute;
         } catch (error) {
             console.error(`Failed to load command ${functionName}:`, error);
