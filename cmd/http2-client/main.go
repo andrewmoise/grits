@@ -74,7 +74,7 @@ func main() {
 }
 
 func getFile(remoteName, localName string) error {
-	resp, err := http.Get("http://localhost:1787/grits/v1/file/" + remoteName)
+	resp, err := http.Get("http://localhost:1787/grits/v1/content/root/" + remoteName)
 	if err != nil {
 		return err
 	}
@@ -102,7 +102,7 @@ func putFile(localName, remoteName string) error {
 	defer file.Close()
 
 	// Create a new PUT request
-	req, err := http.NewRequest(http.MethodPut, "http://localhost:1787/grits/v1/file/"+remoteName, file)
+	req, err := http.NewRequest(http.MethodPut, "http://localhost:1787/grits/v1/content/root/"+remoteName, file)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,7 @@ func putDirectoryRecursively(localDir, remoteDir string) error {
 
 func removeFiles(remoteNames []string) error {
 	for _, remoteName := range remoteNames {
-		req, err := http.NewRequest(http.MethodDelete, "http://localhost:1787/grits/v1/file/"+remoteName, nil)
+		req, err := http.NewRequest(http.MethodDelete, "http://localhost:1787/grits/v1/content/root/"+remoteName, nil)
 		if err != nil {
 			return err
 		}
