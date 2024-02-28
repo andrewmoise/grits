@@ -126,19 +126,13 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rn := ns.GetRoot()
-	if rn == nil {
+	dn := ns.GetRoot()
+	if dn == nil {
 		http.Error(w, "Root namespace not found", http.StatusNotFound)
 		return
 	}
 
-	fn := rn.Tree
-	if fn == nil {
-		http.Error(w, "Root namespace tree not found", http.StatusNotFound)
-		return
-	}
-
-	fa := rn.ExportedBlob.Address
+	fa := dn.ExportedBlob.Address
 	http.Redirect(w, r, "/grits/v1/blob/"+fa.String(), http.StatusFound)
 }
 
@@ -174,15 +168,9 @@ func (s *Server) handleContent(w http.ResponseWriter, r *http.Request) {
 func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
-	rn := ns.GetRoot()
-	if rn == nil {
-		http.Error(w, "Root namespace not found", http.StatusNotFound)
-		return
-	}
-
-	dn := rn.Tree
+	dn := ns.GetRoot()
 	if dn == nil {
-		http.Error(w, "Root namespace tree not found", http.StatusNotFound)
+		http.Error(w, "Root namespace not found", http.StatusNotFound)
 		return
 	}
 

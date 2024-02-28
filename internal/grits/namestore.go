@@ -7,11 +7,11 @@ import (
 )
 
 type NameStore struct {
-	root *RevNode
+	root *DirNode
 	mtx  sync.RWMutex
 }
 
-func (ns *NameStore) GetRoot() *RevNode {
+func (ns *NameStore) GetRoot() *DirNode {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
@@ -27,11 +27,11 @@ func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func([]*FileNode) ([]*Fi
 	defer ns.mtx.Unlock()
 
 	log.Printf("ReviseRoot; starting hash is %s\n", ns.root.ExportedBlob.Address.String())
-	log.Printf("  file hash is %s\n", ns.root.Tree.ExportedBlob.Address.String())
+	log.Printf("  file hash is %s\n", ns.root.ExportedBlob.Address.String())
 
 	// Assuming ns.root.Tree is a *DirNode
 	// Prepare the current children slice for modification
-	currentChildren := ns.root.Tree.Children // This is already a slice of *FileNode
+	currentChildren := ns.root.Children // This is already a slice of *FileNode
 
 	// Call the passed function to get the modified version of children
 	modifiedChildren, err := modifyFn(currentChildren)
@@ -45,16 +45,8 @@ func (ns *NameStore) ReviseRoot(bs *BlobStore, modifyFn func([]*FileNode) ([]*Fi
 		return fmt.Errorf("failed to create new DirNode: %w", err)
 	}
 
-	// Create a new RevNode with the new DirNode and set it as the new root
-	newRevNode, err := bs.CreateRevNode(newDirNode, ns.root)
-	if err != nil {
-		return fmt.Errorf("failed to create new RevNode: %w", err)
-	}
-
-	log.Printf("ReviseRoot; ending hash is %s\n", newRevNode.ExportedBlob.Address.String())
-	log.Printf("  dir hash is %s\n", newRevNode.Tree.ExportedBlob.Address.String())
-
-	ns.root = newRevNode
+	ns.root = newDirNode
+	log.Printf("ReviseRoot; ending hash is %s\n", newDirNode.ExportedBlob.Address.String())
 	return nil
 }
 
@@ -66,15 +58,11 @@ func (ns *NameStore) ResolveName(name string) *FileAddr {
 		return nil
 	}
 
-	if ns.root.Tree == nil {
+	if ns.root.Children == nil {
 		return nil
 	}
 
-	if ns.root.Tree.Children == nil {
-		return nil
-	}
-
-	child, exists := ns.root.Tree.ChildrenMap[name]
+	child, exists := ns.root.ChildrenMap[name]
 	if !exists {
 		return nil
 	}
@@ -83,28 +71,23 @@ func (ns *NameStore) ResolveName(name string) *FileAddr {
 }
 
 func EmptyNameStore(bs *BlobStore) (*NameStore, error) {
-	fn, err := bs.CreateDirNode(make([]*FileNode, 0))
-	if err != nil {
-		return nil, err
-	}
-
-	rn, err := bs.CreateRevNode(fn, nil)
+	dn, err := bs.CreateDirNode(make([]*FileNode, 0))
 	if err != nil {
 		return nil, err
 	}
 
 	ns := &NameStore{
-		root: rn,
+		root: dn,
 	}
 	return ns, nil
 }
 
 func DeserializeNameStore(bs *BlobStore, rootAddr *FileAddr) (*NameStore, error) {
 	// Fetch and deserialize the root RevNode based on its address
-	rootRevNode, err := bs.FetchRevNode(rootAddr)
+	rootDirNode, err := bs.FetchDirNode(rootAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch root RevNode: %w", err)
 	}
 
-	return &NameStore{root: rootRevNode}, nil
+	return &NameStore{root: rootDirNode}, nil
 }
