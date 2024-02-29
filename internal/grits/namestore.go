@@ -10,26 +10,29 @@ import (
 )
 
 ////////////////////////
-// FileNode and friends
-
-// Node types
+// Node Types
 
 type FileNode interface {
 	ExportedBlob() *CachedFile
 	Children() map[string]FileNode
 	AddressString() string
+
+	Take()
+	Release(*BlobStore)
 }
 
 type BlobNode struct {
-	blob *CachedFile
+	blob     *CachedFile
+	refCount int
 }
 
 type TreeNode struct {
 	blob        *CachedFile
 	ChildrenMap map[string]FileNode
+	refCount    int
 }
 
-// Implementations
+// Implementations for BlobNode
 
 func (bn *BlobNode) ExportedBlob() *CachedFile {
 	return bn.blob
@@ -43,6 +46,19 @@ func (bn *BlobNode) AddressString() string {
 	return "blob:" + bn.blob.Address.String()
 }
 
+func (bn *BlobNode) Take() {
+	bn.refCount++
+}
+
+func (bn *BlobNode) Release(bs *BlobStore) {
+	bn.refCount--
+	if bn.refCount == 0 {
+		bs.Release(bn.blob)
+	}
+}
+
+// Implementations for TreeNode
+
 func (tn *TreeNode) ExportedBlob() *CachedFile {
 	return tn.blob
 }
@@ -53,6 +69,20 @@ func (tn *TreeNode) Children() map[string]FileNode {
 
 func (tn *TreeNode) AddressString() string {
 	return "tree:" + tn.blob.Address.String()
+}
+
+func (tn *TreeNode) Take() {
+	tn.refCount++
+}
+
+func (tn *TreeNode) Release(bs *BlobStore) {
+	tn.refCount--
+	if tn.refCount == 0 {
+		bs.Release(tn.blob)
+		for _, child := range tn.ChildrenMap {
+			child.Release(bs)
+		}
+	}
 }
 
 ////////////////////////
@@ -122,6 +152,13 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 		return error
 	}
 
+	if newRoot != nil {
+		newRoot.Take()
+	}
+	if ns.root != nil {
+		ns.root.Release(ns.blobStore)
+	}
+
 	ns.root = newRoot
 	return nil
 }
@@ -185,10 +222,14 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 	newChildren := make(map[string]FileNode)
 	for k, v := range oldChildren {
 		newChildren[k] = v
+		if k != parts[0] {
+			v.Take()
+		}
 	}
 
 	if newValue != nil {
 		newChildren[parts[0]] = newValue
+		newValue.Take()
 	} else {
 		delete(newChildren, parts[0])
 	}
@@ -198,7 +239,10 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		result, err = ns.CreateTreeNode(newChildren)
 		log.Printf("  created new tree node %s\n", result.AddressString())
 		if err != nil {
-			// FIXME - release newChild recursively
+			for _, v := range oldChildren {
+				v.Release(ns.blobStore)
+			}
+
 			return nil, err
 		}
 	} else {

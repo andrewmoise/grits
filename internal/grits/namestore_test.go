@@ -3,6 +3,7 @@ package grits
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 )
@@ -284,5 +285,66 @@ func TestConcurrentAccess(t *testing.T) {
 		if err != nil {
 			t.Errorf("Expected %s to be present after concurrent operations, but it was not found", filePath)
 		}
+	}
+}
+
+func TestFileNodeReferenceCounting(t *testing.T) {
+	ns, bs, cleanup := setupNameStoreTestEnv(t)
+	defer cleanup()
+
+	allFiles := make([]*CachedFile, 0)
+
+	// 1. Create blobs "one" through "ten"
+	for i := 0; i < 10; i++ {
+		data := []byte("Content of file " + strconv.Itoa(i))
+		cf, err := bs.AddDataBlock(data, "")
+		if err != nil {
+			t.Fatalf("Failed to add data block for file %d: %v", i, err)
+		}
+		allFiles = append(allFiles, cf)
+	}
+
+	// 2. Link one through five into the name store
+	fileNames := []string{"zero", "one", "two", "dir/three", "dir/sub/four", "five"}
+	for i, fileName := range fileNames {
+		err := ns.LinkBlob(fileName, allFiles[i].Address)
+		if err != nil {
+			t.Errorf("Failed to link blob to %s: %v", fileName, err)
+		}
+	}
+
+	for i, cf := range allFiles {
+		expectedRefCount := 1
+		if i <= 5 {
+			expectedRefCount = 2
+		}
+		if cf.RefCount != expectedRefCount {
+			t.Errorf("Expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
+		}
+	}
+
+	// 3. Unlink one and five
+	err := ns.LinkBlob(fileNames[1], nil)
+	if err != nil {
+		t.Errorf("Failed to unlink one: %v", err)
+	}
+
+	err = ns.LinkBlob(fileNames[5], nil)
+	if err != nil {
+		t.Errorf("Failed to unlink five: %v", err)
+	}
+
+	// 6. Check reference counts again
+	for i, cf := range allFiles {
+		var expectedRefCount int
+		if i == 1 || i == 5 || i > 5 {
+			expectedRefCount = 1
+		} else {
+			expectedRefCount = 2
+		}
+		if cf.RefCount != expectedRefCount {
+			t.Errorf("After unlinking, expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
+		}
+		bs.Release(cf) // Assuming Release properly decrements RefCount and cleans up if 0
 	}
 }
