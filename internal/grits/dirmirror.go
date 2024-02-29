@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 
 	"github.com/rjeczalik/notify"
@@ -19,13 +18,12 @@ type DirMirror interface {
 	Start() error
 	Stop() error
 	handleEvent(ei notify.EventInfo)
-	initialScan()
+	initialScan() error
 }
 
 type DirMirrorBase struct {
 	eventChan chan notify.EventInfo // Channel for notify events
 	srcPath   string
-	files     map[string]*CachedFile // File reference tracking
 	mtx       sync.Mutex
 }
 
@@ -33,7 +31,6 @@ func NewDirMirrorBase(srcPath string) *DirMirrorBase {
 	return &DirMirrorBase{
 		eventChan: make(chan notify.EventInfo, 10), // Buffer can be adjusted as needed
 		srcPath:   srcPath,
-		files:     make(map[string]*CachedFile),
 	}
 }
 
@@ -43,6 +40,7 @@ func NewDirMirrorBase(srcPath string) *DirMirrorBase {
 type DirToBlobsMirror struct {
 	*DirMirrorBase // Embedding DirMirrorBase
 	bs             *BlobStore
+	files          map[string]*CachedFile // File reference tracking
 	destPath       string
 }
 
@@ -66,6 +64,7 @@ func NewDirToBlobsMirror(srcPath, destPath string, blobStore *BlobStore) (*DirTo
 		DirMirrorBase: NewDirMirrorBase(realSrcPath),
 		bs:            blobStore,
 		destPath:      realDestPath,
+		files:         make(map[string]*CachedFile),
 	}, nil
 }
 
@@ -78,19 +77,23 @@ func (db *DirToBlobsMirror) Start() error {
 	}
 	go db.watch()
 
-	db.initialScan()
+	err := db.initialScan()
+	if err != nil {
+		return fmt.Errorf("failed to perform initial scan: %v", err)
+	}
+
 	return nil
 }
 
 // initialScan walks through the directory initially to add existing files
-func (db *DirToBlobsMirror) initialScan() {
+func (db *DirToBlobsMirror) initialScan() error {
 	os.MkdirAll(db.destPath, 0755)
 
 	db.mtx.Lock()
 	defer db.mtx.Unlock()
 
 	// First, synchronize the destination directory with the source
-	filepath.Walk(db.destPath, func(destPath string, info os.FileInfo, err error) error {
+	err := filepath.Walk(db.destPath, func(destPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			log.Println("Error accessing path:", destPath, "Error:", err)
 			return err
@@ -125,9 +128,12 @@ func (db *DirToBlobsMirror) initialScan() {
 		}
 		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("error walking destination directory: %v", err)
+	}
 
 	// Then, ensure all files from the source are present in the destination
-	filepath.Walk(db.srcPath, func(srcPath string, info os.FileInfo, err error) error {
+	err = filepath.Walk(db.srcPath, func(srcPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			log.Println("Error accessing path:", srcPath, "Error:", err)
 			return err
@@ -140,6 +146,11 @@ func (db *DirToBlobsMirror) initialScan() {
 		}
 		return nil
 	})
+	if err != nil {
+		return fmt.Errorf("error walking source directory: %v", err)
+	}
+
+	return nil
 }
 
 // watch listens for file system events and handles them
@@ -253,7 +264,7 @@ type DirToTreeMirror struct {
 	ns       *NameStore
 }
 
-func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore, nameStore *NameStore) (*DirToTreeMirror, error) {
+func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore) (*DirToTreeMirror, error) {
 	log.Printf("Creating DirToTreeMirror for %s -> %s\n", srcPath, destPath)
 
 	realSrcPath, error := filepath.EvalSymlinks(srcPath)
@@ -271,11 +282,16 @@ func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore, n
 		return nil, fmt.Errorf("failed to evaluate destination path: %v", error)
 	}
 
+	ns, err := EmptyNameStore(blobStore)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create NameStore: %v", err)
+	}
+
 	return &DirToTreeMirror{
 		DirMirrorBase: NewDirMirrorBase(realSrcPath),
 		destPath:      realDestPath,
 		bs:            blobStore,
-		ns:            nameStore,
+		ns:            ns,
 	}, nil
 }
 
@@ -287,64 +303,51 @@ func (dt *DirToTreeMirror) Start() error {
 	}
 	go dt.watch()
 
-	dt.initialScan()
+	err := dt.initialScan()
+	if err != nil {
+		return fmt.Errorf("failed to perform initial scan: %v", err)
+	}
+
 	return nil
 }
 
-func (dt *DirToTreeMirror) initialScan() {
+func (dt *DirToTreeMirror) initialScan() error {
 	log.Printf("Initial scan for DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.destPath)
 
 	dt.mtx.Lock()
 	defer dt.mtx.Unlock()
 
-	dt.ns.ReviseRoot(dt.bs, func(children []*FileNode) ([]*FileNode, error) {
-		newChildren := make([]*FileNode, 0, len(children))
-
-		// Filter out files with prefix dt.destPath from the current children
-		for _, child := range children {
-			if !strings.HasPrefix(child.Name, dt.destPath) {
-				newChildren = append(newChildren, child)
-			} else {
-				log.Printf("  Deleting file %s\n", child.Name)
-			}
+	// Walk through the filesystem starting at dt.srcPath
+	err := filepath.Walk(dt.srcPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err // Propagate the error upwards
 		}
 
-		// Walk through the filesystem starting at dt.srcPath
-		err := filepath.Walk(dt.srcPath, func(path string, info os.FileInfo, err error) error {
+		if !info.IsDir() {
+			log.Printf("  Adding file %s\n", path)
+
+			// Process the file
+			cf, err := dt.bs.AddLocalFile(path)
+			if err != nil {
+				return err // Propagate the error upwards
+			}
+			defer dt.bs.Release(cf)
+
+			// Compute the relative path from srcPath to this file
+			relativePath, err := filepath.Rel(dt.srcPath, path)
 			if err != nil {
 				return err // Propagate the error upwards
 			}
 
-			if !info.IsDir() {
-				log.Printf("  Adding file %s\n", path)
+			// Link a node for the new file
+			key := filepath.Join(dt.destPath, relativePath)
+			dt.ns.LinkBlob(key, cf.Address)
+		}
 
-				// Process the file
-				cf, err := dt.bs.AddLocalFile(path)
-				if err != nil {
-					return err // Propagate the error upwards
-				}
-
-				// Compute the relative path from srcPath to this file
-				relativePath, err := filepath.Rel(dt.srcPath, path)
-				if err != nil {
-					dt.bs.Release(cf)
-					return err // Propagate the error upwards
-				}
-
-				// Construct the FileNode for the new file
-				key := filepath.Join(dt.destPath, relativePath)
-				fileNode := NewFileNode(key, cf.Address) // Assuming NewFileNode signature matches your requirements
-
-				// Add the new FileNode to the slice
-				newChildren = append(newChildren, fileNode)
-				dt.files[path] = cf
-			}
-
-			return nil // Continue walking
-		})
-
-		return newChildren, err // Return the modified slice and any error encountered during filepath.Walk
+		return nil
 	})
+
+	return err
 }
 
 // watch listens for file system events and handles them
@@ -383,82 +386,38 @@ func (dt *DirToTreeMirror) handleEvent(ei notify.EventInfo) {
 }
 
 func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string) error {
-	cachedFile, err := dt.bs.AddLocalFile(srcPath)
+	cf, err := dt.ns.blobStore.AddLocalFile(srcPath)
+	if err != nil {
+		return err
+	}
+	defer dt.ns.blobStore.Release(cf)
+
+	relPath, err := filepath.Rel(dt.srcPath, srcPath)
+	if err != nil {
+		return fmt.Errorf("error calculating relative path: %v", err)
+	}
+
+	destPath := filepath.Join(dt.destPath, relPath)
+
+	err = dt.ns.LinkBlob(destPath, cf.Address)
 	if err != nil {
 		return err
 	}
 
-	prevFile, exists := dt.files[srcPath]
-	if exists {
-		dt.bs.Release(prevFile)
-	}
-
-	dt.ns.ReviseRoot(dt.bs, func(children []*FileNode) ([]*FileNode, error) {
-		relPath, err := filepath.Rel(dt.srcPath, srcPath)
-		if err != nil {
-			return nil, fmt.Errorf("error calculating relative path: %v", err)
-		}
-
-		// Construct the new FileNode for the file
-		newFileNode := NewFileNode(filepath.Join(dt.destPath, relPath), cachedFile.Address)
-
-		// Check if the file already exists in the slice and replace or append as necessary
-		updatedChildren := make([]*FileNode, 0, len(children)+1) // +1 in case we need to add a new file
-		found := false
-		for _, child := range children {
-			if child.Name == newFileNode.Name {
-				// Replace existing file node
-				updatedChildren = append(updatedChildren, newFileNode)
-				found = true
-			} else {
-				// Keep existing file node
-				updatedChildren = append(updatedChildren, child)
-			}
-		}
-		if !found {
-			// Append new file node if it wasn't found (and replaced) among existing ones
-			updatedChildren = append(updatedChildren, newFileNode)
-		}
-
-		return updatedChildren, nil
-	})
-
-	dt.files[srcPath] = cachedFile
-	log.Printf("File %s added/updated in BlobStore", srcPath)
 	return nil
 }
 
 func (dt *DirToTreeMirror) removeFile(filePath string) error {
-	if cachedFile, exists := dt.files[filePath]; exists {
-		dt.bs.Release(cachedFile)
-		delete(dt.files, filePath)
-		log.Printf("File %s removed from BlobStore", filePath)
+	relPath, err := filepath.Rel(dt.srcPath, filePath)
+	if err != nil {
+		return fmt.Errorf("error calculating relative path: %v", err)
+	}
 
-		relPath, err := filepath.Rel(dt.srcPath, filePath)
-		if err != nil {
-			return fmt.Errorf("error calculating relative path: %v", err)
-		}
+	destPath := filepath.Join(dt.destPath, relPath)
 
-		dt.ns.ReviseRoot(dt.bs, func(children []*FileNode) ([]*FileNode, error) {
-			// Prepare a new slice for the children, excluding the one to be removed
-			updatedChildren := make([]*FileNode, 0, len(children))
-			keyToRemove := filepath.Join(dt.destPath, relPath)
-
-			found := false
-			for _, child := range children {
-				if child.Name != keyToRemove {
-					updatedChildren = append(updatedChildren, child)
-				} else {
-					found = true
-				}
-			}
-
-			if !found {
-				log.Printf("File %s not found in current revision; no removal needed", filePath)
-			}
-
-			return updatedChildren, nil
-		})
+	err = dt.ns.LinkBlob(destPath, nil)
+	if err != nil {
+		return err
 	}
 
 	return nil

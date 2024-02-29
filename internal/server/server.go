@@ -75,7 +75,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 				destPath = destPath[1:]
 			}
 
-			dirMirror, error := grits.NewDirToTreeMirror(mirrorConfig.SourceDir, destPath, bs, srv.AccountStores["root"])
+			dirMirror, error := grits.NewDirToTreeMirror(mirrorConfig.SourceDir, destPath, bs)
 			if error != nil {
 				return nil, fmt.Errorf("failed to create DirToTreeMirror: %v", error)
 			}

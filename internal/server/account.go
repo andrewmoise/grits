@@ -36,7 +36,7 @@ func (s *Server) LoadAccounts() error {
 	}
 
 	for account, rootAddrStr := range accountRoots {
-		rootAddr, err := grits.NewFileAddrFromString(rootAddrStr)
+		rootAddr, err := grits.NewTypedFileAddrFromString(rootAddrStr)
 		if err != nil {
 			return fmt.Errorf("failed to parse root address for %s: %v", account, err)
 		}
@@ -59,10 +59,7 @@ func (s *Server) SaveAccounts() error {
 	accountRoots := make(map[string]string)
 	for account, ns := range s.AccountStores {
 		// Ensure thread-safe access to each NameStore's root
-		nsRoot := ns.GetRoot()
-		if nsRoot != nil && nsRoot.ExportedBlob != nil {
-			accountRoots[account] = nsRoot.ExportedBlob.Address.String()
-		}
+		accountRoots[account] = ns.GetRoot()
 	}
 
 	data, err := json.MarshalIndent(accountRoots, "", "  ")
