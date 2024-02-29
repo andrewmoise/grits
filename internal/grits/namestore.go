@@ -21,11 +21,14 @@ func (ns *NameStore) GetRoot() string {
 }
 
 func (ns *NameStore) Lookup(name string) (FileNode, error) {
+	if name != "" && name[0] == '/' {
+		return nil, fmt.Errorf("name must be relative")
+	}
+
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
 	pos := ns.root
-	log.Printf("Lookup: %s in %s\n", name, pos.AddressString())
 	parts := strings.Split(name, "/")
 
 	for _, part := range parts {
@@ -33,7 +36,9 @@ func (ns *NameStore) Lookup(name string) (FileNode, error) {
 			continue
 		}
 
-		log.Printf("  iter %s in %s\n", part, pos.AddressString())
+		if pos == nil {
+			return nil, fmt.Errorf("no such file or directory: %s", name)
+		}
 
 		container := pos.Children()
 		if container == nil {
@@ -51,10 +56,25 @@ func (ns *NameStore) Lookup(name string) (FileNode, error) {
 	return pos, nil
 }
 
-func (ns *NameStore) LinkBlob(name string, addr *FileAddr) error {
+func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
+	name = strings.TrimRight(name, "/")
+	if name != "" && name[0] == '/' {
+		return fmt.Errorf("name must be relative")
+	}
+
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
+	newRoot, error := ns.recursiveLink(name, addr, ns.root)
+	if error != nil {
+		return error
+	}
+
+	ns.root = newRoot
+	return nil
+}
+
+func (ns *NameStore) LinkBlob(name string, addr *FileAddr) error {
 	var tfa *TypedFileAddr
 
 	if addr != nil {
@@ -66,15 +86,7 @@ func (ns *NameStore) LinkBlob(name string, addr *FileAddr) error {
 		tfa = nil
 	}
 
-	newRoot, error := ns.recursiveLink(name, tfa, ns.root)
-	if error != nil {
-		return error
-	}
-
-	log.Printf("  new root: %s\n", newRoot.AddressString())
-
-	ns.root = newRoot
-	return nil
+	return ns.Link(name, tfa)
 }
 
 func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent FileNode) (FileNode, error) {
@@ -101,6 +113,10 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 			if err != nil {
 				return nil, err
 			}
+		}
+
+		if parts[0] == "" {
+			return newValue, nil
 		}
 	} else {
 		oldChild, exists := oldChildren[parts[0]]
