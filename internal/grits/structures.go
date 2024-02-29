@@ -217,52 +217,6 @@ func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
 }
 
 ////////////////////////
-// FileNode and friends
-
-// Node types
-
-type FileNode interface {
-	ExportedBlob() *CachedFile
-	Children() map[string]FileNode
-	AddressString() string
-}
-
-type BlobNode struct {
-	blob *CachedFile
-}
-
-type TreeNode struct {
-	blob        *CachedFile
-	ChildrenMap map[string]FileNode
-}
-
-// Implementations
-
-func (bn *BlobNode) ExportedBlob() *CachedFile {
-	return bn.blob
-}
-
-func (bn *BlobNode) Children() map[string]FileNode {
-	return nil
-}
-
-func (bn *BlobNode) AddressString() string {
-	return "blob:" + bn.blob.Address.String()
-}
-
-func (tn *TreeNode) ExportedBlob() *CachedFile {
-	return tn.blob
-}
-
-func (tn *TreeNode) Children() map[string]FileNode {
-	return tn.ChildrenMap
-}
-
-func (tn *TreeNode) AddressString() string {
-	return "tree:" + tn.blob.Address.String()
-}
-
-////////////////////////
 // Peer
 
 type Peer struct {
