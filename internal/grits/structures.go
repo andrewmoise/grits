@@ -13,6 +13,9 @@ import (
 	"time"
 )
 
+////////////////////////
+// FileAddr
+
 type FileAddr struct {
 	Hash      string // SHA-256 hash as a lowercase hexadecimal string.
 	Size      uint64 // 64-bit size.
@@ -85,6 +88,101 @@ func ComputeFileAddr(path string) (*FileAddr, error) {
 	return NewFileAddr(fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size), ext), nil
 }
 
+////////////////////////
+// TypedFileAddr
+
+// AddrType distinguishes between different types of addresses (blob or tree).
+type AddrType int
+
+const (
+	Blob AddrType = iota // 0
+	Tree                 // 1
+)
+
+// TypedFileAddr embeds FileAddr and adds a type (blob or tree).
+type TypedFileAddr struct {
+	FileAddr
+	Type AddrType
+}
+
+// NewTypedFileAddr creates a new TypedFileAddr.
+func NewTypedFileAddr(hash string, size uint64, extension string, t AddrType) *TypedFileAddr {
+	return &TypedFileAddr{
+		FileAddr: FileAddr{
+			Hash:      hash,
+			Size:      size,
+			Extension: extension,
+		},
+		Type: t,
+	}
+}
+
+// String returns a string representation of the TypedFileAddr, including its type.
+func (tfa *TypedFileAddr) String() string {
+	typePrefix := "blob"
+	if tfa.Type == Tree {
+		typePrefix = "tree"
+	}
+	return fmt.Sprintf("%s:%s", typePrefix, tfa.FileAddr.String())
+}
+
+// NewTypedFileAddrFromString parses a string into a TypedFileAddr.
+// The string format is expected to be "type:hash:size.extension".
+func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
+	parts := strings.Split(s, ":")
+	if len(parts) != 2 {
+		return nil, fmt.Errorf("invalid format, expected 'type:hash:size.extension', got %s", s)
+	}
+
+	// Identify type
+	addrType := Blob // Could be "unknown" or something
+	switch parts[0] {
+	case "blob":
+		addrType = Blob
+	case "tree":
+		addrType = Tree
+	default:
+		return nil, fmt.Errorf("unknown type prefix %s", parts[0])
+	}
+
+	// Further split the second part to extract hash, size, and extension
+	secondParts := strings.Split(parts[1], ".")
+
+	var extension string
+	var hashAndSize string
+	if len(secondParts) >= 2 {
+		extension = "." + secondParts[len(secondParts)-1]
+		hashAndSize = strings.Join(secondParts[:len(secondParts)-1], ".")
+	} else {
+		extension = ""
+		hashAndSize = secondParts[0]
+	}
+
+	// Assuming the extension is the last part and size is just before the extension, concatenated with the hash
+	hashSizeParts := strings.Split(hashAndSize, "-")
+	if len(hashSizeParts) != 2 {
+		return nil, fmt.Errorf("invalid format for hash:size in %s", hashAndSize)
+	}
+
+	hash := hashSizeParts[0]
+	size, err := strconv.ParseUint(hashSizeParts[1], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid size value: %v", err)
+	}
+
+	return &TypedFileAddr{
+		FileAddr: FileAddr{
+			Hash:      hash,
+			Size:      size,
+			Extension: extension,
+		},
+		Type: addrType,
+	}, nil
+}
+
+////////////////////////
+// CachedFile
+
 type CachedFile struct {
 	Path        string
 	RefCount    int
@@ -117,6 +215,55 @@ func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
 	}
 	return buffer, nil
 }
+
+////////////////////////
+// FileNode and friends
+
+// Node types
+
+type FileNode interface {
+	ExportedBlob() *CachedFile
+	Children() map[string]FileNode
+	AddressString() string
+}
+
+type BlobNode struct {
+	blob *CachedFile
+}
+
+type TreeNode struct {
+	blob        *CachedFile
+	ChildrenMap map[string]FileNode
+}
+
+// Implementations
+
+func (bn *BlobNode) ExportedBlob() *CachedFile {
+	return bn.blob
+}
+
+func (bn *BlobNode) Children() map[string]FileNode {
+	return nil
+}
+
+func (bn *BlobNode) AddressString() string {
+	return "blob:" + bn.blob.Address.String()
+}
+
+func (tn *TreeNode) ExportedBlob() *CachedFile {
+	return tn.blob
+}
+
+func (tn *TreeNode) Children() map[string]FileNode {
+	return tn.ChildrenMap
+}
+
+func (tn *TreeNode) AddressString() string {
+	return "tree:" + tn.blob.Address.String()
+}
+
+////////////////////////
+// Peer
 
 type Peer struct {
 	IPv4Address string    `json:"ipv4Address"`
@@ -225,6 +372,9 @@ func (ap *AllPeers) Deserialize(data []byte) error {
 	return nil
 }
 
+////////////////////////
+// BlobReference
+
 type BlobReference struct {
 	Peers map[*Peer]time.Time // Maps Peer URL to the timestamp of the latest announcement.
 }
@@ -245,6 +395,9 @@ func (br *BlobReference) AddPeer(peer *Peer) {
 func (br *BlobReference) RemovePeer(peer *Peer) {
 	delete(br.Peers, peer)
 }
+
+////////////////////////
+// AllData
 
 // AllData manages all data known to the network, mapping data addresses to BlobReferences.
 type AllData struct {

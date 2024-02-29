@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -105,7 +106,12 @@ func TestFileOperations(t *testing.T) {
 	for name, hash := range files {
 		log.Printf("%s -> %s\n", name, hash)
 
-		url = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, hash)
+		parts := strings.Split(hash, ":")
+		if len(parts) != 2 {
+			t.Errorf("Invalid hash: %s", hash)
+		}
+
+		url = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[1])
 		resp, err := http.Get(url)
 		if err != nil {
 			t.Fatalf("GET request failed: %v", err)
@@ -199,7 +205,12 @@ func TestFileOperations(t *testing.T) {
 			t.Errorf("File 3 should have been deleted")
 		}
 
-		url = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, hash)
+		parts := strings.Split(hash, ":")
+		if len(parts) != 2 {
+			t.Errorf("Invalid hash: %s", hash)
+		}
+
+		url = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[1])
 		resp, err := http.Get(url)
 		if err != nil {
 			t.Fatalf("GET request failed: %v", err)

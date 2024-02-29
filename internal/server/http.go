@@ -54,9 +54,13 @@ func (s *Server) tokenAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func (s *Server) setupRoutes() {
+	// Content routes:
+
 	s.Mux.HandleFunc("/grits/v1/blob/", corsMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/content/root/", corsMiddleware(s.handleContent))
 	s.Mux.HandleFunc("/grits/v1/tree", corsMiddleware(s.handleTree))
+
+	// Client tooling routes:
 
 	// Special handling for serving the Service Worker JS from the root
 	s.Mux.HandleFunc("/grits/v1/service-worker.js", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -65,6 +69,8 @@ func (s *Server) setupRoutes() {
 
 	// Handling client files with CORS enabled
 	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", corsMiddleware(http.FileServer(http.Dir(s.Config.ServerPath("client"))).ServeHTTP)))
+
+	// DHT routes:
 
 	// Using the middleware directly with HandleFunc for specific routes
 	if s.Config.IsRootNode {
@@ -126,13 +132,13 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dn := ns.GetRoot()
-	if dn == nil {
+	fn, err := ns.Lookup("/")
+	if err != nil {
 		http.Error(w, "Root namespace not found", http.StatusNotFound)
 		return
 	}
 
-	fa := dn.ExportedBlob.Address
+	fa := fn.ExportedBlob().Address
 	http.Redirect(w, r, "/grits/v1/blob/"+fa.String(), http.StatusFound)
 }
 
@@ -168,20 +174,13 @@ func (s *Server) handleContent(w http.ResponseWriter, r *http.Request) {
 func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
-	dn := ns.GetRoot()
-	if dn == nil {
-		http.Error(w, "Root namespace not found", http.StatusNotFound)
-		return
-	}
-
-	fn, exists := dn.ChildrenMap[path]
-	if !exists {
+	fn, err := ns.Lookup(path)
+	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 
-	// Try to read the file from the blob store using the full address
-	cachedFile, err := bs.ReadFile(fn.FileAddr)
+	cachedFile, err := bs.ReadFile(fn.ExportedBlob().Address)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
@@ -216,67 +215,29 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 		http.Error(w, "Failed to store file content", http.StatusInternalServerError)
 		return
 	}
+	defer bs.Release(cf)
 
-	ns.ReviseRoot(bs, func(children []*grits.FileNode) ([]*grits.FileNode, error) {
-		// Construct the FileNode for the new or updated file
-		newFileNode := grits.NewFileNode(path, cf.Address) // Ensure this matches your constructor
+	err = ns.LinkBlob(path, cf.Address)
+	if err != nil {
+		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
+		return
+	}
 
-		// Check if the file already exists in the slice and replace or append as necessary
-		updatedChildren := make([]*grits.FileNode, 0, len(children)+1) // +1 in case we add a new file
-		found := false
-		for _, child := range children {
-			if child.Name == newFileNode.Name {
-				// Replace existing file node with new info
-				updatedChildren = append(updatedChildren, newFileNode)
-				found = true
-			} else {
-				// Keep existing file node
-				updatedChildren = append(updatedChildren, child)
-			}
-		}
-		if !found {
-			// Append new file node if it wasn't found among existing ones
-			updatedChildren = append(updatedChildren, newFileNode)
-		}
-
-		return updatedChildren, nil
-	})
-
-	bs.Release(cf)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "File linked successfully")
 }
 
 func handleNamespaceDelete(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received DELETE request for file: %s\n", path)
 
-	fileNotFound := true // Assume file not found by default
+	if path == "" || path == "/" {
+		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
+		return
+	}
 
-	err := ns.ReviseRoot(bs, func(children []*grits.FileNode) ([]*grits.FileNode, error) {
-		updatedChildren := make([]*grits.FileNode, 0, len(children))
-		for _, child := range children {
-			if child.Name != path {
-				// Keep all files that do not match the path
-				updatedChildren = append(updatedChildren, child)
-			} else {
-				// If we find the file, it's not a 'file not found' situation
-				fileNotFound = false
-			}
-		}
-		// If after scanning, the file to delete wasn't found, return an error
-		if fileNotFound {
-			return nil, fmt.Errorf("file not found: %s", path)
-		}
-		// Return the updated slice without the deleted file
-		return updatedChildren, nil
-	})
-
-	// If an error occurred during the revision
+	err := ns.LinkBlob(path, nil)
 	if err != nil {
-		log.Printf("Error processing DELETE request: %v\n", err)
-		if fileNotFound {
-			http.Error(w, "File not found", http.StatusNotFound)
-		} else {
-			http.Error(w, fmt.Sprintf("Error deleting file: %v", err), http.StatusInternalServerError)
-		}
+		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
 		return
 	}
 

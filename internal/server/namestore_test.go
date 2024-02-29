@@ -44,20 +44,11 @@ func TestNamespacePersistence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to add data block: %v", err)
 		}
-		// Considering the context, explicit release might not be necessary here
-		// But ensure proper resource management in non-test environments
+		defer srv.BlobStore.Release(cf)
 
-		err = ns.ReviseRoot(srv.BlobStore, func(children []*grits.FileNode) ([]*grits.FileNode, error) {
-			// Construct the new FileNode for the block
-			newFileNode := grits.NewFileNode(block, cf.Address) // Ensure constructor matches your setup
-
-			// Append the new FileNode to children, since this is adding blocks
-			updatedChildren := append(children, newFileNode)
-
-			return updatedChildren, nil
-		})
+		err = ns.LinkBlob(block, cf.Address)
 		if err != nil {
-			t.Fatalf("Failed to revise root: %v", err)
+			t.Fatalf("Failed to link blob: %v", err)
 		}
 	}
 
@@ -65,7 +56,7 @@ func TestNamespacePersistence(t *testing.T) {
 		t.Fatalf("Failed to revise root: %v", err)
 	}
 
-	fmt.Printf("All ready to save -- Root: %v\n", ns.GetRoot().ExportedBlob.Address.String())
+	fmt.Printf("All ready to save -- Root: %v\n", ns.GetRoot())
 
 	// Save the state of the server.
 	if err := srv.SaveAccounts(); err != nil {
@@ -79,12 +70,12 @@ func TestNamespacePersistence(t *testing.T) {
 
 	// Check that the namespace state is the same.
 	for _, block := range blocks {
-		fa := ns.ResolveName(block)
-		if fa == nil {
-			t.Errorf("Failed to resolve name: %v", block)
+		fn, err := ns.Lookup(block)
+		if err != nil {
+			t.Errorf("Failed to look up name: %v", err)
 		}
 
-		cf, err := srv.BlobStore.ReadFile(fa)
+		cf, err := srv.BlobStore.ReadFile(fn.ExportedBlob().Address)
 		if err != nil {
 			t.Errorf("Failed to read file: %v", err)
 		}
