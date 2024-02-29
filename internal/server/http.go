@@ -165,7 +165,7 @@ func (s *Server) handleContent(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		handleNamespacePut(s.BlobStore, ns, filePath, w, r)
 	case http.MethodDelete:
-		handleNamespaceDelete(s.BlobStore, ns, filePath, w, r)
+		handleNamespaceDelete(ns, filePath, w, r)
 	default:
 		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
 	}
@@ -227,7 +227,7 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	fmt.Fprintf(w, "File linked successfully")
 }
 
-func handleNamespaceDelete(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespaceDelete(ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received DELETE request for file: %s\n", path)
 
 	if path == "" || path == "/" {
