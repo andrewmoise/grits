@@ -67,12 +67,13 @@ func TestDirToTreeMirror(t *testing.T) {
 
 	// Verify files are added to NameStore
 	for i := 1; i <= 5; i++ {
-		fn, err := nameStore.Lookup(path.Join(destPath, fmt.Sprintf("file%d.txt", i)))
+		cf, err := nameStore.Lookup(path.Join(destPath, fmt.Sprintf("file%d.txt", i)))
 		if err != nil {
 			t.Fatalf("Failed to lookup file%d.txt in NameStore: %v", i, err)
 		}
+		defer blobStore.Release(cf)
 
-		file, err := blobStore.ReadFile(fn.ExportedBlob().Address)
+		file, err := blobStore.ReadFile(cf.Address)
 		if err != nil {
 			t.Fatalf("Failed to read file%d.txt from BlobStore: %v", i, err)
 		}
@@ -99,12 +100,13 @@ func TestDirToTreeMirror(t *testing.T) {
 	}
 
 	// Verify file5.txt content is updated
-	fn, err := nameStore.Lookup(path.Join(destPath, "file5.txt"))
+	cf, err := nameStore.Lookup(path.Join(destPath, "file5.txt"))
 	if err != nil {
 		t.Fatalf("Failed to resolve file5.txt in NameStore")
 	}
+	defer blobStore.Release(cf)
 
-	file, err := blobStore.ReadFile(fn.ExportedBlob().Address)
+	file, err := blobStore.ReadFile(cf.Address)
 	if err != nil {
 		t.Fatalf("Failed to read file5.txt from BlobStore: %v", err)
 	}
@@ -139,12 +141,13 @@ func TestDirToTreeMirror(t *testing.T) {
 	log.Printf("--- Check subdirectory add\n")
 
 	// Verify the subdirectory file is added to NameStore
-	subFa, err := nameStore.Lookup(path.Join(destPath, "subdir", "subfile1.txt"))
+	subCf, err := nameStore.Lookup(path.Join(destPath, "subdir", "subfile1.txt"))
 	if err != nil {
 		t.Fatalf("Failed to resolve subdir/subfile1.txt in NameStore")
 	}
+	defer blobStore.Release(subCf)
 
-	subFile, err := blobStore.ReadFile(subFa.ExportedBlob().Address)
+	subFile, err := blobStore.ReadFile(subCf.Address)
 	if err != nil {
 		t.Fatalf("Failed to read subdir/subfile1.txt from BlobStore: %v", err)
 	}

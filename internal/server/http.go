@@ -132,13 +132,14 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fn, err := ns.Lookup("/")
+	cf, err := ns.Lookup("/")
 	if err != nil {
 		http.Error(w, "Root namespace not found", http.StatusNotFound)
 		return
 	}
+	defer s.BlobStore.Release(cf)
 
-	fa := fn.ExportedBlob().Address
+	fa := cf.Address
 	http.Redirect(w, r, "/grits/v1/blob/"+fa.String(), http.StatusFound)
 }
 
@@ -165,7 +166,7 @@ func (s *Server) handleContent(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		handleNamespacePut(s.BlobStore, ns, filePath, w, r)
 	case http.MethodDelete:
-		handleNamespaceDelete(ns, filePath, w, r)
+		handleNamespaceDelete(ns, filePath, w)
 	default:
 		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
 	}
@@ -174,13 +175,14 @@ func (s *Server) handleContent(w http.ResponseWriter, r *http.Request) {
 func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
-	fn, err := ns.Lookup(path)
+	cf, err := ns.Lookup(path)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
+	defer bs.Release(cf)
 
-	cachedFile, err := bs.ReadFile(fn.ExportedBlob().Address)
+	cachedFile, err := bs.ReadFile(cf.Address)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
@@ -227,7 +229,7 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	fmt.Fprintf(w, "File linked successfully")
 }
 
-func handleNamespaceDelete(ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespaceDelete(ns *grits.NameStore, path string, w http.ResponseWriter) {
 	log.Printf("Received DELETE request for file: %s\n", path)
 
 	if path == "" || path == "/" {
