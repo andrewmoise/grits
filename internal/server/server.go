@@ -71,9 +71,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 			srv.DirMirrors = append(srv.DirMirrors, dirMirror)
 		case "DirToTree":
 			destPath := mirrorConfig.DestPath
-			if strings.HasPrefix(destPath, "/") {
-				destPath = destPath[1:]
-			}
+			destPath = strings.TrimPrefix(destPath, "/")
 
 			dirMirror, error := grits.NewDirToTreeMirror(mirrorConfig.SourceDir, destPath, bs)
 			if error != nil {
