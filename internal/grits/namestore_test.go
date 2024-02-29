@@ -59,16 +59,18 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 	}
 
 	// Lookup /file.txt
-	_, err = nameStore.Lookup("file.txt")
+	cf, err := nameStore.Lookup("file.txt")
 	if err != nil {
 		t.Errorf("Failed to lookup file.txt: %v", err)
 	}
+	defer nameStore.blobStore.Release(cf)
 
 	// Lookup /dir/file.txt
-	_, err = nameStore.Lookup("dir/file.txt")
+	cf, err = nameStore.Lookup("dir/file.txt")
 	if err != nil {
 		t.Errorf("Failed to lookup dir/file.txt: %v", err)
 	}
+	defer nameStore.blobStore.Release(cf)
 
 	// Attempt to lookup a non-existent file
 	_, err = nameStore.Lookup("nonexistent.txt")
@@ -105,13 +107,14 @@ func TestUpdatingFiles(t *testing.T) {
 	}
 
 	// Lookup /updateTest.txt and verify the blob reflects the update
-	fileNode, err := nameStore.Lookup("updateTest.txt")
+	cf, err := nameStore.Lookup("updateTest.txt")
 	if err != nil {
 		t.Fatalf("Failed to lookup updateTest.txt after update: %v", err)
 	}
+	defer blobStore.Release(cf)
 
 	// Read the content of the file from the BlobStore
-	readBlob, err := blobStore.ReadFile(fileNode.ExportedBlob().Address)
+	readBlob, err := blobStore.ReadFile(cf.Address)
 	if err != nil {
 		t.Fatalf("Failed to read updated blob from BlobStore: %v", err)
 	}

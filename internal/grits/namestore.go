@@ -20,7 +20,7 @@ func (ns *NameStore) GetRoot() string {
 	return ns.root.AddressString()
 }
 
-func (ns *NameStore) Lookup(name string) (FileNode, error) {
+func (ns *NameStore) Lookup(name string) (*CachedFile, error) {
 	if name != "" && name[0] == '/' {
 		return nil, fmt.Errorf("name must be relative")
 	}
@@ -32,12 +32,12 @@ func (ns *NameStore) Lookup(name string) (FileNode, error) {
 	parts := strings.Split(name, "/")
 
 	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-
 		if pos == nil {
 			return nil, fmt.Errorf("no such file or directory: %s", name)
+		}
+
+		if part == "" {
+			continue
 		}
 
 		container := pos.Children()
@@ -53,7 +53,10 @@ func (ns *NameStore) Lookup(name string) (FileNode, error) {
 		pos = nextNode
 	}
 
-	return pos, nil
+	cf := pos.ExportedBlob()
+	ns.blobStore.Take(cf)
+
+	return cf, nil
 }
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {

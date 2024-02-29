@@ -154,14 +154,9 @@ func TestNamespacePersistence(t *testing.T) {
 
 	// Check that the namespace state is the same.
 	for _, block := range blocks {
-		fn, err := ns.Lookup(block)
+		cf, err := ns.Lookup(block)
 		if err != nil {
 			t.Errorf("Failed to look up name: %v", err)
-		}
-
-		cf, err := srv.BlobStore.ReadFile(fn.ExportedBlob().Address)
-		if err != nil {
-			t.Errorf("Failed to read file: %v", err)
 		}
 		defer srv.BlobStore.Release(cf)
 

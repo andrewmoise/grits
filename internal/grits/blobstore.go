@@ -170,6 +170,13 @@ func (bs *BlobStore) Touch(cf *CachedFile) {
 	os.Chtimes(cf.Path, time.Now(), time.Now())
 }
 
+func (bs *BlobStore) Take(cachedFile *CachedFile) {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	cachedFile.RefCount++
+}
+
 func (bs *BlobStore) Release(cachedFile *CachedFile) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
