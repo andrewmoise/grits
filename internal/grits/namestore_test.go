@@ -31,7 +31,7 @@ func setupNameStoreTestEnv(t *testing.T) (*NameStore, *BlobStore, func()) {
 
 	// Cleanup function to delete temporary directory after test
 	cleanup := func() {
-		//os.RemoveAll(tempDir)
+		os.RemoveAll(tempDir)
 	}
 
 	return nameStore, blobStore, cleanup

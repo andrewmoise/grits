@@ -98,7 +98,7 @@ func TestNamespacePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	//defer os.RemoveAll(tempDir) // Clean up after the test.
+	defer os.RemoveAll(tempDir) // Clean up after the test.
 
 	fmt.Printf("tempDir: %s\n", tempDir)
 

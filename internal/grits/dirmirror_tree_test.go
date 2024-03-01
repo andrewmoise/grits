@@ -16,7 +16,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temporary source directory: %v", err)
 	}
-	//defer os.RemoveAll(serverDir)
+	defer os.RemoveAll(serverDir)
 
 	// Initialize BlobStore and NameStore
 	config := NewConfig()
