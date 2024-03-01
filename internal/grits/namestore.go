@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
 	"reflect"
 	"strings"
 	"sync"
@@ -160,6 +161,48 @@ func (ns *NameStore) Lookup(name string) (*CachedFile, error) {
 	ns.blobStore.Take(cf)
 
 	return cf, nil
+}
+
+func (ns *NameStore) LookupFull(name string) ([][]string, error) {
+	if name != "" && name[0] == '/' {
+		return nil, fmt.Errorf("name must be relative")
+	}
+
+	ns.mtx.RLock()
+	defer ns.mtx.RUnlock()
+
+	pos := ns.root
+	parts := strings.Split(name, "/")
+	partialPath := ""
+
+	response := make([][]string, 0, len(parts)+1) // +1 for the root
+	response = append(response, []string{partialPath, pos.AddressString()})
+
+	for _, part := range parts {
+		if pos == nil {
+			return nil, fmt.Errorf("no such file or directory: %s", name)
+		}
+
+		if part == "" {
+			continue
+		}
+
+		container := pos.Children()
+		if container == nil {
+			return nil, fmt.Errorf("non-directory in path %s", name)
+		}
+
+		nextNode, exists := container[part]
+		if !exists {
+			return nil, fmt.Errorf("no such file or directory: %s", part)
+		}
+
+		pos = nextNode
+		partialPath = path.Join(partialPath, part)
+		response = append(response, []string{partialPath, pos.AddressString()})
+	}
+
+	return response, nil
 }
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {

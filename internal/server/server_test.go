@@ -58,7 +58,7 @@ func TestFakeNetwork(t *testing.T) {
 		}
 	}()
 
-	hub := startHubNode(path.Join(tempDir, "hub"), 1787)
+	hub := startHubNode(path.Join(tempDir, "hub"), 1987)
 	if hub == nil {
 		t.Fatal("Failed to start hub node")
 	}
@@ -66,7 +66,7 @@ func TestFakeNetwork(t *testing.T) {
 	servers = append(servers, hub)
 
 	for i := 0; i < 50; i++ {
-		node := startEdgeNode(path.Join(tempDir, fmt.Sprintf("%d", i)), 1800+i, "localhost", 1787)
+		node := startEdgeNode(path.Join(tempDir, fmt.Sprintf("%d", i)), 1900+i, "localhost", 1987)
 		if node == nil {
 			t.Fatalf("Failed to start edge node %d", i)
 		}
