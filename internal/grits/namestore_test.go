@@ -1,7 +1,9 @@
 package grits
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"sync"
@@ -29,7 +31,7 @@ func setupNameStoreTestEnv(t *testing.T) (*NameStore, *BlobStore, func()) {
 
 	// Cleanup function to delete temporary directory after test
 	cleanup := func() {
-		os.RemoveAll(tempDir)
+		//os.RemoveAll(tempDir)
 	}
 
 	return nameStore, blobStore, cleanup
@@ -305,7 +307,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// 2. Link one through five into the name store
-	fileNames := []string{"zero", "one", "two", "dir/three", "dir/sub/four", "five"}
+	fileNames := []string{"zero", "one", "someplace/else/two", "dir/three", "dir/sub/four", "five"}
 	for i, fileName := range fileNames {
 		err := ns.LinkBlob(fileName, allFiles[i].Address)
 		if err != nil {
@@ -334,7 +336,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Errorf("Failed to unlink five: %v", err)
 	}
 
-	// 6. Check reference counts again
+	// 4. Check reference counts again
 	for i, cf := range allFiles {
 		var expectedRefCount int
 		if i == 1 || i == 5 || i > 5 {
@@ -345,6 +347,182 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		if cf.RefCount != expectedRefCount {
 			t.Errorf("After unlinking, expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
 		}
-		bs.Release(cf) // Assuming Release properly decrements RefCount and cleans up if 0
+
+		fn, exists := ns.fileCache[NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, "", Blob).String()]
+		if !exists {
+			if expectedRefCount-1 <= 0 {
+				continue
+			}
+			t.Errorf("FileNode for %s not found in cache", cf.Address.String())
+		}
+
+		bn, ok := fn.(*BlobNode)
+		if !ok {
+			t.Errorf("FileNode for %s is not a BlobNode", cf.Address.String())
+		}
+
+		if bn.refCount != expectedRefCount-1 {
+			t.Errorf("After unlinking, expected reference count of %d for file node %d, got %d", expectedRefCount-1, i, bn.refCount)
+		}
+	}
+
+	// 5. Try unlinking a whole subdirectory
+	err = ns.LinkBlob("someplace", nil)
+	if err != nil {
+		t.Errorf("Failed to unlink someplace: %v", err)
+	}
+
+	for i, cf := range allFiles {
+		var expectedRefCount int
+		if i == 1 || i == 2 || i == 5 || i > 5 {
+			expectedRefCount = 1
+		} else {
+			expectedRefCount = 2
+		}
+		if cf.RefCount != expectedRefCount {
+			t.Errorf("After unlinking, expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
+		}
+	}
+
+	// 6. Try revision of the whole tree
+	log.Printf("--- Starting test 6, tree revision")
+	DebugPrintTree(ns.root, "")
+
+	newRoot := make(map[string]string)
+	newRoot["tree"] = ns.GetRoot()
+
+	newRootJson, err := json.Marshal(newRoot)
+	if err != nil {
+		t.Fatalf("Failed to serialize newRoot to JSON: %v", err)
+	}
+
+	// Add the JSON as a new data block to the BlobStore
+	cf, err := bs.AddDataBlock(newRootJson, ".json")
+	if err != nil {
+		t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
+	}
+
+	tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, ".json", Tree)
+
+	ns.Link("", tfa)
+	bs.Release(cf)
+
+	log.Printf("--- Verify tree setup")
+	DebugPrintTree(ns.root, "")
+
+	cf, err = ns.Lookup("tree/zero")
+	if err != nil {
+		t.Fatalf("Failed to lookup tree/zero: %v", err)
+	}
+
+	if cf.Address.Hash != allFiles[0].Address.Hash {
+		t.Errorf("Expected tree/zero to point to %s, got %s", allFiles[0].Address.Hash, cf.Address.Hash)
+	}
+	bs.Release(cf)
+
+	log.Printf("--- Starting revisions")
+
+	for i := 6; i < 10; i++ {
+		newRoot := make(map[string]string)
+
+		newRoot["prev"] = ns.GetRoot()
+
+		cf, err := ns.Lookup("tree")
+		if err != nil {
+			t.Fatalf("Failed to lookup tree: %v", err)
+		}
+
+		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, ".json", Tree)
+		newRoot["tree"] = tfa.String()
+
+		newRootJson, err = json.Marshal(newRoot)
+		if err != nil {
+			t.Fatalf("Failed to serialize newRoot to JSON: %v", err)
+		}
+
+		log.Printf("We serialize JSON: %s\n", newRootJson)
+
+		// Add the JSON as a new data block to the BlobStore
+		cf, err = bs.AddDataBlock(newRootJson, ".json")
+		if err != nil {
+			t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
+		}
+
+		tfa = NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, ".json", Tree)
+
+		err = ns.Link("", tfa)
+		if err != nil {
+			t.Fatalf("Failed to link new root: %v", err)
+		}
+
+		err = ns.LinkBlob(fmt.Sprintf("tree/%d", i), allFiles[i].Address)
+		if err != nil {
+			t.Fatalf("Failed to link tree/%d: %v", i, err)
+		}
+
+		err = ns.LinkBlob(fmt.Sprintf("tree/%s", fileNames[i-6]), allFiles[i].Address)
+		if err != nil {
+			t.Fatalf("Failed to link tree/%s: %v", fileNames[i-6], err)
+		}
+
+		log.Printf("--- Modification %d\n", i)
+		DebugPrintTree(ns.root, "")
+	}
+
+	log.Printf("--- Release allFiles")
+
+	for _, cf := range allFiles {
+		bs.Release(cf)
+	}
+
+	log.Printf("--- Check reference counts (in nodes)")
+	DebugPrintTree(ns.root, "")
+
+	expectedRefCounts := []int{1, 0, 0, 1, 1, 0, 8, 6, 3, 2}
+
+	for i, cf := range allFiles {
+		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, "", Blob)
+
+		fileNode, exists := ns.fileCache[tfa.String()]
+		if !exists {
+			t.Errorf("FileNode for %s not found in cache", cf.Address.String())
+			continue
+		}
+
+		blobNode, isBlobNode := fileNode.(*BlobNode)
+		if !isBlobNode {
+			t.Errorf("FileNode for %s is not a BlobNode", cf.Address.String())
+			continue
+		}
+
+		actualRefCount := blobNode.refCount
+
+		var fileName string
+		if i < 6 {
+			fileName = fileNames[i]
+		} else {
+			fileName = fmt.Sprintf("%d", i)
+		}
+		log.Printf("File %d - %s: expected %d, got %d (hash is %s)", i, fileName, expectedRefCounts[i], actualRefCount, cf.Address.Hash)
+
+		if actualRefCount != expectedRefCounts[i] {
+			t.Errorf("After big revision setup, expected reference count of %d for file %d, got %d", expectedRefCounts[i], i, actualRefCount)
+		}
+	}
+
+	// 7. Try unlinking the whole tree and make sure things get cleaned up
+	log.Printf("--- Starting test 7, full unlink")
+	DebugPrintTree(ns.root, "")
+
+	err = ns.Link("", nil)
+	if err != nil {
+		t.Errorf("Failed to unlink root: %v", err)
+	}
+
+	DebugPrintTree(ns.root, "")
+	for i, cf := range allFiles {
+		if cf.RefCount != 0 {
+			t.Errorf("Expected ending reference count of 0 for %d, got %d", i, cf.RefCount)
+		}
 	}
 }
