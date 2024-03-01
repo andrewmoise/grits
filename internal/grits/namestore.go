@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 )
@@ -52,7 +53,9 @@ func (bn *BlobNode) Take() {
 
 func (bn *BlobNode) Release(bs *BlobStore) {
 	bn.refCount--
+	log.Printf("  Release ref for blob node %s\n", bn.blob.Address.String())
 	if bn.refCount == 0 {
+		log.Printf("    and release blob %s\n", bn.blob.Address.String())
 		bs.Release(bn.blob)
 	}
 }
@@ -77,11 +80,31 @@ func (tn *TreeNode) Take() {
 
 func (tn *TreeNode) Release(bs *BlobStore) {
 	tn.refCount--
+	log.Printf("  Release ref for tree node %s\n", tn.blob.Address.String())
 	if tn.refCount == 0 {
+		log.Printf("    and release blob %s\n", tn.blob.Address.String())
 		bs.Release(tn.blob)
-		for _, child := range tn.ChildrenMap {
+		for name, child := range tn.ChildrenMap {
+			log.Printf("    and child %s\n", name)
 			child.Release(bs)
 		}
+	}
+}
+
+func DebugPrintTree(node FileNode, indent string) {
+	if node == nil {
+		log.Printf("%snil\n", indent)
+		return
+	}
+
+	children := node.Children()
+	if children == nil {
+		return
+	}
+
+	for name, child := range children {
+		log.Printf("%s%s - %s\n", indent, name, child.AddressString())
+		DebugPrintTree(child, indent+"  ")
 	}
 }
 
@@ -133,6 +156,7 @@ func (ns *NameStore) Lookup(name string) (*CachedFile, error) {
 	}
 
 	cf := pos.ExportedBlob()
+	log.Printf("  Take ref for %s from Lookup\n", name)
 	ns.blobStore.Take(cf)
 
 	return cf, nil
@@ -153,9 +177,11 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	}
 
 	if newRoot != nil {
+		log.Printf("  Take reference for root - %s", newRoot.AddressString())
 		newRoot.Take()
 	}
 	if ns.root != nil {
+		log.Printf("  Release reference for old root - %s", ns.root.AddressString())
 		ns.root.Release(ns.blobStore)
 	}
 
@@ -179,6 +205,20 @@ func (ns *NameStore) LinkBlob(name string, addr *FileAddr) error {
 }
 
 func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent FileNode) (FileNode, error) {
+	addrStr := "null"
+	if addr != nil {
+		addrStr = addr.String()
+	}
+
+	var oldParentStr string
+	if oldParent == nil || reflect.ValueOf(oldParent).IsNil() {
+		oldParentStr = "null"
+	} else {
+		oldParentStr = oldParent.AddressString()
+	}
+
+	log.Printf("recursiveLink(%s, %s, %s)\n", name, addrStr, oldParentStr)
+
 	parts := strings.SplitN(name, "/", 2)
 
 	var oldChildren map[string]FileNode
@@ -198,9 +238,14 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		if addr == nil {
 			newValue = nil
 		} else {
-			newValue, err = ns.FetchFileNode(addr)
-			if err != nil {
-				return nil, err
+			var exists bool
+
+			newValue, exists = ns.fileCache[addr.String()]
+			if !exists {
+				newValue, err = ns.LoadFileNode(addr)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 
@@ -223,12 +268,14 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 	for k, v := range oldChildren {
 		newChildren[k] = v
 		if k != parts[0] {
+			log.Printf("  Take ref for sibling %s from recursiveLink\n", k)
 			v.Take()
 		}
 	}
 
 	if newValue != nil {
 		newChildren[parts[0]] = newValue
+		log.Printf("  Take ref for new child %s from recursiveLink\n", parts[0])
 		newValue.Take()
 	} else {
 		delete(newChildren, parts[0])
@@ -239,7 +286,8 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		result, err = ns.CreateTreeNode(newChildren)
 		log.Printf("  created new tree node %s\n", result.AddressString())
 		if err != nil {
-			for _, v := range oldChildren {
+			for _, v := range newChildren {
+				log.Printf("  Release ref for sibling %s from recursiveLink\n", v.AddressString())
 				v.Release(ns.blobStore)
 			}
 
@@ -274,18 +322,20 @@ func DeserializeNameStore(bs *BlobStore, rootAddr *TypedFileAddr) (*NameStore, e
 		fileCache: make(map[string]FileNode),
 	}
 
-	dn, err := ns.FetchFileNode(rootAddr)
+	dn, err := ns.LoadFileNode(rootAddr)
 	if err != nil {
-		return nil, fmt.Errorf("error fetching root node: %v", err)
+		return nil, fmt.Errorf("error loading root node: %v", err)
 	}
 
 	ns.root = dn
+	ns.root.Take()
+
 	return ns, nil
 }
 
 // Getting file nodes from a NameStore
 
-func (ns *NameStore) FetchFileNode(addr *TypedFileAddr) (FileNode, error) {
+func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 	cf, err := ns.blobStore.ReadFile(&addr.FileAddr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
@@ -305,15 +355,15 @@ func (ns *NameStore) FetchFileNode(addr *TypedFileAddr) (FileNode, error) {
 
 		dirFile, err := ns.blobStore.ReadFile(&addr.FileAddr)
 		if err != nil {
+			delete(ns.fileCache, addr.String())
 			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
 		}
 		defer func() {
-			// FIXME - This actually isn't quite right
 			if dn != nil {
 				delete(ns.fileCache, addr.String())
-				ns.blobStore.Release(dirFile)
-				for _, child := range dn.ChildrenMap {
-					ns.blobStore.Release(child.ExportedBlob())
+				for name, child := range dn.ChildrenMap {
+					log.Printf("  iter child %s", name)
+					child.Release(ns.blobStore)
 				}
 			}
 		}()
@@ -329,9 +379,11 @@ func (ns *NameStore) FetchFileNode(addr *TypedFileAddr) (FileNode, error) {
 		}
 
 		for name, addrStr := range dirMap {
-			cachedFile, exists := ns.fileCache[addrStr]
+			cachedChild, exists := ns.fileCache[addrStr]
 			if exists {
-				dn.ChildrenMap[name] = cachedFile
+				dn.ChildrenMap[name] = cachedChild
+				cachedChild.Take()
+
 				continue
 			}
 
@@ -340,15 +392,18 @@ func (ns *NameStore) FetchFileNode(addr *TypedFileAddr) (FileNode, error) {
 				return nil, fmt.Errorf("error parsing address %s: %v", addrStr, err)
 			}
 
-			fn, err := ns.FetchFileNode(addr)
+			fn, err := ns.LoadFileNode(addr)
 			if err != nil {
-				return nil, fmt.Errorf("error fetching %s: %v", addrStr, err)
+				return nil, fmt.Errorf("error loading %s: %v", addrStr, err)
 			}
 
 			dn.ChildrenMap[name] = fn
+			fn.Take()
 		}
 
+		ns.fileCache[addr.String()] = dn
 		resultDn := dn
+
 		dn = nil
 		return resultDn, nil
 	}
