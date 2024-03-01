@@ -2,182 +2,85 @@ package server
 
 import (
 	"bytes"
-	"fmt"
-	"grits/internal/grits"
-	"log"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
 	"os"
-	"path/filepath"
-	"regexp"
 	"testing"
-	"time"
 
-	"github.com/tebeka/selenium"
-	"github.com/tebeka/selenium/chrome"
+	"grits/internal/grits"
 )
 
-// CustomLogWriter captures log output for inspection
-type CustomLogWriter struct {
-	buf bytes.Buffer
-}
-
-func (w *CustomLogWriter) Write(p []byte) (n int, err error) {
-	return w.buf.Write(p)
-}
-
-// NewCustomLogWriter creates a new instance of CustomLogWriter
-func NewCustomLogWriter() *CustomLogWriter {
-	return &CustomLogWriter{}
-}
-
-// GetLogs returns the captured log messages as a string
-func (w *CustomLogWriter) GetLogs() string {
-	return w.buf.String()
-}
-
-// SetupLogging redirects log output to a CustomLogWriter
-func SetupLogging() *CustomLogWriter {
-	logWriter := NewCustomLogWriter()
-	log.SetOutput(logWriter)
-	return logWriter
-}
-
-// ResetLogging restores the default log output
-func ResetLogging() {
-	log.SetOutput(os.Stderr)
-}
-
-func TestServerInteraction(t *testing.T) {
-	dir, err := os.Getwd()
+func TestLookupAndLinkEndpoints(t *testing.T) {
+	// Setup
+	tempDir, err := os.MkdirTemp("", "grits_server")
 	if err != nil {
-		log.Printf("Error getting working directory: %v", err)
-	} else {
-		log.Printf("Current working directory: %s", dir)
+		t.Fatalf("Failed to create temp directory: %v", err)
 	}
+	defer os.RemoveAll(tempDir)
 
-	// Create temporary directory for temp server data
-	tempDir2, err := os.MkdirTemp("", "grits_server2")
+	config := grits.NewConfig()
+	config.ServerDir = tempDir
+	config.ThisPort = 1887
+
+	server, err := NewServer(config)
 	if err != nil {
-		log.Fatalf("Failed to create temp directory for server 2: %v", err)
-	}
-	defer os.RemoveAll(tempDir2)
-
-	// Create content directories for temp server
-	contentDir2 := filepath.Join(tempDir2, "content")
-	if err := os.Mkdir(contentDir2, 0755); err != nil {
-		log.Fatalf("Failed to create content directory for server 2: %v", err)
+		t.Fatalf("Failed to start server: %v", err)
 	}
 
-	projectDir, err := filepath.Abs(filepath.Join("..", ".."))
+	server.Start()
+	defer server.Stop(context.Background())
+
+	url := "http://localhost:1887/grits/v1"
+
+	// Upload blobs and link them
+	blobContents := []string{"one", "two", "three", "four", "five"}
+	addresses := make([]string, len(blobContents))
+
+	for i, content := range blobContents {
+		// Upload blob
+		resp, err := http.Post(url+"/upload", "text/plain", bytes.NewBufferString(content))
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("Failed to upload blob '%s': %v %d", content, err, resp.StatusCode)
+		}
+
+		// Read blob address from response
+		addr, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("Failed to read response body: %v", err)
+		}
+		addresses[i] = string(addr)
+
+		// Link the blob to two paths
+		for _, path := range []string{"root/" + content, "root/dir/subdir/" + content} {
+			resp, err = http.Post(url+"/link/"+path, "application/json", bytes.NewBufferString(`blob:`+string(addr)))
+			if err != nil {
+				t.Fatalf("Failed to link blob '%s' to path '%s': %v", content, path, err)
+			}
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("Failed to link blob '%s' to path '%s': status code %d", content, path, resp.StatusCode)
+			}
+		}
+	}
+
+	// Perform a lookup on "dir/subdir/one"
+	resp, err := http.Get(url + "/lookup/root/dir/subdir/one")
 	if err != nil {
-		log.Fatalf("Failed to get project directory: %v", err)
+		t.Fatalf("Failed to perform lookup: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Lookup failed with status code %d", resp.StatusCode)
 	}
 
-	// Create a file in both content directories
-	filePath1 := filepath.Join(filepath.Join(projectDir, "content"), "testfile.txt")
-	if err := os.WriteFile(filePath1, []byte("hello"), 0644); err != nil {
-		log.Fatalf("Failed to write test file for server 1: %v", err)
-	}
-
-	filePath2 := filepath.Join(contentDir2, "testfile.txt")
-	if err := os.WriteFile(filePath2, []byte("hello"), 0644); err != nil {
-		log.Fatalf("Failed to write test file for server 2: %v", err)
-	}
-
-	// Initialize and start the first server
-	config1 := grits.NewConfig()
-	config1.ServerDir = projectDir
-	config1.ThisPort = 1787
-
-	srv1, err := NewServer(config1)
+	var lookupResponse [][]string
+	err = json.NewDecoder(resp.Body).Decode(&lookupResponse)
 	if err != nil {
-		log.Fatalf("Failed to initialize server 1: %v", err)
-	}
-	srv1.Start()
-
-	dir, err = os.Getwd()
-	if err != nil {
-		log.Printf("Error getting working directory: %v", err)
-	} else {
-		log.Printf("Current working directory: %s", dir)
+		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
 
-	// Initialize and start the second server
-	config2 := grits.NewConfig()
-	config2.ServerDir = tempDir2
-	config2.ThisPort = 1788
-	config2.DirMirrors = append(config2.DirMirrors, grits.DirMirrorConfig{
-		Type:          "DirToBlobs",
-		SourceDir:     contentDir2,
-		CacheLinksDir: filepath.Join(tempDir2, "cache_links"),
-	})
-
-	srv2, err := NewServer(config2)
-	if err != nil {
-		log.Fatalf("Failed to initialize server 2: %v", err)
-	}
-	srv2.Start()
-
-	// Allow some time for servers to start
-	time.Sleep(1 * time.Second)
-
-	_, err = os.ReadFile(filepath.Join(tempDir2, "cache_links", "testfile.txt"))
-	if err != nil {
-		log.Fatalf("Failed to read file address from server 1: %v", err)
-	}
-
-	service, err := selenium.NewChromeDriverService("/usr/local/bin/chromedriver", 4444)
-	if err != nil {
-		t.Fatalf("Error starting ChromeDriver service: %v", err)
-	}
-	defer service.Stop()
-
-	caps := selenium.Capabilities{"browserName": "chrome"}
-	chromeCaps := chrome.Capabilities{
-		Args: []string{
-			"--no-sandbox",
-			"--disable-dev-shm-usage",
-			"--disable-gpu",
-			"--headless",
-			"--window-size=800x600",
-			"--incognito",
-		},
-	}
-	caps.AddChrome(chromeCaps)
-
-	wd, err := selenium.NewRemote(caps, "")
-	if err != nil {
-		t.Fatalf("Failed to open session: %v", err)
-	}
-	defer wd.Quit()
-
-	logWriter := SetupLogging()
-	defer ResetLogging()
-
-	// Replace the URL with the path to your index.html served by your Go server
-	if err := wd.Get("http://localhost:1787/grits/v1/client/index.html"); err != nil {
-		t.Fatalf("Failed to load page: %v", err)
-	}
-
-	// Wait for the link to be clickable
-	time.Sleep(1 * time.Second) // Consider using explicit waits instead of sleep
-
-	// Find and click the link
-	link, err := wd.FindElement(selenium.ByLinkText, "Click for link")
-	if err != nil {
-		t.Fatalf("Failed to find link: %v", err)
-	}
-	if err := link.Click(); err != nil {
-		t.Fatalf("Failed to click link: %v", err)
-	}
-
-	time.Sleep(1 * time.Second)
-
-	logs := logWriter.GetLogs()
-
-	fmt.Printf("Logs: %s\n", logs)
-
-	expectedLog := regexp.MustCompile(`1788`)
-	if !expectedLog.MatchString(logs) {
-		t.Errorf("Expected log pattern not found in logs")
-	}
+	// Check the lookup response
 }
