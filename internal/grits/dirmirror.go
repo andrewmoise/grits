@@ -14,11 +14,12 @@ import (
 // Base interface
 
 // DirMirror defines the interface for directory mirroring operations
-type DirMirror interface {
+type Volume interface {
 	Start() error
 	Stop() error
 	handleEvent(ei notify.EventInfo)
 	initialScan() error
+	isReadOnly() bool
 }
 
 type DirMirrorBase struct {
@@ -253,6 +254,10 @@ func (db *DirToBlobsMirror) Stop() error {
 	return nil
 }
 
+func (db *DirToBlobsMirror) isReadOnly() bool {
+	return true
+}
+
 /////
 // DirToTreeMirror
 
@@ -427,4 +432,8 @@ func (dt *DirToTreeMirror) removeFile(filePath string) error {
 func (dt *DirToTreeMirror) Stop() error {
 	notify.Stop(dt.eventChan)
 	return nil
+}
+
+func (db *DirToTreeMirror) isReadOnly() bool {
+	return true
 }

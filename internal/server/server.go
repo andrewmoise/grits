@@ -19,7 +19,7 @@ type Server struct {
 	// HTTP stuff
 	HTTPServer *http.Server
 	Mux        *http.ServeMux
-	DirMirrors []grits.DirMirror
+	Volumes    []grits.Volume
 
 	// DHT stuff
 	Peers    grits.AllPeers // To store information about known peers
@@ -42,15 +42,11 @@ func NewServer(config *grits.Config) (*Server, error) {
 	}
 
 	srv := &Server{
-		Config:    config,
-		BlobStore: bs,
-
-		HTTPServer: &http.Server{
-			Addr: ":" + fmt.Sprintf("%d", config.ThisPort),
-		},
-		DirMirrors: make([]grits.DirMirror, 0),
-		Mux:        http.NewServeMux(),
-
+		Config:        config,
+		BlobStore:     bs,
+		HTTPServer:    &http.Server{Addr: ":" + fmt.Sprintf("%d", config.ThisPort)},
+		Volumes:       make([]grits.Volume, 0),
+		Mux:           http.NewServeMux(),
 		AccountStores: make(map[string]*grits.NameStore),
 		taskStop:      make(chan struct{}),
 	}
@@ -60,28 +56,27 @@ func NewServer(config *grits.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to load accounts: %v", err)
 	}
 
-	for _, mirrorConfig := range config.DirMirrors {
-		switch mirrorConfig.Type {
-		case "DirToBlobs":
-			dirMirror, error := grits.NewDirToBlobsMirror(mirrorConfig.SourceDir, mirrorConfig.CacheLinksDir, bs)
-			if error != nil {
-				return nil, fmt.Errorf("failed to create DirToBlobsMirror: %v", error)
-			}
+	for _, volConfig := range config.Volumes {
+		var vol grits.Volume
+		var err error
+		switch volConfig.Type {
+		case "BlobsVolume":
+			vol, err = grits.NewDirToBlobsMirror(volConfig.SourceDir, volConfig.CacheLinksDir, bs)
 
-			srv.DirMirrors = append(srv.DirMirrors, dirMirror)
-		case "DirToTree":
-			destPath := mirrorConfig.DestPath
+		case "LocalDirVolume":
+			destPath := volConfig.DestPath
 			destPath = strings.TrimPrefix(destPath, "/")
 
-			dirMirror, error := grits.NewDirToTreeMirror(mirrorConfig.SourceDir, destPath, bs)
-			if error != nil {
-				return nil, fmt.Errorf("failed to create DirToTreeMirror: %v", error)
-			}
+			vol, err = grits.NewDirToTreeMirror(volConfig.SourceDir, destPath, bs)
 
-			srv.DirMirrors = append(srv.DirMirrors, dirMirror)
 		default:
-			return nil, fmt.Errorf("unsupported dir mirror type: %s", mirrorConfig.Type)
+			return nil, fmt.Errorf("unknown volume type: %s", volConfig.Type)
 		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to create volume: %v", err)
+		}
+
+		srv.Volumes = append(srv.Volumes, vol)
 	}
 
 	srv.setupRoutes()
@@ -90,8 +85,8 @@ func NewServer(config *grits.Config) (*Server, error) {
 }
 
 func (s *Server) Run() {
-	for _, db := range s.DirMirrors {
-		db.Start()
+	for _, vol := range s.Volumes {
+		vol.Start()
 	}
 
 	s.AddPeriodicTask(time.Duration(s.Config.NamespaceSavePeriod)*time.Second, s.SaveAccounts)
@@ -111,8 +106,8 @@ func (s *Server) Run() {
 		log.Printf("Failed to save accounts: %v\n", err)
 	}
 
-	for _, db := range s.DirMirrors {
-		db.Stop()
+	for _, vol := range s.Volumes {
+		vol.Stop()
 	}
 }
 
