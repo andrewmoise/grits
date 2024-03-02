@@ -26,7 +26,7 @@ type Config struct {
 	NamespaceSavePeriod int    `json:"NamespaceSavePeriod"`
 
 	// Directories to cache
-	DirMirrors []DirMirrorConfig `json:"Mirrors"`
+	Volumes []VolumeConfig `json:"Volumes"`
 
 	// Nitty-gritty DHT tuning
 	DhtNotifyNumber     int `json:"DhtNotifyNumber"`
@@ -42,7 +42,7 @@ type Config struct {
 	RootProxyDropTimeout     int `json:"RootProxyDropTimeout"`
 }
 
-type DirMirrorConfig struct {
+type VolumeConfig struct {
 	Type          string `json:"Type"`
 	SourceDir     string `json:"SourceDir"`
 	CacheLinksDir string `json:"CacheLinksDir,omitempty"`
@@ -65,7 +65,7 @@ func NewConfig() *Config {
 		StorageFreeSize:     80 * 1024 * 1024,  // Size to clean down to when overfull
 		NamespaceSavePeriod: 30,                // # of seconds between namespace checkpoints
 
-		DirMirrors: []DirMirrorConfig{}, // Dirs to put in the blob cache
+		Volumes: []VolumeConfig{}, // Dirs to put in the blob cache
 
 		DhtNotifyNumber:          5,  // # of peers to notify in the DHT
 		DhtNotifyPeriod:          20, // # of seconds between DHT notifications
@@ -102,8 +102,8 @@ func (c *Config) LoadFromFile(filename string) error {
 	typeConfig := valConfig.Type()
 
 	for key, value := range data {
-		if key == "Mirrors" {
-			// Handle DirMirrors separately
+		if key == "Volumes" {
+			// Handle Volumes separately
 			continue
 		}
 
@@ -130,17 +130,17 @@ func (c *Config) LoadFromFile(filename string) error {
 		}
 	}
 
-	// Manually decode DirMirrors if present
-	if dirMirrorsData, ok := data["Mirrors"]; ok {
-		dirMirrorsJSON, err := json.Marshal(dirMirrorsData)
+	// Manually decode Volumes if present
+	if volumesData, ok := data["Volumes"]; ok {
+		volumesJson, err := json.Marshal(volumesData)
 		if err != nil {
 			return err
 		}
-		var dirMirrors []DirMirrorConfig
-		if err := json.Unmarshal(dirMirrorsJSON, &dirMirrors); err != nil {
+		var volumes []VolumeConfig
+		if err := json.Unmarshal(volumesJson, &volumes); err != nil {
 			return err
 		}
-		c.DirMirrors = dirMirrors
+		c.Volumes = volumes
 	}
 
 	return nil

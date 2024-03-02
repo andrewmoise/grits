@@ -105,8 +105,8 @@ func TestClientSideInteraction(t *testing.T) {
 	config2 := grits.NewConfig()
 	config2.ServerDir = tempDir2
 	config2.ThisPort = 1788
-	config2.DirMirrors = append(config2.DirMirrors, grits.DirMirrorConfig{
-		Type:          "DirToBlobs",
+	config2.Volumes = append(config2.Volumes, grits.VolumeConfig{
+		Type:          "BlobsVolume",
 		SourceDir:     contentDir2,
 		CacheLinksDir: filepath.Join(tempDir2, "cache_links"),
 	})
