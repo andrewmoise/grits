@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -45,28 +46,38 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 			t.Fatalf("Failed to upload blob '%s': %v %d", content, err, resp.StatusCode)
 		}
 
-		// Read blob address from response
-		addr, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		addressJson, err := io.ReadAll(resp.Body)
 		if err != nil {
 			t.Fatalf("Failed to read response body: %v", err)
 		}
-		addresses[i] = string(addr)
+
+		if err := json.Unmarshal(addressJson, &addresses[i]); err != nil {
+			t.Fatalf("Failed to unmarshal address: %v", err)
+		}
 
 		// Link the blob to two paths
-		for _, path := range []string{"root/" + content, "root/dir/subdir/" + content} {
-			resp, err = http.Post(url+"/link/"+path, "application/json", bytes.NewBufferString(`blob:`+string(addr)))
-			if err != nil {
-				t.Fatalf("Failed to link blob '%s' to path '%s': %v", content, path, err)
-			}
-			if resp.StatusCode != http.StatusOK {
-				t.Fatalf("Failed to link blob '%s' to path '%s': status code %d", content, path, resp.StatusCode)
-			}
+		linkData := []struct {
+			Path string `json:"path"`
+			Addr string `json:"addr"`
+		}{
+			{Path: "root/" + content, Addr: "blob:" + addresses[i]},
+			{Path: "root/dir/subdir/" + content, Addr: "blob:" + addresses[i]},
 		}
+
+		linkPayload, _ := json.Marshal(linkData)
+		resp, err = http.Post(url+"/link", "application/json", bytes.NewBuffer(linkPayload))
+		if err != nil || resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			bodyString := string(bodyBytes)
+
+			t.Fatalf("Failed to link blob '%s': %v %d %s", content, err, resp.StatusCode, bodyString)
+		}
+		resp.Body.Close()
 	}
 
 	// Perform a lookup on "dir/subdir/one"
-	resp, err := http.Get(url + "/lookup/root/dir/subdir/one")
+	lookupPayload, _ := json.Marshal("root/dir/subdir/one")
+	resp, err := http.Post(url+"/lookup", "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
 		t.Fatalf("Failed to perform lookup: %v", err)
 	}
@@ -77,10 +88,11 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	}
 
 	var lookupResponse [][]string
-	err = json.NewDecoder(resp.Body).Decode(&lookupResponse)
-	if err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&lookupResponse); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
 
 	// Check the lookup response
+	// You may want to add specific checks here based on your expectations
+	fmt.Printf("Lookup response: %+v\n", lookupResponse)
 }

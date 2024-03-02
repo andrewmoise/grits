@@ -59,13 +59,13 @@ func (s *Server) setupRoutes() {
 	// Content routes:
 
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
-	s.Mux.HandleFunc("/grits/v1/upload", s.corsMiddleware(s.handleBlobUpload))
 	s.Mux.HandleFunc("/grits/v1/content/root/", s.corsMiddleware(s.handleContent))
 	s.Mux.HandleFunc("/grits/v1/tree", s.corsMiddleware(s.handleTree))
 
 	// New lookup and link routes
-	s.Mux.HandleFunc("/grits/v1/lookup/", s.corsMiddleware(s.handleLookup))
-	s.Mux.HandleFunc("/grits/v1/link/", s.corsMiddleware(s.handleLink))
+	s.Mux.HandleFunc("/grits/v1/upload", s.corsMiddleware(s.handleBlobUpload))
+	s.Mux.HandleFunc("/grits/v1/lookup", s.corsMiddleware(s.handleLookup))
+	s.Mux.HandleFunc("/grits/v1/link", s.corsMiddleware(s.handleLink))
 
 	// Client tooling routes:
 
@@ -164,16 +164,23 @@ func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	// Respond with the address of the new blob
 	addrStr := cachedFile.Address.String()
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(addrStr))
+
+	json.NewEncoder(w).Encode(addrStr)
 }
 
 func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
 	}
 
-	lookupParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/grits/v1/lookup/"), "/", 2)
+	var path string
+	if err := json.NewDecoder(r.Body).Decode(&path); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	lookupParts := strings.SplitN(path, "/", 2)
 
 	// Assuming the accountName is part of the lookupPath or resolved beforehand
 	accountName := lookupParts[0]
@@ -210,46 +217,54 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract the path to link
-	linkParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/grits/v1/link/"), "/", 2)
-	accountName := linkParts[0]
-	linkPath := linkParts[1]
+	var allLinkData []struct {
+		Path string `json:"path"`
+		Addr string `json:"addr"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&allLinkData); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
 
-	s.AccountLock.Lock()
-	ns, exists := s.AccountStores[accountName]
-	s.AccountLock.Unlock()
-	if !exists {
-		log.Printf("All accounts (looking for %s):\n", accountName)
-		for name, _ := range s.AccountStores {
-			log.Printf("Account: %s\n", name)
+	for _, linkData := range allLinkData {
+		// Extract the path to link
+		linkParts := strings.SplitN(strings.TrimPrefix(linkData.Path, "/grits/v1/link/"), "/", 2)
+		accountName := linkParts[0]
+		linkPath := linkParts[1]
+
+		s.AccountLock.Lock()
+		ns, exists := s.AccountStores[accountName]
+		s.AccountLock.Unlock()
+		if !exists {
+			log.Printf("All accounts (looking for %s):\n", accountName)
+			for name, _ := range s.AccountStores {
+				log.Printf("Account: %s\n", name)
+			}
+			http.Error(w, fmt.Sprintf("Account %s not found", accountName), http.StatusNotFound)
+			return
 		}
-		http.Error(w, fmt.Sprintf("Account %s not found", accountName), http.StatusNotFound)
-		return
+
+		addr, err := grits.NewTypedFileAddrFromString(linkData.Addr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to decode TypedFileAddr %s", linkData.Addr), http.StatusBadRequest)
+			return
+		}
+
+		// Perform link
+		fmt.Printf("Perform link: %s to %s\n", linkPath, addr.String())
+		if err := ns.Link(linkPath, addr); err != nil {
+			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Link successful for path, new root is %s\n", ns.GetRoot())
 	}
 
-	// Decode the TypedFileAddr from the request body
-	addrString, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
-		return
-	}
-
-	addr, err := grits.NewTypedFileAddrFromString(string(addrString))
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to decode TypedFileAddr %s", string(addrString)), http.StatusBadRequest)
-		return
-	}
-
-	// Perform link
-	fmt.Printf("Perform link: %s to %s\n", linkPath, addr.String())
-	if err := ns.Link(linkPath, addr); err != nil {
-		http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	log.Printf("Link successful for path, new root is %s\n", ns.GetRoot())
+	result := make([][]string, 0) // TODO
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, "Link successful for path: %s", linkPath)
+	json.NewEncoder(w).Encode(result)
+
+	fmt.Fprintf(w, "Link successful")
 }
 
 func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
