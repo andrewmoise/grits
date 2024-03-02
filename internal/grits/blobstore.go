@@ -51,7 +51,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 			return err // return error to stop the walk
 		}
 		if !info.IsDir() {
-			fileAddr, err := ComputeFileAddr(path)
+			blobAddr, err := ComputeBlobAddr(path)
 			if err != nil {
 				log.Printf("Error computing hash and size for file %s: %v\n", path, err)
 				return err // continue scanning other files even if one fails
@@ -59,8 +59,8 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 
 			relativePath, _ := filepath.Rel(bs.storageDir, path)
 
-			if relativePath != fileAddr.String() {
-				log.Printf("File %s seems not to be a blob %s != %s. Skipping...\n", path, relativePath, fileAddr.String())
+			if relativePath != blobAddr.String() {
+				log.Printf("File %s seems not to be a blob %s != %s. Skipping...\n", path, relativePath, blobAddr.String())
 				return nil
 			}
 
@@ -68,7 +68,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 			bs.files[relativePath] = &CachedFile{
 				Path:        path,
 				RefCount:    0, // Initially, no references to the file
-				Address:     fileAddr,
+				Address:     blobAddr,
 				LastTouched: info.ModTime(),
 			}
 		}
@@ -76,13 +76,13 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 	})
 }
 
-func (bs *BlobStore) ReadFile(fileAddr *FileAddr) (*CachedFile, error) {
+func (bs *BlobStore) ReadFile(blobAddr *BlobAddr) (*CachedFile, error) {
 	bs.mtx.RLock()
 	defer bs.mtx.RUnlock()
 
-	cachedFile, ok := bs.files[fileAddr.String()]
+	cachedFile, ok := bs.files[blobAddr.String()]
 	if !ok {
-		return nil, fmt.Errorf("file with address %s not found in cache", fileAddr.String())
+		return nil, fmt.Errorf("file with address %s not found in cache", blobAddr.String())
 	}
 
 	// Increment RefCount to reserve the file and protect it from cleanup
@@ -91,7 +91,7 @@ func (bs *BlobStore) ReadFile(fileAddr *FileAddr) (*CachedFile, error) {
 }
 
 func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
-	fileAddr, err := ComputeFileAddr(srcPath)
+	blobAddr, err := ComputeBlobAddr(srcPath)
 	if err != nil {
 		return nil, err
 	}
@@ -99,12 +99,12 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	if cachedFile, exists := bs.files[fileAddr.String()]; exists {
+	if cachedFile, exists := bs.files[blobAddr.String()]; exists {
 		cachedFile.RefCount++
 		return cachedFile, nil
 	}
 
-	destPath := filepath.Join(bs.storageDir, fileAddr.String())
+	destPath := filepath.Join(bs.storageDir, blobAddr.String())
 	if err := copyFile(srcPath, destPath); err != nil {
 		return nil, err
 	}
@@ -112,16 +112,16 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
 	cachedFile := &CachedFile{
 		Path:        destPath,
 		RefCount:    1,
-		Address:     fileAddr,
+		Address:     blobAddr,
 		LastTouched: time.Now(),
 	}
 
-	bs.files[fileAddr.String()] = cachedFile
-	bs.currentSize += fileAddr.Size
+	bs.files[blobAddr.String()] = cachedFile
+	bs.currentSize += blobAddr.Size
 	return cachedFile, nil
 }
 
-func (bs *BlobStore) AddDataBlock(data []byte, ext string) (*CachedFile, error) {
+func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	// Compute hash and size of the data
 	hash := ComputeSHA256(data)
 	size := uint64(len(data))
@@ -129,17 +129,17 @@ func (bs *BlobStore) AddDataBlock(data []byte, ext string) (*CachedFile, error) 
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	fileAddr := NewFileAddr(hash, size, ext)
+	blobAddr := NewBlobAddr(hash, size)
 
 	// Check if the data block already exists in the store
-	if cachedFile, exists := bs.files[fileAddr.String()]; exists {
+	if cachedFile, exists := bs.files[blobAddr.String()]; exists {
 		// Increment RefCount since the file is being accessed
 		cachedFile.RefCount++
 		return cachedFile, nil
 	}
 
 	// Since the data block does not exist, store it
-	destPath := filepath.Join(bs.storageDir, fileAddr.String())
+	destPath := filepath.Join(bs.storageDir, blobAddr.String())
 
 	fmt.Printf("Writing file for data block to store: %s\n", destPath)
 
@@ -151,12 +151,12 @@ func (bs *BlobStore) AddDataBlock(data []byte, ext string) (*CachedFile, error) 
 	cachedFile := &CachedFile{
 		Path:        destPath,
 		RefCount:    1, // Initialize RefCount to 1 for new data blocks
-		Address:     fileAddr,
+		Address:     blobAddr,
 		LastTouched: time.Now(),
 	}
 
 	// Add the new data block to the files map
-	bs.files[fileAddr.String()] = cachedFile
+	bs.files[blobAddr.String()] = cachedFile
 	bs.currentSize += size
 
 	return cachedFile, nil

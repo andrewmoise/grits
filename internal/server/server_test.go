@@ -124,7 +124,7 @@ func TestNamespacePersistence(t *testing.T) {
 	blocks := []string{"one", "two", "three"}
 
 	for _, block := range blocks {
-		cf, err := srv.BlobStore.AddDataBlock([]byte(block), "")
+		cf, err := srv.BlobStore.AddDataBlock([]byte(block))
 		if err != nil {
 			t.Fatalf("Failed to add data block: %v", err)
 		}

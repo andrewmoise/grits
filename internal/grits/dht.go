@@ -31,9 +31,9 @@ func convertPeerToInteger(peer *Peer) uint64 {
 	return binary.BigEndian.Uint64(intValue)
 }
 
-// convertFileAddrToInteger converts a file address to an integer.
-func convertFileAddrToInteger(fileAddr string) uint64 {
-	intValue, _ := hex.DecodeString(fileAddr[:8])
+// convertBlobAddrToInteger converts a file address to an integer.
+func convertBlobAddrToInteger(blobAddr string) uint64 {
+	intValue, _ := hex.DecodeString(blobAddr[:8])
 	return binary.BigEndian.Uint64(intValue)
 }
 
@@ -60,12 +60,12 @@ func (bf *BlobFinder) UpdatePeers(allPeers *AllPeers) {
 }
 
 // GetClosestPeers finds the n closest peers to a given file address.
-func (bf *BlobFinder) GetClosestPeers(fileAddr *FileAddr, n int) ([]*Peer, error) {
+func (bf *BlobFinder) GetClosestPeers(blobAddr *BlobAddr, n int) ([]*Peer, error) {
 	if len(bf.SortedPeers) == 0 {
 		return nil, fmt.Errorf("no peers")
 	}
 
-	target := convertFileAddrToInteger(fileAddr.Hash)
+	target := convertBlobAddrToInteger(blobAddr.Hash)
 	left, right := 0, len(bf.SortedPeers)-1
 
 	for right-left > 1 {

@@ -232,12 +232,12 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	return nil
 }
 
-func (ns *NameStore) LinkBlob(name string, addr *FileAddr) error {
+func (ns *NameStore) LinkBlob(name string, addr *BlobAddr) error {
 	var tfa *TypedFileAddr
 
 	if addr != nil {
 		tfa = &TypedFileAddr{
-			FileAddr: *addr,
+			BlobAddr: *addr,
 			Type:     Blob,
 		}
 	} else {
@@ -379,7 +379,7 @@ func DeserializeNameStore(bs *BlobStore, rootAddr *TypedFileAddr) (*NameStore, e
 // Getting file nodes from a NameStore
 
 func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
-	cf, err := ns.blobStore.ReadFile(&addr.FileAddr)
+	cf, err := ns.blobStore.ReadFile(&addr.BlobAddr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
 	}
@@ -396,7 +396,7 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			ChildrenMap: make(map[string]FileNode),
 		}
 
-		dirFile, err := ns.blobStore.ReadFile(&addr.FileAddr)
+		dirFile, err := ns.blobStore.ReadFile(&addr.BlobAddr)
 		if err != nil {
 			delete(ns.fileCache, addr.String())
 			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
@@ -463,7 +463,7 @@ func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, er
 		return nil, fmt.Errorf("error marshalling directory: %v", err)
 	}
 
-	cf, err := ns.blobStore.AddDataBlock(dirData, ".json")
+	cf, err := ns.blobStore.AddDataBlock(dirData)
 	if err != nil {
 		return nil, fmt.Errorf("error writing directory: %v", err)
 	}
@@ -474,7 +474,7 @@ func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, er
 	}, nil
 }
 
-func (ns *NameStore) CreateBlobNode(fa *FileAddr) (*BlobNode, error) {
+func (ns *NameStore) CreateBlobNode(fa *BlobAddr) (*BlobNode, error) {
 	cf, err := ns.blobStore.ReadFile(fa)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", fa.String(), err)
