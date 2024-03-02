@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,40 +13,33 @@ import (
 )
 
 ////////////////////////
-// FileAddr
+// BlobAddr
 
-type FileAddr struct {
-	Hash      string // SHA-256 hash as a lowercase hexadecimal string.
-	Size      uint64 // 64-bit size.
-	Extension string // File extension, including the leading dot.
+type BlobAddr struct {
+	Hash string // SHA-256 hash as a lowercase hexadecimal string.
+	Size uint64 // 64-bit size.
 }
 
-// NewFileAddr creates a new FileAddr with a hash string, size, and extension.
-func NewFileAddr(hash string, size uint64, extension string) *FileAddr {
-	return &FileAddr{Hash: hash, Size: size, Extension: extension}
+// NewBlobAddr creates a new BlobAddr with a hash string and size
+func NewBlobAddr(hash string, size uint64) *BlobAddr {
+	return &BlobAddr{Hash: hash, Size: size}
 }
 
-// NewFileAddrFromString creates a FileAddr from a string format "hash-size.extension" or "hash-size" for no extension.
-func NewFileAddrFromString(addrStr string) (*FileAddr, error) {
+// NewBlobAddrFromString creates a BlobAddr from a string format "hash-size"
+func NewBlobAddrFromString(addrStr string) (*BlobAddr, error) {
 	parts := strings.SplitN(addrStr, "-", 2)
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid file address format - %s", addrStr)
 	}
 
 	hash := parts[0]
-	sizeExt := strings.SplitN(parts[1], ".", 2)
-	sizeStr := sizeExt[0]
-	var extension string
-	if len(sizeExt) == 2 {
-		extension = "." + sizeExt[1]
-	}
 
-	size, err := strconv.ParseUint(sizeStr, 10, 64)
+	size, err := strconv.ParseUint(parts[1], 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("invalid file size - %s", sizeStr)
+		return nil, fmt.Errorf("invalid file size - %s", parts[1])
 	}
 
-	return NewFileAddr(hash, size, extension), nil
+	return NewBlobAddr(hash, size), nil
 }
 
 // ComputeSHA256 takes a byte slice and returns its SHA-256 hash as a lowercase hexadecimal string.
@@ -57,19 +49,19 @@ func ComputeSHA256(data []byte) string {
 	return fmt.Sprintf("%x", hasher.Sum(nil)) // Compute the SHA-256 checksum and format it as a hex string
 }
 
-// String returns the string representation of FileAddr, including the extension if present.
-func (fa *FileAddr) String() string {
-	return fmt.Sprintf("%s-%d%s", fa.Hash, fa.Size, fa.Extension)
+// String returns the string representation of BlobAddr, including the extension if present.
+func (fa *BlobAddr) String() string {
+	return fmt.Sprintf("%s-%d", fa.Hash, fa.Size)
 }
 
-// Equals checks if two FileAddr instances are equal, including their extensions.
-func (fa *FileAddr) Equals(other *FileAddr) bool {
-	return fa.Hash == other.Hash && fa.Size == other.Size && fa.Extension == other.Extension
+// Equals checks if two BlobAddr instances are equal
+func (fa *BlobAddr) Equals(other *BlobAddr) bool {
+	return fa.Hash == other.Hash && fa.Size == other.Size
 }
 
-// computeFileAddr computes the SHA-256 hash, size, and file extension for an existing file,
-// and returns a new FileAddr instance based on these parameters.
-func ComputeFileAddr(path string) (*FileAddr, error) {
+// computeBlobAddr computes the SHA-256 hash, size, and file extension for an existing file,
+// and returns a new BlobAddr instance based on these parameters.
+func ComputeBlobAddr(path string) (*BlobAddr, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -82,10 +74,7 @@ func ComputeFileAddr(path string) (*FileAddr, error) {
 		return nil, err
 	}
 
-	// Extract the file extension, including the leading dot
-	ext := filepath.Ext(path)
-
-	return NewFileAddr(fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size), ext), nil
+	return NewBlobAddr(fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size)), nil
 }
 
 ////////////////////////
@@ -101,17 +90,16 @@ const (
 
 // TypedFileAddr embeds FileAddr and adds a type (blob or tree).
 type TypedFileAddr struct {
-	FileAddr
+	BlobAddr
 	Type AddrType
 }
 
 // NewTypedFileAddr creates a new TypedFileAddr.
-func NewTypedFileAddr(hash string, size uint64, extension string, t AddrType) *TypedFileAddr {
+func NewTypedFileAddr(hash string, size uint64, t AddrType) *TypedFileAddr {
 	return &TypedFileAddr{
-		FileAddr: FileAddr{
-			Hash:      hash,
-			Size:      size,
-			Extension: extension,
+		BlobAddr: BlobAddr{
+			Hash: hash,
+			Size: size,
 		},
 		Type: t,
 	}
@@ -123,7 +111,7 @@ func (tfa *TypedFileAddr) String() string {
 	if tfa.Type == Tree {
 		typePrefix = "tree"
 	}
-	return fmt.Sprintf("%s:%s", typePrefix, tfa.FileAddr.String())
+	return fmt.Sprintf("%s:%s", typePrefix, tfa.BlobAddr.String())
 }
 
 // NewTypedFileAddrFromString parses a string into a TypedFileAddr.
@@ -145,23 +133,10 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 		return nil, fmt.Errorf("unknown type prefix %s", parts[0])
 	}
 
-	// Further split the second part to extract hash, size, and extension
-	secondParts := strings.Split(parts[1], ".")
-
-	var extension string
-	var hashAndSize string
-	if len(secondParts) >= 2 {
-		extension = "." + secondParts[len(secondParts)-1]
-		hashAndSize = strings.Join(secondParts[:len(secondParts)-1], ".")
-	} else {
-		extension = ""
-		hashAndSize = secondParts[0]
-	}
-
 	// Assuming the extension is the last part and size is just before the extension, concatenated with the hash
-	hashSizeParts := strings.Split(hashAndSize, "-")
+	hashSizeParts := strings.Split(parts[1], "-")
 	if len(hashSizeParts) != 2 {
-		return nil, fmt.Errorf("invalid format for hash:size in %s", hashAndSize)
+		return nil, fmt.Errorf("invalid format for hash:size in %s", parts[1])
 	}
 
 	hash := hashSizeParts[0]
@@ -171,10 +146,9 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 	}
 
 	return &TypedFileAddr{
-		FileAddr: FileAddr{
-			Hash:      hash,
-			Size:      size,
-			Extension: extension,
+		BlobAddr: BlobAddr{
+			Hash: hash,
+			Size: size,
 		},
 		Type: addrType,
 	}, nil
@@ -186,16 +160,16 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 type CachedFile struct {
 	Path        string
 	RefCount    int
-	Address     *FileAddr
+	Address     *BlobAddr
 	LastTouched time.Time
 }
 
 // NewCachedFile creates a new CachedFile.
-func NewCachedFile(path string, refCount int, fileAddr *FileAddr) *CachedFile {
+func NewCachedFile(path string, refCount int, blobAddr *BlobAddr) *CachedFile {
 	return &CachedFile{
 		Path:        path,
 		RefCount:    refCount,
-		Address:     fileAddr,
+		Address:     blobAddr,
 		LastTouched: time.Now(),
 	}
 }
@@ -367,15 +341,15 @@ func NewAllData() *AllData {
 }
 
 // AddData adds or updates a data entry with a peer URL.
-func (ad *AllData) AddData(fileAddr string, peer *Peer) {
+func (ad *AllData) AddData(BlobAddr string, peer *Peer) {
 	ad.lock.Lock()
 	defer ad.lock.Unlock()
 
 	// If the file address is not yet known, initialize its BlobReference.
-	if _, exists := ad.Data[fileAddr]; !exists {
-		ad.Data[fileAddr] = NewBlobReference()
+	if _, exists := ad.Data[BlobAddr]; !exists {
+		ad.Data[BlobAddr] = NewBlobReference()
 	}
-	ad.Data[fileAddr].AddPeer(peer)
+	ad.Data[BlobAddr].AddPeer(peer)
 }
 
 // RemovePeerFromData removes a peer from all data entries where it's listed.

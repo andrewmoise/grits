@@ -100,7 +100,7 @@ func TestDirToBlobsMirror_FileOperations(t *testing.T) {
 	verifyFileContent(t, destPath, "file4.txt", "Content for file 4", blobStore)     // file4 should be created
 }
 
-func verifyFileContent(t *testing.T, destPath, filename, expectedContent string, blobStore *BlobStore) *FileAddr {
+func verifyFileContent(t *testing.T, destPath, filename, expectedContent string, blobStore *BlobStore) *BlobAddr {
 	t.Helper()
 
 	destFilePath := filepath.Join(destPath, filename)
@@ -109,14 +109,14 @@ func verifyFileContent(t *testing.T, destPath, filename, expectedContent string,
 		t.Fatalf("Failed to read destination file address for %s: %v", filename, err)
 	}
 
-	fileAddr, err := NewFileAddrFromString(string(addressContent))
+	blobAddr, err := NewBlobAddrFromString(string(addressContent))
 	if err != nil {
 		t.Fatalf("Invalid file address format in destination file for %s: %v", filename, err)
 	}
 
-	cachedFile, err := blobStore.ReadFile(fileAddr)
+	cachedFile, err := blobStore.ReadFile(blobAddr)
 	if err != nil {
-		t.Fatalf("File with address %s not found in BlobStore for %s", fileAddr.String(), filename)
+		t.Fatalf("File with address %s not found in BlobStore for %s", blobAddr.String(), filename)
 	}
 	defer blobStore.Release(cachedFile)
 
@@ -128,10 +128,10 @@ func verifyFileContent(t *testing.T, destPath, filename, expectedContent string,
 		t.Errorf("Cached file content mismatch for %s. Expected: %s, got: %s", filename, expectedContent, string(actualContent))
 	}
 
-	return fileAddr
+	return blobAddr
 }
 
-func verifyFileAbsent(t *testing.T, destPath, filename string, blobStore *BlobStore, goneAddr *FileAddr) {
+func verifyFileAbsent(t *testing.T, destPath, filename string, blobStore *BlobStore, goneAddr *BlobAddr) {
 	t.Helper()
 
 	destFilePath := filepath.Join(destPath, filename)

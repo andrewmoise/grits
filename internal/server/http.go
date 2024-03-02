@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -109,7 +108,7 @@ func (s *Server) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileAddr, err := grits.NewFileAddrFromString(addrStr)
+	fileAddr, err := grits.NewBlobAddrFromString(addrStr)
 	if err != nil {
 		http.Error(w, "Invalid file address format", http.StatusBadRequest)
 		return
@@ -360,11 +359,8 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 		return
 	}
 
-	// Extract the file extension, including the leading dot
-	ext := filepath.Ext(path)
-
 	// Store the file content in the blob store
-	cf, err := bs.AddDataBlock(data, ext)
+	cf, err := bs.AddDataBlock(data)
 	if err != nil {
 		http.Error(w, "Failed to store file content", http.StatusInternalServerError)
 		return

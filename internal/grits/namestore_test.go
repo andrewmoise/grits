@@ -44,7 +44,7 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 
 	// Test data setup
 	fileContent := []byte("Hello, NameStore!")
-	cachedFile, err := blobStore.AddDataBlock(fileContent, ".txt")
+	cachedFile, err := blobStore.AddDataBlock(fileContent)
 	if err != nil {
 		t.Fatalf("Failed to add data block to BlobStore: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestUpdatingFiles(t *testing.T) {
 
 	// Initial setup: Link a blob to /updateTest.txt
 	initialContent := []byte("Initial content")
-	initialBlob, err := blobStore.AddDataBlock(initialContent, ".txt")
+	initialBlob, err := blobStore.AddDataBlock(initialContent)
 	if err != nil {
 		t.Fatalf("Failed to add initial data block to BlobStore: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestUpdatingFiles(t *testing.T) {
 
 	// Update the file: Link a new blob to /updateTest.txt
 	updatedContent := []byte("Updated content")
-	updatedBlob, err := blobStore.AddDataBlock(updatedContent, ".txt")
+	updatedBlob, err := blobStore.AddDataBlock(updatedContent)
 	if err != nil {
 		t.Fatalf("Failed to add updated data block to BlobStore: %v", err)
 	}
@@ -138,7 +138,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	defer cleanupBlobStore()
 
 	// Simulate linking a blob to "dir/subdir/file.txt"
-	cachedFile, err := bs.AddDataBlock([]byte("file content"), ".txt")
+	cachedFile, err := bs.AddDataBlock([]byte("file content"))
 	if err != nil {
 		t.Fatalf("Failed to add blob to BlobStore: %v", err)
 	}
@@ -175,7 +175,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 
 	// Add a file to the BlobStore for linking in the NameStore.
 	fileContent := []byte("This is a test.")
-	cachedFile, err := blobStore.AddDataBlock(fileContent, ".txt")
+	cachedFile, err := blobStore.AddDataBlock(fileContent)
 	if err != nil {
 		t.Fatalf("Failed to add data block to BlobStore: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestConcurrentAccess(t *testing.T) {
 
 	// Prepare a blob to use for linking
 	fileContent := []byte("Concurrent access test content")
-	cachedFile, err := blobStore.AddDataBlock(fileContent, ".txt")
+	cachedFile, err := blobStore.AddDataBlock(fileContent)
 	if err != nil {
 		t.Fatalf("Failed to add data block to BlobStore: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	// 1. Create blobs "one" through "ten"
 	for i := 0; i < 10; i++ {
 		data := []byte("Content of file " + strconv.Itoa(i))
-		cf, err := bs.AddDataBlock(data, "")
+		cf, err := bs.AddDataBlock(data)
 		if err != nil {
 			t.Fatalf("Failed to add data block for file %d: %v", i, err)
 		}
@@ -348,7 +348,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			t.Errorf("After unlinking, expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
 		}
 
-		fn, exists := ns.fileCache[NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, "", Blob).String()]
+		fn, exists := ns.fileCache[NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Blob).String()]
 		if !exists {
 			if expectedRefCount-1 <= 0 {
 				continue
@@ -397,12 +397,12 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// Add the JSON as a new data block to the BlobStore
-	cf, err := bs.AddDataBlock(newRootJson, ".json")
+	cf, err := bs.AddDataBlock(newRootJson)
 	if err != nil {
 		t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 	}
 
-	tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, ".json", Tree)
+	tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Tree)
 
 	ns.Link("", tfa)
 	bs.Release(cf)
@@ -432,7 +432,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			t.Fatalf("Failed to lookup tree: %v", err)
 		}
 
-		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, ".json", Tree)
+		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Tree)
 		newRoot["tree"] = tfa.String()
 
 		newRootJson, err = json.Marshal(newRoot)
@@ -443,12 +443,12 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		log.Printf("We serialize JSON: %s\n", newRootJson)
 
 		// Add the JSON as a new data block to the BlobStore
-		cf, err = bs.AddDataBlock(newRootJson, ".json")
+		cf, err = bs.AddDataBlock(newRootJson)
 		if err != nil {
 			t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 		}
 
-		tfa = NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, ".json", Tree)
+		tfa = NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Tree)
 
 		err = ns.Link("", tfa)
 		if err != nil {
@@ -481,7 +481,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	expectedRefCounts := []int{1, 0, 0, 1, 1, 0, 8, 6, 3, 2}
 
 	for i, cf := range allFiles {
-		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, "", Blob)
+		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Blob)
 
 		fileNode, exists := ns.fileCache[tfa.String()]
 		if !exists {
