@@ -1,3 +1,6 @@
+//go:build selenium
+// +build selenium
+
 package server
 
 import (
