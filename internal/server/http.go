@@ -56,7 +56,6 @@ func (s *Server) tokenAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 func (s *Server) setupRoutes() {
 	// Content routes:
-
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/content/root/", s.corsMiddleware(s.handleContent))
 	s.Mux.HandleFunc("/grits/v1/tree", s.corsMiddleware(s.handleTree))
@@ -285,7 +284,7 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 
 	cf, err := ns.Lookup("/")
 	if err != nil {
-		http.Error(w, "Root namespace not found", http.StatusNotFound)
+		http.Error(w, fmt.Sprintf("Problem with root lookup: %v", err), http.StatusNotFound)
 		return
 	}
 	defer s.BlobStore.Release(cf)
