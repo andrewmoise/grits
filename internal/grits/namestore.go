@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path"
-	"reflect"
 	"strings"
 	"sync"
 )
@@ -54,9 +53,7 @@ func (bn *BlobNode) Take() {
 
 func (bn *BlobNode) Release(bs *BlobStore) {
 	bn.refCount--
-	log.Printf("  Release ref for blob node %s\n", bn.blob.Address.String())
 	if bn.refCount == 0 {
-		log.Printf("    and release blob %s\n", bn.blob.Address.String())
 		bs.Release(bn.blob)
 	}
 }
@@ -81,12 +78,9 @@ func (tn *TreeNode) Take() {
 
 func (tn *TreeNode) Release(bs *BlobStore) {
 	tn.refCount--
-	log.Printf("  Release ref for tree node %s\n", tn.blob.Address.String())
 	if tn.refCount == 0 {
-		log.Printf("    and release blob %s\n", tn.blob.Address.String())
 		bs.Release(tn.blob)
-		for name, child := range tn.ChildrenMap {
-			log.Printf("    and child %s\n", name)
+		for _, child := range tn.ChildrenMap {
 			child.Release(bs)
 		}
 	}
@@ -94,7 +88,6 @@ func (tn *TreeNode) Release(bs *BlobStore) {
 
 func DebugPrintTree(node FileNode, indent string) {
 	if node == nil {
-		log.Printf("%snil\n", indent)
 		return
 	}
 
@@ -103,8 +96,7 @@ func DebugPrintTree(node FileNode, indent string) {
 		return
 	}
 
-	for name, child := range children {
-		log.Printf("%s%s - %s\n", indent, name, child.AddressString())
+	for _, child := range children {
 		DebugPrintTree(child, indent+"  ")
 	}
 }
@@ -124,6 +116,7 @@ func (ns *NameStore) GetRoot() string {
 }
 
 func (ns *NameStore) Lookup(name string) (*CachedFile, error) {
+	name = strings.TrimRight(name, "/")
 	if name != "" && name[0] == '/' {
 		return nil, fmt.Errorf("name must be relative")
 	}
@@ -157,7 +150,6 @@ func (ns *NameStore) Lookup(name string) (*CachedFile, error) {
 	}
 
 	cf := pos.ExportedBlob()
-	log.Printf("  Take ref for %s from Lookup\n", name)
 	ns.blobStore.Take(cf)
 
 	return cf, nil
@@ -206,6 +198,8 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 }
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
+	log.Printf("Enter link\n")
+
 	name = strings.TrimRight(name, "/")
 	if name != "" && name[0] == '/' {
 		return fmt.Errorf("name must be relative")
@@ -220,13 +214,13 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	}
 
 	if newRoot != nil {
-		log.Printf("  Take reference for root - %s", newRoot.AddressString())
 		newRoot.Take()
 	}
 	if ns.root != nil {
-		log.Printf("  Release reference for old root - %s", ns.root.AddressString())
 		ns.root.Release(ns.blobStore)
 	}
+
+	log.Printf("Leave link\n")
 
 	ns.root = newRoot
 	return nil
@@ -248,20 +242,6 @@ func (ns *NameStore) LinkBlob(name string, addr *BlobAddr) error {
 }
 
 func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent FileNode) (FileNode, error) {
-	addrStr := "null"
-	if addr != nil {
-		addrStr = addr.String()
-	}
-
-	var oldParentStr string
-	if oldParent == nil || reflect.ValueOf(oldParent).IsNil() {
-		oldParentStr = "null"
-	} else {
-		oldParentStr = oldParent.AddressString()
-	}
-
-	log.Printf("recursiveLink(%s, %s, %s)\n", name, addrStr, oldParentStr)
-
 	parts := strings.SplitN(name, "/", 2)
 
 	var oldChildren map[string]FileNode
@@ -311,14 +291,12 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 	for k, v := range oldChildren {
 		newChildren[k] = v
 		if k != parts[0] {
-			log.Printf("  Take ref for sibling %s from recursiveLink\n", k)
 			v.Take()
 		}
 	}
 
 	if newValue != nil {
 		newChildren[parts[0]] = newValue
-		log.Printf("  Take ref for new child %s from recursiveLink\n", parts[0])
 		newValue.Take()
 	} else {
 		delete(newChildren, parts[0])
@@ -327,10 +305,8 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 	var result FileNode
 	if len(newChildren) > 0 {
 		result, err = ns.CreateTreeNode(newChildren)
-		log.Printf("  created new tree node %s\n", result.AddressString())
 		if err != nil {
 			for _, v := range newChildren {
-				log.Printf("  Release ref for sibling %s from recursiveLink\n", v.AddressString())
 				v.Release(ns.blobStore)
 			}
 
@@ -404,8 +380,7 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 		defer func() {
 			if dn != nil {
 				delete(ns.fileCache, addr.String())
-				for name, child := range dn.ChildrenMap {
-					log.Printf("  iter child %s", name)
+				for _, child := range dn.ChildrenMap {
 					child.Release(ns.blobStore)
 				}
 			}
