@@ -1,3 +1,6 @@
+//go:build http3
+// +build http3
+
 package client
 
 import (
