@@ -93,8 +93,17 @@ func TestFileOperations(t *testing.T) {
 	}
 	defer listResp.Body.Close()
 
+	listBody, err := io.ReadAll(listResp.Body)
+	if err != nil {
+		t.Fatalf("Error reading file list: %v", err)
+	}
+
+	if listResp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected OK status; got %d %s", listResp.StatusCode, listBody)
+	}
+
 	var files map[string]string
-	if err := json.NewDecoder(listResp.Body).Decode(&files); err != nil {
+	if err := json.Unmarshal(listBody, &files); err != nil {
 		fmt.Println("Error decoding file list:", err)
 		return
 	}
