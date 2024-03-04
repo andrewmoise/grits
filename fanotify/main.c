@@ -53,7 +53,7 @@ main(int argc, char *argv[])
     /* Place a mark on the filesystem object supplied in argv[1]. */
 
     ret = fanotify_mark(fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
-                        FAN_CREATE | FAN_DELETE | FAN_CLOSE_WRITE | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_DELETE_SELF | FAN_RENAME | FAN_EVENT_ON_CHILD,
+                        FAN_CREATE | FAN_DELETE | FAN_CLOSE_WRITE | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_EVENT_ON_CHILD,
                         AT_FDCWD, argv[1]);
     if (ret == -1) {
         perror("fanotify_mark");
@@ -61,7 +61,7 @@ main(int argc, char *argv[])
     }
 
     ret = fanotify_mark(fd, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
-                        FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_DELETE_SELF | FAN_RENAME | FAN_ONDIR,
+                        FAN_CREATE | FAN_DELETE | FAN_MOVED_FROM | FAN_MOVED_TO | FAN_ONDIR,
                         AT_FDCWD, argv[1]);
     if (ret == -1) {
         perror("fanotify_mark");
@@ -141,46 +141,18 @@ main(int argc, char *argv[])
                 int only_mask;
                 const char *dir_or_file;
 
-                printf("Directory %s has been modified.\n", path);
+                dir_or_file = (metadata->mask & FAN_ONDIR) ? "|FAN_ONDIR" : "";
 
-                only_mask = (metadata->mask & ~FAN_ONDIR);
-                dir_or_file = (metadata->mask & FAN_ONDIR) ? "subdirectory" : "file";
-
-                if (only_mask == FAN_CLOSE_WRITE)
-                    printf("  FAN_CLOSE_WRITE (%s modified):\n", dir_or_file);
-                else if (only_mask == FAN_CREATE || only_mask == (FAN_CREATE | FAN_CLOSE_WRITE))
-                    printf("  FAN_CREATE (%s modified):\n", dir_or_file);
-                else if (only_mask == FAN_DELETE)
-                    printf("  FAN_DELETE (%s modified):\n", dir_or_file);
-                else if (only_mask == FAN_MOVED_FROM)
-                    printf("  FAN_MOVED_FROM (%s modified):\n", dir_or_file);
-                else if (only_mask == FAN_MOVED_TO)
-                    printf("  FAN_MOVED_TO (%s modified):\n", dir_or_file);
-                else if (metadata->mask == FAN_RENAME)
-                    printf("  FAN_RENAME (%s modified):\n", dir_or_file);
-                else
-                    printf("  FAN_?? (mask %x)\n", metadata->mask);
-
-                if (fid->hdr.info_type == FAN_EVENT_INFO_TYPE_OLD_DFID_NAME)
-                    printf("  (Old DFID name)\n");
-                if (fid->hdr.info_type == FAN_EVENT_INFO_TYPE_OLD_DFID_NAME)
-                    printf("  (New DFID name)\n");
-
-                if (file_name) {
-                    ret = fstatat(event_fd, file_name, &sb, 0);
-                    if (ret == -1) {
-                        if (errno != ENOENT) {
-                            perror("fstatat");
-                            exit(EXIT_FAILURE);
-                        }
-                        printf("  Entry %s does not exist.\n", file_name);
-                    } else if ((sb.st_mode & S_IFMT) == S_IFDIR) {
-                        printf("  Entry %s is a subdirectory.\n", file_name);
-                    } else {
-                        printf("  Entry %s is not a subdirectory.\n",
-                                file_name);
-                    }
-                }
+                if (metadata->mask & FAN_CREATE)
+                    printf("FAN_CREATE%s %s/%s\n", dir_or_file, path, file_name);
+                if (metadata->mask & FAN_MOVED_TO)
+                    printf("FAN_MOVED_TO%s %s/%s\n", dir_or_file, path, file_name);
+                if (metadata->mask & FAN_CLOSE_WRITE)
+                    printf("FAN_CLOSE_WRITE%s %s/%s\n", dir_or_file, path, file_name);
+                if (metadata->mask & FAN_DELETE)
+                    printf("FAN_DELETE%s %s/%s\n", dir_or_file, path, file_name);
+                if (metadata->mask & FAN_MOVED_FROM)
+                    printf("FAN_MOVED_FROM%s %s/%s\n", dir_or_file, path, file_name);
             }
 
             /* Close associated file descriptor for this event. */
