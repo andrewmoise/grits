@@ -1,3 +1,15 @@
+/*
+
+Copyright (C) 2013, Heinrich Schuchardt <xypron.glpk@gmx.de>
+Copyright (C) 2014, Michael Kerrisk <mtk.manpages@gmail.com>
+Copyright (C) 2024, Andrew Moise <andrew.moise@gmail.com>
+
+(Derived from Linux man pages fanotify(7) man page example)
+
+Licensed under GNU Affero General Public License, Version 3
+
+*/
+
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -264,6 +276,20 @@ int main(int argc, char *argv[]) {
             }
             path[path_len] = 0;
 
+            /* Do our cleanup now, so we can just 'continue' in order not to print */
+
+            if (close(event_fd) == -1) {
+                perror("close");
+                exit(EXIT_FAILURE);
+            }
+
+            /* Check that we're in the watched subdir */
+
+            if (strncmp(path, watch_path, strlen(watch_path)) != 0)
+                continue;
+
+            /* Check that we have access to the location of the event */
+
             int full_path_len = strlen(path) + 1;
             if (file_name != NULL)
                 full_path_len += strlen(file_name) + 1;
@@ -274,27 +300,23 @@ int main(int argc, char *argv[]) {
             else
                 snprintf(full_path, full_path_len, "%s", path);
 
-            if (strncmp(full_path, watch_path, strlen(watch_path)) == 0
-                && access_is_ok(real_uid, effective_uid, full_path))
-            {
-                const char *dir_or_file = (metadata->mask & FAN_ONDIR) ? "|FAN_ONDIR" : "";
-                char terminator = (null_terminate ? '\0' : '\n');
+            if (!access_is_ok(real_uid, effective_uid, full_path))
+                continue;
 
-                for(int i=0; events[i].name != NULL; i++) {
-                    if (metadata->mask & events[i].value) {
-                        printf("%s%s %s/%s%c", events[i].name, dir_or_file, path, file_name, terminator);
-                    }
+            /* We passed the checks, print events */
+
+            const char *dir_or_file = (metadata->mask & FAN_ONDIR) ? "|FAN_ONDIR" : "";
+            char terminator = (null_terminate ? '\0' : '\n');
+
+            for (int i = 0; events[i].name != NULL; i++) {
+                if (metadata->mask & events[i].value) {
+                    printf("%s%s %s/%s%c", events[i].name, dir_or_file, path, file_name, terminator);
+                    fflush(stdout); // Ensure immediate output
                 }
-            }
-
-            /* Close associated file descriptor for this event. */
-            if (close(event_fd) == -1) {
-                perror("close");
-                exit(EXIT_FAILURE);
             }
         }
     }
 
-    printf("All events processed successfully. Program exiting.\n");
+    // Can't happen that we get here, we always exit from signal
     exit(EXIT_SUCCESS);
 }
