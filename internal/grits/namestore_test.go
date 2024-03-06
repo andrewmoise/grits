@@ -20,10 +20,10 @@ func setupNameStoreTestEnv(t *testing.T) (*NameStore, *BlobStore, func()) {
 
 	// Create a BlobStore using the temporary directory
 	config := NewConfig(tempDir)
-	blobStore := NewBlobStore(config)
+	BlobStore := NewBlobStore(config)
 
 	// Initialize the NameStore with the BlobStore
-	nameStore, err := EmptyNameStore(blobStore)
+	nameStore, err := EmptyNameStore(BlobStore)
 	if err != nil {
 		t.Fatalf("Failed to initialize NameStore: %v", err)
 	}
@@ -33,17 +33,17 @@ func setupNameStoreTestEnv(t *testing.T) (*NameStore, *BlobStore, func()) {
 		os.RemoveAll(tempDir)
 	}
 
-	return nameStore, blobStore, cleanup
+	return nameStore, BlobStore, cleanup
 }
 
 // Test creating and looking up files and directories.
 func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
-	nameStore, blobStore, cleanup := setupNameStoreTestEnv(t)
+	nameStore, BlobStore, cleanup := setupNameStoreTestEnv(t)
 	defer cleanup()
 
 	// Test data setup
 	fileContent := []byte("Hello, NameStore!")
-	cachedFile, err := blobStore.AddDataBlock(fileContent)
+	cachedFile, err := BlobStore.AddDataBlock(fileContent)
 	if err != nil {
 		t.Fatalf("Failed to add data block to BlobStore: %v", err)
 	}
@@ -65,14 +65,14 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 	if err != nil {
 		t.Errorf("Failed to lookup file.txt: %v", err)
 	}
-	defer nameStore.blobStore.Release(cf)
+	defer nameStore.BlobStore.Release(cf)
 
 	// Lookup /dir/file.txt
 	cf, err = nameStore.Lookup("dir/file.txt")
 	if err != nil {
 		t.Errorf("Failed to lookup dir/file.txt: %v", err)
 	}
-	defer nameStore.blobStore.Release(cf)
+	defer nameStore.BlobStore.Release(cf)
 
 	// Attempt to lookup a non-existent file
 	_, err = nameStore.Lookup("nonexistent.txt")
@@ -83,12 +83,12 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 
 // TestUpdatingFiles ensures that updating an existing file's blob is reflected in the NameStore.
 func TestUpdatingFiles(t *testing.T) {
-	nameStore, blobStore, cleanup := setupNameStoreTestEnv(t)
+	nameStore, BlobStore, cleanup := setupNameStoreTestEnv(t)
 	defer cleanup()
 
 	// Initial setup: Link a blob to /updateTest.txt
 	initialContent := []byte("Initial content")
-	initialBlob, err := blobStore.AddDataBlock(initialContent)
+	initialBlob, err := BlobStore.AddDataBlock(initialContent)
 	if err != nil {
 		t.Fatalf("Failed to add initial data block to BlobStore: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestUpdatingFiles(t *testing.T) {
 
 	// Update the file: Link a new blob to /updateTest.txt
 	updatedContent := []byte("Updated content")
-	updatedBlob, err := blobStore.AddDataBlock(updatedContent)
+	updatedBlob, err := BlobStore.AddDataBlock(updatedContent)
 	if err != nil {
 		t.Fatalf("Failed to add updated data block to BlobStore: %v", err)
 	}
@@ -113,10 +113,10 @@ func TestUpdatingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to lookup updateTest.txt after update: %v", err)
 	}
-	defer blobStore.Release(cf)
+	defer BlobStore.Release(cf)
 
 	// Read the content of the file from the BlobStore
-	readBlob, err := blobStore.ReadFile(cf.Address)
+	readBlob, err := BlobStore.ReadFile(cf.Address)
 	if err != nil {
 		t.Fatalf("Failed to read updated blob from BlobStore: %v", err)
 	}
@@ -169,12 +169,12 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 
 // TestComplexDirectoryStructures tests creating, looking up, and removing nested directory structures.
 func TestComplexDirectoryStructures(t *testing.T) {
-	nameStore, blobStore, cleanup := setupNameStoreTestEnv(t)
+	nameStore, BlobStore, cleanup := setupNameStoreTestEnv(t)
 	defer cleanup()
 
 	// Add a file to the BlobStore for linking in the NameStore.
 	fileContent := []byte("This is a test.")
-	cachedFile, err := blobStore.AddDataBlock(fileContent)
+	cachedFile, err := BlobStore.AddDataBlock(fileContent)
 	if err != nil {
 		t.Fatalf("Failed to add data block to BlobStore: %v", err)
 	}
@@ -229,12 +229,12 @@ func TestComplexDirectoryStructures(t *testing.T) {
 
 // TestConcurrentAccess tests the NameStore's ability to handle concurrent operations safely.
 func TestConcurrentAccess(t *testing.T) {
-	nameStore, blobStore, cleanup := setupNameStoreTestEnv(t)
+	nameStore, BlobStore, cleanup := setupNameStoreTestEnv(t)
 	defer cleanup()
 
 	// Prepare a blob to use for linking
 	fileContent := []byte("Concurrent access test content")
-	cachedFile, err := blobStore.AddDataBlock(fileContent)
+	cachedFile, err := BlobStore.AddDataBlock(fileContent)
 	if err != nil {
 		t.Fatalf("Failed to add data block to BlobStore: %v", err)
 	}
