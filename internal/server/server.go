@@ -19,7 +19,7 @@ type Server struct {
 	// HTTP stuff
 	HTTPServer *http.Server
 	Mux        *http.ServeMux
-	Volumes    []grits.Volume
+	Volumes    []Volume
 
 	// DHT stuff
 	Peers    grits.AllPeers // To store information about known peers
@@ -45,7 +45,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 		Config:        config,
 		BlobStore:     bs,
 		HTTPServer:    &http.Server{Addr: ":" + fmt.Sprintf("%d", config.ThisPort)},
-		Volumes:       make([]grits.Volume, 0),
+		Volumes:       make([]Volume, 0),
 		Mux:           http.NewServeMux(),
 		AccountStores: make(map[string]*grits.NameStore),
 		taskStop:      make(chan struct{}),
@@ -57,7 +57,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 	}
 
 	for _, volConfig := range config.Volumes {
-		var vol grits.Volume
+		var vol Volume
 		var err error
 		switch volConfig.Type {
 
@@ -65,7 +65,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 			destPath := volConfig.DestPath
 			destPath = strings.TrimPrefix(destPath, "/")
 
-			vol, err = grits.NewDirToTreeMirror(volConfig.SourceDir, destPath, bs, srv.Shutdown)
+			vol, err = NewDirToTreeMirror(volConfig.SourceDir, destPath, bs, config.DirWatcherPath, srv.Shutdown)
 
 		default:
 			return nil, fmt.Errorf("unknown volume type: %s", volConfig.Type)

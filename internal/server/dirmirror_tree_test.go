@@ -1,7 +1,8 @@
-package grits
+package server
 
 import (
 	"fmt"
+	"grits/internal/grits"
 	"log"
 	"os"
 	"path"
@@ -19,9 +20,9 @@ func TestDirToTreeMirror(t *testing.T) {
 	defer os.RemoveAll(serverDir)
 
 	// Initialize BlobStore and NameStore
-	config := NewConfig(serverDir)
+	config := grits.NewConfig(serverDir)
 
-	blobStore := NewBlobStore(config)
+	blobStore := grits.NewBlobStore(config)
 
 	// src and destination
 	srcPath := path.Join(serverDir, "src")
@@ -32,7 +33,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	log.Printf("--- Start test\n")
 
 	// Instantiate and start DirToTreeMirror
-	dirMirror, error := NewDirToTreeMirror(srcPath, destPath, blobStore, nil)
+	dirMirror, error := NewDirToTreeMirror(srcPath, destPath, blobStore, config.DirWatcherPath, nil)
 	if error != nil {
 		t.Fatalf("Failed to create DirToTreeMirror: %v", error)
 	}

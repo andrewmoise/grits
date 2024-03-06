@@ -104,7 +104,7 @@ func DebugPrintTree(node FileNode, indent string) {
 // NameStore
 
 type NameStore struct {
-	blobStore *BlobStore
+	BlobStore *BlobStore
 	root      FileNode
 	fileCache map[string]FileNode
 	mtx       sync.RWMutex
@@ -149,7 +149,7 @@ func (ns *NameStore) Lookup(name string) (*CachedFile, error) {
 	}
 
 	cf := pos.ExportedBlob()
-	ns.blobStore.Take(cf)
+	ns.BlobStore.Take(cf)
 
 	return cf, nil
 }
@@ -214,7 +214,7 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 		newRoot.Take()
 	}
 	if ns.root != nil {
-		ns.root.Release(ns.blobStore)
+		ns.root.Release(ns.BlobStore)
 	}
 
 	ns.root = newRoot
@@ -302,7 +302,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		result, err = ns.CreateTreeNode(newChildren)
 		if err != nil {
 			for _, v := range newChildren {
-				v.Release(ns.blobStore)
+				v.Release(ns.BlobStore)
 			}
 
 			return nil, err
@@ -316,7 +316,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 
 func EmptyNameStore(bs *BlobStore) (*NameStore, error) {
 	ns := &NameStore{
-		blobStore: bs,
+		BlobStore: bs,
 		fileCache: make(map[string]FileNode),
 	}
 
@@ -332,7 +332,7 @@ func EmptyNameStore(bs *BlobStore) (*NameStore, error) {
 
 func DeserializeNameStore(bs *BlobStore, rootAddr *TypedFileAddr) (*NameStore, error) {
 	ns := &NameStore{
-		blobStore: bs,
+		BlobStore: bs,
 		fileCache: make(map[string]FileNode),
 	}
 
@@ -350,7 +350,7 @@ func DeserializeNameStore(bs *BlobStore, rootAddr *TypedFileAddr) (*NameStore, e
 // Getting file nodes from a NameStore
 
 func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
-	cf, err := ns.blobStore.ReadFile(&addr.BlobAddr)
+	cf, err := ns.BlobStore.ReadFile(&addr.BlobAddr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
 	}
@@ -367,7 +367,7 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			ChildrenMap: make(map[string]FileNode),
 		}
 
-		dirFile, err := ns.blobStore.ReadFile(&addr.BlobAddr)
+		dirFile, err := ns.BlobStore.ReadFile(&addr.BlobAddr)
 		if err != nil {
 			delete(ns.fileCache, addr.String())
 			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
@@ -376,7 +376,7 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			if dn != nil {
 				delete(ns.fileCache, addr.String())
 				for _, child := range dn.ChildrenMap {
-					child.Release(ns.blobStore)
+					child.Release(ns.BlobStore)
 				}
 			}
 		}()
@@ -433,7 +433,7 @@ func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, er
 		return nil, fmt.Errorf("error marshalling directory: %v", err)
 	}
 
-	cf, err := ns.blobStore.AddDataBlock(dirData)
+	cf, err := ns.BlobStore.AddDataBlock(dirData)
 	if err != nil {
 		return nil, fmt.Errorf("error writing directory: %v", err)
 	}
@@ -445,7 +445,7 @@ func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, er
 }
 
 func (ns *NameStore) CreateBlobNode(fa *BlobAddr) (*BlobNode, error) {
-	cf, err := ns.blobStore.ReadFile(fa)
+	cf, err := ns.BlobStore.ReadFile(fa)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", fa.String(), err)
 	}

@@ -1,4 +1,4 @@
-package grits
+package server
 
 import (
 	"bufio"
