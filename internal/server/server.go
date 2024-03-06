@@ -65,7 +65,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 			destPath := volConfig.DestPath
 			destPath = strings.TrimPrefix(destPath, "/")
 
-			vol, err = grits.NewDirToTreeMirror(volConfig.SourceDir, destPath, bs)
+			vol, err = grits.NewDirToTreeMirror(volConfig.SourceDir, destPath, bs, srv.Shutdown)
 
 		default:
 			return nil, fmt.Errorf("unknown volume type: %s", volConfig.Type)
@@ -115,10 +115,19 @@ func (s *Server) Start() {
 	}()
 }
 
+// This is called from above us, to indicate, please stop, we're done.
 func (s *Server) Stop(ctx context.Context) error {
-	err := s.HTTPServer.Shutdown(ctx)
-	if err != nil {
-		log.Printf("Fatal error, problem during shutdown: %v", err)
+	return s.HTTPServer.Shutdown(ctx)
+}
+
+// This is called from below us, to indicate, oh no, there's a problem, shut down and
+// report an error.
+func (s *Server) Shutdown() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	fmt.Println("Shutting down server...")
+	if err := s.Stop(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v\n", err)
 	}
-	return err
 }

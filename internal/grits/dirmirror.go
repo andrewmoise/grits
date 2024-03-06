@@ -49,7 +49,7 @@ type DirToTreeMirror struct {
 	ns *NameStore
 }
 
-func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore) (*DirToTreeMirror, error) {
+func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore, shutdownFunc func()) (*DirToTreeMirror, error) {
 	log.Printf("Creating DirToTreeMirror for %s -> %s\n", srcPath, destPath)
 
 	realSrcPath, error := filepath.EvalSymlinks(srcPath)
@@ -66,7 +66,7 @@ func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore) (
 		DirMirrorBase: NewDirMirrorBase(blobStore, realSrcPath, destPath),
 		ns:            ns,
 	}
-	dt.dirWatcher = NewDirWatcher(blobStore.config.DirWatcherPath, realSrcPath, dt)
+	dt.dirWatcher = NewDirWatcher(blobStore.config.DirWatcherPath, realSrcPath, dt, shutdownFunc)
 
 	return dt, nil
 }
