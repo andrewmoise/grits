@@ -18,7 +18,8 @@ type Config struct {
 	ServerToken string `json:"ServerToken"`
 
 	// File locations
-	ServerDir string `json:"-"`
+	ServerDir      string `json:"-"`
+	DirWatcherPath string `json:"DirWatcherPath"`
 
 	// Storage configuration
 	StorageSize         uint64 `json:"StorageSize"`
@@ -50,7 +51,7 @@ type VolumeConfig struct {
 }
 
 // NewConfig creates a new configuration instance with default values.
-func NewConfig() *Config {
+func NewConfig(serverDir string) *Config {
 	return &Config{
 		ThisHost:   "127.0.0.1",
 		ThisPort:   1787,
@@ -59,7 +60,9 @@ func NewConfig() *Config {
 		RootPort:   0,
 
 		ServerToken: "",
-		ServerDir:   ".",
+
+		ServerDir:      serverDir,
+		DirWatcherPath: "/usr/local/bin/fanotify-helper",
 
 		StorageSize:         100 * 1024 * 1024, // Max size of data
 		StorageFreeSize:     80 * 1024 * 1024,  // Size to clean down to when overfull

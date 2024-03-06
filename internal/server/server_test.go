@@ -14,10 +14,9 @@ import (
 )
 
 func startHubNode(serverDir string, port int) *Server {
-	config := grits.NewConfig()
+	config := grits.NewConfig(serverDir)
 	config.ThisPort = port
 	config.IsRootNode = true
-	config.ServerDir = serverDir
 
 	hubServer, err := NewServer(config)
 	if err != nil {
@@ -29,11 +28,10 @@ func startHubNode(serverDir string, port int) *Server {
 }
 
 func startEdgeNode(serverDir string, port int, rootHost string, rootPort int) *Server {
-	config := grits.NewConfig()
+	config := grits.NewConfig(serverDir)
 	config.ThisPort = port
 	config.RootHost = rootHost
 	config.RootPort = rootPort
-	config.ServerDir = serverDir
 
 	edgeServer, err := NewServer(config)
 	if err != nil {
@@ -103,8 +101,7 @@ func TestNamespacePersistence(t *testing.T) {
 	fmt.Printf("tempDir: %s\n", tempDir)
 
 	// Create a new server instance using this temporary directory.
-	config := grits.NewConfig()
-	config.ServerDir = tempDir
+	config := grits.NewConfig(tempDir)
 
 	srv, err := NewServer(config)
 	if err != nil {

@@ -21,8 +21,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	config := grits.NewConfig()
-	config.ServerDir = tempDir
+	config := grits.NewConfig(tempDir)
 	config.ThisPort = 1887
 
 	server, err := NewServer(config)
