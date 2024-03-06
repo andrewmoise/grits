@@ -3,7 +3,6 @@ package grits
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path"
 	"strings"
@@ -198,8 +197,6 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 }
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
-	log.Printf("Enter link\n")
-
 	name = strings.TrimRight(name, "/")
 	if name != "" && name[0] == '/' {
 		return fmt.Errorf("name must be relative")
@@ -219,8 +216,6 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	if ns.root != nil {
 		ns.root.Release(ns.blobStore)
 	}
-
-	log.Printf("Leave link\n")
 
 	ns.root = newRoot
 	return nil
