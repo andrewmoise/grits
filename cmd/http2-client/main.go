@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -80,6 +79,11 @@ func getFile(remoteName, localName string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Got status %d: %s", resp.StatusCode, string(respBody))
+	}
+
 	localFile, err := os.Create(localName)
 	if err != nil {
 		return err
@@ -116,10 +120,9 @@ func putFile(localName, remoteName string) error {
 	}
 	defer resp.Body.Close()
 
-	// Check the response status code
 	if resp.StatusCode != http.StatusOK {
-		// You might also want to read the response body for error details here
-		return fmt.Errorf("failed to upload file: %s (%d)", remoteName, resp.StatusCode)
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Got status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	return nil
@@ -158,7 +161,8 @@ func removeFiles(remoteNames []string) error {
 		resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("failed to remove file: %s (%d)", remoteName, resp.StatusCode)
+			respBody, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("Got status %d: %s", resp.StatusCode, string(respBody))
 		}
 	}
 
@@ -172,34 +176,19 @@ func listFiles() error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("Got status %d: %s", resp.StatusCode, string(respBody))
+	}
+
 	// Read and parse the JSON response
-	var rootObj map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&rootObj); err != nil {
-		return err
-	}
-
-	// Extract the 'tree' member as a string
-	treeValue, ok := rootObj["tree"].(string)
-	if !ok {
-		return fmt.Errorf("'tree' member is not a string or missing in the response")
-	}
-
-	listResp, err := http.Get("http://localhost:1787/grits/v1/blob/" + treeValue)
-	if err != nil {
-		return err
-	}
-	defer listResp.Body.Close()
-	if listResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to retrieve file list: %d", listResp.StatusCode)
-	}
-
 	var files map[string]string
-	if err := json.NewDecoder(listResp.Body).Decode(&files); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&files); err != nil {
 		return err
 	}
 
 	for name, hash := range files {
-		log.Printf("%s -> %s\n", name, hash)
+		fmt.Printf("%s -> %s\n", name, hash)
 	}
 
 	return nil
