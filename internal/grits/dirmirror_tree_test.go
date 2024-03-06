@@ -46,7 +46,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	defer dirMirror.Stop()
 
 	// Allow some time for the initial scan to complete
-	time.Sleep(1 * time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	log.Printf("--- Initial add\n")
 
@@ -60,7 +60,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	}
 
 	// Allow some time for changes to be detected and processed
-	time.Sleep(1 * time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	log.Printf("--- Check initial add\n")
 
@@ -88,7 +88,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	os.WriteFile(filepath.Join(srcPath, "file5.txt"), []byte(newContent), 0644)
 
 	// Allow some time for changes to be detected and processed
-	time.Sleep(1 * time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	log.Printf("--- Check modifications\n")
 
@@ -135,7 +135,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	}
 
 	// Allow some time for changes to be detected and processed
-	time.Sleep(1 * time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	log.Printf("--- Check subdirectory add\n")
 
@@ -156,7 +156,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	os.Remove(subFileName)
 
 	// Allow some time for changes to be detected and processed
-	time.Sleep(1 * time.Second)
+	time.Sleep(100 * time.Millisecond)
 
 	log.Printf("--- Check subdirectory file removal\n")
 
