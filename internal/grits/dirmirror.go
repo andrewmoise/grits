@@ -8,53 +8,33 @@ import (
 	"sync"
 )
 
-/////
-// Base interface
-
-// DirMirror defines the overall interface for anything that's like a directory mirror
+// Volume defines the interface for directory mirroring operations
 type Volume interface {
 	Start() error
 	Stop() error
-
 	HandleScan(file string) error
 	HandleScanTree(directory string) error
-
 	isReadOnly() bool
 }
 
-type DirMirrorBase struct {
-	srcPath  string
-	destPath string
-
+// DirToTreeMirror is responsible for mirroring a directory structure to a tree structure in the blob store
+type DirToTreeMirror struct {
+	srcPath    string
+	destPath   string
 	bs         *BlobStore
+	ns         *NameStore
 	dirWatcher *DirWatcher
 	mtx        sync.Mutex
 }
 
-func NewDirMirrorBase(bs *BlobStore, srcPath, destPath string) *DirMirrorBase {
-	dmb := &DirMirrorBase{
-		bs:       bs,
-		srcPath:  srcPath,
-		destPath: destPath,
-	}
-
-	return dmb
-}
-
-/////
-// DirToTreeMirror
-
-type DirToTreeMirror struct {
-	*DirMirrorBase
-	ns *NameStore
-}
+// General bookkeeping functions
 
 func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore, shutdownFunc func()) (*DirToTreeMirror, error) {
 	log.Printf("Creating DirToTreeMirror for %s -> %s\n", srcPath, destPath)
 
-	realSrcPath, error := filepath.EvalSymlinks(srcPath)
-	if error != nil {
-		return nil, fmt.Errorf("failed to evaluate source path: %v", error)
+	realSrcPath, err := filepath.EvalSymlinks(srcPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to evaluate source path: %v", err)
 	}
 
 	ns, err := EmptyNameStore(blobStore)
@@ -63,8 +43,10 @@ func NewDirToTreeMirror(srcPath string, destPath string, blobStore *BlobStore, s
 	}
 
 	dt := &DirToTreeMirror{
-		DirMirrorBase: NewDirMirrorBase(blobStore, realSrcPath, destPath),
-		ns:            ns,
+		bs:       blobStore,
+		srcPath:  realSrcPath,
+		destPath: destPath,
+		ns:       ns,
 	}
 	dt.dirWatcher = NewDirWatcher(blobStore.config.DirWatcherPath, realSrcPath, dt, shutdownFunc)
 
@@ -86,6 +68,17 @@ func (dt *DirToTreeMirror) Start() error {
 
 	return nil
 }
+
+func (dt *DirToTreeMirror) Stop() error {
+	err := dt.dirWatcher.Stop()
+	return err
+}
+
+func (db *DirToTreeMirror) isReadOnly() bool {
+	return true
+}
+
+// Interface from the DirWatcher, to learn when things have changed
 
 func (db *DirToTreeMirror) HandleScan(filename string) error {
 	db.mtx.Lock()
@@ -168,6 +161,8 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 	return nil
 }
 
+// Interface to NameStore, to make changes to the tree when we need to
+
 func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string, file *os.File) error {
 	cf, err := dt.ns.blobStore.AddOpenFile(file)
 	if err != nil {
@@ -204,14 +199,4 @@ func (dt *DirToTreeMirror) removeFile(filePath string) error {
 	}
 
 	return nil
-}
-
-// Stop stops the directory monitoring
-func (dt *DirToTreeMirror) Stop() error {
-	err := dt.dirWatcher.Stop()
-	return err
-}
-
-func (db *DirToTreeMirror) isReadOnly() bool {
-	return true
 }
