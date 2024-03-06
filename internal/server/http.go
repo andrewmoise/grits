@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"grits/internal/grits"
@@ -114,16 +115,49 @@ func (s *Server) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try to read the file from the blob store using the full address
-	var cachedFile *grits.CachedFile
-	cachedFile, err = s.BlobStore.ReadFile(fileAddr)
+	cachedFile, err := s.BlobStore.ReadFile(fileAddr)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
 	defer s.BlobStore.Release(cachedFile)
 
+	// Validate the file contents if hard linking is enabled
+	if s.Config.ValidateBlobs {
+		isValid, err := validateFileContents(cachedFile.Path, fileAddr)
+		if err != nil || !isValid {
+			log.Printf("Error validating file contents: %v\n", err)
+			http.Error(w, "Internal server error due to file validation failure", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// Serve the file
 	http.ServeFile(w, r, cachedFile.Path)
 	s.BlobStore.Touch(cachedFile)
+}
+
+// validateFileContents opens the file, computes its SHA-256 hash and size,
+// and compares them with the expected values.
+func validateFileContents(filePath string, expectedAddr *grits.BlobAddr) (bool, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+
+	hasher := sha256.New()
+	size, err := io.Copy(hasher, file)
+	if err != nil {
+		return false, err
+	}
+
+	computedHash := fmt.Sprintf("%x", hasher.Sum(nil))
+	if computedHash != expectedAddr.Hash || uint64(size) != expectedAddr.Size {
+		return false, fmt.Errorf("hash or size mismatch")
+	}
+
+	return true, nil
 }
 
 func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
@@ -361,14 +395,14 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	// Store the file content in the blob store
 	cf, err := bs.AddDataBlock(data)
 	if err != nil {
-		http.Error(w, "Failed to store file content", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to store %s content", path), http.StatusInternalServerError)
 		return
 	}
 	defer bs.Release(cf)
 
 	err = ns.LinkBlob(path, cf.Address)
 	if err != nil {
-		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
 		return
 	}
 

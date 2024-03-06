@@ -25,6 +25,8 @@ type Config struct {
 	StorageSize         uint64 `json:"StorageSize"`
 	StorageFreeSize     uint64 `json:"StorageFreeSize"`
 	NamespaceSavePeriod int    `json:"NamespaceSavePeriod"`
+	HardLinkBlobs       bool   `json:"HardLinkBlobs"`
+	ValidateBlobs       bool   `json:"ValidateBlobs"`
 
 	// Directories to cache
 	Volumes []VolumeConfig `json:"Volumes"`
@@ -67,6 +69,8 @@ func NewConfig(serverDir string) *Config {
 		StorageSize:         100 * 1024 * 1024, // Max size of data
 		StorageFreeSize:     80 * 1024 * 1024,  // Size to clean down to when overfull
 		NamespaceSavePeriod: 30,                // # of seconds between namespace checkpoints
+		HardLinkBlobs:       false,
+		ValidateBlobs:       false,
 
 		Volumes: []VolumeConfig{}, // Dirs to put in the blob cache
 
