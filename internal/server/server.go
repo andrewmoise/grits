@@ -60,8 +60,6 @@ func NewServer(config *grits.Config) (*Server, error) {
 		var vol grits.Volume
 		var err error
 		switch volConfig.Type {
-		case "BlobsVolume":
-			vol, err = grits.NewDirToBlobsMirror(volConfig.SourceDir, volConfig.CacheLinksDir, bs)
 
 		case "LocalDirVolume":
 			destPath := volConfig.DestPath
@@ -118,5 +116,9 @@ func (s *Server) Start() {
 }
 
 func (s *Server) Stop(ctx context.Context) error {
-	return s.HTTPServer.Shutdown(ctx)
+	err := s.HTTPServer.Shutdown(ctx)
+	if err != nil {
+		log.Printf("Fatal error, problem during shutdown: %v", err)
+	}
+	return err
 }
