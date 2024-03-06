@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"grits/internal/grits"
 )
@@ -31,6 +32,8 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 	server.Start()
 	defer server.Stop(context.Background())
+
+	time.Sleep(100 * time.Millisecond)
 
 	url := "http://localhost:1887/grits/v1"
 
