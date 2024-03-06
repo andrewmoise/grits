@@ -114,11 +114,6 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 		return nil, err
 	}
 
-	// Seek back to the beginning of the file for potential copying.
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("failed to seek file: %v", err)
-	}
-
 	blobAddr := NewBlobAddr(fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size))
 
 	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
@@ -129,14 +124,32 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 
 	// If the blob doesn't exist in the store, copy it.
 	destPath := filepath.Join(bs.storageDir, blobAddr.String())
-	destFile, err := os.Create(destPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create blob file: %v", err)
-	}
-	defer destFile.Close()
 
-	if _, err = io.Copy(destFile, file); err != nil {
-		return nil, fmt.Errorf("failed to copy file to blob store: %v", err)
+	if bs.config.HardLinkBlobs {
+		// Attempt to create a hard link
+		originalFilePath, err := filepath.Abs(file.Name())
+		if err != nil {
+			return nil, fmt.Errorf("failed to get absolute path for original file: %v", err)
+		}
+
+		if err := os.Link(originalFilePath, destPath); err != nil {
+			return nil, fmt.Errorf("failed to create hard link: %v", err)
+		}
+	} else {
+		// Seek back to the beginning of the file.
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("failed to seek file: %v", err)
+		}
+
+		destFile, err := os.Create(destPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create blob file: %v", err)
+		}
+		defer destFile.Close()
+
+		if _, err = io.Copy(destFile, file); err != nil {
+			return nil, fmt.Errorf("failed to copy file to blob store: %v", err)
+		}
 	}
 
 	cachedFile := &CachedFile{
