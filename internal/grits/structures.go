@@ -119,7 +119,7 @@ func (tfa *TypedFileAddr) String() string {
 func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 	parts := strings.Split(s, ":")
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid format, expected 'type:hash:size.extension', got %s", s)
+		return nil, fmt.Errorf("invalid format, expected 'type:hash-size', got %s", s)
 	}
 
 	// Identify type
