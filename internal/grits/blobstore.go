@@ -1,6 +1,7 @@
 package grits
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -65,7 +66,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 			}
 
 			// Create a CachedFile object and add it to the map
-			bs.files[relativePath] = &CachedFile{
+			bs.files[blobAddr.Hash] = &CachedFile{
 				Path:        path,
 				RefCount:    0, // Initially, no references to the file
 				Address:     blobAddr,
@@ -80,7 +81,7 @@ func (bs *BlobStore) ReadFile(blobAddr *BlobAddr) (*CachedFile, error) {
 	bs.mtx.RLock()
 	defer bs.mtx.RUnlock()
 
-	cachedFile, ok := bs.files[blobAddr.String()]
+	cachedFile, ok := bs.files[blobAddr.Hash]
 	if !ok {
 		return nil, fmt.Errorf("file with address %s not found in cache", blobAddr.String())
 	}
@@ -91,22 +92,51 @@ func (bs *BlobStore) ReadFile(blobAddr *BlobAddr) (*CachedFile, error) {
 }
 
 func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
-	blobAddr, err := ComputeBlobAddr(srcPath)
+	file, err := os.Open(srcPath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	return bs.AddOpenFile(file)
+}
+
+// AddOpenFile takes an already-opened file, computes its SHA-256 hash and size,
+// and adds it to the blob store if necessary.
+func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	// Compute the SHA-256 hash and size of the file.
+	hasher := sha256.New()
+	size, err := io.Copy(hasher, file)
 	if err != nil {
 		return nil, err
 	}
 
-	bs.mtx.Lock()
-	defer bs.mtx.Unlock()
+	// Seek back to the beginning of the file for potential copying.
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("failed to seek file: %v", err)
+	}
 
-	if cachedFile, exists := bs.files[blobAddr.String()]; exists {
+	blobAddr := NewBlobAddr(fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size))
+
+	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
 		cachedFile.RefCount++
+		cachedFile.LastTouched = time.Now() // Update the last touched time
 		return cachedFile, nil
 	}
 
+	// If the blob doesn't exist in the store, copy it.
 	destPath := filepath.Join(bs.storageDir, blobAddr.String())
-	if err := copyFile(srcPath, destPath); err != nil {
-		return nil, err
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create blob file: %v", err)
+	}
+	defer destFile.Close()
+
+	if _, err = io.Copy(destFile, file); err != nil {
+		return nil, fmt.Errorf("failed to copy file to blob store: %v", err)
 	}
 
 	cachedFile := &CachedFile{
@@ -116,8 +146,9 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
 		LastTouched: time.Now(),
 	}
 
-	bs.files[blobAddr.String()] = cachedFile
+	bs.files[blobAddr.Hash] = cachedFile
 	bs.currentSize += blobAddr.Size
+
 	return cachedFile, nil
 }
 
@@ -132,7 +163,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	blobAddr := NewBlobAddr(hash, size)
 
 	// Check if the data block already exists in the store
-	if cachedFile, exists := bs.files[blobAddr.String()]; exists {
+	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
 		// Increment RefCount since the file is being accessed
 		cachedFile.RefCount++
 		return cachedFile, nil
@@ -156,7 +187,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	}
 
 	// Add the new data block to the files map
-	bs.files[blobAddr.String()] = cachedFile
+	bs.files[blobAddr.Hash] = cachedFile
 	bs.currentSize += size
 
 	return cachedFile, nil
@@ -211,28 +242,11 @@ func (bs *BlobStore) evictOldFiles() {
 		}
 
 		bs.currentSize -= file.Address.Size
-		delete(bs.files, file.Address.String())
+		delete(bs.files, file.Address.Hash)
 
 		err := os.Remove(file.Path)
 		if err != nil {
 			panic(fmt.Sprintf("Couldn't delete expired file %s from cache! %v", file.Path, err))
 		}
 	}
-}
-
-func copyFile(srcPath, destPath string) error {
-	input, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-
-	output, err := os.Create(destPath)
-	if err != nil {
-		return err
-	}
-	defer output.Close()
-
-	_, err = io.Copy(output, input)
-	return err
 }
