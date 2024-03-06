@@ -58,6 +58,9 @@ func TestFileOperations(t *testing.T) {
 		}
 	}()
 
+	// Wait a little for initialization
+	time.Sleep(100 * time.Millisecond)
+
 	// 1. Create 5 files
 
 	for i := 1; i <= 5; i++ {
