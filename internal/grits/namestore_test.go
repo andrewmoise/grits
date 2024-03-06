@@ -19,8 +19,7 @@ func setupNameStoreTestEnv(t *testing.T) (*NameStore, *BlobStore, func()) {
 	}
 
 	// Create a BlobStore using the temporary directory
-	config := NewConfig()
-	config.ServerDir = tempDir
+	config := NewConfig(tempDir)
 	blobStore := NewBlobStore(config)
 
 	// Initialize the NameStore with the BlobStore

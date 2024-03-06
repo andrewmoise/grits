@@ -1,6 +1,7 @@
 package grits
 
 import (
+	"log"
 	"os"
 	"testing"
 )
@@ -13,10 +14,11 @@ func setupBlobStore(t *testing.T) (*BlobStore, func()) {
 		t.Fatalf("Failed to create temporary directory: %v", err)
 	}
 
+	log.Printf("Setup in %s\n", tempDir)
+
 	// Assuming default values are appropriate for testing.
 	// Adjust if necessary.
-	config := NewConfig()
-	config.ServerDir = tempDir
+	config := NewConfig(tempDir)
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
 
@@ -56,7 +58,9 @@ func TestBlobStore_AddLocalFile(t *testing.T) {
 
 func TestBlobStore_ReadFile(t *testing.T) {
 	bs, cleanup := setupBlobStore(t)
-	defer cleanup()
+	if t == nil {
+		defer cleanup()
+	}
 
 	// Setup file in BlobStore
 	srcPath := bs.config.ServerPath("var/test.txt")

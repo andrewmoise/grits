@@ -18,12 +18,8 @@ func setupDirToBlobsMirror(t *testing.T) (*DirToBlobsMirror, *BlobStore, string,
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
 
-	// Set up a BlobStore with a temporary directory
-	blobStoreConfig := &Config{
-		ServerDir:       dirPath,
-		StorageSize:     10 * 1024 * 1024, // 10MB
-		StorageFreeSize: 8 * 1024 * 1024,  // 8MB
-	}
+	blobStoreConfig := NewConfig(dirPath)
+
 	blobStore := NewBlobStore(blobStoreConfig)
 
 	srcPath := filepath.Join(dirPath, "src")
@@ -34,9 +30,14 @@ func setupDirToBlobsMirror(t *testing.T) (*DirToBlobsMirror, *BlobStore, string,
 
 	log.Printf("--- Start test\n")
 
-	DirToBlobsMirror, error := NewDirToBlobsMirror(srcPath, destPath, blobStore)
-	if error != nil {
-		t.Fatalf("Failed to create DirToBlobsMirror: %v", error)
+	DirToBlobsMirror, err := NewDirToBlobsMirror(srcPath, destPath, blobStore)
+	if err != nil {
+		t.Fatalf("failed to create DirToBlobsMirror: %v", err)
+	}
+
+	err = DirToBlobsMirror.Start()
+	if err != nil {
+		t.Fatalf("failed to start dir mirror: %v", err)
 	}
 
 	cleanup := func() {

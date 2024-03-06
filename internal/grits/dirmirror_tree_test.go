@@ -19,8 +19,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	defer os.RemoveAll(serverDir)
 
 	// Initialize BlobStore and NameStore
-	config := NewConfig()
-	config.ServerDir = serverDir
+	config := NewConfig(serverDir)
 
 	blobStore := NewBlobStore(config)
 

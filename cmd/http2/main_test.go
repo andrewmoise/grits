@@ -22,8 +22,7 @@ func setupTestServer(t *testing.T) (*server.Server, func()) {
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
 	}
-	config := grits.NewConfig()
-	config.ServerDir = tempDir
+	config := grits.NewConfig(tempDir)
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
 
