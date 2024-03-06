@@ -32,7 +32,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	log.Printf("--- Start test\n")
 
 	// Instantiate and start DirToTreeMirror
-	dirMirror, error := NewDirToTreeMirror(srcPath, destPath, blobStore)
+	dirMirror, error := NewDirToTreeMirror(srcPath, destPath, blobStore, nil)
 	if error != nil {
 		t.Fatalf("Failed to create DirToTreeMirror: %v", error)
 	}

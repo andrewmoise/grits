@@ -19,18 +19,20 @@ type DirEventHandler interface {
 
 // DirWatcher watches directory events using a setuid script.
 type DirWatcher struct {
-	cmd        *exec.Cmd
-	scriptPath string // Path to the setuid script
-	watchDir   string
-	handler    DirEventHandler
+	cmd          *exec.Cmd
+	scriptPath   string // Path to the setuid script
+	watchDir     string
+	handler      DirEventHandler
+	shutdownFunc func()
 }
 
 // NewDirWatcher creates a new DirWatcher.
-func NewDirWatcher(script string, watchDir string, handler DirEventHandler) *DirWatcher {
+func NewDirWatcher(script string, watchDir string, handler DirEventHandler, shutdownFunc func()) *DirWatcher {
 	return &DirWatcher{
-		scriptPath: script,
-		watchDir:   watchDir,
-		handler:    handler,
+		scriptPath:   script,
+		watchDir:     watchDir,
+		handler:      handler,
+		shutdownFunc: shutdownFunc,
 	}
 }
 
@@ -87,7 +89,8 @@ func (dw *DirWatcher) processEvents(stdout io.ReadCloser) {
 		parts := strings.SplitN(event, " ", 2)
 
 		if len(parts) == 1 && parts[0] == "ESTALE" {
-			dw.handler.HandleScanTree(dw.watchDir)
+			// We ignore this; hopefully that's ok
+			//dw.handler.HandleScanTree(dw.watchDir)
 		} else if len(parts) == 2 {
 			if strings.HasSuffix(parts[0], "|FAN_ONDIR") {
 				dw.handler.HandleScanTree(parts[1])
@@ -103,12 +106,23 @@ func (dw *DirWatcher) processEvents(stdout io.ReadCloser) {
 		log.Printf("Error reading standard input! %v\n", err)
 	}
 
+	// Note: We should never get here except on shutdown. If we're not part of an orderly
+	// shutdown, there's been a problem -- indicate to whole server to shut down, in
+	// that case.
+	shutdownFunc := dw.shutdownFunc
+	if shutdownFunc != nil {
+		shutdownFunc()
+	}
+
 	log.Printf("DirWatcher process loop exiting")
 }
 
 // Stop terminates the directory watching by killing the subprocess.
 func (dw *DirWatcher) Stop() error {
 	log.Printf("Stop DirWatcher\n")
+
+	// Make sure there's no trigger of the abnormal shutdown case in processEvents().
+	dw.shutdownFunc = nil
 
 	if dw.cmd != nil && dw.cmd.Process != nil {
 		if err := dw.cmd.Process.Signal(syscall.SIGTERM); err != nil {
