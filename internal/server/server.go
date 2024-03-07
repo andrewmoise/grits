@@ -65,7 +65,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 			destPath := volConfig.DestPath
 			destPath = strings.TrimPrefix(destPath, "/")
 
-			vol, err = NewDirToTreeMirror(volConfig.SourceDir, destPath, bs, config.DirWatcherPath, srv.Shutdown)
+			vol, err = NewDirToTreeMirror(volConfig.SourceDir, destPath, srv, config.DirWatcherPath, srv.Shutdown)
 
 		default:
 			return nil, fmt.Errorf("unknown volume type: %s", volConfig.Type)
@@ -88,6 +88,7 @@ func (s *Server) Run() {
 	}
 
 	s.AddPeriodicTask(time.Duration(s.Config.NamespaceSavePeriod)*time.Second, s.SaveAccounts)
+	s.AddPeriodicTask(500*time.Millisecond, s.ReportJobs)
 
 	err := s.HTTPServer.ListenAndServe()
 	if err == http.ErrServerClosed {

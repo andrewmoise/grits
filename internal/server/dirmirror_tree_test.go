@@ -15,14 +15,17 @@ func TestDirToTreeMirror(t *testing.T) {
 	// Setup temporary directory for source files
 	serverDir, err := os.MkdirTemp("", "dirtotree_test")
 	if err != nil {
-		t.Fatalf("Failed to create temporary source directory: %v", err)
+		t.Fatalf("failed to create temporary source directory: %v", err)
 	}
 	defer os.RemoveAll(serverDir)
 
 	// Initialize BlobStore and NameStore
 	config := grits.NewConfig(serverDir)
 
-	blobStore := grits.NewBlobStore(config)
+	server, err := NewServer(config)
+	if err != nil {
+		t.Fatalf("failed to create server: %v", err)
+	}
 
 	// src and destination
 	srcPath := path.Join(serverDir, "src")
@@ -33,7 +36,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	log.Printf("--- Start test\n")
 
 	// Instantiate and start DirToTreeMirror
-	dirMirror, error := NewDirToTreeMirror(srcPath, destPath, blobStore, config.DirWatcherPath, nil)
+	dirMirror, error := NewDirToTreeMirror(srcPath, destPath, server, config.DirWatcherPath, nil)
 	if error != nil {
 		t.Fatalf("Failed to create DirToTreeMirror: %v", error)
 	}
@@ -71,13 +74,13 @@ func TestDirToTreeMirror(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed to lookup file%d.txt in NameStore: %v", i, err)
 		}
-		defer blobStore.Release(cf)
+		defer server.BlobStore.Release(cf)
 
-		file, err := blobStore.ReadFile(cf.Address)
+		file, err := server.BlobStore.ReadFile(cf.Address)
 		if err != nil {
 			t.Fatalf("Failed to read file%d.txt from BlobStore: %v", i, err)
 		}
-		blobStore.Release(file)
+		server.BlobStore.Release(file)
 	}
 
 	log.Printf("--- Modifications\n")
@@ -104,13 +107,13 @@ func TestDirToTreeMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to resolve file5.txt in NameStore")
 	}
-	defer blobStore.Release(cf)
+	defer server.BlobStore.Release(cf)
 
-	file, err := blobStore.ReadFile(cf.Address)
+	file, err := server.BlobStore.ReadFile(cf.Address)
 	if err != nil {
 		t.Fatalf("Failed to read file5.txt from BlobStore: %v", err)
 	}
-	defer blobStore.Release(file)
+	defer server.BlobStore.Release(file)
 
 	updatedContent, err := os.ReadFile(file.Path)
 	if err != nil {
@@ -145,13 +148,13 @@ func TestDirToTreeMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to resolve subdir/subfile1.txt in NameStore")
 	}
-	defer blobStore.Release(subCf)
+	defer server.BlobStore.Release(subCf)
 
-	subFile, err := blobStore.ReadFile(subCf.Address)
+	subFile, err := server.BlobStore.ReadFile(subCf.Address)
 	if err != nil {
 		t.Fatalf("Failed to read subdir/subfile1.txt from BlobStore: %v", err)
 	}
-	blobStore.Release(subFile)
+	server.BlobStore.Release(subFile)
 
 	// Optional: Delete the subdirectory file and verify removal
 	os.Remove(subFileName)
