@@ -18,11 +18,11 @@ type Volume interface {
 	isReadOnly() bool
 }
 
-// DirToTreeMirror is responsible for mirroring a directory structure to a tree structure in the blob store
+// DirToTreeMirror is responsible for mirroring a directory structure to a tree structure in the blob store.
 type DirToTreeMirror struct {
 	srcPath    string
 	destPath   string
-	bs         *grits.BlobStore
+	server     *Server
 	ns         *grits.NameStore
 	dirWatcher *DirWatcher
 	mtx        sync.Mutex
@@ -30,7 +30,7 @@ type DirToTreeMirror struct {
 
 // General bookkeeping functions
 
-func NewDirToTreeMirror(srcPath string, destPath string, blobStore *grits.BlobStore, dirWatcherPath string, shutdownFunc func()) (*DirToTreeMirror, error) {
+func NewDirToTreeMirror(srcPath string, destPath string, server *Server, dirWatcherPath string, shutdownFunc func()) (*DirToTreeMirror, error) {
 	log.Printf("Creating DirToTreeMirror for %s -> %s\n", srcPath, destPath)
 
 	realSrcPath, err := filepath.EvalSymlinks(srcPath)
@@ -38,13 +38,13 @@ func NewDirToTreeMirror(srcPath string, destPath string, blobStore *grits.BlobSt
 		return nil, fmt.Errorf("failed to evaluate source path: %v", err)
 	}
 
-	ns, err := grits.EmptyNameStore(blobStore)
+	ns, err := grits.EmptyNameStore(server.BlobStore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NameStore: %v", err)
 	}
 
 	dt := &DirToTreeMirror{
-		bs:       blobStore,
+		server:   server,
 		srcPath:  realSrcPath,
 		destPath: destPath,
 		ns:       ns,
@@ -75,35 +75,31 @@ func (dt *DirToTreeMirror) Stop() error {
 	return err
 }
 
-func (db *DirToTreeMirror) isReadOnly() bool {
+func (dt *DirToTreeMirror) isReadOnly() bool {
 	return true
 }
 
-// Interface from the DirWatcher, to learn when things have changed
-
-func (db *DirToTreeMirror) HandleScan(filename string) error {
-	db.mtx.Lock()
-	defer db.mtx.Unlock()
+// HandleScan processes an individual file update or addition.
+func (dt *DirToTreeMirror) HandleScan(filename string) error {
+	dt.mtx.Lock()
+	defer dt.mtx.Unlock()
 
 	f, err := os.Open(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// If the file does not exist, remove it from the cache.
-			return db.removeFile(filename)
+			return dt.removeFile(filename)
 		}
-		// For other types of errors, return the error.
 		return err
 	}
 	defer f.Close()
 
-	// If the file exists, proceed to add or update it in the BlobStore using the file handle.
-	return db.addOrUpdateFile(filename, f)
+	return dt.addOrUpdateFile(filename, f)
 }
 
 func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 	// Okay for this one we leverage some of the usefulness of our NameStore primitives
 
-	newDirNs, err := grits.EmptyNameStore(dt.bs)
+	newDirNs, err := grits.EmptyNameStore(dt.server.BlobStore)
 	if err != nil {
 		return err
 	}
@@ -126,11 +122,11 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 		}
 		defer file.Close()
 
-		cf, err := dt.bs.AddOpenFile(file)
+		cf, err := dt.server.BlobStore.AddOpenFile(file)
 		if err != nil {
 			return err
 		}
-		defer dt.bs.Release(cf)
+		defer dt.server.BlobStore.Release(cf)
 
 		relPath, err := filepath.Rel(dt.srcPath, path)
 		if err != nil {
