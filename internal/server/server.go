@@ -32,6 +32,10 @@ type Server struct {
 	// Periodic tasks
 	taskStop chan struct{}
 	taskWg   sync.WaitGroup
+
+	// Long running jobs
+	jobs     map[*JobDescriptor]bool
+	jobsLock sync.Mutex
 }
 
 // NewServer initializes and returns a new Server instance.
@@ -49,6 +53,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 		Mux:           http.NewServeMux(),
 		AccountStores: make(map[string]*grits.NameStore),
 		taskStop:      make(chan struct{}),
+		jobs:          make(map[*JobDescriptor]bool),
 	}
 
 	err := srv.LoadAccounts()
