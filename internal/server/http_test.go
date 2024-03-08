@@ -106,8 +106,12 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 }
 
 func TestUploadAndDownloadBlob(t *testing.T) {
-	// Initialize the server or HTTP module
-	tempDir := t.TempDir() // Use a temporary directory for testing
+	tempDir, err := os.MkdirTemp("", "grits_server")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
 	config := grits.NewConfig(tempDir)
 	srv, err := NewServer(config)
 	if err != nil {
