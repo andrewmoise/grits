@@ -130,14 +130,6 @@ func (s *HttpModule) setupRoutes() {
 	// Handling client files with CORS enabled
 	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", s.corsMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
 
-	// DHT routes (need to move to DHT module)
-
-	// Using the middleware directly with HandleFunc for specific routes
-	//	if s.Server.Config.IsRootNode {
-	//		s.Mux.HandleFunc("/grits/v1/heartbeat", s.handleHeartbeat())
-	//	}
-	//	s.Mux.HandleFunc("/grits/v1/announce", s.handleAnnounce())
-
 	s.HttpServer.Handler = s.Mux
 }
 

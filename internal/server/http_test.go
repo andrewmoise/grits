@@ -13,6 +13,8 @@ import (
 	"grits/internal/grits"
 )
 
+// Main API endpoints
+
 func TestLookupAndLinkEndpoints(t *testing.T) {
 	// Setup
 	tempDir, err := os.MkdirTemp("", "grits_server")
