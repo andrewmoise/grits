@@ -27,19 +27,6 @@ type Config struct {
 
 	// Modules and configs for same
 	Modules []json.RawMessage `json:"Modules"`
-
-	// Nitty-gritty DHT tuning
-	DhtNotifyNumber     int `json:"DhtNotifyNumber"`
-	DhtNotifyPeriod     int `json:"DhtNotifyPeriod"`
-	DhtMaxResponseNodes int `json:"DhtMaxResponseNodes"`
-	DhtRefreshTime      int `json:"DhtRefreshTime"`
-	DhtExpiryTime       int `json:"DhtExpiryTime"`
-
-	MaxProxyMapAge           int `json:"MaxProxyMapAge"`
-	ProxyMapCleanupPeriod    int `json:"ProxyMapCleanupPeriod"`
-	ProxyHeartbeatPeriod     int `json:"ProxyHeartbeatPeriod"`
-	RootUpdatePeerListPeriod int `json:"RootUpdatePeerListPeriod"`
-	RootProxyDropTimeout     int `json:"RootProxyDropTimeout"`
 }
 
 // NewConfig creates a new configuration instance with default values.
@@ -59,17 +46,6 @@ func NewConfig(serverDir string) *Config {
 		NamespaceSavePeriod: 30,                // # of seconds between namespace checkpoints
 		HardLinkBlobs:       false,
 		ValidateBlobs:       false,
-
-		DhtNotifyNumber:          5,  // # of peers to notify in the DHT
-		DhtNotifyPeriod:          20, // # of seconds between DHT notifications
-		DhtMaxResponseNodes:      10, // Max # of nodes to return in a DHT response
-		DhtRefreshTime:           8 * 60 * 60,
-		DhtExpiryTime:            24 * 60 * 60,
-		MaxProxyMapAge:           24 * 60 * 60,
-		ProxyMapCleanupPeriod:    60 * 60,
-		ProxyHeartbeatPeriod:     5 * 60, // # of seconds between proxy heartbeats
-		RootUpdatePeerListPeriod: 6 * 60, // ?
-		RootProxyDropTimeout:     6 * 60, // # of seconds before root drops a proxy
 	}
 }
 
