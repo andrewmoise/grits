@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"grits/internal/grits"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -36,6 +38,7 @@ type Server struct {
 	// Shutdown channel
 	shutdownChan chan struct{}
 	shutdownOnce sync.Once // Ensures shutdown logic runs only once
+	shutdownWg   sync.WaitGroup
 }
 
 // NewServer initializes and returns a new Server instance.
@@ -43,6 +46,11 @@ func NewServer(config *grits.Config) (*Server, error) {
 	bs := grits.NewBlobStore(config)
 	if bs == nil {
 		return nil, fmt.Errorf("failed to initialize blob store")
+	}
+
+	err := os.MkdirAll(filepath.Join(config.ServerDir, "var"), 0755)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create var directory in %s", config.ServerDir)
 	}
 
 	srv := &Server{
@@ -54,7 +62,7 @@ func NewServer(config *grits.Config) (*Server, error) {
 		shutdownChan:  make(chan struct{}),
 	}
 
-	err := srv.LoadAccounts()
+	err = srv.LoadAccounts()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load accounts: %v", err)
 	}
@@ -101,6 +109,15 @@ func (s *Server) Start() error {
 }
 
 func (s *Server) Stop() {
+	s.shutdownOnce.Do(func() {
+		close(s.shutdownChan) // Safely close channel
+	})
+
+	// Wait for all shutdown tasks to complete
+	s.shutdownWg.Wait()
+}
+
+func (s *Server) Shutdown() {
 	s.shutdownOnce.Do(func() {
 		close(s.shutdownChan) // Safely close channel
 	})
