@@ -67,7 +67,7 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 				return fmt.Errorf("failed to unmarshal DirToTreeMirror module config: %v", err)
 			}
 
-			module, err := NewDirToTreeMirror(mirrorConfig.SourceDir, mirrorConfig.DestPath, s, s.Config.DirWatcherPath, s.Stop)
+			module, err := NewDirToTreeMirror(mirrorConfig.SourceDir, mirrorConfig.DestPath, s, s.Config.DirWatcherPath, s.Shutdown)
 			if err != nil {
 				return fmt.Errorf("failed to instantiate DirToTreeMirror: %v", err)
 			}
