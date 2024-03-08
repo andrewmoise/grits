@@ -4,8 +4,11 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
+	"sync"
+	"time"
 )
 
 type DhtModuleConfig struct {
@@ -36,6 +39,179 @@ func NewDhtModuleConfig() *DhtModuleConfig {
 		ProxyHeartbeatPeriod:     5 * 60, // # of seconds between proxy heartbeats
 		RootUpdatePeerListPeriod: 6 * 60, // ?
 		RootProxyDropTimeout:     6 * 60, // # of seconds before root drops a proxy
+	}
+}
+
+////////////////////////
+// Peer
+
+type Peer struct {
+	IPv4Address string    `json:"ipv4Address"`
+	IPv6Address string    `json:"ipv6Address"`
+	Port        int       `json:"port"`
+	IsNat       bool      `json:"isNat"`
+	Token       string    `json:"token"`
+	LastSeen    time.Time `json:"-"`
+}
+
+func NewPeer(ipv4Address, ipv6Address string, port int, isNat bool) *Peer {
+	return &Peer{
+		IPv4Address: ipv4Address,
+		IPv6Address: ipv6Address,
+		Port:        port,
+		IsNat:       isNat,
+		LastSeen:    time.Now(),
+	}
+}
+
+func (p *Peer) UpdateLastSeen() {
+	p.LastSeen = time.Now()
+}
+
+func (p *Peer) TimeSinceSeen() time.Duration {
+	if p.LastSeen.IsZero() {
+		return -1
+	}
+	return time.Since(p.LastSeen)
+}
+
+// AllPeers holds mappings from IP addresses to peers.
+type AllPeers struct {
+	Peers map[string]*Peer
+	lock  sync.RWMutex
+}
+
+// NewAllPeers creates a new AllPeers instance.
+func NewAllPeers() *AllPeers {
+	return &AllPeers{
+		Peers: make(map[string]*Peer),
+	}
+}
+
+// AddPeer adds a peer to the appropriate IP address maps.
+func (ap *AllPeers) AddPeer(peer *Peer) {
+	ap.lock.Lock()
+	defer ap.lock.Unlock()
+
+	ap.Peers[peer.Token] = peer
+}
+
+// GetPeerByIPv4 returns a peer by its IPv4 address.
+func (ap *AllPeers) GetPeer(token string) (*Peer, bool) {
+	ap.lock.RLock()
+	defer ap.lock.RUnlock()
+
+	peer, exists := ap.Peers[token]
+	return peer, exists
+}
+
+// RemovePeer removes a peer from the IP address maps.
+func (ap *AllPeers) RemovePeer(peer *Peer) {
+	ap.lock.Lock()
+	defer ap.lock.Unlock()
+
+	delete(ap.Peers, peer.Token)
+}
+
+// Serialize serializes the list of peers to JSON.
+func (ap *AllPeers) Serialize() ([]byte, error) {
+	ap.lock.Lock()
+	defer ap.lock.Unlock()
+
+	peersList := make([]*Peer, 0, len(ap.Peers))
+	for _, peer := range ap.Peers {
+		peersList = append(peersList, peer)
+	}
+
+	return json.Marshal(peersList)
+}
+
+// Deserialize loads the list of peers from JSON.
+func (ap *AllPeers) Deserialize(data []byte) error {
+	ap.lock.Lock()
+	defer ap.lock.Unlock()
+
+	var peersList []*Peer
+	if err := json.Unmarshal(data, &peersList); err != nil {
+		return err
+	}
+
+	// Clear existing peers map to avoid duplicates
+	ap.Peers = make(map[string]*Peer)
+
+	// Re-populate the map with deserialized peer data
+	for _, peer := range peersList {
+		if peer.IPv4Address != "" {
+			ap.Peers[peer.IPv4Address] = peer
+		}
+		if peer.IPv6Address != "" {
+			ap.Peers[peer.IPv6Address] = peer
+		}
+	}
+
+	return nil
+}
+
+////////////////////////
+// BlobReference
+
+type BlobReference struct {
+	Peers map[*Peer]time.Time // Maps Peer URL to the timestamp of the latest announcement.
+}
+
+// NewBlobReference creates a new BlobReference instance.
+func NewBlobReference() *BlobReference {
+	return &BlobReference{
+		Peers: make(map[*Peer]time.Time),
+	}
+}
+
+// AddPeer adds or updates a peer and its announcement timestamp in the BlobReference.
+func (br *BlobReference) AddPeer(peer *Peer) {
+	br.Peers[peer] = time.Now()
+}
+
+// RemovePeer removes a peer from the BlobReference.
+func (br *BlobReference) RemovePeer(peer *Peer) {
+	delete(br.Peers, peer)
+}
+
+////////////////////////
+// AllData
+
+// AllData manages all data known to the network, mapping data addresses to BlobReferences.
+type AllData struct {
+	Data map[string]*BlobReference
+	lock sync.Mutex
+}
+
+// NewAllData creates a new AllData instance.
+func NewAllData() *AllData {
+	return &AllData{
+		Data: make(map[string]*BlobReference),
+	}
+}
+
+// AddData adds or updates a data entry with a peer URL.
+func (ad *AllData) AddData(BlobAddr string, peer *Peer) {
+	ad.lock.Lock()
+	defer ad.lock.Unlock()
+
+	// If the file address is not yet known, initialize its BlobReference.
+	if _, exists := ad.Data[BlobAddr]; !exists {
+		ad.Data[BlobAddr] = NewBlobReference()
+	}
+	ad.Data[BlobAddr].AddPeer(peer)
+}
+
+// RemovePeerFromData removes a peer from all data entries where it's listed.
+func (ad *AllData) RemovePeerFromData(peer *Peer) {
+	ad.lock.Lock()
+	defer ad.lock.Unlock()
+
+	// Iterate over all data entries and remove the peer URL from each.
+	for _, blobRef := range ad.Data {
+		blobRef.RemovePeer(peer)
 	}
 }
 
@@ -138,6 +314,14 @@ func containsPeer(slice []*Peer, item *Peer) bool {
 }
 
 // We need to add this to the DHT module once it's all enabled and worked on again:
+
+// DHT routes
+
+// Using the middleware directly with HandleFunc for specific routes
+//	if s.Server.Config.IsRootNode {
+//		s.Mux.HandleFunc("/grits/v1/heartbeat", s.handleHeartbeat())
+//	}
+//	s.Mux.HandleFunc("/grits/v1/announce", s.handleAnnounce())
 
 //func (s *HttpModule) handleHeartbeat() http.HandlerFunc {
 //	return func(w http.ResponseWriter, r *http.Request) {
