@@ -2,16 +2,13 @@ package grits
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 )
 
+// CoreConfig represents the core server configuration.
 type Config struct {
 	// General networking configuration
-	ThisHost    string `json:"ThisHost"`
-	ThisPort    int    `json:"ThisPort"`
 	IsRootNode  bool   `json:"IsRootNode"`
 	RootHost    string `json:"RootHost"`
 	RootPort    int    `json:"RootPort"`
@@ -28,8 +25,8 @@ type Config struct {
 	HardLinkBlobs       bool   `json:"HardLinkBlobs"`
 	ValidateBlobs       bool   `json:"ValidateBlobs"`
 
-	// Directories to cache
-	Volumes []VolumeConfig `json:"Volumes"`
+	// Modules and configs for same
+	Modules []json.RawMessage `json:"Modules"`
 
 	// Nitty-gritty DHT tuning
 	DhtNotifyNumber     int `json:"DhtNotifyNumber"`
@@ -45,18 +42,9 @@ type Config struct {
 	RootProxyDropTimeout     int `json:"RootProxyDropTimeout"`
 }
 
-type VolumeConfig struct {
-	Type          string `json:"Type"`
-	SourceDir     string `json:"SourceDir"`
-	CacheLinksDir string `json:"CacheLinksDir,omitempty"`
-	DestPath      string `json:"DestPath,omitempty"`
-}
-
 // NewConfig creates a new configuration instance with default values.
 func NewConfig(serverDir string) *Config {
 	return &Config{
-		ThisHost:   "127.0.0.1",
-		ThisPort:   1787,
 		IsRootNode: false,
 		RootHost:   "",
 		RootPort:   0,
@@ -71,8 +59,6 @@ func NewConfig(serverDir string) *Config {
 		NamespaceSavePeriod: 30,                // # of seconds between namespace checkpoints
 		HardLinkBlobs:       false,
 		ValidateBlobs:       false,
-
-		Volumes: []VolumeConfig{}, // Dirs to put in the blob cache
 
 		DhtNotifyNumber:          5,  // # of peers to notify in the DHT
 		DhtNotifyPeriod:          20, // # of seconds between DHT notifications
@@ -98,56 +84,10 @@ func (c *Config) LoadFromFile(filename string) error {
 	}
 	defer file.Close()
 
-	// Decode into a map so we can iterate over keys
-	data := make(map[string]interface{})
+	// Use json.Decoder to decode directly into the struct
 	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&data); err != nil {
+	if err := decoder.Decode(c); err != nil {
 		return err
-	}
-
-	valConfig := reflect.ValueOf(c).Elem()
-	typeConfig := valConfig.Type()
-
-	for key, value := range data {
-		if key == "Volumes" {
-			// Handle Volumes separately
-			continue
-		}
-
-		fieldValue := valConfig.FieldByName(key)
-		if !fieldValue.IsValid() {
-			return errors.New("invalid field name: " + key)
-		}
-		if !fieldValue.CanSet() {
-			return errors.New("cannot set field: " + key)
-		}
-
-		field, ok := typeConfig.FieldByName(key)
-		if !ok {
-			return errors.New("field not found: " + key)
-		}
-		requiredType := field.Type
-
-		val := reflect.ValueOf(value)
-		if val.Type().ConvertibleTo(requiredType) {
-			valConverted := val.Convert(requiredType)
-			fieldValue.Set(valConverted)
-		} else {
-			return errors.New("type mismatch for field: " + key)
-		}
-	}
-
-	// Manually decode Volumes if present
-	if volumesData, ok := data["Volumes"]; ok {
-		volumesJson, err := json.Marshal(volumesData)
-		if err != nil {
-			return err
-		}
-		var volumes []VolumeConfig
-		if err := json.Unmarshal(volumesJson, &volumes); err != nil {
-			return err
-		}
-		c.Volumes = volumes
 	}
 
 	return nil

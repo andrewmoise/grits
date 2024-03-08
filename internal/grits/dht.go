@@ -105,3 +105,40 @@ func containsPeer(slice []*Peer, item *Peer) bool {
 	}
 	return false
 }
+
+// We need to add this to the DHT module once it's all enabled and worked on again:
+
+//func (s *HttpModule) handleHeartbeat() http.HandlerFunc {
+//	return func(w http.ResponseWriter, r *http.Request) {
+//		token := r.Header.Get("Authorization")
+//		peer, exists := s.Peers.GetPeer(token)
+//		if !exists {
+//			http.Error(w, "Unauthorized: Unknown or invalid token", http.StatusUnauthorized)
+//			return
+//		}
+//
+//		peer.UpdateLastSeen()
+//
+//		peerList, error := s.Peers.Serialize()
+//		if error != nil {
+//			http.Error(w, "Internal server error", http.StatusInternalServerError)
+//			return
+//		}
+//
+//		w.Write(peerList)
+//	}
+//}
+//
+//func (s *HttpModule) handleAnnounce() http.HandlerFunc {
+//	return func(w http.ResponseWriter, r *http.Request) {
+//		token := r.Header.Get("Authorization")
+//		peer, exists := s.Peers.GetPeer(token)
+//		if !exists {
+//			http.Error(w, "Unauthorized: Unknown or invalid token", http.StatusUnauthorized)
+//			return
+//		}
+//
+//		peer.UpdateLastSeen()
+//		// Process the announcement...
+//	}
+//}

@@ -1,12 +1,9 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"grits/internal/grits"
 	"log"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 )
@@ -16,10 +13,8 @@ type Server struct {
 	Config    *grits.Config
 	BlobStore *grits.BlobStore
 
-	// HTTP stuff
-	HTTPServer *http.Server
-	Mux        *http.ServeMux
-	Volumes    []Volume
+	// Module stuff
+	Modules []Module
 
 	// DHT stuff
 	Peers    grits.AllPeers // To store information about known peers
@@ -36,6 +31,10 @@ type Server struct {
 	// Long running jobs
 	jobs     map[*JobDescriptor]bool
 	jobsLock sync.Mutex
+
+	// Shutdown channel
+	shutdownChan chan struct{}
+	shutdownOnce sync.Once // Ensures shutdown logic runs only once
 }
 
 // NewServer initializes and returns a new Server instance.
@@ -48,12 +47,10 @@ func NewServer(config *grits.Config) (*Server, error) {
 	srv := &Server{
 		Config:        config,
 		BlobStore:     bs,
-		HTTPServer:    &http.Server{Addr: ":" + fmt.Sprintf("%d", config.ThisPort)},
-		Volumes:       make([]Volume, 0),
-		Mux:           http.NewServeMux(),
 		AccountStores: make(map[string]*grits.NameStore),
 		taskStop:      make(chan struct{}),
 		jobs:          make(map[*JobDescriptor]bool),
+		shutdownChan:  make(chan struct{}),
 	}
 
 	err := srv.LoadAccounts()
@@ -61,79 +58,49 @@ func NewServer(config *grits.Config) (*Server, error) {
 		return nil, fmt.Errorf("failed to load accounts: %v", err)
 	}
 
-	for _, volConfig := range config.Volumes {
-		var vol Volume
-		var err error
-		switch volConfig.Type {
-
-		case "LocalDirVolume":
-			destPath := volConfig.DestPath
-			destPath = strings.TrimPrefix(destPath, "/")
-
-			vol, err = NewDirToTreeMirror(volConfig.SourceDir, destPath, srv, config.DirWatcherPath, srv.Shutdown)
-
-		default:
-			return nil, fmt.Errorf("unknown volume type: %s", volConfig.Type)
-		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to create volume: %v", err)
-		}
-
-		srv.Volumes = append(srv.Volumes, vol)
-	}
-
-	srv.setupRoutes()
-
 	return srv, nil
 }
 
-func (s *Server) Run() {
-	for _, vol := range s.Volumes {
-		vol.Start()
+func (s *Server) Start() error {
+	// Load modules from config
+	if err := s.LoadModules(s.Config.Modules); err != nil {
+		return fmt.Errorf("failed to load modules: %v", err)
 	}
 
+	// Start modules
+	for _, module := range s.Modules {
+		if err := module.Start(); err != nil {
+			return fmt.Errorf("failed to start %s module: %v", module.Name(), err)
+		}
+	}
+
+	// Server periodic tasks
 	s.AddPeriodicTask(time.Duration(s.Config.NamespaceSavePeriod)*time.Second, s.SaveAccounts)
 	s.AddPeriodicTask(500*time.Millisecond, s.ReportJobs)
 
-	err := s.HTTPServer.ListenAndServe()
-	if err == http.ErrServerClosed {
-		err = nil
-	}
-	if err != nil {
-		log.Printf("HTTP server error: %v\n", err)
-	}
-
-	s.StopPeriodicTasks()
-
-	err = s.SaveAccounts()
-	if err != nil {
-		log.Printf("Failed to save accounts: %v\n", err)
-	}
-
-	for _, vol := range s.Volumes {
-		vol.Stop()
-	}
-}
-
-func (s *Server) Start() {
+	// Start a goroutine to wait for shutdown signal
 	go func() {
-		s.Run()
+		<-s.shutdownChan
+
+		s.StopPeriodicTasks()
+
+		err := s.SaveAccounts()
+		if err != nil {
+			log.Printf("Failed to save accounts: %v\n", err)
+		}
+
+		for _, module := range s.Modules {
+			if err := module.Stop(); err != nil {
+				log.Printf("Error stopping %s module: %v", module.Name(), err)
+			}
+		}
 	}()
+
+	return nil
 }
 
-// This is called from above us, to indicate, please stop, we're done.
-func (s *Server) Stop(ctx context.Context) error {
-	return s.HTTPServer.Shutdown(ctx)
-}
-
-// This is called from below us, to indicate, oh no, there's a problem, shut down and
-// report an error.
-func (s *Server) Shutdown() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	fmt.Println("Shutting down server...")
-	if err := s.Stop(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v\n", err)
-	}
+func (s *Server) Stop() {
+	s.shutdownOnce.Do(func() {
+		close(s.shutdownChan) // Safely close channel
+	})
 }

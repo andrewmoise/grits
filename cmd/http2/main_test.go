@@ -2,7 +2,6 @@ package main_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,7 +16,7 @@ import (
 	"grits/internal/server"
 )
 
-func setupTestServer(t *testing.T) (*server.Server, func()) {
+func setupTestServer(t *testing.T, port int) (*server.Server, func()) {
 	tempDir, err := os.MkdirTemp("", "grits_test")
 	if err != nil {
 		t.Fatalf("Failed to create temp directory: %v", err)
@@ -33,6 +32,12 @@ func setupTestServer(t *testing.T) (*server.Server, func()) {
 		t.Fatalf("Failed to initialize server: %v", err)
 	}
 
+	httpConfig := &server.HttpModuleConfig{
+		ThisPort: port,
+	}
+	httpModule := server.NewHttpModule(s, httpConfig)
+	s.Modules = append(s.Modules, httpModule)
+
 	log.Printf("Server initialized\n")
 
 	cleanup := func() {
@@ -44,18 +49,14 @@ func setupTestServer(t *testing.T) (*server.Server, func()) {
 
 func TestFileOperations(t *testing.T) {
 	// Setup
-	baseURL := "http://localhost:1787"
-	s, cleanup := setupTestServer(t)
+	baseURL := "http://localhost:2187"
+	s, cleanup := setupTestServer(t, 2187)
 	defer cleanup()
 	s.Start()
 
 	// Ensure graceful shutdown and capture any errors
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 	defer func() {
-		if err := s.Stop(ctx); err != nil {
-			t.Logf("Server shutdown error: %v", err)
-		}
+		s.Stop()
 	}()
 
 	// Wait a little for initialization

@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,15 +22,20 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	config := grits.NewConfig(tempDir)
-	config.ThisPort = 1887
 
 	server, err := NewServer(config)
 	if err != nil {
 		t.Fatalf("Failed to start server: %v", err)
 	}
 
+	httpConfig := &HttpModuleConfig{
+		ThisPort: 1887,
+	}
+	httpModule := NewHttpModule(server, httpConfig)
+	server.Modules = append(server.Modules, httpModule)
+
 	server.Start()
-	defer server.Stop(context.Background())
+	defer server.Stop()
 
 	time.Sleep(100 * time.Millisecond)
 
