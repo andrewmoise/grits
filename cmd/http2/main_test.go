@@ -36,7 +36,7 @@ func setupTestServer(t *testing.T, port int) (*server.Server, func()) {
 		ThisPort: port,
 	}
 	httpModule := server.NewHttpModule(s, httpConfig)
-	s.Modules = append(s.Modules, httpModule)
+	s.AddModule(httpModule)
 
 	log.Printf("Server initialized\n")
 
