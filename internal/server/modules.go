@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 )
 
 // Module is an interface that all modules must implement.
@@ -15,23 +14,8 @@ type Module interface {
 
 // ModuleConfig represents a generic module configuration.
 type ModuleConfig struct {
-	Type   string          `json:"type"`
-	Config json.RawMessage `json:"config"`
-}
-
-// LoadModuleConfigs loads module configurations from a JSON file.
-func LoadModuleConfigs(filename string) ([]ModuleConfig, error) {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return nil, err
-	}
-
-	var configs []ModuleConfig
-	if err := json.Unmarshal(data, &configs); err != nil {
-		return nil, err
-	}
-
-	return configs, nil
+	Type   string          `json:"Type"`
+	Config json.RawMessage `json:"Config"`
 }
 
 func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
