@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -15,7 +14,6 @@ import (
 
 func startHubNode(serverDir string, port int) *Server {
 	config := grits.NewConfig(serverDir)
-	config.ThisPort = port
 	config.IsRootNode = true
 
 	hubServer, err := NewServer(config)
@@ -23,13 +21,19 @@ func startHubNode(serverDir string, port int) *Server {
 		log.Fatalf("Failed to start hub node: %v", err)
 		return nil
 	}
+
+	httpConfig := &HttpModuleConfig{
+		ThisPort: port,
+	}
+	httpModule := NewHttpModule(hubServer, httpConfig)
+	hubServer.Modules = append(hubServer.Modules, httpModule)
+
 	hubServer.Start()
 	return hubServer
 }
 
 func startEdgeNode(serverDir string, port int, rootHost string, rootPort int) *Server {
 	config := grits.NewConfig(serverDir)
-	config.ThisPort = port
 	config.RootHost = rootHost
 	config.RootPort = rootPort
 
@@ -38,6 +42,13 @@ func startEdgeNode(serverDir string, port int, rootHost string, rootPort int) *S
 		log.Fatalf("Failed to start edge node on port %d: %v", port, err)
 		return nil
 	}
+
+	httpConfig := &HttpModuleConfig{
+		ThisPort: port,
+	}
+	httpModule := NewHttpModule(edgeServer, httpConfig)
+	edgeServer.Modules = append(edgeServer.Modules, httpModule)
+
 	edgeServer.Start()
 	return edgeServer
 }
@@ -52,7 +63,7 @@ func TestFakeNetwork(t *testing.T) {
 	var servers []*Server = make([]*Server, 0, 51)
 	defer func() {
 		for _, server := range servers {
-			server.Stop(context.Background())
+			server.Stop()
 		}
 	}()
 
@@ -60,7 +71,7 @@ func TestFakeNetwork(t *testing.T) {
 	if hub == nil {
 		t.Fatal("Failed to start hub node")
 	}
-	defer hub.Stop(context.Background())
+	defer hub.Stop()
 	servers = append(servers, hub)
 
 	for i := 0; i < 50; i++ {

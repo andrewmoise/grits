@@ -28,6 +28,16 @@ type DirToTreeMirror struct {
 	mtx        sync.Mutex
 }
 
+func (*DirToTreeMirror) Name() string {
+	return "dirmirror"
+}
+
+type DirToTreeMirrorConfig struct {
+	SourceDir      string `json:"SourceDir"`
+	DestPath       string `json:"DestPath"`
+	DirWatcherPath string `json:"DirWatcherPath"`
+}
+
 // General bookkeeping functions
 
 func NewDirToTreeMirror(srcPath string, destPath string, server *Server, dirWatcherPath string, shutdownFunc func()) (*DirToTreeMirror, error) {

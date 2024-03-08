@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -9,7 +8,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
-	"time"
 
 	"grits/internal/grits"
 	"grits/internal/server"
@@ -51,15 +49,14 @@ func main() {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
+	if err := srv.Start(); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
+
 	srv.Start()
 
 	<-signals
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	fmt.Println("Shutting down server...")
-	if err := srv.Stop(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v\n", err)
-	}
+	srv.Stop()
 }

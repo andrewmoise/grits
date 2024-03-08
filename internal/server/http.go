@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -10,10 +11,76 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
+type HttpModuleConfig struct {
+	ThisHost string `json:"ThisHost"`
+	ThisPort int    `json:"ThisPort"`
+}
+
+type HttpModule struct {
+	Config *HttpModuleConfig
+	Server *Server
+
+	HttpServer *http.Server
+	Mux        *http.ServeMux
+}
+
+func (*HttpModule) Name() string {
+	return "http"
+}
+
+// NewHttpModule creates and initializes an HttpModule instance based on the provided configuration.
+func NewHttpModule(server *Server, config *HttpModuleConfig) *HttpModule {
+	mux := http.NewServeMux()
+	httpServer := &http.Server{
+		Addr:    fmt.Sprintf("%s:%d", config.ThisHost, config.ThisPort),
+		Handler: mux,
+	}
+
+	httpModule := &HttpModule{
+		Config: config,
+		Server: server,
+
+		HttpServer: httpServer,
+		Mux:        mux,
+	}
+
+	// Set up routes within the constructor or an initialization method
+	httpModule.setupRoutes()
+
+	return httpModule
+}
+
+// Start begins serving HTTP requests.
+func (hm *HttpModule) Start() error {
+	// Starting the HTTP server in a goroutine
+	go func() {
+		if err := hm.HttpServer.ListenAndServe(); err != http.ErrServerClosed {
+			log.Fatalf("HTTP server ListenAndServe: %v", err)
+		}
+	}()
+	log.Printf("HTTP module started on %s\n", hm.HttpServer.Addr)
+	return nil
+}
+
+// Stop gracefully shuts down the HTTP server.
+func (hm *HttpModule) Stop() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := hm.HttpServer.Shutdown(ctx); err != nil {
+		log.Printf("HTTP module shutdown error: %v", err)
+		return err
+	}
+
+	log.Println("HTTP module stopped")
+	return nil
+}
+
 // corsMiddleware is a middleware function that adds CORS headers to the response.
-func (srv *Server) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func (srv *HttpModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
 
@@ -42,20 +109,7 @@ func (srv *Server) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// tokenAuthMiddleware is a middleware function that checks for a valid token.
-func (s *Server) tokenAuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		_, exists := s.Peers.GetPeer(token)
-		if !exists {
-			http.Error(w, "Invalid or missing token", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
-	}
-}
-
-func (s *Server) setupRoutes() {
+func (s *HttpModule) setupRoutes() {
 	// Content routes:
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/content/root/", s.corsMiddleware(s.handleContent))
@@ -70,24 +124,24 @@ func (s *Server) setupRoutes() {
 
 	// Special handling for serving the Service Worker JS from the root
 	s.Mux.HandleFunc("/grits/v1/service-worker.js", s.corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, s.Config.ServerPath("client/service-worker.js"))
+		http.ServeFile(w, r, s.Server.Config.ServerPath("client/service-worker.js"))
 	}))
 
 	// Handling client files with CORS enabled
-	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", s.corsMiddleware(http.FileServer(http.Dir(s.Config.ServerPath("client"))).ServeHTTP)))
+	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", s.corsMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
 
-	// DHT routes:
+	// DHT routes (need to move to DHT module)
 
 	// Using the middleware directly with HandleFunc for specific routes
-	if s.Config.IsRootNode {
-		s.Mux.HandleFunc("/grits/v1/heartbeat", s.tokenAuthMiddleware(s.handleHeartbeat()))
-	}
-	s.Mux.HandleFunc("/grits/v1/announce", s.tokenAuthMiddleware(s.handleAnnounce()))
+	//	if s.Server.Config.IsRootNode {
+	//		s.Mux.HandleFunc("/grits/v1/heartbeat", s.handleHeartbeat())
+	//	}
+	//	s.Mux.HandleFunc("/grits/v1/announce", s.handleAnnounce())
 
-	s.HTTPServer.Handler = s.Mux
+	s.HttpServer.Handler = s.Mux
 }
 
-func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request) {
+func (s *HttpModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodHead:
 		s.handleBlobFetch(w, r) // Automatically skips sending the file for HEAD
@@ -98,7 +152,7 @@ func (s *Server) handleBlob(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
+func (s *HttpModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
 
 	// Extract file address from URL, expecting format "{hash}:{size}"
@@ -115,15 +169,15 @@ func (s *Server) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try to read the file from the blob store using the full address
-	cachedFile, err := s.BlobStore.ReadFile(fileAddr)
+	cachedFile, err := s.Server.BlobStore.ReadFile(fileAddr)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
-	defer s.BlobStore.Release(cachedFile)
+	defer s.Server.BlobStore.Release(cachedFile)
 
 	// Validate the file contents if hard linking is enabled
-	if s.Config.ValidateBlobs {
+	if s.Server.Config.ValidateBlobs {
 		isValid, err := validateFileContents(cachedFile.Path, fileAddr)
 		if err != nil || !isValid {
 			log.Printf("Error validating file contents: %v\n", err)
@@ -134,7 +188,7 @@ func (s *Server) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 
 	// Serve the file
 	http.ServeFile(w, r, cachedFile.Path)
-	s.BlobStore.Touch(cachedFile)
+	s.Server.BlobStore.Touch(cachedFile)
 }
 
 // validateFileContents opens the file, computes its SHA-256 hash and size,
@@ -160,7 +214,7 @@ func validateFileContents(filePath string, expectedAddr *grits.BlobAddr) (bool, 
 	return true, nil
 }
 
-func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
+func (s *HttpModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
@@ -185,13 +239,13 @@ func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add the file to the blob store
-	cachedFile, err := s.BlobStore.AddLocalFile(tmpFile.Name())
+	cachedFile, err := s.Server.BlobStore.AddLocalFile(tmpFile.Name())
 	if err != nil {
 		log.Printf("Failed to add file to blob store: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	defer s.BlobStore.Release(cachedFile)
+	defer s.Server.BlobStore.Release(cachedFile)
 
 	// Respond with the address of the new blob
 	addrStr := cachedFile.Address.String()
@@ -200,7 +254,7 @@ func (s *Server) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(addrStr)
 }
 
-func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
+func (s *HttpModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
@@ -216,7 +270,7 @@ func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
 
 	// Assuming the accountName is part of the lookupPath or resolved beforehand
 	accountName := lookupParts[0]
-	ns, exists := s.AccountStores[accountName]
+	ns, exists := s.Server.AccountStores[accountName]
 	if !exists {
 		http.Error(w, "Account not found", http.StatusNotFound)
 		return
@@ -241,7 +295,7 @@ func (s *Server) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
+func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Handling link request\n")
 
 	if r.Method != http.MethodPost {
@@ -264,12 +318,12 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 		accountName := linkParts[0]
 		linkPath := linkParts[1]
 
-		s.AccountLock.Lock()
-		ns, exists := s.AccountStores[accountName]
-		s.AccountLock.Unlock()
+		s.Server.AccountLock.Lock()
+		ns, exists := s.Server.AccountStores[accountName]
+		s.Server.AccountLock.Unlock()
 		if !exists {
 			log.Printf("All accounts (looking for %s):\n", accountName)
-			for name, _ := range s.AccountStores {
+			for name, _ := range s.Server.AccountStores {
 				log.Printf("Account: %s\n", name)
 			}
 			http.Error(w, fmt.Sprintf("Account %s not found", accountName), http.StatusNotFound)
@@ -299,7 +353,7 @@ func (s *Server) handleLink(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Link successful")
 }
 
-func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
+func (s *HttpModule) handleTree(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
 
 	if r.Method != http.MethodGet {
@@ -308,9 +362,9 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	accountName := "root"
-	s.AccountLock.Lock()
-	ns, exists := s.AccountStores[accountName]
-	s.AccountLock.Unlock()
+	s.Server.AccountLock.Lock()
+	ns, exists := s.Server.AccountStores[accountName]
+	s.Server.AccountLock.Unlock()
 	if !exists {
 		http.Error(w, "Account not found", http.StatusNotFound)
 		return
@@ -321,21 +375,21 @@ func (s *Server) handleTree(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Problem with root lookup: %v", err), http.StatusNotFound)
 		return
 	}
-	defer s.BlobStore.Release(cf)
+	defer s.Server.BlobStore.Release(cf)
 
 	fa := cf.Address
 	http.Redirect(w, r, "/grits/v1/blob/"+fa.String(), http.StatusFound)
 }
 
 // handleFile manages requests for account-specific namespaces
-func (s *Server) handleContent(w http.ResponseWriter, r *http.Request) {
+func (s *HttpModule) handleContent(w http.ResponseWriter, r *http.Request) {
 	// Extract account name and filepath from the URL
 	filePath := strings.TrimPrefix(r.URL.Path, "/grits/v1/content/root/")
 	accountName := "root"
 
-	s.AccountLock.Lock()
-	ns, exists := s.AccountStores[accountName]
-	s.AccountLock.Unlock()
+	s.Server.AccountLock.Lock()
+	ns, exists := s.Server.AccountStores[accountName]
+	s.Server.AccountLock.Unlock()
 	if !exists {
 		http.Error(w, "Account not found", http.StatusNotFound)
 		return
@@ -346,9 +400,9 @@ func (s *Server) handleContent(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		handleNamespaceGet(s.BlobStore, ns, filePath, w, r)
+		handleNamespaceGet(s.Server.BlobStore, ns, filePath, w, r)
 	case http.MethodPut:
-		handleNamespacePut(s.BlobStore, ns, filePath, w, r)
+		handleNamespacePut(s.Server.BlobStore, ns, filePath, w, r)
 	case http.MethodDelete:
 		handleNamespaceDelete(ns, filePath, w)
 	default:
@@ -427,39 +481,4 @@ func handleNamespaceDelete(ns *grits.NameStore, path string, w http.ResponseWrit
 	// If the file was successfully deleted, you can return an appropriate success response
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "File deleted successfully")
-}
-
-func (s *Server) handleHeartbeat() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		peer, exists := s.Peers.GetPeer(token)
-		if !exists {
-			http.Error(w, "Unauthorized: Unknown or invalid token", http.StatusUnauthorized)
-			return
-		}
-
-		peer.UpdateLastSeen()
-
-		peerList, error := s.Peers.Serialize()
-		if error != nil {
-			http.Error(w, "Internal server error", http.StatusInternalServerError)
-			return
-		}
-
-		w.Write(peerList)
-	}
-}
-
-func (s *Server) handleAnnounce() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		token := r.Header.Get("Authorization")
-		peer, exists := s.Peers.GetPeer(token)
-		if !exists {
-			http.Error(w, "Unauthorized: Unknown or invalid token", http.StatusUnauthorized)
-			return
-		}
-
-		peer.UpdateLastSeen()
-		// Process the announcement...
-	}
 }
