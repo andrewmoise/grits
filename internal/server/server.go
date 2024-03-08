@@ -14,7 +14,8 @@ type Server struct {
 	BlobStore *grits.BlobStore
 
 	// Module stuff
-	Modules []Module
+	Modules     []Module
+	moduleHooks []func(Module)
 
 	// DHT stuff
 	Peers    grits.AllPeers // To store information about known peers

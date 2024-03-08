@@ -34,7 +34,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		ThisPort: 1887,
 	}
 	httpModule := NewHttpModule(server, httpConfig)
-	server.Modules = append(server.Modules, httpModule)
+	server.AddModule(httpModule)
 
 	server.Start()
 	defer server.Stop()
@@ -121,7 +121,7 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 	url := "http://" + httpConfig.ThisHost + ":" + fmt.Sprintf("%d", httpConfig.ThisPort)
 
 	httpModule := NewHttpModule(srv, httpConfig)
-	srv.Modules = append(srv.Modules, httpModule)
+	srv.AddModule(httpModule)
 
 	srv.Start()
 	defer srv.Stop()
@@ -129,8 +129,14 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 	// Test upload
 	testBlobContent := "Test blob content"
 	uploadResp, err := http.Post(url+"/grits/v1/upload", "text/plain", bytes.NewBufferString(testBlobContent))
-	if err != nil || uploadResp.StatusCode != http.StatusOK {
-		t.Fatalf("Failed to upload blob: %v; HTTP status code: %d", err, uploadResp.StatusCode)
+	if err != nil {
+		t.Fatalf("Failed to upload blob: %v", err)
+	} else if uploadResp.StatusCode != http.StatusOK {
+		uploadBody, err := io.ReadAll(uploadResp.Body)
+		if err == nil {
+			uploadBody = []byte("")
+		}
+		t.Fatalf("Failed to upload blob: code %d %s", uploadResp.StatusCode, uploadBody)
 	}
 	defer uploadResp.Body.Close()
 
