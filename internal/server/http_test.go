@@ -104,3 +104,55 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	// You may want to add specific checks here based on your expectations
 	fmt.Printf("Lookup response: %+v\n", lookupResponse)
 }
+
+func TestUploadAndDownloadBlob(t *testing.T) {
+	// Initialize the server or HTTP module
+	tempDir := t.TempDir() // Use a temporary directory for testing
+	config := grits.NewConfig(tempDir)
+	srv, err := NewServer(config)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	httpConfig := &HttpModuleConfig{
+		ThisHost: "localhost",
+		ThisPort: 2287, // Just for setup, actual port not used with httptest
+	}
+	url := "http://" + httpConfig.ThisHost + ":" + fmt.Sprintf("%d", httpConfig.ThisPort)
+
+	httpModule := NewHttpModule(srv, httpConfig)
+	srv.Modules = append(srv.Modules, httpModule)
+
+	srv.Start()
+	defer srv.Stop()
+
+	// Test upload
+	testBlobContent := "Test blob content"
+	uploadResp, err := http.Post(url+"/grits/v1/upload", "text/plain", bytes.NewBufferString(testBlobContent))
+	if err != nil || uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("Failed to upload blob: %v; HTTP status code: %d", err, uploadResp.StatusCode)
+	}
+	defer uploadResp.Body.Close()
+
+	var blobAddress string
+	if err := json.NewDecoder(uploadResp.Body).Decode(&blobAddress); err != nil {
+		t.Fatalf("Failed to decode upload response: %v", err)
+	}
+
+	// Test download using the received blob address
+	downloadURL := url + "/grits/v1/blob/" + blobAddress
+	downloadResp, err := http.Get(downloadURL)
+	if err != nil || downloadResp.StatusCode != http.StatusOK {
+		t.Fatalf("Failed to download blob: %v; HTTP status code: %d", err, downloadResp.StatusCode)
+	}
+	defer downloadResp.Body.Close()
+
+	downloadedContent, err := io.ReadAll(downloadResp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read download response body: %v", err)
+	}
+
+	if string(downloadedContent) != testBlobContent {
+		t.Errorf("Downloaded content does not match uploaded content. Got %s, want %s", string(downloadedContent), testBlobContent)
+	}
+}
