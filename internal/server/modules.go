@@ -15,11 +15,14 @@ type Module interface {
 
 // Special for storage modules:
 type Volume interface {
+	GetVolumeName() string
+
 	Start() error
 	Stop() error
+
 	isReadOnly() bool
-	GetVolumeName() string
 	GetNameStore() *grits.NameStore
+	Checkpoint() error
 }
 
 // ModuleConfig represents a generic module configuration.
