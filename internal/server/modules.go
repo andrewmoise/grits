@@ -54,10 +54,10 @@ func (s *Server) AddModule(module Module) {
 	for _, hook := range s.moduleHooks {
 		hook(module)
 	}
+}
 
-	if volume, ok := module.(Volume); ok {
-		s.Volumes[volume.GetVolumeName()] = volume
-	}
+func (s *Server) AddVolume(volume Volume) {
+	s.Volumes[volume.GetVolumeName()] = volume
 }
 
 // AddModuleHook adds a new hook to be called whenever a new module is added.
@@ -97,6 +97,19 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 			}
 
 			s.AddModule(module)
+			s.AddVolume(module)
+
+		case "wiki":
+			var wikiConfig WikiVolumeConfig
+			if err := json.Unmarshal(baseConfig.Config, &wikiConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal WikiVolume module config: %v", err)
+			}
+			wikiVolume, err := NewWikiVolume(&wikiConfig, s)
+			if err != nil {
+				return fmt.Errorf("failed to instantiate WikiVolume: %v", err)
+			}
+			s.AddModule(wikiVolume)
+			s.AddVolume(wikiVolume)
 
 		default:
 			return fmt.Errorf("unknown module type: %s", baseConfig.Type)

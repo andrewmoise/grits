@@ -16,41 +16,14 @@ import (
 // Main API endpoints
 
 func TestLookupAndLinkEndpoints(t *testing.T) {
-	// Setup
-	tempDir, err := os.MkdirTemp("", "grits_server")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
-
-	config := grits.NewConfig(tempDir)
-
-	server, err := NewServer(config)
-	if err != nil {
-		t.Fatalf("Failed to start server: %v", err)
-	}
-
-	httpConfig := &HttpModuleConfig{
-		ThisPort: 1887,
-	}
-	httpModule := NewHttpModule(server, httpConfig)
-	server.AddModule(httpModule)
-
-	rootVolumeConfig := &WikiVolumeConfig{
-		VolumeName: "root",
-	}
-	rootVolume, err := NewWikiVolume(rootVolumeConfig, server)
-	if err != nil {
-		t.Fatalf("Failed to create root volume: %v", err)
-	}
-	server.AddModule(rootVolume)
+	url := fmt.Sprintf("http://localhost:1887/grits/v1")
+	server, cleanup := SetupTestServer(t, WithHttpModule(1887), WithWikiVolume("root"))
+	defer cleanup()
 
 	server.Start()
 	defer server.Stop()
 
 	time.Sleep(100 * time.Millisecond)
-
-	url := fmt.Sprintf("http://localhost:%d/grits/v1", httpConfig.ThisPort)
 
 	// Upload blobs and link them
 	blobContents := []string{"one", "two", "three", "four", "five"}
