@@ -17,6 +17,8 @@ import (
 type HttpModuleConfig struct {
 	ThisHost string `json:"ThisHost"`
 	ThisPort int    `json:"ThisPort"`
+
+	EnableTls bool `json:"EnableTLS,omitempty"`
 }
 
 type HttpModule struct {
@@ -59,11 +61,23 @@ func NewHttpModule(server *Server, config *HttpModuleConfig) *HttpModule {
 func (hm *HttpModule) Start() error {
 	// Starting the HTTP server in a goroutine
 	go func() {
-		if err := hm.HttpServer.ListenAndServe(); err != http.ErrServerClosed {
-			log.Fatalf("HTTP server ListenAndServe: %v", err)
+		var err error
+		if hm.Config.EnableTls {
+			// Paths to cert and key files
+			certPath := hm.Server.Config.ServerPath("certs/server.crt")
+			keyPath := hm.Server.Config.ServerPath("certs/server.key")
+
+			log.Printf("Starting HTTPS server on %s\n", hm.HttpServer.Addr)
+			err = hm.HttpServer.ListenAndServeTLS(certPath, keyPath)
+		} else {
+			log.Printf("Starting HTTP server on %s\n", hm.HttpServer.Addr)
+			err = hm.HttpServer.ListenAndServe()
+		}
+		if err != http.ErrServerClosed {
+			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
-	log.Printf("HTTP module started on %s\n", hm.HttpServer.Addr)
+	log.Printf("HTTP module started on %s (TLS enabled: %t)\n", hm.HttpServer.Addr, hm.Config.EnableTls)
 	return nil
 }
 
