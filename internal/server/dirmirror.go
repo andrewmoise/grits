@@ -88,6 +88,10 @@ func (dt *DirToTreeMirror) isReadOnly() bool {
 	return true
 }
 
+func (dt *DirToTreeMirror) Checkpoint() error {
+	return nil
+}
+
 // HandleScan processes an individual file update or addition.
 func (dt *DirToTreeMirror) HandleScan(filename string) error {
 	dt.mtx.Lock()

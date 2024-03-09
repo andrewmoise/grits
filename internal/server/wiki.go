@@ -56,6 +56,10 @@ func (wv *WikiVolume) isReadOnly() bool {
 	return false
 }
 
+func (wv *WikiVolume) Checkpoint() error {
+	return wv.save()
+}
+
 func (wv *WikiVolume) GetModuleName() string {
 	return "wiki"
 }
@@ -113,18 +117,29 @@ func (wv *WikiVolume) load() error {
 	return nil
 }
 
-// save writes the volume's NameStore root to persistent storage.
+// save writes the volume's NameStore root to persistent storage
 func (wv *WikiVolume) save() error {
 	wv.persistMtx.Lock()
 	defer wv.persistMtx.Unlock()
 
-	filename := wv.server.Config.ServerPath("var/wikiroots/" + wv.name + ".json")
+	// Prepare the data to be saved
 	rootAddrStr := wv.ns.GetRoot()
-
 	data, err := json.Marshal(rootAddrStr)
 	if err != nil {
 		return fmt.Errorf("failed to marshal root address: %v", err)
 	}
 
-	return os.WriteFile(filename, data, 0644)
+	// Write to a temporary file first
+	tempFilename := wv.server.Config.ServerPath("var/wikiroots/" + wv.name + ".json.new")
+	if err := os.WriteFile(tempFilename, data, 0644); err != nil {
+		return fmt.Errorf("failed to write to temp file: %v", err)
+	}
+
+	// Rename the temporary file to the final filename atomically
+	finalFilename := wv.server.Config.ServerPath("var/wikiroots/" + wv.name + ".json")
+	if err := os.Rename(tempFilename, finalFilename); err != nil {
+		return fmt.Errorf("failed to rename temp file to final file: %v", err)
+	}
+
+	return nil
 }

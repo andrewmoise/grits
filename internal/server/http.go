@@ -331,6 +331,11 @@ func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("Link successful for path, new root is %s\n", ns.GetRoot())
+
+		err = volume.Checkpoint()
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to checkpoint %s: %v", linkData.Volume, err), http.StatusInternalServerError)
+		}
 	}
 
 	result := make([][]string, 0) // TODO
