@@ -112,12 +112,11 @@ func (srv *HttpModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func (s *HttpModule) setupRoutes() {
 	// Content routes:
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
-	s.Mux.HandleFunc("/grits/v1/content/root/", s.corsMiddleware(s.handleContent))
-
-	// New lookup and link routes
 	s.Mux.HandleFunc("/grits/v1/upload", s.corsMiddleware(s.handleBlobUpload))
-	s.Mux.HandleFunc("/grits/v1/lookup", s.corsMiddleware(s.handleLookup))
-	s.Mux.HandleFunc("/grits/v1/link", s.corsMiddleware(s.handleLink))
+
+	s.Mux.HandleFunc("/grits/v1/lookup/", s.corsMiddleware(s.handleLookup))
+	s.Mux.HandleFunc("/grits/v1/link/", s.corsMiddleware(s.handleLink))
+	s.Mux.HandleFunc("/grits/v1/content/", s.corsMiddleware(s.handleContent))
 
 	// Client tooling routes:
 
@@ -251,19 +250,16 @@ func (s *HttpModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var path string
-	if err := json.NewDecoder(r.Body).Decode(&path); err != nil {
+	var lookupPath string
+	if err := json.NewDecoder(r.Body).Decode(&lookupPath); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
-	pathParts := strings.SplitN(path, "/", 2)
-	var volumeName, lookupPath string
-
-	if len(pathParts) < 2 {
-		volumeName, lookupPath = pathParts[0], ""
-	} else {
-		volumeName, lookupPath = pathParts[0], pathParts[1]
+	volumeName := strings.TrimPrefix(r.URL.Path, "/grits/v1/lookup/")
+	if volumeName == "" {
+		http.Error(w, "Volume name is required", http.StatusBadRequest)
+		return
 	}
 
 	volume := s.Server.FindVolumeByName(volumeName)
@@ -295,29 +291,34 @@ func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var allLinkData []struct {
-		Volume string `json:"volume"`
-		Path   string `json:"path"`
-		Addr   string `json:"addr"`
+		Path string `json:"path"`
+		Addr string `json:"addr"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&allLinkData); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
 
+	volumeName := strings.TrimPrefix(r.URL.Path, "/grits/v1/link/")
+	if volumeName == "" {
+		http.Error(w, "Volume name is required", http.StatusBadRequest)
+		return
+	}
+
+	volume := s.Server.FindVolumeByName(volumeName)
+	if volume == nil {
+		http.Error(w, fmt.Sprintf("Volume %s not found", volume), http.StatusNotFound)
+		return
+	}
+
+	if volume.isReadOnly() {
+		http.Error(w, fmt.Sprintf("Volume %s is read-only", volume), http.StatusForbidden)
+		return
+	}
+
+	ns := volume.GetNameStore()
+
 	for _, linkData := range allLinkData {
-		volume := s.Server.FindVolumeByName(linkData.Volume)
-		if volume == nil {
-			http.Error(w, fmt.Sprintf("Volume %s not found", linkData.Volume), http.StatusNotFound)
-			return
-		}
-
-		if volume.isReadOnly() {
-			http.Error(w, fmt.Sprintf("Volume %s is read-only", linkData.Volume), http.StatusForbidden)
-			return
-		}
-
-		ns := volume.GetNameStore()
-
 		addr, err := grits.NewTypedFileAddrFromString(linkData.Addr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to decode TypedFileAddr %s", linkData.Addr), http.StatusBadRequest)
@@ -331,11 +332,11 @@ func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("Link successful for path, new root is %s\n", ns.GetRoot())
+	}
 
-		err = volume.Checkpoint()
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to checkpoint %s: %v", linkData.Volume, err), http.StatusInternalServerError)
-		}
+	err := volume.Checkpoint()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to checkpoint %s: %v", volume, err), http.StatusInternalServerError)
 	}
 
 	result := make([][]string, 0) // TODO

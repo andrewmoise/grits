@@ -52,8 +52,8 @@ func TestFileOperations(t *testing.T) {
 	log.Printf("Files created\n")
 
 	// 2. Get the list of files
-	lookupURL := fmt.Sprintf("%s/grits/v1/lookup", baseURL)
-	lookupPayload := []byte(`"root"`)
+	lookupURL := fmt.Sprintf("%s/grits/v1/lookup/root", baseURL)
+	lookupPayload := []byte(`""`)
 	resp, err := http.Post(lookupURL, "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
 		t.Fatalf("failed to perform lookup: %v", err)
@@ -184,17 +184,54 @@ func TestFileOperations(t *testing.T) {
 
 	// 5. Final listing and verification of files and their content
 
-	url = fmt.Sprintf("%s/grits/v1/tree", baseURL)
-	listResp, err := http.Get(url)
+	lookupURL = fmt.Sprintf("%s/grits/v1/lookup/root", baseURL)
+	lookupPayload = []byte(`""`)
+	resp, err = http.Post(lookupURL, "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
-		fmt.Println("Error listing files:", err)
-		return
+		t.Fatalf("failed to perform lookup: %v", err)
 	}
-	defer listResp.Body.Close()
+	defer resp.Body.Close()
+
+	respBody, err = io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("couldn't read response body: %v", err)
+	}
+
+	log.Printf("Response body: %s", string(respBody))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
+	}
+
+	lookupResponse = make([][]string, 0)
+	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
+		t.Fatalf("Failed to decode lookup response: %v", err)
+	}
+
+	// Extract blob address for the directory tree node and download it
+	if len(lookupResponse) < 1 {
+		t.Fatalf("Lookup response did not include directory tree node")
+	}
+
+	treeBlobAddr, err = grits.NewTypedFileAddrFromString(lookupResponse[0][1])
+	if err != nil {
+		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
+	}
+
+	blobURL = fmt.Sprintf("%s/grits/v1/blob/%s-%d", baseURL, treeBlobAddr.Hash, treeBlobAddr.Size)
+	blobResp, err = http.Get(blobURL)
+	if err != nil {
+		t.Fatalf("Failed to download tree blob: %v", err)
+	}
+	defer blobResp.Body.Close()
+
+	if blobResp.StatusCode != http.StatusOK {
+		t.Fatalf("Blob download failed with status code %d", blobResp.StatusCode)
+	}
 
 	files = make(map[string]string)
-	if err := json.NewDecoder(listResp.Body).Decode(&files); err != nil {
-		fmt.Println("Error decoding file list:", err)
+	if err := json.NewDecoder(blobResp.Body).Decode(&files); err != nil {
+		t.Fatalf("Error decoding file list: %v", err)
 		return
 	}
 
