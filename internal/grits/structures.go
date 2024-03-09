@@ -160,6 +160,7 @@ type CachedFile struct {
 	RefCount    int
 	Address     *BlobAddr
 	LastTouched time.Time
+	IsHardLink  bool
 }
 
 // NewCachedFile creates a new CachedFile.

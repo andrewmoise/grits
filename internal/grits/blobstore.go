@@ -125,6 +125,8 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 	// If the blob doesn't exist in the store, copy it.
 	destPath := filepath.Join(bs.storageDir, blobAddr.String())
 
+	isHardLink := false
+
 	if bs.config.HardLinkBlobs {
 		// Attempt to create a hard link
 		originalFilePath, err := filepath.Abs(file.Name())
@@ -135,6 +137,8 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 		if err := os.Link(originalFilePath, destPath); err != nil {
 			return nil, fmt.Errorf("failed to create hard link: %v", err)
 		}
+
+		isHardLink = true
 	} else {
 		// Seek back to the beginning of the file.
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -157,10 +161,13 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 		RefCount:    1,
 		Address:     blobAddr,
 		LastTouched: time.Now(),
+		IsHardLink:  isHardLink,
 	}
 
 	bs.files[blobAddr.Hash] = cachedFile
-	bs.currentSize += blobAddr.Size
+	if !isHardLink {
+		bs.currentSize += blobAddr.Size
+	}
 
 	return cachedFile, nil
 }
@@ -252,7 +259,9 @@ func (bs *BlobStore) evictOldFiles() {
 			continue
 		}
 
-		bs.currentSize -= file.Address.Size
+		if !file.IsHardLink {
+			bs.currentSize -= file.Address.Size
+		}
 		delete(bs.files, file.Address.Hash)
 
 		err := os.Remove(file.Path)
