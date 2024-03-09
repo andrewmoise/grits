@@ -13,7 +13,6 @@ import (
 type DirToTreeMirror struct {
 	volumeName string
 	srcPath    string
-	destPath   string
 	server     *Server
 	ns         *grits.NameStore
 	dirWatcher *DirWatcher
@@ -35,14 +34,13 @@ func (dt *DirToTreeMirror) GetNameStore() *grits.NameStore {
 type DirToTreeMirrorConfig struct {
 	VolumeName     string `json:"VolumeName"`
 	SourceDir      string `json:"SourceDir"`
-	DestPath       string `json:"DestPath"`
 	DirWatcherPath string `json:"DirWatcherPath"`
 }
 
 // General bookkeeping functions
 
 func NewDirToTreeMirror(config *DirToTreeMirrorConfig, server *Server, shutdownFunc func()) (*DirToTreeMirror, error) {
-	log.Printf("Creating DirToTreeMirror for %s -> %s\n", config.SourceDir, config.DestPath)
+	log.Printf("Creating DirToTreeMirror for %s -> %s\n", config.SourceDir, config.VolumeName)
 
 	realSrcPath, err := filepath.EvalSymlinks(config.SourceDir)
 	if err != nil {
@@ -57,7 +55,6 @@ func NewDirToTreeMirror(config *DirToTreeMirrorConfig, server *Server, shutdownF
 	dt := &DirToTreeMirror{
 		volumeName: config.VolumeName,
 		srcPath:    realSrcPath,
-		destPath:   config.DestPath,
 		server:     server,
 		ns:         ns,
 	}
@@ -68,7 +65,7 @@ func NewDirToTreeMirror(config *DirToTreeMirrorConfig, server *Server, shutdownF
 }
 
 func (dt *DirToTreeMirror) Start() error {
-	log.Printf("Starting DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.destPath)
+	log.Printf("Starting DirToTreeMirror for %s -> %s\n", dt.srcPath, dt.volumeName)
 
 	err := dt.dirWatcher.Start()
 	if err != nil {
@@ -120,6 +117,7 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 	if err != nil {
 		return err
 	}
+	defer newDirNs.Link("", nil) // Release references
 
 	// Walk through the source directory and put all files into newDirNs
 	err = filepath.Walk(dt.srcPath, func(path string, info os.FileInfo, err error) error {
@@ -169,8 +167,12 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 		return err
 	}
 
-	dt.ns.Link(dt.destPath, fileAddr)
-	newDirNs.Link("", nil)
+	relPath, err := filepath.Rel(dt.srcPath, directory)
+	if err != nil {
+		return fmt.Errorf("Cannot relativize %s: %v", directory, err)
+	}
+
+	dt.ns.Link(relPath, fileAddr)
 
 	return nil
 }
@@ -189,9 +191,7 @@ func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string, file *os.File) error 
 		return fmt.Errorf("error calculating relative path: %v", err)
 	}
 
-	destPath := filepath.Join(dt.destPath, relPath)
-
-	err = dt.ns.LinkBlob(destPath, cf.Address)
+	err = dt.ns.LinkBlob(relPath, cf.Address)
 	if err != nil {
 		return err
 	}
@@ -205,9 +205,7 @@ func (dt *DirToTreeMirror) removeFile(filePath string) error {
 		return fmt.Errorf("error calculating relative path: %v", err)
 	}
 
-	destPath := filepath.Join(dt.destPath, relPath)
-
-	err = dt.ns.LinkBlob(destPath, nil)
+	err = dt.ns.LinkBlob(relPath, nil)
 	if err != nil {
 		return err
 	}
