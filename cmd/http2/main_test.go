@@ -38,6 +38,15 @@ func setupTestServer(t *testing.T, port int) (*server.Server, func()) {
 	httpModule := server.NewHttpModule(s, httpConfig)
 	s.AddModule(httpModule)
 
+	rootConfig := &server.WikiVolumeConfig{
+		VolumeName: "root",
+	}
+	rootVolume, err := server.NewWikiVolume(rootConfig, s)
+	if err != nil {
+		t.Fatalf("Can't create root volume: %v", err)
+	}
+	s.AddModule(rootVolume)
+
 	log.Printf("Server initialized\n")
 
 	cleanup := func() {
@@ -52,12 +61,9 @@ func TestFileOperations(t *testing.T) {
 	baseURL := "http://localhost:2187"
 	s, cleanup := setupTestServer(t, 2187)
 	defer cleanup()
-	s.Start()
 
-	// Ensure graceful shutdown and capture any errors
-	defer func() {
-		s.Stop()
-	}()
+	s.Start()
+	defer s.Stop()
 
 	// Wait a little for initialization
 	time.Sleep(100 * time.Millisecond)
@@ -78,7 +84,8 @@ func TestFileOperations(t *testing.T) {
 			t.Fatalf("PUT request failed: %v", err)
 		}
 		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("Expected OK status; got %d", resp.StatusCode)
+			respBody, _ := io.ReadAll(resp.Body)
+			t.Fatalf("Expected OK status; got %d (%s)", resp.StatusCode, string(respBody))
 		}
 		resp.Body.Close()
 	}
@@ -86,29 +93,55 @@ func TestFileOperations(t *testing.T) {
 	log.Printf("Files created\n")
 
 	// 2. Get the list of files
-
-	url := fmt.Sprintf("%s/grits/v1/tree", baseURL)
-
-	listResp, err := http.Get(url)
+	lookupURL := fmt.Sprintf("%s/grits/v1/lookup", baseURL)
+	lookupPayload := []byte(`"root"`)
+	resp, err := http.Post(lookupURL, "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
-		fmt.Println("Error listing files:", err)
-		return
+		t.Fatalf("failed to perform lookup: %v", err)
 	}
-	defer listResp.Body.Close()
+	defer resp.Body.Close()
 
-	listBody, err := io.ReadAll(listResp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("Error reading file list: %v", err)
+		t.Fatalf("couldn't read response body: %v", err)
 	}
 
-	if listResp.StatusCode != http.StatusOK {
-		t.Fatalf("Expected OK status; got %d %s", listResp.StatusCode, listBody)
+	log.Printf("Response body: %s", string(respBody))
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
 
-	var files map[string]string
-	if err := json.Unmarshal(listBody, &files); err != nil {
-		fmt.Println("Error decoding file list:", err)
-		return
+	var lookupResponse [][]string
+	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
+		t.Fatalf("Failed to decode lookup response: %v", err)
+	}
+
+	// Extract blob address for the directory tree node and download it
+	if len(lookupResponse) < 1 {
+		t.Fatalf("Lookup response did not include directory tree node")
+	}
+
+	treeBlobAddr, err := grits.NewTypedFileAddrFromString(lookupResponse[0][1])
+	if err != nil {
+		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
+	}
+
+	blobURL := fmt.Sprintf("%s/grits/v1/blob/%s-%d", baseURL, treeBlobAddr.Hash, treeBlobAddr.Size)
+	blobResp, err := http.Get(blobURL)
+	if err != nil {
+		t.Fatalf("Failed to download tree blob: %v", err)
+	}
+	defer blobResp.Body.Close()
+
+	if blobResp.StatusCode != http.StatusOK {
+		t.Fatalf("Blob download failed with status code %d", blobResp.StatusCode)
+	}
+
+	// Decode the directory listing from the tree blob
+	var files map[string]string // Or whatever structure you expect
+	if err := json.NewDecoder(blobResp.Body).Decode(&files); err != nil {
+		t.Fatalf("Failed to decode tree blob content: %v", err)
 	}
 
 	log.Printf("Files listed\n")
@@ -123,7 +156,7 @@ func TestFileOperations(t *testing.T) {
 			t.Errorf("Invalid hash: %s", hash)
 		}
 
-		url = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[1])
+		url := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[1])
 		resp, err := http.Get(url)
 		if err != nil {
 			t.Fatalf("GET request failed: %v", err)
@@ -153,13 +186,13 @@ func TestFileOperations(t *testing.T) {
 
 	// 3. Delete file 3
 
-	url = fmt.Sprintf("%s/grits/v1/content/root/3", baseURL)
+	url := fmt.Sprintf("%s/grits/v1/content/root/3", baseURL)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		t.Fatalf("Creating DELETE request failed: %v", err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("DELETE request failed: %v", err)
 	}
@@ -193,7 +226,7 @@ func TestFileOperations(t *testing.T) {
 	// 5. Final listing and verification of files and their content
 
 	url = fmt.Sprintf("%s/grits/v1/tree", baseURL)
-	listResp, err = http.Get(url)
+	listResp, err := http.Get(url)
 	if err != nil {
 		fmt.Println("Error listing files:", err)
 		return

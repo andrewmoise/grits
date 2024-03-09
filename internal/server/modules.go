@@ -3,13 +3,23 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"grits/internal/grits"
 )
 
 // Module is an interface that all modules must implement.
 type Module interface {
 	Start() error
 	Stop() error
-	Name() string
+	GetModuleName() string
+}
+
+// Special for storage modules:
+type Volume interface {
+	Start() error
+	Stop() error
+	isReadOnly() bool
+	GetVolumeName() string
+	GetNameStore() *grits.NameStore
 }
 
 // ModuleConfig represents a generic module configuration.
@@ -21,11 +31,18 @@ type ModuleConfig struct {
 func (s *Server) GetModules(name string) []Module {
 	var matches []Module
 	for _, module := range s.Modules {
-		if module.Name() == name {
+		if module.GetModuleName() == name {
 			matches = append(matches, module)
 		}
 	}
 	return matches
+}
+
+func (s *Server) FindVolumeByName(name string) Volume {
+	if volume, exists := s.Volumes[name]; exists {
+		return volume
+	}
+	return nil // Volume not found
 }
 
 func (s *Server) AddModule(module Module) {
@@ -33,6 +50,10 @@ func (s *Server) AddModule(module Module) {
 	// Call all hooks for the newly added module
 	for _, hook := range s.moduleHooks {
 		hook(module)
+	}
+
+	if volume, ok := module.(Volume); ok {
+		s.Volumes[volume.GetVolumeName()] = volume
 	}
 }
 
@@ -67,7 +88,7 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 				return fmt.Errorf("failed to unmarshal DirToTreeMirror module config: %v", err)
 			}
 
-			module, err := NewDirToTreeMirror(mirrorConfig.SourceDir, mirrorConfig.DestPath, s, s.Config.DirWatcherPath, s.Shutdown)
+			module, err := NewDirToTreeMirror(&mirrorConfig, s, s.Shutdown)
 			if err != nil {
 				return fmt.Errorf("failed to instantiate DirToTreeMirror: %v", err)
 			}
