@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -52,17 +53,40 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 			return err // return error to stop the walk
 		}
 		if !info.IsDir() {
-			blobAddr, err := ComputeBlobAddr(path)
+			relativePath, err := filepath.Rel(bs.storageDir, path)
 			if err != nil {
-				log.Printf("Error computing hash and size for file %s: %v\n", path, err)
-				return err // continue scanning other files even if one fails
+				return fmt.Errorf("Can't relativize %s: %v", path, err)
 			}
 
-			relativePath, _ := filepath.Rel(bs.storageDir, path)
-
-			if relativePath != blobAddr.String() {
+			blobAddr, err := NewBlobAddrFromString(relativePath)
+			if err != nil {
 				log.Printf("File %s seems not to be a blob %s != %s. Skipping...\n", path, relativePath, blobAddr.String())
 				return nil
+			}
+
+			if bs.config.ValidateBlobs {
+				computedBlobAddr, err := ComputeBlobAddr(path)
+				if err != nil {
+					log.Printf("Error computing hash and size for file %s: %v\n", path, err)
+					return err // continue scanning other files even if one fails
+				}
+
+				if computedBlobAddr.String() != relativePath {
+					return fmt.Errorf("failure to verify %s", path)
+				}
+			}
+
+			fileInfo, err := os.Stat(path)
+			if err != nil {
+				return fmt.Errorf("error obtaining file information: %s", err)
+			}
+
+			isHardLink := false
+
+			// Type assertion to access the Sys() interface as *syscall.Stat_t
+			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
+			if ok {
+				isHardLink = (stat.Nlink > 1)
 			}
 
 			// Create a CachedFile object and add it to the map
@@ -71,6 +95,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 				RefCount:    0, // Initially, no references to the file
 				Address:     blobAddr,
 				LastTouched: info.ModTime(),
+				IsHardLink:  isHardLink,
 			}
 		}
 		return nil
