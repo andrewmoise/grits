@@ -32,9 +32,8 @@ func (dt *DirToTreeMirror) GetNameStore() *grits.NameStore {
 }
 
 type DirToTreeMirrorConfig struct {
-	VolumeName     string `json:"VolumeName"`
-	SourceDir      string `json:"SourceDir"`
-	DirWatcherPath string `json:"DirWatcherPath"`
+	VolumeName string `json:"VolumeName"`
+	SourceDir  string `json:"SourceDir"`
 }
 
 // General bookkeeping functions
@@ -119,8 +118,12 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 	}
 	defer newDirNs.Link("", nil) // Release references
 
+	log.Printf("We are scanning %s\n", directory)
+
 	// Walk through the source directory and put all files into newDirNs
 	err = filepath.Walk(dt.srcPath, func(path string, info os.FileInfo, err error) error {
+		log.Printf("  We find %s\n", path)
+
 		if err != nil {
 			return err
 		}
@@ -169,8 +172,10 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 
 	relPath, err := filepath.Rel(dt.srcPath, directory)
 	if err != nil {
-		return fmt.Errorf("Cannot relativize %s: %v", directory, err)
+		return fmt.Errorf("cannot relativize %s: %v", directory, err)
 	}
+
+	log.Printf("We link %s to %s\n", relPath, fileAddr.String())
 
 	dt.ns.Link(relPath, fileAddr)
 
