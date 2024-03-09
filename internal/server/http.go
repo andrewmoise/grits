@@ -39,6 +39,8 @@ func NewHttpModule(server *Server, config *HttpModuleConfig) *HttpModule {
 		Handler: mux,
 	}
 
+	log.Printf("HTTP listening on %s\n", httpServer.Addr)
+
 	httpModule := &HttpModule{
 		Config: config,
 		Server: server,

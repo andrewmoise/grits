@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"grits/internal/grits"
+	"log"
 )
 
 // Module is an interface that all modules must implement.
@@ -70,6 +71,8 @@ func (s *Server) AddModuleHook(hook func(Module)) {
 }
 
 func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
+	log.Printf("Loading modules\n")
+
 	for _, rawConfig := range rawModuleConfigs {
 		var baseConfig ModuleConfig
 		if err := json.Unmarshal(rawConfig, &baseConfig); err != nil {
@@ -101,7 +104,7 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 
 		case "wiki":
 			var wikiConfig WikiVolumeConfig
-			if err := json.Unmarshal(baseConfig.Config, &wikiConfig); err != nil {
+			if err := json.Unmarshal(rawConfig, &wikiConfig); err != nil {
 				return fmt.Errorf("failed to unmarshal WikiVolume module config: %v", err)
 			}
 			wikiVolume, err := NewWikiVolume(&wikiConfig, s)
