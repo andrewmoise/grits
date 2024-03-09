@@ -28,6 +28,10 @@ func (dt *DirToTreeMirror) GetVolumeName() string {
 	return dt.volumeName
 }
 
+func (dt *DirToTreeMirror) GetNameStore() *grits.NameStore {
+	return dt.ns
+}
+
 type DirToTreeMirrorConfig struct {
 	VolumeName     string `json:"VolumeName"`
 	SourceDir      string `json:"SourceDir"`
