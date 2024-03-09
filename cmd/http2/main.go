@@ -53,8 +53,6 @@ func main() {
 		log.Fatalf("Failed to start server: %v", err)
 	}
 
-	srv.Start()
-
 	<-signals
 
 	fmt.Println("Shutting down server...")
