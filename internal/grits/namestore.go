@@ -202,6 +202,10 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 		return fmt.Errorf("name must be relative")
 	}
 
+	if name == "." {
+		name = ""
+	}
+
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
