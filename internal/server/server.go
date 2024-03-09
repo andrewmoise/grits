@@ -21,10 +21,6 @@ type Server struct {
 
 	Volumes map[string]Volume
 
-	// DHT stuff
-	Peers    grits.AllPeers // To store information about known peers
-	PeerLock sync.Mutex     // Protects access to Peers
-
 	// Periodic tasks
 	taskStop chan struct{}
 	taskWg   sync.WaitGroup

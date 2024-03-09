@@ -1,4 +1,4 @@
-package grits
+package server
 
 import (
 	"crypto/sha256"
@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"grits/internal/grits"
 	"sort"
 	"sync"
 	"time"
@@ -267,7 +268,7 @@ func (bf *BlobFinder) UpdatePeers(allPeers *AllPeers) {
 }
 
 // GetClosestPeers finds the n closest peers to a given file address.
-func (bf *BlobFinder) GetClosestPeers(blobAddr *BlobAddr, n int) ([]*Peer, error) {
+func (bf *BlobFinder) GetClosestPeers(blobAddr *grits.BlobAddr, n int) ([]*Peer, error) {
 	if len(bf.SortedPeers) == 0 {
 		return nil, fmt.Errorf("no peers")
 	}
