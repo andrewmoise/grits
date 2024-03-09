@@ -27,7 +27,7 @@ type HttpModule struct {
 	Mux        *http.ServeMux
 }
 
-func (*HttpModule) Name() string {
+func (*HttpModule) GetModuleName() string {
 	return "http"
 }
 
@@ -113,7 +113,6 @@ func (s *HttpModule) setupRoutes() {
 	// Content routes:
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/content/root/", s.corsMiddleware(s.handleContent))
-	s.Mux.HandleFunc("/grits/v1/tree", s.corsMiddleware(s.handleTree))
 
 	// New lookup and link routes
 	s.Mux.HandleFunc("/grits/v1/upload", s.corsMiddleware(s.handleBlobUpload))
@@ -258,22 +257,22 @@ func (s *HttpModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lookupParts := strings.SplitN(path, "/", 2)
+	pathParts := strings.SplitN(path, "/", 2)
+	var volumeName, lookupPath string
 
-	// Assuming the accountName is part of the lookupPath or resolved beforehand
-	accountName := lookupParts[0]
-	ns, exists := s.Server.AccountStores[accountName]
-	if !exists {
-		http.Error(w, "Account not found", http.StatusNotFound)
+	if len(pathParts) < 2 {
+		volumeName, lookupPath = pathParts[0], ""
+	} else {
+		volumeName, lookupPath = pathParts[0], pathParts[1]
+	}
+
+	volume := s.Server.FindVolumeByName(volumeName)
+	if volume == nil {
+		http.Error(w, "Volume not found", http.StatusNotFound)
 		return
 	}
 
-	var lookupPath string
-	if len(lookupParts) > 1 {
-		lookupPath = lookupParts[1]
-	} else {
-		lookupPath = ""
-	}
+	ns := volume.GetNameStore()
 
 	response, err := ns.LookupFull(lookupPath)
 	if err != nil {
@@ -296,8 +295,9 @@ func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var allLinkData []struct {
-		Path string `json:"path"`
-		Addr string `json:"addr"`
+		Volume string `json:"volume"`
+		Path   string `json:"path"`
+		Addr   string `json:"addr"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&allLinkData); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
@@ -305,22 +305,18 @@ func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, linkData := range allLinkData {
-		// Extract the path to link
-		linkParts := strings.SplitN(strings.TrimPrefix(linkData.Path, "/grits/v1/link/"), "/", 2)
-		accountName := linkParts[0]
-		linkPath := linkParts[1]
-
-		s.Server.AccountLock.Lock()
-		ns, exists := s.Server.AccountStores[accountName]
-		s.Server.AccountLock.Unlock()
-		if !exists {
-			log.Printf("All accounts (looking for %s):\n", accountName)
-			for name, _ := range s.Server.AccountStores {
-				log.Printf("Account: %s\n", name)
-			}
-			http.Error(w, fmt.Sprintf("Account %s not found", accountName), http.StatusNotFound)
+		volume := s.Server.FindVolumeByName(linkData.Volume)
+		if volume == nil {
+			http.Error(w, fmt.Sprintf("Volume %s not found", linkData.Volume), http.StatusNotFound)
 			return
 		}
+
+		if volume.isReadOnly() {
+			http.Error(w, fmt.Sprintf("Volume %s is read-only", linkData.Volume), http.StatusForbidden)
+			return
+		}
+
+		ns := volume.GetNameStore()
 
 		addr, err := grits.NewTypedFileAddrFromString(linkData.Addr)
 		if err != nil {
@@ -329,8 +325,8 @@ func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Perform link
-		fmt.Printf("Perform link: %s to %s\n", linkPath, addr.String())
-		if err := ns.Link(linkPath, addr); err != nil {
+		fmt.Printf("Perform link: %s to %s\n", linkData.Path, addr.String())
+		if err := ns.Link(linkData.Path, addr); err != nil {
 			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -345,47 +341,26 @@ func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Link successful")
 }
 
-func (s *HttpModule) handleTree(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
-
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only GET is supported", http.StatusMethodNotAllowed)
-		return
-	}
-
-	accountName := "root"
-	s.Server.AccountLock.Lock()
-	ns, exists := s.Server.AccountStores[accountName]
-	s.Server.AccountLock.Unlock()
-	if !exists {
-		http.Error(w, "Account not found", http.StatusNotFound)
-		return
-	}
-
-	cf, err := ns.Lookup("/")
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Problem with root lookup: %v", err), http.StatusNotFound)
-		return
-	}
-	defer s.Server.BlobStore.Release(cf)
-
-	fa := cf.Address
-	http.Redirect(w, r, "/grits/v1/blob/"+fa.String(), http.StatusFound)
-}
-
-// handleFile manages requests for account-specific namespaces
 func (s *HttpModule) handleContent(w http.ResponseWriter, r *http.Request) {
-	// Extract account name and filepath from the URL
-	filePath := strings.TrimPrefix(r.URL.Path, "/grits/v1/content/root/")
-	accountName := "root"
+	path := strings.TrimPrefix(r.URL.Path, "/grits/v1/content/")
 
-	s.Server.AccountLock.Lock()
-	ns, exists := s.Server.AccountStores[accountName]
-	s.Server.AccountLock.Unlock()
-	if !exists {
-		http.Error(w, "Account not found", http.StatusNotFound)
+	// Example path: /grits/v1/content/volumeName/some/path
+	pathParts := strings.SplitN(path, "/", 2)
+	if len(pathParts) < 2 {
+		http.Error(w, "URL must include a volume name and path", http.StatusBadRequest)
 		return
 	}
+
+	volumeName := pathParts[0]
+	filePath := pathParts[1] // Remaining path
+
+	volume := s.Server.FindVolumeByName(volumeName)
+	if volume == nil {
+		http.Error(w, fmt.Sprintf("Volume %s not found", volumeName), http.StatusNotFound)
+		return
+	}
+
+	ns := volume.GetNameStore()
 
 	log.Printf("Received request for file: %s\n", filePath)
 	log.Printf("Method is %s\n", r.Method)

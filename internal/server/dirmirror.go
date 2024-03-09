@@ -9,17 +9,9 @@ import (
 	"sync"
 )
 
-// Volume defines the interface for directory mirroring operations
-type Volume interface {
-	Start() error
-	Stop() error
-	HandleScan(file string) error
-	HandleScanTree(directory string) error
-	isReadOnly() bool
-}
-
 // DirToTreeMirror is responsible for mirroring a directory structure to a tree structure in the blob store.
 type DirToTreeMirror struct {
+	volumeName string
 	srcPath    string
 	destPath   string
 	server     *Server
@@ -28,11 +20,16 @@ type DirToTreeMirror struct {
 	mtx        sync.Mutex
 }
 
-func (*DirToTreeMirror) Name() string {
+func (*DirToTreeMirror) GetModuleName() string {
 	return "dirmirror"
 }
 
+func (dt *DirToTreeMirror) GetVolumeName() string {
+	return dt.volumeName
+}
+
 type DirToTreeMirrorConfig struct {
+	VolumeName     string `json:"VolumeName"`
 	SourceDir      string `json:"SourceDir"`
 	DestPath       string `json:"DestPath"`
 	DirWatcherPath string `json:"DirWatcherPath"`
@@ -40,10 +37,10 @@ type DirToTreeMirrorConfig struct {
 
 // General bookkeeping functions
 
-func NewDirToTreeMirror(srcPath string, destPath string, server *Server, dirWatcherPath string, shutdownFunc func()) (*DirToTreeMirror, error) {
-	log.Printf("Creating DirToTreeMirror for %s -> %s\n", srcPath, destPath)
+func NewDirToTreeMirror(config *DirToTreeMirrorConfig, server *Server, shutdownFunc func()) (*DirToTreeMirror, error) {
+	log.Printf("Creating DirToTreeMirror for %s -> %s\n", config.SourceDir, config.DestPath)
 
-	realSrcPath, err := filepath.EvalSymlinks(srcPath)
+	realSrcPath, err := filepath.EvalSymlinks(config.SourceDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate source path: %v", err)
 	}
@@ -54,12 +51,14 @@ func NewDirToTreeMirror(srcPath string, destPath string, server *Server, dirWatc
 	}
 
 	dt := &DirToTreeMirror{
-		server:   server,
-		srcPath:  realSrcPath,
-		destPath: destPath,
-		ns:       ns,
+		volumeName: config.VolumeName,
+		srcPath:    realSrcPath,
+		destPath:   config.DestPath,
+		server:     server,
+		ns:         ns,
 	}
-	dt.dirWatcher = NewDirWatcher(dirWatcherPath, realSrcPath, dt, shutdownFunc)
+
+	dt.dirWatcher = NewDirWatcher(server.Config.DirWatcherPath, realSrcPath, dt, shutdownFunc)
 
 	return dt, nil
 }

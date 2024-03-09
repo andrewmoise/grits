@@ -36,12 +36,21 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	httpModule := NewHttpModule(server, httpConfig)
 	server.AddModule(httpModule)
 
+	rootVolumeConfig := &WikiVolumeConfig{
+		VolumeName: "root",
+	}
+	rootVolume, err := NewWikiVolume(rootVolumeConfig, server)
+	if err != nil {
+		t.Fatalf("Failed to create root volume: %v", err)
+	}
+	server.AddModule(rootVolume)
+
 	server.Start()
 	defer server.Stop()
 
 	time.Sleep(100 * time.Millisecond)
 
-	url := "http://localhost:1887/grits/v1"
+	url := fmt.Sprintf("http://localhost:%d/grits/v1", httpConfig.ThisPort)
 
 	// Upload blobs and link them
 	blobContents := []string{"one", "two", "three", "four", "five"}
@@ -65,11 +74,12 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 		// Link the blob to two paths
 		linkData := []struct {
-			Path string `json:"path"`
-			Addr string `json:"addr"`
+			Volume string `json:"volume"`
+			Path   string `json:"path"`
+			Addr   string `json:"addr"`
 		}{
-			{Path: "root/" + content, Addr: "blob:" + addresses[i]},
-			{Path: "root/dir/subdir/" + content, Addr: "blob:" + addresses[i]},
+			{Volume: "root", Path: content, Addr: "blob:" + addresses[i]},
+			{Volume: "root", Path: "dir/subdir/" + content, Addr: "blob:" + addresses[i]},
 		}
 
 		linkPayload, _ := json.Marshal(linkData)

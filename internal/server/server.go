@@ -19,13 +19,11 @@ type Server struct {
 	Modules     []Module
 	moduleHooks []func(Module)
 
+	Volumes map[string]Volume
+
 	// DHT stuff
 	Peers    grits.AllPeers // To store information about known peers
 	PeerLock sync.Mutex     // Protects access to Peers
-
-	// Account stuff
-	AccountStores map[string]*grits.NameStore
-	AccountLock   sync.RWMutex // Protects access to AccountStores
 
 	// Periodic tasks
 	taskStop chan struct{}
@@ -54,17 +52,12 @@ func NewServer(config *grits.Config) (*Server, error) {
 	}
 
 	srv := &Server{
-		Config:        config,
-		BlobStore:     bs,
-		AccountStores: make(map[string]*grits.NameStore),
-		taskStop:      make(chan struct{}),
-		jobs:          make(map[*JobDescriptor]bool),
-		shutdownChan:  make(chan struct{}),
-	}
-
-	err = srv.LoadAccounts()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load accounts: %v", err)
+		Config:       config,
+		BlobStore:    bs,
+		Volumes:      make(map[string]Volume),
+		taskStop:     make(chan struct{}),
+		jobs:         make(map[*JobDescriptor]bool),
+		shutdownChan: make(chan struct{}),
 	}
 
 	return srv, nil
@@ -79,12 +72,11 @@ func (s *Server) Start() error {
 	// Start modules
 	for _, module := range s.Modules {
 		if err := module.Start(); err != nil {
-			return fmt.Errorf("failed to start %s module: %v", module.Name(), err)
+			return fmt.Errorf("failed to start %s module: %v", module.GetModuleName(), err)
 		}
 	}
 
 	// Server periodic tasks
-	s.AddPeriodicTask(time.Duration(s.Config.NamespaceSavePeriod)*time.Second, s.SaveAccounts)
 	s.AddPeriodicTask(500*time.Millisecond, s.ReportJobs)
 
 	// Start a goroutine to wait for shutdown signal
@@ -93,14 +85,9 @@ func (s *Server) Start() error {
 
 		s.StopPeriodicTasks()
 
-		err := s.SaveAccounts()
-		if err != nil {
-			log.Printf("Failed to save accounts: %v\n", err)
-		}
-
 		for _, module := range s.Modules {
 			if err := module.Stop(); err != nil {
-				log.Printf("Error stopping %s module: %v", module.Name(), err)
+				log.Printf("Error stopping %s module: %v", module.GetModuleName(), err)
 			}
 		}
 	}()

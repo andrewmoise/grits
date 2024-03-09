@@ -35,8 +35,14 @@ func TestDirToTreeMirror(t *testing.T) {
 
 	log.Printf("--- Start test\n")
 
+	volumeConfig := &DirToTreeMirrorConfig{
+		SourceDir:      srcPath,
+		DestPath:       destPath,
+		DirWatcherPath: "/usr/local/bin/fanotify-helper",
+	}
+
 	// Instantiate and start DirToTreeMirror
-	dirMirror, error := NewDirToTreeMirror(srcPath, destPath, server, config.DirWatcherPath, nil)
+	dirMirror, error := NewDirToTreeMirror(volumeConfig, server, server.Shutdown)
 	if error != nil {
 		t.Fatalf("Failed to create DirToTreeMirror: %v", error)
 	}
