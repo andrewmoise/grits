@@ -35,7 +35,7 @@ func (*HttpModule) GetModuleName() string {
 func NewHttpModule(server *Server, config *HttpModuleConfig) *HttpModule {
 	mux := http.NewServeMux()
 	httpServer := &http.Server{
-		Addr:    fmt.Sprintf("%s:%d", config.ThisHost, config.ThisPort),
+		Addr:    fmt.Sprintf(":%d", config.ThisPort),
 		Handler: mux,
 	}
 
