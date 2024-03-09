@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -16,50 +15,10 @@ import (
 	"grits/internal/server"
 )
 
-func setupTestServer(t *testing.T, port int) (*server.Server, func()) {
-	tempDir, err := os.MkdirTemp("", "grits_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	config := grits.NewConfig(tempDir)
-	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
-	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
-
-	log.Printf("Created temp directory: %s\n", tempDir)
-
-	s, err := server.NewServer(config)
-	if err != nil {
-		t.Fatalf("Failed to initialize server: %v", err)
-	}
-
-	httpConfig := &server.HttpModuleConfig{
-		ThisPort: port,
-	}
-	httpModule := server.NewHttpModule(s, httpConfig)
-	s.AddModule(httpModule)
-
-	rootConfig := &server.WikiVolumeConfig{
-		VolumeName: "root",
-	}
-	rootVolume, err := server.NewWikiVolume(rootConfig, s)
-	if err != nil {
-		t.Fatalf("Can't create root volume: %v", err)
-	}
-	s.AddModule(rootVolume)
-
-	log.Printf("Server initialized\n")
-
-	cleanup := func() {
-		os.RemoveAll(tempDir)
-	}
-
-	return s, cleanup
-}
-
 func TestFileOperations(t *testing.T) {
 	// Setup
 	baseURL := "http://localhost:2187"
-	s, cleanup := setupTestServer(t, 2187)
+	s, cleanup := server.SetupTestServer(t, server.WithHttpModule(2187), server.WithWikiVolume("root"))
 	defer cleanup()
 
 	s.Start()
