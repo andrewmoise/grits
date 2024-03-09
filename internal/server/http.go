@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -416,8 +417,18 @@ func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	}
 	defer bs.Release(cachedFile)
 
-	http.ServeFile(w, r, cachedFile.Path)
-	bs.Touch(cachedFile)
+	// Open the file for reading
+	file, err := os.Open(cachedFile.Path)
+	if err != nil {
+		log.Printf("Error opening file: %v\n", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	// Serve the content
+	log.Printf("Serving file %s\n", cachedFile.Path)
+	http.ServeContent(w, r, filepath.Base(path), cf.LastTouched, file)
 }
 
 func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
