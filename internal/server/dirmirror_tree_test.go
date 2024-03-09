@@ -34,8 +34,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	log.Printf("--- Start test\n")
 
 	volumeConfig := &DirToTreeMirrorConfig{
-		SourceDir:      srcPath,
-		DirWatcherPath: "/usr/local/bin/fanotify-helper",
+		SourceDir: srcPath,
 	}
 
 	// Instantiate and start DirToTreeMirror

@@ -40,7 +40,7 @@ func NewDirWatcher(script string, watchDir string, handler DirEventHandler, shut
 func (dw *DirWatcher) Start() error {
 	log.Printf("Start DirWatcher\n")
 
-	log.Printf("%s %s %s %s %s %s %s",
+	log.Printf("%s %s %s %s %s %s %s\n",
 		dw.scriptPath, "-0", "-f",
 		"FAN_MOVED_TO,FAN_CLOSE_WRITE,FAN_MOVED_FROM,FAN_DELETE",
 		"-d", "FAN_MOVED_TO,FAN_MOVED_FROM", dw.watchDir)
@@ -66,7 +66,7 @@ func (dw *DirWatcher) Start() error {
 func (dw *DirWatcher) processEvents(stdout io.ReadCloser) {
 	scanner := bufio.NewScanner(stdout)
 	scanner.Split(func(data []byte, atEOF bool) (advance int, token []byte, err error) {
-		log.Printf("Got data from watcher proc - %s, %d", string(data), len(data))
+		log.Printf("Got data from watcher proc - %s, %d\n", string(data), len(data))
 
 		if atEOF && len(data) == 0 {
 			return 0, nil, nil
@@ -114,7 +114,7 @@ func (dw *DirWatcher) processEvents(stdout io.ReadCloser) {
 		shutdownFunc()
 	}
 
-	log.Printf("DirWatcher process loop exiting")
+	log.Printf("DirWatcher process loop exiting\n")
 }
 
 // Stop terminates the directory watching by killing the subprocess.
