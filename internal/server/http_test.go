@@ -51,12 +51,12 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 			Path   string `json:"path"`
 			Addr   string `json:"addr"`
 		}{
-			{Volume: "root", Path: content, Addr: "blob:" + addresses[i]},
-			{Volume: "root", Path: "dir/subdir/" + content, Addr: "blob:" + addresses[i]},
+			{Path: content, Addr: "blob:" + addresses[i]},
+			{Path: "dir/subdir/" + content, Addr: "blob:" + addresses[i]},
 		}
 
 		linkPayload, _ := json.Marshal(linkData)
-		resp, err = http.Post(url+"/link", "application/json", bytes.NewBuffer(linkPayload))
+		resp, err = http.Post(url+"/link/root", "application/json", bytes.NewBuffer(linkPayload))
 		if err != nil || resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
 			bodyString := string(bodyBytes)
@@ -67,8 +67,8 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	}
 
 	// Perform a lookup on "dir/subdir/one"
-	lookupPayload, _ := json.Marshal("root/dir/subdir/one")
-	resp, err := http.Post(url+"/lookup", "application/json", bytes.NewBuffer(lookupPayload))
+	lookupPayload, _ := json.Marshal("dir/subdir/one")
+	resp, err := http.Post(url+"/lookup/root", "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
 		t.Fatalf("Failed to perform lookup: %v", err)
 	}
