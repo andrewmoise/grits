@@ -403,10 +403,35 @@ func (s *HttpModule) handleContent(w http.ResponseWriter, r *http.Request) {
 func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
-	cf, err := ns.Lookup(path)
+	fullPath, err := ns.LookupFull(path)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
+	}
+	if len(fullPath) < 1 {
+		http.Error(w, "Empty volume", http.StatusNotFound)
+		return
+	}
+
+	pathAddrStr := fullPath[len(fullPath)-1][1]
+	pathAddr, err := grits.NewTypedFileAddrFromString(pathAddrStr)
+	if err != nil {
+		http.Error(w, "Invalid tree node", http.StatusInternalServerError)
+		return
+	}
+
+	var cf *grits.CachedFile
+	if pathAddr.Type == grits.Tree {
+		cf, err = ns.Lookup(path + "/index.html")
+		if err != nil {
+			http.Error(w, "No index", http.StatusNotFound)
+			return
+		}
+	} else {
+		cf, err = bs.ReadFile(&grits.BlobAddr{Hash: pathAddr.Hash, Size: pathAddr.Size})
+		if err != nil {
+			http.Error(w, "Cannot open blob", http.StatusInternalServerError)
+		}
 	}
 	defer bs.Release(cf)
 
