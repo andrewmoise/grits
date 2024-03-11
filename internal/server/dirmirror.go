@@ -110,6 +110,23 @@ func (dt *DirToTreeMirror) HandleScan(filename string) error {
 }
 
 func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
+	job := dt.server.CreateJobDescriptor("HandleScanTree " + directory)
+	job.SetStage("Initializing")
+	defer dt.server.Done(job)
+	totalFiles := 0
+	processedFiles := 0
+
+	// First pass to count files (simplified for brevity)
+	filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			totalFiles++
+		}
+		return nil
+	})
+
 	// Okay for this one we leverage some of the usefulness of our NameStore primitives
 
 	newDirNs, err := grits.EmptyNameStore(dt.server.BlobStore)
@@ -122,8 +139,6 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 
 	// Walk through the source directory and put all files into newDirNs
 	err = filepath.Walk(dt.srcPath, func(path string, info os.FileInfo, err error) error {
-		log.Printf("  We find %s\n", path)
-
 		if err != nil {
 			return err
 		}
@@ -131,6 +146,11 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 		if info.IsDir() {
 			return nil
 		}
+
+		processedFiles++
+		completion := float32(processedFiles) / float32(totalFiles)
+		job.SetStage(path)
+		job.SetCompletion(completion)
 
 		file, err := os.Open(path)
 		if os.IsNotExist(err) {
