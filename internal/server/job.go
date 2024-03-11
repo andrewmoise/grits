@@ -70,7 +70,7 @@ func (s *Server) ReportJobs() error {
 	defer s.jobsLock.Unlock()
 
 	for jd := range s.jobs {
-		log.Printf("Job: %s, Stage: %s, Completion: %.2f%%", jd.Description(), jd.Stage(), jd.Completion()*100)
+		log.Printf("Job: %s (%s, %.2f%% done)", jd.Description(), jd.Stage(), jd.Completion()*100)
 	}
 
 	return nil

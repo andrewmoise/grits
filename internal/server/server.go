@@ -60,6 +60,8 @@ func NewServer(config *grits.Config) (*Server, error) {
 }
 
 func (s *Server) Start() error {
+	s.AddPeriodicTask(5*time.Second, s.ReportJobs)
+
 	// Load modules from config
 	if err := s.LoadModules(s.Config.Modules); err != nil {
 		return fmt.Errorf("failed to load modules: %v", err)
@@ -72,9 +74,6 @@ func (s *Server) Start() error {
 			return fmt.Errorf("failed to start %s module: %v", module.GetModuleName(), err)
 		}
 	}
-
-	// Server periodic tasks
-	s.AddPeriodicTask(500*time.Millisecond, s.ReportJobs)
 
 	// Start a goroutine to wait for shutdown signal
 	go func() {
