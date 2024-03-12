@@ -101,13 +101,13 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 		t.Fatalf("Failed to create server: %v", err)
 	}
 
-	httpConfig := &HttpModuleConfig{
+	httpConfig := &HTTPModuleConfig{
 		ThisHost: "localhost",
 		ThisPort: 2287, // Just for setup, actual port not used with httptest
 	}
 	url := "http://" + httpConfig.ThisHost + ":" + fmt.Sprintf("%d", httpConfig.ThisPort)
 
-	httpModule := NewHttpModule(srv, httpConfig)
+	httpModule := NewHTTPModule(srv, httpConfig)
 	srv.AddModule(httpModule)
 
 	srv.Start()

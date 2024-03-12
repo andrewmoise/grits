@@ -23,10 +23,10 @@ func startHubNode(serverDir string, port int) *Server {
 		return nil
 	}
 
-	httpConfig := &HttpModuleConfig{
+	httpConfig := &HTTPModuleConfig{
 		ThisPort: port,
 	}
-	httpModule := NewHttpModule(hubServer, httpConfig)
+	httpModule := NewHTTPModule(hubServer, httpConfig)
 	hubServer.AddModule(httpModule)
 
 	hubServer.Start()
@@ -44,10 +44,10 @@ func startEdgeNode(serverDir string, port int, rootHost string, rootPort int) *S
 		return nil
 	}
 
-	httpConfig := &HttpModuleConfig{
+	httpConfig := &HTTPModuleConfig{
 		ThisPort: port,
 	}
-	httpModule := NewHttpModule(edgeServer, httpConfig)
+	httpModule := NewHTTPModule(edgeServer, httpConfig)
 	edgeServer.AddModule(httpModule)
 
 	edgeServer.Start()
