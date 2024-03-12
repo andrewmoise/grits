@@ -15,40 +15,40 @@ import (
 	"time"
 )
 
-type HttpModuleConfig struct {
+type HTTPModuleConfig struct {
 	ThisHost string `json:"ThisHost"`
 	ThisPort int    `json:"ThisPort"`
 
 	EnableTls bool `json:"EnableTLS,omitempty"`
 }
 
-type HttpModule struct {
-	Config *HttpModuleConfig
+type HTTPModule struct {
+	Config *HTTPModuleConfig
 	Server *Server
 
-	HttpServer *http.Server
+	HTTPServer *http.Server
 	Mux        *http.ServeMux
 }
 
-func (*HttpModule) GetModuleName() string {
+func (*HTTPModule) GetModuleName() string {
 	return "http"
 }
 
-// NewHttpModule creates and initializes an HttpModule instance based on the provided configuration.
-func NewHttpModule(server *Server, config *HttpModuleConfig) *HttpModule {
+// NewHTTPModule creates and initializes an HTTPModule instance based on the provided configuration.
+func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 	mux := http.NewServeMux()
-	httpServer := &http.Server{
+	HTTPServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.ThisPort),
 		Handler: mux,
 	}
 
-	log.Printf("HTTP listening on %s\n", httpServer.Addr)
+	log.Printf("HTTP listening on %s\n", HTTPServer.Addr)
 
-	httpModule := &HttpModule{
+	httpModule := &HTTPModule{
 		Config: config,
 		Server: server,
 
-		HttpServer: httpServer,
+		HTTPServer: HTTPServer,
 		Mux:        mux,
 	}
 
@@ -59,7 +59,7 @@ func NewHttpModule(server *Server, config *HttpModuleConfig) *HttpModule {
 }
 
 // Start begins serving HTTP requests.
-func (hm *HttpModule) Start() error {
+func (hm *HTTPModule) Start() error {
 	// Starting the HTTP server in a goroutine
 	go func() {
 		var err error
@@ -68,26 +68,26 @@ func (hm *HttpModule) Start() error {
 			certPath := hm.Server.Config.ServerPath("certs/server.crt")
 			keyPath := hm.Server.Config.ServerPath("certs/server.key")
 
-			log.Printf("Starting HTTPS server on %s\n", hm.HttpServer.Addr)
-			err = hm.HttpServer.ListenAndServeTLS(certPath, keyPath)
+			log.Printf("Starting HTTPS server on %s\n", hm.HTTPServer.Addr)
+			err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
 		} else {
-			log.Printf("Starting HTTP server on %s\n", hm.HttpServer.Addr)
-			err = hm.HttpServer.ListenAndServe()
+			log.Printf("Starting HTTP server on %s\n", hm.HTTPServer.Addr)
+			err = hm.HTTPServer.ListenAndServe()
 		}
 		if err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
-	log.Printf("HTTP module started on %s (TLS enabled: %t)\n", hm.HttpServer.Addr, hm.Config.EnableTls)
+	log.Printf("HTTP module started on %s (TLS enabled: %t)\n", hm.HTTPServer.Addr, hm.Config.EnableTls)
 	return nil
 }
 
 // Stop gracefully shuts down the HTTP server.
-func (hm *HttpModule) Stop() error {
+func (hm *HTTPModule) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := hm.HttpServer.Shutdown(ctx); err != nil {
+	if err := hm.HTTPServer.Shutdown(ctx); err != nil {
 		log.Printf("HTTP module shutdown error: %v", err)
 		return err
 	}
@@ -97,7 +97,7 @@ func (hm *HttpModule) Stop() error {
 }
 
 // corsMiddleware is a middleware function that adds CORS headers to the response.
-func (srv *HttpModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
 
@@ -126,7 +126,7 @@ func (srv *HttpModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *HttpModule) setupRoutes() {
+func (s *HTTPModule) setupRoutes() {
 	// Content routes:
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/upload", s.corsMiddleware(s.handleBlobUpload))
@@ -145,10 +145,10 @@ func (s *HttpModule) setupRoutes() {
 	// Handling client files with CORS enabled
 	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", s.corsMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
 
-	s.HttpServer.Handler = s.Mux
+	s.HTTPServer.Handler = s.Mux
 }
 
-func (s *HttpModule) handleBlob(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodHead:
 		s.handleBlobFetch(w, r) // Automatically skips sending the file for HEAD
@@ -159,7 +159,7 @@ func (s *HttpModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *HttpModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
 
 	// Extract file address from URL, expecting format "{hash}:{size}"
@@ -221,7 +221,7 @@ func validateFileContents(filePath string, expectedAddr *grits.BlobAddr) (bool, 
 	return true, nil
 }
 
-func (s *HttpModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
@@ -261,7 +261,7 @@ func (s *HttpModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(addrStr)
 }
 
-func (s *HttpModule) handleLookup(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
@@ -299,7 +299,7 @@ func (s *HttpModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Handling link request\n")
 
 	if r.Method != http.MethodPost {
@@ -364,7 +364,7 @@ func (s *HttpModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Link successful")
 }
 
-func (s *HttpModule) handleContent(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/grits/v1/content/")
 
 	// Example path: /grits/v1/content/volumeName/some/path

@@ -81,12 +81,12 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 
 		switch baseConfig.Type {
 		case "http":
-			var httpConfig HttpModuleConfig
+			var httpConfig HTTPModuleConfig
 			if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {
 				return fmt.Errorf("failed to unmarshal HTTP module config: %v", err)
 			}
 
-			s.AddModule(NewHttpModule(s, &httpConfig))
+			s.AddModule(NewHTTPModule(s, &httpConfig))
 
 		case "dirmirror":
 			var mirrorConfig DirToTreeMirrorConfig

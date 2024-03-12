@@ -50,17 +50,17 @@ type Peer struct {
 	IPv4Address string    `json:"ipv4Address"`
 	IPv6Address string    `json:"ipv6Address"`
 	Port        int       `json:"port"`
-	IsNat       bool      `json:"isNat"`
+	IsNAT       bool      `json:"IsNAT"`
 	Token       string    `json:"token"`
 	LastSeen    time.Time `json:"-"`
 }
 
-func NewPeer(ipv4Address, ipv6Address string, port int, isNat bool) *Peer {
+func NewPeer(ipv4Address, ipv6Address string, port int, IsNAT bool) *Peer {
 	return &Peer{
 		IPv4Address: ipv4Address,
 		IPv6Address: ipv6Address,
 		Port:        port,
-		IsNat:       isNat,
+		IsNAT:       IsNAT,
 		LastSeen:    time.Now(),
 	}
 }
