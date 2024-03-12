@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,12 +11,22 @@ import (
 )
 
 func main() {
-	var command string
-	if len(os.Args) < 2 {
-		fmt.Println("Usage: client <command> [arguments]")
+	// Define a flag for the server address
+	serverAddress := flag.String("h", "localhost:1787", "Server address with optional port")
+
+	// Parse the flags
+	flag.Parse()
+
+	// After parsing, flag.Args() contains the non-flag command-line arguments
+	args := flag.Args()
+
+	if len(args) < 1 {
+		fmt.Println("Usage: client [options] <command> [arguments]")
+		flag.PrintDefaults()
 		os.Exit(1)
 	}
-	command = os.Args[1]
+
+	command := args[0] // The first non-flag argument is the command
 
 	switch command {
 	case "get":
@@ -23,7 +34,7 @@ func main() {
 			fmt.Println("Usage: client get <remote-name> <local-name>")
 			os.Exit(1)
 		}
-		getFile(os.Args[2], os.Args[3])
+		getFile(*serverAddress, os.Args[2], os.Args[3])
 	case "put":
 		recursive := false
 		startIndex := 2
@@ -38,13 +49,13 @@ func main() {
 		localName := os.Args[startIndex]
 		remoteName := os.Args[startIndex+1]
 		if recursive {
-			err := putDirectoryRecursively(localName, remoteName)
+			err := putDirectoryRecursively(*serverAddress, localName, remoteName)
 			if err != nil {
 				fmt.Println("Error:", err)
 				os.Exit(1)
 			}
 		} else {
-			err := putFile(localName, remoteName)
+			err := putFile(*serverAddress, localName, remoteName)
 			if err != nil {
 				fmt.Println("Error:", err)
 				os.Exit(1)
@@ -55,13 +66,13 @@ func main() {
 			fmt.Println("Usage: client rm <remote-name> ...")
 			os.Exit(1)
 		}
-		err := removeFiles(os.Args[2:])
+		err := removeFiles(*serverAddress, os.Args[2:])
 		if err != nil {
 			fmt.Println("Error:", err)
 			os.Exit(1)
 		}
 	case "ls":
-		err := listFiles()
+		err := listFiles(*serverAddress)
 		if err != nil {
 			fmt.Println("Error:", err)
 			os.Exit(1)
@@ -72,8 +83,8 @@ func main() {
 	}
 }
 
-func getFile(remoteName, localName string) error {
-	resp, err := http.Get("http://localhost:1787/grits/v1/content/root/" + remoteName)
+func getFile(serverAddress, remoteName, localName string) error {
+	resp, err := http.Get("http://" + serverAddress + "/grits/v1/content/root/" + remoteName)
 	if err != nil {
 		return err
 	}
@@ -98,7 +109,7 @@ func getFile(remoteName, localName string) error {
 	return nil
 }
 
-func putFile(localName, remoteName string) error {
+func putFile(serverAddress, localName, remoteName string) error {
 	file, err := os.Open(localName)
 	if err != nil {
 		return err
@@ -106,7 +117,7 @@ func putFile(localName, remoteName string) error {
 	defer file.Close()
 
 	// Create a new PUT request
-	req, err := http.NewRequest(http.MethodPut, "http://localhost:1787/grits/v1/content/root/"+remoteName, file)
+	req, err := http.NewRequest(http.MethodPut, "http://"+serverAddress+"/grits/v1/content/root/"+remoteName, file)
 	if err != nil {
 		return err
 	}
@@ -128,7 +139,7 @@ func putFile(localName, remoteName string) error {
 	return nil
 }
 
-func putDirectoryRecursively(localDir, remoteDir string) error {
+func putDirectoryRecursively(serverAddress, localDir, remoteDir string) error {
 	err := filepath.Walk(localDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -136,7 +147,7 @@ func putDirectoryRecursively(localDir, remoteDir string) error {
 		if !info.IsDir() {
 			localPath := path
 			remotePath := filepath.Join(remoteDir, path[len(localDir):])
-			err := putFile(localPath, remotePath)
+			err := putFile(serverAddress, localPath, remotePath)
 			if err != nil {
 				return err
 			}
@@ -147,9 +158,9 @@ func putDirectoryRecursively(localDir, remoteDir string) error {
 	return err
 }
 
-func removeFiles(remoteNames []string) error {
+func removeFiles(serverAddress string, remoteNames []string) error {
 	for _, remoteName := range remoteNames {
-		req, err := http.NewRequest(http.MethodDelete, "http://localhost:1787/grits/v1/content/root/"+remoteName, nil)
+		req, err := http.NewRequest(http.MethodDelete, "http://"+serverAddress+"/grits/v1/content/root/"+remoteName, nil)
 		if err != nil {
 			return err
 		}
@@ -169,8 +180,8 @@ func removeFiles(remoteNames []string) error {
 	return nil
 }
 
-func listFiles() error {
-	resp, err := http.Get("http://localhost:1787/grits/v1/tree")
+func listFiles(serverAddress string) error {
+	resp, err := http.Get("http://" + serverAddress + "/grits/v1/tree")
 	if err != nil {
 		return err
 	}
