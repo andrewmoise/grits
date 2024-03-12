@@ -30,6 +30,8 @@ type TreeNode struct {
 	blob        *CachedFile
 	ChildrenMap map[string]FileNode
 	refCount    int
+
+	nameStore *NameStore
 }
 
 // Implementations for BlobNode
@@ -60,6 +62,7 @@ func (bn *BlobNode) Release(bs *BlobStore) {
 // Implementations for TreeNode
 
 func (tn *TreeNode) ExportedBlob() *CachedFile {
+	tn.ensureSerialized()
 	return tn.blob
 }
 
@@ -68,6 +71,7 @@ func (tn *TreeNode) Children() map[string]FileNode {
 }
 
 func (tn *TreeNode) AddressString() string {
+	tn.ensureSerialized()
 	return "tree:" + tn.blob.Address.String()
 }
 
@@ -78,7 +82,9 @@ func (tn *TreeNode) Take() {
 func (tn *TreeNode) Release(bs *BlobStore) {
 	tn.refCount--
 	if tn.refCount == 0 {
-		bs.Release(tn.blob)
+		if tn.blob != nil {
+			bs.Release(tn.blob)
+		}
 		for _, child := range tn.ChildrenMap {
 			child.Release(bs)
 		}
@@ -369,6 +375,7 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 		dn := &TreeNode{
 			blob:        cf,
 			ChildrenMap: make(map[string]FileNode),
+			nameStore:   ns,
 		}
 
 		dirFile, err := ns.BlobStore.ReadFile(&addr.BlobAddr)
@@ -427,24 +434,9 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 }
 
 func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, error) {
-	dirMap := make(map[string]string)
-	for name, child := range children {
-		dirMap[name] = child.AddressString()
-	}
-
-	dirData, err := json.Marshal(dirMap)
-	if err != nil {
-		return nil, fmt.Errorf("error marshalling directory: %v", err)
-	}
-
-	cf, err := ns.BlobStore.AddDataBlock(dirData)
-	if err != nil {
-		return nil, fmt.Errorf("error writing directory: %v", err)
-	}
-
 	return &TreeNode{
-		blob:        cf,
 		ChildrenMap: children,
+		nameStore:   ns,
 	}, nil
 }
 
@@ -455,4 +447,29 @@ func (ns *NameStore) CreateBlobNode(fa *BlobAddr) (*BlobNode, error) {
 	}
 
 	return &BlobNode{blob: cf}, nil
+}
+
+func (tn *TreeNode) ensureSerialized() error {
+	if tn.blob != nil {
+		// Already serialized
+		return nil
+	}
+
+	dirMap := make(map[string]string)
+	for name, child := range tn.Children() {
+		dirMap[name] = child.AddressString()
+	}
+
+	dirData, err := json.Marshal(dirMap)
+	if err != nil {
+		return fmt.Errorf("error marshalling directory: %v", err)
+	}
+
+	cf, err := tn.nameStore.BlobStore.AddDataBlock(dirData)
+	if err != nil {
+		return fmt.Errorf("error writing directory: %v", err)
+	}
+
+	tn.blob = cf
+	return nil
 }
