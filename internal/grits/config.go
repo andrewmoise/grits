@@ -39,7 +39,7 @@ func NewConfig(serverDir string) *Config {
 		ServerToken: "",
 
 		ServerDir:      serverDir,
-		DirWatcherPath: "/usr/local/bin/fanotify-helper",
+		DirWatcherPath: "/usr/local/bin/ogwatch",
 
 		StorageSize:         100 * 1024 * 1024, // Max size of data
 		StorageFreeSize:     80 * 1024 * 1024,  // Size to clean down to when overfull

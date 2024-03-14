@@ -7,14 +7,12 @@ import (
 	"io"
 	"log"
 	"os/exec"
-	"strings"
 	"syscall"
 )
 
 // DirEventHandler defines the methods required to handle file update events.
 type DirEventHandler interface {
-	HandleScan(file string) error
-	HandleScanTree(directory string) error
+	HandleScan(path string) error
 }
 
 // DirWatcher watches directory events using a setuid script.
@@ -40,14 +38,9 @@ func NewDirWatcher(script string, watchDir string, handler DirEventHandler, shut
 func (dw *DirWatcher) Start() error {
 	log.Printf("Start DirWatcher\n")
 
-	log.Printf("%s %s %s %s %s %s %s\n",
-		dw.scriptPath, "-0", "-f",
-		"FAN_MOVED_TO,FAN_CLOSE_WRITE,FAN_MOVED_FROM,FAN_DELETE",
-		"-d", "FAN_MOVED_TO,FAN_MOVED_FROM", dw.watchDir)
+	log.Printf("%s %s %s %s\n", dw.scriptPath, "-0", "-g", dw.watchDir)
 
-	dw.cmd = exec.Command(dw.scriptPath, "-0", "-f",
-		"FAN_MOVED_TO,FAN_CLOSE_WRITE,FAN_MOVED_FROM,FAN_DELETE",
-		"-d", "FAN_MOVED_TO,FAN_MOVED_FROM", dw.watchDir)
+	dw.cmd = exec.Command(dw.scriptPath, "-0", "-g", dw.watchDir)
 
 	stdout, err := dw.cmd.StdoutPipe()
 	if err != nil {
@@ -86,19 +79,10 @@ func (dw *DirWatcher) processEvents(stdout io.ReadCloser) {
 	for scanner.Scan() {
 		event := scanner.Text()
 		log.Println("Event:", event)
-		parts := strings.SplitN(event, " ", 2)
-
-		if len(parts) == 1 && parts[0] == "ESTALE" {
-			// We ignore this; hopefully that's ok
-			//dw.handler.HandleScanTree(dw.watchDir)
-		} else if len(parts) == 2 {
-			if strings.HasSuffix(parts[0], "|FAN_ONDIR") {
-				dw.handler.HandleScanTree(parts[1])
-			} else {
-				dw.handler.HandleScan(parts[1])
-			}
-		} else {
-			log.Printf("Can't make sense of watcher message! %s\n", event)
+		err := dw.handler.HandleScan(event)
+		if err != nil {
+			log.Printf("error processing scan event for %s: %v", event, err)
+			break
 		}
 	}
 
