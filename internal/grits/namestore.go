@@ -212,6 +212,14 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 		name = ""
 	}
 
+	// Somewhat weird special case for empty tree... FIXME what about whitespace?
+	if addr != nil &&
+		addr.Type == Tree &&
+		addr.Hash == "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" &&
+		addr.Size == 2 {
+		addr = nil
+	}
+
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 

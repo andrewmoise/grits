@@ -71,7 +71,7 @@ func (dt *DirToTreeMirror) Start() error {
 		return err
 	}
 
-	err = dt.HandleScanTree(dt.srcPath)
+	err = dt.HandleScan(dt.srcPath)
 	if err != nil {
 		return err
 	}
@@ -92,32 +92,26 @@ func (dt *DirToTreeMirror) Checkpoint() error {
 	return nil
 }
 
-// HandleScan processes an individual file update or addition.
-func (dt *DirToTreeMirror) HandleScan(filename string) error {
-	dt.mtx.Lock()
-	defer dt.mtx.Unlock()
+func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
+	log.Printf("HandleScan %s\n", scanPath)
 
-	f, err := os.Open(filename)
+	relPath, err := filepath.Rel(dt.srcPath, scanPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return dt.removeFile(filename)
-		}
-		return err
+		return fmt.Errorf("cannot relativize %s: %v", scanPath, err)
 	}
-	defer f.Close()
 
-	return dt.addOrUpdateFile(filename, f)
-}
+	log.Printf("  1 HandleScan %s\n", scanPath)
 
-func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
-	job := dt.server.CreateJobDescriptor("HandleScanTree " + directory)
+	// Set up job info, just in case things are complex.
+
+	job := dt.server.CreateJobDescriptor("HandleScan " + scanPath)
 	job.SetStage("Initializing")
 	defer dt.server.Done(job)
 	totalFiles := 0
 	processedFiles := 0
 
 	// First pass to count files (simplified for brevity)
-	filepath.Walk(directory, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(scanPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -126,19 +120,20 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 		}
 		return nil
 	})
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error in initial scan of %s: %v", scanPath, err)
+	}
 
-	// Okay for this one we leverage some of the usefulness of our NameStore primitives
+	log.Printf("  2 HandleScan %s\n", scanPath)
 
 	newDirNs, err := grits.EmptyNameStore(dt.server.BlobStore)
 	if err != nil {
 		return err
 	}
-	defer newDirNs.Link("", nil) // Release references
-
-	log.Printf("We are scanning %s\n", directory)
+	defer newDirNs.Link("", nil) // Release references from temp NameStore
 
 	// Walk through the source directory and put all files into newDirNs
-	err = filepath.Walk(dt.srcPath, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(scanPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -166,10 +161,12 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 		}
 		defer dt.server.BlobStore.Release(cf)
 
-		relPath, err := filepath.Rel(dt.srcPath, path)
+		relPath, err := filepath.Rel(scanPath, path)
 		if err != nil {
 			return err
 		}
+
+		log.Printf("Adding relative path: %s -> %s is %s", dt.srcPath, path, relPath)
 
 		err = newDirNs.LinkBlob(relPath, cf.Address)
 		if err != nil {
@@ -178,8 +175,8 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 
 		return nil
 	})
-	if err != nil {
-		return err
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("error in main scan of %s: %v", scanPath, err)
 	}
 
 	dt.mtx.Lock()
@@ -190,14 +187,12 @@ func (dt *DirToTreeMirror) HandleScanTree(directory string) error {
 		return err
 	}
 
-	relPath, err := filepath.Rel(dt.srcPath, directory)
-	if err != nil {
-		return fmt.Errorf("cannot relativize %s: %v", directory, err)
-	}
-
 	log.Printf("We link %s to %s\n", relPath, fileAddr.String())
 
-	dt.ns.Link(relPath, fileAddr)
+	err = dt.ns.Link(relPath, fileAddr)
+	if err != nil {
+		return fmt.Errorf("Can't do final link for %s: %v", scanPath, err)
+	}
 
 	return nil
 }
