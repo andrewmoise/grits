@@ -39,11 +39,20 @@ type DirToTreeMirrorConfig struct {
 // General bookkeeping functions
 
 func NewDirToTreeMirror(config *DirToTreeMirrorConfig, server *Server, shutdownFunc func()) (*DirToTreeMirror, error) {
-	log.Printf("Creating DirToTreeMirror for %s -> %s\n", config.SourceDir, config.VolumeName)
+	if len(config.SourceDir) <= 0 {
+		return nil, fmt.Errorf("must specify SourceDir for dirmirror %s", config.VolumeName)
+	}
 
-	realSrcPath, err := filepath.EvalSymlinks(config.SourceDir)
+	sourceDir := config.SourceDir
+	if sourceDir[0] != '/' {
+		sourceDir = server.Config.ServerPath(sourceDir)
+	}
+
+	log.Printf("Creating DirToTreeMirror for %s -> %s\n", sourceDir, config.VolumeName)
+
+	sourceDir, err := filepath.EvalSymlinks(sourceDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to evaluate source path: %v", err)
+		return nil, fmt.Errorf("failed to evaluate %s: %v", config.SourceDir, err)
 	}
 
 	ns, err := grits.EmptyNameStore(server.BlobStore)
@@ -53,12 +62,12 @@ func NewDirToTreeMirror(config *DirToTreeMirrorConfig, server *Server, shutdownF
 
 	dt := &DirToTreeMirror{
 		volumeName: config.VolumeName,
-		srcPath:    realSrcPath,
+		srcPath:    sourceDir,
 		server:     server,
 		ns:         ns,
 	}
 
-	dt.dirWatcher = NewDirWatcher(server.Config.DirWatcherPath, realSrcPath, dt, shutdownFunc)
+	dt.dirWatcher = NewDirWatcher(server.Config.DirWatcherPath, sourceDir, dt, shutdownFunc)
 
 	return dt, nil
 }
