@@ -126,6 +126,28 @@ func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+/*
+
+General route API:
+
+GET to /grits/v1/blob/{hash}-{size} returns the blob data
+
+POST to /grits/v1/upload accepts binary data for the blob in the request body,
+   and the response is the new address ("{hash}-{size}" format) as a JSON-encoded
+   bare string
+
+POST to /grits/v1/lookup/{volume} accepts a bare JSON-encoded string in the request body,
+  and returns a JSON-encoded array of pairs of strings: [$path, $resource_addr_at_that_path]
+
+POST to /grits/v1/link/{volume} accepts a JSON-encoded array of maps
+  {'path': {path}, 'addr': {addr}} indicating a bunch of resources to link into
+  the given volume's storage atomically.
+
+
+GET to /grits/v1/content/{volume}/{path} just serves file data (mainly for debugging)
+
+*/
+
 func (s *HTTPModule) setupRoutes() {
 	// Content routes:
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
@@ -133,6 +155,7 @@ func (s *HTTPModule) setupRoutes() {
 
 	s.Mux.HandleFunc("/grits/v1/lookup/", s.corsMiddleware(s.handleLookup))
 	s.Mux.HandleFunc("/grits/v1/link/", s.corsMiddleware(s.handleLink))
+
 	s.Mux.HandleFunc("/grits/v1/content/", s.corsMiddleware(s.handleContent))
 
 	// Client tooling routes:
@@ -162,7 +185,7 @@ func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
 
-	// Extract file address from URL, expecting format "{hash}:{size}"
+	// Extract file address from URL, expecting format "{hash}-{size}"
 	addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
 	if addrStr == "" {
 		http.Error(w, "Missing file address", http.StatusBadRequest)
