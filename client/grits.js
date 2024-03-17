@@ -1,7 +1,7 @@
 /*****
  Example Usage:
 
-const gritsStore = new Storage('https://localhost:17871/grits/v1/');
+const gritsStore = new Storage('https://localhost:1787/grits/v1/');
 
 // Get a File object, then fetch its blob content
 gritsStore.file('some/path/file.txt')
@@ -156,6 +156,18 @@ export class Storage {
             throw new Error(`HTTP error! status: ${response.status}`);
         }
         return response.body; // Returns a ReadableStream of the body contents
+    }
+
+    async upload(blobData) {
+        const response = await fetch(`${this.root}upload`, {
+            method: 'POST',
+            body: blobData,
+        });
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const newResourceAddr = await response.text(); // Assuming the response is a JSON-encoded bare string
+        return newResourceAddr;
     }
 }
     

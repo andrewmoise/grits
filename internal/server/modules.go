@@ -63,6 +63,8 @@ func (s *Server) AddVolume(volume Volume) {
 
 // AddModuleHook adds a new hook to be called whenever a new module is added.
 func (s *Server) AddModuleHook(hook func(Module)) {
+	log.Printf("We add module hook\n")
+
 	s.moduleHooks = append(s.moduleHooks, hook)
 	// Call the hook immediately for all existing modules
 	for _, module := range s.Modules {
@@ -80,14 +82,6 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 		}
 
 		switch baseConfig.Type {
-		case "http":
-			var httpConfig HTTPModuleConfig
-			if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {
-				return fmt.Errorf("failed to unmarshal HTTP module config: %v", err)
-			}
-
-			s.AddModule(NewHTTPModule(s, &httpConfig))
-
 		case "dirmirror":
 			var mirrorConfig DirToTreeMirrorConfig
 			if err := json.Unmarshal(rawConfig, &mirrorConfig); err != nil {
@@ -101,6 +95,23 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 
 			s.AddModule(module)
 			s.AddVolume(module)
+
+		case "http":
+			var httpConfig HTTPModuleConfig
+			if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal HTTP module config: %v", err)
+			}
+
+			s.AddModule(NewHTTPModule(s, &httpConfig))
+
+		case "serviceworker":
+			var swConfig ServiceWorkerModuleConfig
+			if err := json.Unmarshal(rawConfig, &swConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal ServiceWorker module config: %v", err)
+			}
+
+			swModule := NewServiceWorkerModule(s, &swConfig)
+			s.AddModule(swModule)
 
 		case "wiki":
 			var wikiConfig WikiVolumeConfig
