@@ -160,11 +160,13 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 		}
 
 		if err := os.Link(originalFilePath, destPath); err != nil {
-			return nil, fmt.Errorf("failed to create hard link: %v", err)
+			log.Printf("Failed to create hard link for %s: %v", file.Name(), err)
+		} else {
+			isHardLink = true
 		}
+	}
 
-		isHardLink = true
-	} else {
+	if !isHardLink {
 		// Seek back to the beginning of the file.
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
 			return nil, fmt.Errorf("failed to seek file: %v", err)
