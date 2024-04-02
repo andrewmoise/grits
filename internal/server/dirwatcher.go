@@ -38,8 +38,6 @@ func NewDirWatcher(script string, watchDir string, handler DirEventHandler, shut
 func (dw *DirWatcher) Start() error {
 	log.Printf("Start DirWatcher\n")
 
-	log.Printf("%s %s %s %s\n", dw.scriptPath, "-0", "-g", dw.watchDir)
-
 	dw.cmd = exec.Command(dw.scriptPath, "-0", "-g", dw.watchDir)
 
 	stdout, err := dw.cmd.StdoutPipe()
@@ -47,11 +45,18 @@ func (dw *DirWatcher) Start() error {
 		return fmt.Errorf("error obtaining stdout pipe: %v", err)
 	}
 
+	stderr, err := dw.cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("error obtaining stderr pipe: %v", err)
+	}
+
 	if err := dw.cmd.Start(); err != nil {
 		return fmt.Errorf("error starting command: %v", err)
 	}
 
+	go dw.monitorStderr(stderr)
 	go dw.processEvents(stdout)
+	go dw.monitorExit()
 
 	return nil
 }
@@ -115,6 +120,22 @@ func (dw *DirWatcher) Stop() error {
 		if _, err := dw.cmd.Process.Wait(); err != nil {
 			return fmt.Errorf("error waiting for process to exit: %v", err)
 		}
+		dw.cmd = nil
 	}
 	return nil
+}
+
+func (dw *DirWatcher) monitorStderr(stderr io.ReadCloser) {
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		log.Printf("From ogwatch: %s\n", scanner.Text())
+	}
+}
+
+func (dw *DirWatcher) monitorExit() {
+	if err := dw.cmd.Wait(); err != nil {
+		log.Printf("ogwatch exited with error: %v\n", err)
+	} else {
+		log.Println("Subprocess exited without error.")
+	}
 }
