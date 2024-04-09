@@ -96,6 +96,15 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 			s.AddModule(module)
 			s.AddVolume(module)
 
+		case "fuse":
+			var fuseConfig FuseModuleConfig
+			if err := json.Unmarshal(rawConfig, &fuseConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal FuseModule config: %v", err)
+			}
+
+			fuseModule := NewFuseModule(s, fuseConfig.VolumeName, fuseConfig.MountPoint)
+			s.AddModule(fuseModule)
+
 		case "http":
 			var httpConfig HTTPModuleConfig
 			if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {

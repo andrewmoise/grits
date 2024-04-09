@@ -160,6 +160,47 @@ func (ns *NameStore) Lookup(name string) (*CachedFile, error) {
 	return cf, nil
 }
 
+func (ns *NameStore) LookupNode(name string) (FileNode, error) {
+	ns.mtx.RLock()
+	defer ns.mtx.RUnlock()
+
+	// Normalize the name path to avoid leading/trailing slashes confusion
+	name = strings.Trim(name, "/")
+	if name == "" {
+		if ns.root != nil {
+			ns.root.Take() // Take a reference to the root node before returning
+		}
+		return ns.root, nil // Return the root node for empty path
+	}
+
+	parts := strings.Split(name, "/")
+	node := ns.root // Start from the root node
+
+	for _, part := range parts {
+		if node == nil {
+			return nil, fmt.Errorf("path not found: %s", name)
+		}
+
+		// Only TreeNodes have children to traverse
+		treeNode, isTreeNode := node.(*TreeNode)
+		if !isTreeNode {
+			return nil, fmt.Errorf("encountered non-directory in path: %s", name)
+		}
+
+		childNode, exists := treeNode.ChildrenMap[part]
+		if !exists {
+			return nil, fmt.Errorf("path not found: %s", name)
+		}
+
+		node = childNode // Move to the next node in the path
+	}
+
+	if node != nil {
+		node.Take() // Take a reference to the node before returning
+	}
+	return node, nil
+}
+
 func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 	if name != "" && name[0] == '/' {
 		return nil, fmt.Errorf("name must be relative")
