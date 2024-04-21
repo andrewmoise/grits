@@ -82,6 +82,16 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 		}
 
 		switch baseConfig.Type {
+		case "deployment":
+			var deploymentConfig DeploymentConfig
+			if err := json.Unmarshal(rawConfig, &deploymentConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal DeploymentModule config: %v", err)
+			}
+
+			module := NewDeploymentModule(s, &deploymentConfig)
+
+			s.AddModule(module)
+
 		case "dirmirror":
 			var mirrorConfig DirToTreeMirrorConfig
 			if err := json.Unmarshal(rawConfig, &mirrorConfig); err != nil {

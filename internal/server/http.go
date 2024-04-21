@@ -28,6 +28,8 @@ type HTTPModule struct {
 
 	HTTPServer *http.Server
 	Mux        *http.ServeMux
+
+	Deployments map[string]*DeploymentModule
 }
 
 func (*HTTPModule) GetModuleName() string {
@@ -50,10 +52,14 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 
 		HTTPServer: HTTPServer,
 		Mux:        mux,
+
+		Deployments: make(map[string]*DeploymentModule),
 	}
 
 	// Set up routes within the constructor or an initialization method
 	httpModule.setupRoutes()
+
+	server.AddModuleHook(httpModule.addDeployment)
 
 	return httpModule
 }
@@ -94,6 +100,18 @@ func (hm *HTTPModule) Stop() error {
 
 	log.Println("HTTP module stopped")
 	return nil
+}
+
+func (hm *HTTPModule) addDeployment(module Module) {
+	deployment, ok := module.(*DeploymentModule)
+	if ok {
+		hostname := deployment.Config.HostName
+		if _, exists := hm.Deployments[hostname]; exists {
+			log.Fatalf("Deployment for %s is defined twice", hostname)
+		}
+
+		hm.Deployments[hostname] = deployment
+	}
 }
 
 // corsMiddleware is a middleware function that adds CORS headers to the response.
@@ -149,6 +167,9 @@ GET to /grits/v1/content/{volume}/{path} just serves file data (mainly for debug
 */
 
 func (s *HTTPModule) setupRoutes() {
+	// Deployment routes:
+	s.Mux.HandleFunc("/", s.corsMiddleware(s.handleDeployment))
+
 	// Content routes:
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/upload", s.corsMiddleware(s.handleBlobUpload))
@@ -387,6 +408,28 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Link successful")
 }
 
+func (s *HTTPModule) handleDeployment(w http.ResponseWriter, r *http.Request) {
+	// Extract hostname from the request
+	hostname := r.Host
+	deployment, exists := s.Deployments[hostname]
+	if !exists {
+		http.Error(w, fmt.Sprintf("Host deployment %s not found", hostname), http.StatusNotFound)
+		return
+	}
+
+	for _, mapping := range deployment.Config.PathMappings {
+		if strings.HasPrefix(r.URL.Path, mapping.UrlPath) {
+			volume := mapping.Volume
+			volumePath := strings.TrimPrefix(r.URL.Path, mapping.UrlPath)
+
+			s.handleContentRequest(volume, volumePath, w, r)
+			return
+		}
+	}
+
+	http.Error(w, fmt.Sprintf("Path %s not found in deployment", r.URL.Path), http.StatusNotFound)
+}
+
 func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/grits/v1/content/")
 
@@ -400,6 +443,10 @@ func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
 	volumeName := pathParts[0]
 	filePath := pathParts[1] // Remaining path
 
+	s.handleContentRequest(volumeName, filePath, w, r)
+}
+
+func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.ResponseWriter, r *http.Request) {
 	volume := s.Server.FindVolumeByName(volumeName)
 	if volume == nil {
 		http.Error(w, fmt.Sprintf("Volume %s not found", volumeName), http.StatusNotFound)
