@@ -8,7 +8,7 @@ import (
 
 // ServiceWorkerModuleConfig holds the configuration for the service worker module.
 type ServiceWorkerModuleConfig struct {
-	PathMappings []PathMapping `json:"PathMappings"`
+	PathMappings []PathMapping `json:"Paths"`
 }
 
 // PathMapping defines a mapping from a URL path to a volume and path in storage.

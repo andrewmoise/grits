@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"grits/internal/grits"
+	"io"
 	"log"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -44,8 +46,7 @@ func (fm *FuseModule) Start() error {
 		return fmt.Errorf("volume %s not found", fm.volumeName)
 	}
 
-	fm.fs = &FS{volume: volume}
-	//fm.fs = &HelloFS{}
+	fm.fs = NewFS(volume)
 
 	// Mount the filesystem
 	conn, err := fuse.Mount(
@@ -86,22 +87,135 @@ func (fm *FuseModule) GetModuleName() string {
 // FS represents the filesystem structure.
 type FS struct {
 	volume Volume
+
+	openFiles     map[string]*os.File // Note, this is only files with unflushed changes
+	openFilesLock sync.RWMutex
+
+	uidManager *UIDManager
 }
 
+// Initialize FS with openFiles map
+func NewFS(volume Volume) *FS {
+	return &FS{
+		volume:     volume,
+		openFiles:  make(map[string]*os.File),
+		uidManager: NewUIDManager(),
+	}
+}
+
+func (fs *FS) GetOpenFile(path string, isCreate bool) (*os.File, error) {
+	fs.openFilesLock.RLock()
+	file, exists := fs.openFiles[path]
+	fs.openFilesLock.RUnlock()
+	if exists {
+		return file, nil
+	}
+
+	tempFile, err := os.CreateTemp("", "fusewrite-")
+	if err != nil {
+		return nil, fmt.Errorf("creating temp file for write: %w", err)
+	}
+	defer func() {
+		if tempFile != nil {
+			os.Remove(tempFile.Name())
+		}
+	}()
+
+	cf, err := fs.volume.GetNameStore().Lookup(path)
+	defer func() {
+		if cf != nil {
+			fs.volume.GetNameStore().BlobStore.Release(cf)
+		}
+	}()
+
+	if isCreate {
+		// No data to copy, but return error if this already existed
+		if cf != nil {
+			return nil, fmt.Errorf("file %s already exists", path)
+		}
+	} else {
+		// Copy pre-existing data
+
+		infile, err := os.Open(cf.Path)
+		if err != nil {
+			return nil, err
+		}
+		defer infile.Close()
+
+		_, err = io.Copy(tempFile, infile)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	fs.openFilesLock.Lock()
+	defer fs.openFilesLock.Unlock()
+
+	file, exists = fs.openFiles[path]
+	if exists {
+		if isCreate {
+			return nil, fmt.Errorf("file %s already exists", path)
+		} else {
+			// Oops. Clean up the copy we made and never speak of it again.
+			return file, nil
+		}
+	}
+
+	fs.openFiles[path] = tempFile
+	tempFile = nil // Disable deletion
+	return fs.openFiles[path], nil
+}
+
+// Hacky UID manager
+
+type UIDManager struct {
+	pathToUID map[string]uint64
+	maxUID    uint64
+	lock      sync.Mutex
+}
+
+func NewUIDManager() *UIDManager {
+	return &UIDManager{
+		pathToUID: make(map[string]uint64),
+	}
+}
+
+func (m *UIDManager) GetUID(path string) uint64 {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if uid, exists := m.pathToUID[path]; exists {
+		return uid
+	}
+	// Assign a new UID
+	m.maxUID++
+	m.pathToUID[path] = m.maxUID
+	return m.maxUID
+}
+
+func (m *UIDManager) RemovePath(path string) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	delete(m.pathToUID, path)
+}
+
+// Base operations and structures
+
 type Dir struct {
-	Volume Volume
-	Path   string
+	fs   *FS
+	Path string
 }
 
 type File struct {
-	Volume Volume
-	Path   string
+	fs   *FS
+	Path string
 }
 
-// Main interface functions
+// Main FUSE interface functions
 
 func (fs *FS) Root() (fs.Node, error) {
-	return LookupFuseNode(fs.volume, "/")
+	return LookupFuseNode(fs, "/")
 }
 
 func (d *Dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
@@ -111,14 +225,14 @@ func (d *Dir) Lookup(ctx context.Context, name string) (fs.Node, error) {
 	fullPath := path.Join(d.Path, name)
 	fullPath = strings.TrimLeft(fullPath, "/")
 
-	return LookupFuseNode(d.Volume, fullPath)
+	return LookupFuseNode(d.fs, fullPath)
 }
 
-func LookupFuseNode(v Volume, fullPath string) (fs.Node, error) {
+func LookupFuseNode(fs *FS, fullPath string) (fs.Node, error) {
 	log.Printf("  LookupFuseNode() for %s\n", fullPath)
 
 	// Lookup the node using the NameStore
-	node, err := v.GetNameStore().LookupNode(fullPath)
+	node, err := fs.volume.GetNameStore().LookupNode(fullPath)
 	if err != nil {
 		log.Printf("    Error: %v\n", err)
 		// Convert the error into a FUSE ENOENT error if the node is not found
@@ -127,20 +241,20 @@ func LookupFuseNode(v Volume, fullPath string) (fs.Node, error) {
 		}
 		return nil, err
 	}
-	defer node.Release(v.GetNameStore().BlobStore)
+	defer node.Release(fs.volume.GetNameStore().BlobStore)
 
 	// Depending on the type of node, return a Dir or File object
 	switch node.(type) {
 	case *grits.TreeNode:
 		log.Printf("    got tree\n")
 		// For TreeNode, return a Dir object
-		return &Dir{Volume: v, Path: fullPath}, nil
+		return &Dir{fs: fs, Path: fullPath}, nil
 	case *grits.BlobNode:
 		log.Printf("    got blob\n")
 		// For BlobNode, return a File object
-		return &File{Volume: v, Path: fullPath}, nil
+		return &File{fs: fs, Path: fullPath}, nil
 	default:
-		log.Printf("    Unknown node type", err)
+		log.Print("    Unknown node type", err)
 		// If the node type is unknown, return an error
 		return nil, fmt.Errorf("unknown node type for path %s", fullPath)
 	}
@@ -149,11 +263,11 @@ func LookupFuseNode(v Volume, fullPath string) (fs.Node, error) {
 func (d *Dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 	log.Printf("Fuse module ReadDirAll() for %s\n", d.Path)
 
-	node, err := d.Volume.GetNameStore().LookupNode(d.Path)
+	node, err := d.fs.volume.GetNameStore().LookupNode(d.Path)
 	if err != nil {
 		return nil, err
 	}
-	defer node.Release(d.Volume.GetNameStore().BlobStore)
+	defer node.Release(d.fs.volume.GetNameStore().BlobStore)
 
 	tn, ok := node.(*grits.TreeNode)
 	if !ok {
@@ -172,14 +286,12 @@ func (d *Dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 		case *grits.BlobNode:
 			dtype = fuse.DT_File
 		default:
-			continue // Skip if the type is unknown
+			return nil, fmt.Errorf("unknown child type")
 		}
 
 		// Construct a fuse.Dirent for each child
 		dirent := fuse.Dirent{
-			// Inode numbers are not directly managed in this example; set to 0 if unknown
-			// Some filesystems use unique hash values or other mechanisms to generate inode numbers
-			Inode: 1,
+			Inode: 1, // FIXME
 			Name:  name,
 			Type:  dtype,
 		}
@@ -193,11 +305,11 @@ func (d *Dir) ReadDirAll(ctx context.Context) ([]fuse.Dirent, error) {
 func (f *File) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadResponse) error {
 	log.Printf("Fuse module Read() for %s\n", f.Path)
 
-	cf, err := f.Volume.GetNameStore().Lookup(f.Path)
+	cf, err := f.fs.volume.GetNameStore().Lookup(f.Path)
 	if err != nil {
 		return err
 	}
-	defer f.Volume.GetNameStore().BlobStore.Release(cf)
+	defer f.fs.volume.GetNameStore().BlobStore.Release(cf)
 
 	data, err := cf.Read(int(req.Offset), req.Size)
 	if err != nil {
@@ -208,12 +320,57 @@ func (f *File) Read(ctx context.Context, req *fuse.ReadRequest, resp *fuse.ReadR
 	return nil
 }
 
+// Example implementation for Write and Flush
 func (f *File) Write(ctx context.Context, req *fuse.WriteRequest, resp *fuse.WriteResponse) error {
-	return fmt.Errorf("not implemented")
+	log.Printf("Fuse module Write() for %s\n", f.Path)
+
+	openFile, err := f.fs.GetOpenFile(f.Path, false)
+	if err != nil {
+		return err
+	}
+
+	// Write to the temporary file
+	written, err := openFile.WriteAt(req.Data, req.Offset)
+	if err != nil {
+		return err
+	}
+
+	resp.Size = written
+	return nil
 }
 
 func (f *File) Flush(ctx context.Context, req *fuse.FlushRequest) error {
-	return fmt.Errorf("not implemented")
+	log.Printf("Fuse module Flush() for %s\n", f.Path)
+
+	f.fs.openFilesLock.Lock()
+	defer f.fs.openFilesLock.Unlock() // Note: Lock contention under write load
+
+	openFile, exists := f.fs.openFiles[f.Path]
+	if !exists {
+		// No problem; nothing to flush.
+		return nil
+	}
+	delete(f.fs.openFiles, f.Path)
+
+	defer os.Remove(openFile.Name())
+
+	_, err := openFile.Seek(0, 0)
+	if err != nil {
+		return err
+	}
+
+	cf, err := f.fs.volume.GetNameStore().BlobStore.AddOpenFile(openFile)
+	if err != nil {
+		return err
+	}
+	defer f.fs.volume.GetNameStore().BlobStore.Release(cf)
+
+	err = f.fs.volume.GetNameStore().LinkBlob(f.Path, cf.Address)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (f *File) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenResponse) (fs.Handle, error) {
@@ -222,13 +379,29 @@ func (f *File) Open(ctx context.Context, req *fuse.OpenRequest, resp *fuse.OpenR
 	return f, nil // Assuming the *File itself can act as a handle
 }
 
-func (f *File) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.CreateResponse) (fs.Node, fs.Handle, error) {
-	log.Printf("Fuse module Create() for %s\n", f.Path)
+func (d *Dir) Create(ctx context.Context, req *fuse.CreateRequest, resp *fuse.CreateResponse) (fs.Node, fs.Handle, error) {
+	log.Printf("Fuse module Create() for %s %s\n", d.Path, req.Name)
 
-	return nil, nil, fmt.Errorf("not implemented")
+	fullPath := path.Join(d.Path, req.Name)
+	fullPath = strings.TrimLeft(fullPath, "/")
+
+	_, err := d.fs.GetOpenFile(fullPath, true)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Prepare the FUSE response and new File node
+	fileNode := &File{fs: d.fs, Path: fullPath}
+
+	uid := d.fs.uidManager.GetUID(fullPath)
+	resp.Node = fuse.NodeID(uid)
+	resp.Handle = fuse.HandleID(uid)
+	resp.Attr.Inode = uid
+
+	resp.Attr.Mode = req.Mode
+
+	return fileNode, fileNode, nil
 }
-
-// Implementations
 
 func FuseAttr(cf *grits.CachedFile, attr *fuse.Attr, mode os.FileMode) error {
 	fileInfo, err := os.Stat(cf.Path)
@@ -243,7 +416,7 @@ func FuseAttr(cf *grits.CachedFile, attr *fuse.Attr, mode os.FileMode) error {
 		return fmt.Errorf("failed to get inode number for %s", cf.Path)
 	}
 
-	attr.Inode = 1
+	attr.Inode = 1 // FIXME
 	attr.Mode = mode
 	attr.Size = uint64(fileInfo.Size())
 	attr.Atime = time.Unix(stat.Atim.Sec, stat.Atim.Nsec) // Access time
@@ -256,12 +429,12 @@ func FuseAttr(cf *grits.CachedFile, attr *fuse.Attr, mode os.FileMode) error {
 func (f *File) Attr(ctx context.Context, attr *fuse.Attr) error {
 	log.Printf("Fuse module Attr() for %s\n", f.Path)
 
-	cf, err := f.Volume.GetNameStore().Lookup(f.Path)
+	cf, err := f.fs.volume.GetNameStore().Lookup(f.Path)
 	if err != nil {
 		log.Printf("Couldn't look up! %s\n", f.Path)
 		return err
 	}
-	defer f.Volume.GetNameStore().BlobStore.Release(cf)
+	defer f.fs.volume.GetNameStore().BlobStore.Release(cf)
 
 	return FuseAttr(cf, attr, 0o400)
 }
@@ -269,12 +442,12 @@ func (f *File) Attr(ctx context.Context, attr *fuse.Attr) error {
 func (d *Dir) Attr(ctx context.Context, attr *fuse.Attr) error {
 	log.Printf("Fuse module Attr() for %s\n", d.Path)
 
-	cf, err := d.Volume.GetNameStore().Lookup(d.Path)
+	cf, err := d.fs.volume.GetNameStore().Lookup(d.Path)
 	if err != nil {
 		log.Printf("Couldn't look up! %s\n", d.Path)
 		return err
 	}
-	defer d.Volume.GetNameStore().BlobStore.Release(cf)
+	defer d.fs.volume.GetNameStore().BlobStore.Release(cf)
 
 	return FuseAttr(cf, attr, os.ModeDir|0o500)
 }

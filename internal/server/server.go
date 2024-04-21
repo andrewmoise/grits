@@ -82,6 +82,7 @@ func (s *Server) Start() error {
 		s.StopPeriodicTasks()
 
 		for _, module := range s.Modules {
+			log.Printf("Stopping module %s\n", module.GetModuleName())
 			if err := module.Stop(); err != nil {
 				log.Printf("Error stopping %s module: %v", module.GetModuleName(), err)
 			}
