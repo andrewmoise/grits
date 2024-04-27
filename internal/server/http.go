@@ -486,9 +486,9 @@ func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.
 
 	var cf *grits.CachedFile
 	if pathAddr.Type == grits.Tree {
-		addr, err := volume.Lookup(path + "/index.html")
+		addr, err := volume.Lookup(strings.TrimRight(path, "/") + "/index.html")
 		if err != nil {
-			http.Error(w, "No index", http.StatusNotFound)
+			http.Error(w, fmt.Sprintf("No index: %v", err), http.StatusNotFound)
 			return
 		}
 
