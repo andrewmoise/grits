@@ -55,7 +55,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 		if !info.IsDir() {
 			relativePath, err := filepath.Rel(bs.storageDir, path)
 			if err != nil {
-				return fmt.Errorf("Can't relativize %s: %v", path, err)
+				return fmt.Errorf("can't relativize %s: %v", path, err)
 			}
 
 			blobAddr, err := NewBlobAddrFromString(relativePath)
