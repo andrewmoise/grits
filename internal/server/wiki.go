@@ -68,8 +68,21 @@ func (wv *WikiVolume) GetVolumeName() string {
 	return wv.name
 }
 
-func (wv *WikiVolume) GetNameStore() *grits.NameStore {
-	return wv.ns
+func (wv *WikiVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
+	node, err := wv.ns.LookupNode(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return node.Address(), nil
+}
+
+func (wv *WikiVolume) LookupFull(path string) ([][]string, error) {
+	return wv.ns.LookupFull(path)
+}
+
+func (wv *WikiVolume) Link(path string, addr *grits.TypedFileAddr) error {
+	return wv.ns.Link(path, addr)
 }
 
 // load retrieves the volume's NameStore root from persistent storage.

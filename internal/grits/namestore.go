@@ -16,6 +16,7 @@ type FileNode interface {
 	ExportedBlob() *CachedFile
 	Children() map[string]FileNode
 	AddressString() string
+	Address() *TypedFileAddr
 
 	Take()
 	Release(*BlobStore)
@@ -48,6 +49,10 @@ func (bn *BlobNode) AddressString() string {
 	return "blob:" + bn.blob.Address.String()
 }
 
+func (bn *BlobNode) Address() *TypedFileAddr {
+	return NewTypedFileAddr(bn.blob.Address.Hash, bn.blob.Address.Size, Blob)
+}
+
 func (bn *BlobNode) Take() {
 	bn.refCount++
 }
@@ -68,6 +73,11 @@ func (tn *TreeNode) ExportedBlob() *CachedFile {
 
 func (tn *TreeNode) Children() map[string]FileNode {
 	return tn.ChildrenMap
+}
+
+func (tn *TreeNode) Address() *TypedFileAddr {
+	tn.ensureSerialized()
+	return NewTypedFileAddr(tn.blob.Address.Hash, tn.blob.Address.Size, Tree)
 }
 
 func (tn *TreeNode) AddressString() string {
@@ -120,7 +130,7 @@ func (ns *NameStore) GetRoot() string {
 	return ns.root.AddressString()
 }
 
-func (ns *NameStore) Lookup(name string) (*CachedFile, error) {
+func (ns *NameStore) LookupAndOpen(name string) (*CachedFile, error) {
 	name = strings.TrimRight(name, "/")
 	if name != "" && name[0] == '/' {
 		return nil, fmt.Errorf("name must be relative")
