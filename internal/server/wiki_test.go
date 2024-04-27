@@ -1,6 +1,7 @@
 package server
 
 import (
+	"grits/internal/grits"
 	"os"
 	"testing"
 )
@@ -31,8 +32,10 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	}
 	defer server.BlobStore.Release(blobAddr)
 
+	typedAddr := grits.NewTypedFileAddr(blobAddr.Address.Hash, blobAddr.Address.Size, grits.Blob)
+
 	// Link the new blob to the wiki volume using the test path.
-	err = wikiVolume.GetNameStore().LinkBlob(testPath, blobAddr.Address)
+	err = wikiVolume.Link(testPath, typedAddr)
 	if err != nil {
 		t.Fatalf("Failed to link blob in wiki volume: %v", err)
 	}
@@ -49,9 +52,14 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	}
 
 	// Verify the content persisted by looking up the previously linked path.
-	cachedFile, err := wikiVolumeReloaded.GetNameStore().Lookup(testPath)
+	addr, err := wikiVolumeReloaded.Lookup(testPath)
 	if err != nil {
 		t.Fatalf("Failed to lookup content in wiki volume: %v", err)
+	}
+
+	cachedFile, err := server.BlobStore.ReadFile(&addr.BlobAddr)
+	if err != nil {
+		t.Fatalf("Failed to read file contents: %v", err)
 	}
 	defer server.BlobStore.Release(cachedFile)
 

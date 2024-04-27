@@ -27,8 +27,21 @@ func (dt *DirToTreeMirror) GetVolumeName() string {
 	return dt.volumeName
 }
 
-func (dt *DirToTreeMirror) GetNameStore() *grits.NameStore {
-	return dt.ns
+func (dt *DirToTreeMirror) Lookup(path string) (*grits.TypedFileAddr, error) {
+	node, err := dt.ns.LookupNode(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return node.Address(), nil
+}
+
+func (dt *DirToTreeMirror) LookupFull(path string) ([][]string, error) {
+	return dt.ns.LookupFull(path)
+}
+
+func (dt *DirToTreeMirror) Link(path string, addr *grits.TypedFileAddr) error {
+	return dt.ns.Link(path, addr)
 }
 
 type DirToTreeMirrorConfig struct {

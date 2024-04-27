@@ -72,7 +72,7 @@ func TestDirToTreeMirror(t *testing.T) {
 
 	// Verify files are added to NameStore
 	for i := 1; i <= 5; i++ {
-		cf, err := nameStore.Lookup(fmt.Sprintf("file%d.txt", i))
+		cf, err := nameStore.LookupAndOpen(fmt.Sprintf("file%d.txt", i))
 		if err != nil {
 			t.Fatalf("Failed to lookup file%d.txt in NameStore: %v", i, err)
 		}
@@ -99,13 +99,13 @@ func TestDirToTreeMirror(t *testing.T) {
 	log.Printf("--- Check modifications\n")
 
 	// Verify file3.txt is removed from NameStore
-	_, err = nameStore.Lookup("file3.txt")
+	_, err = nameStore.LookupAndOpen("file3.txt")
 	if err == nil {
 		t.Fatalf("file3.txt should have been removed from NameStore")
 	}
 
 	// Verify file5.txt content is updated
-	cf, err := nameStore.Lookup("file5.txt")
+	cf, err := nameStore.LookupAndOpen("file5.txt")
 	if err != nil {
 		t.Fatalf("Failed to resolve file5.txt in NameStore")
 	}
@@ -146,7 +146,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	log.Printf("--- Check subdirectory add\n")
 
 	// Verify the subdirectory file is added to NameStore
-	subCf, err := nameStore.Lookup(path.Join("subdir", "subfile1.txt"))
+	subCf, err := nameStore.LookupAndOpen(path.Join("subdir", "subfile1.txt"))
 	if err != nil {
 		t.Fatalf("Failed to resolve subdir/subfile1.txt in NameStore")
 	}
@@ -167,7 +167,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	log.Printf("--- Check subdirectory file removal\n")
 
 	// Verify subdirectory file is removed from NameStore
-	_, err = nameStore.Lookup(path.Join("subdir", "subfile1.txt"))
+	_, err = nameStore.LookupAndOpen(path.Join("subdir", "subfile1.txt"))
 	if err == nil {
 		t.Fatalf("subdir/subfile1.txt should have been removed from NameStore")
 	}

@@ -22,8 +22,11 @@ type Volume interface {
 	Stop() error
 
 	isReadOnly() bool
-	GetNameStore() *grits.NameStore
 	Checkpoint() error
+
+	Lookup(path string) (*grits.TypedFileAddr, error)
+	LookupFull(name string) ([][]string, error)
+	Link(path string, addr *grits.TypedFileAddr) error
 }
 
 // ModuleConfig represents a generic module configuration.
@@ -105,15 +108,6 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 
 			s.AddModule(module)
 			s.AddVolume(module)
-
-		case "fuse":
-			var fuseConfig FuseModuleConfig
-			if err := json.Unmarshal(rawConfig, &fuseConfig); err != nil {
-				return fmt.Errorf("failed to unmarshal FuseModule config: %v", err)
-			}
-
-			fuseModule := NewFuseModule(s, fuseConfig.VolumeName, fuseConfig.MountPoint)
-			s.AddModule(fuseModule)
 
 		case "http":
 			var httpConfig HTTPModuleConfig

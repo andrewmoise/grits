@@ -329,9 +329,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns := volume.GetNameStore()
-
-	response, err := ns.LookupFull(lookupPath)
+	response, err := volume.LookupFull(lookupPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
 		return
@@ -377,8 +375,6 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ns := volume.GetNameStore()
-
 	for _, linkData := range allLinkData {
 		addr, err := grits.NewTypedFileAddrFromString(linkData.Addr)
 		if err != nil {
@@ -388,11 +384,11 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 
 		// Perform link
 		fmt.Printf("Perform link: %s to %s\n", linkData.Path, addr.String())
-		if err := ns.Link(linkData.Path, addr); err != nil {
+		if err := volume.Link(linkData.Path, addr); err != nil {
 			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 			return
 		}
-		log.Printf("Link successful for path, new root is %s\n", ns.GetRoot())
+		log.Printf("Link successful for path\n")
 	}
 
 	err := volume.Checkpoint()
@@ -453,27 +449,25 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 		return
 	}
 
-	ns := volume.GetNameStore()
-
 	log.Printf("Received request for file: %s\n", filePath)
 	log.Printf("Method is %s\n", r.Method)
 
 	switch r.Method {
 	case http.MethodGet:
-		handleNamespaceGet(s.Server.BlobStore, ns, filePath, w, r)
+		handleNamespaceGet(s.Server.BlobStore, volume, filePath, w, r)
 	case http.MethodPut:
-		handleNamespacePut(s.Server.BlobStore, ns, filePath, w, r)
+		handleNamespacePut(s.Server.BlobStore, volume, filePath, w, r)
 	case http.MethodDelete:
-		handleNamespaceDelete(ns, filePath, w)
+		handleNamespaceDelete(volume, filePath, w)
 	default:
 		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
 	}
 }
 
-func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
-	fullPath, err := ns.LookupFull(path)
+	fullPath, err := volume.LookupFull(path)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
@@ -492,9 +486,15 @@ func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 
 	var cf *grits.CachedFile
 	if pathAddr.Type == grits.Tree {
-		cf, err = ns.Lookup(path + "/index.html")
+		addr, err := volume.Lookup(path + "/index.html")
 		if err != nil {
 			http.Error(w, "No index", http.StatusNotFound)
+			return
+		}
+
+		cf, err = bs.ReadFile(&addr.BlobAddr)
+		if err != nil {
+			http.Error(w, "Can't open file for read", http.StatusInternalServerError)
 			return
 		}
 	} else {
@@ -526,7 +526,7 @@ func handleNamespaceGet(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	http.ServeContent(w, r, filepath.Base(path), cf.LastTouched, file)
 }
 
-func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespacePut(bs *grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received PUT request for file: %s\n", path)
 
 	if path == "" || path == "/" {
@@ -549,7 +549,8 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	}
 	defer bs.Release(cf)
 
-	err = ns.LinkBlob(path, cf.Address)
+	addr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
+	err = volume.Link(path, addr)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
 		return
@@ -559,7 +560,7 @@ func handleNamespacePut(bs *grits.BlobStore, ns *grits.NameStore, path string, w
 	fmt.Fprintf(w, "File linked successfully")
 }
 
-func handleNamespaceDelete(ns *grits.NameStore, path string, w http.ResponseWriter) {
+func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 	log.Printf("Received DELETE request for file: %s\n", path)
 
 	if path == "" || path == "/" {
@@ -567,7 +568,7 @@ func handleNamespaceDelete(ns *grits.NameStore, path string, w http.ResponseWrit
 		return
 	}
 
-	err := ns.LinkBlob(path, nil)
+	err := volume.Link(path, nil)
 	if err != nil {
 		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
 		return

@@ -61,21 +61,21 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 	}
 
 	// Lookup /file.txt
-	cf, err := nameStore.Lookup("file.txt")
+	cf, err := nameStore.LookupAndOpen("file.txt")
 	if err != nil {
 		t.Errorf("Failed to lookup file.txt: %v", err)
 	}
 	defer nameStore.BlobStore.Release(cf)
 
 	// Lookup /dir/file.txt
-	cf, err = nameStore.Lookup("dir/file.txt")
+	cf, err = nameStore.LookupAndOpen("dir/file.txt")
 	if err != nil {
 		t.Errorf("Failed to lookup dir/file.txt: %v", err)
 	}
 	defer nameStore.BlobStore.Release(cf)
 
 	// Attempt to lookup a non-existent file
-	_, err = nameStore.Lookup("nonexistent.txt")
+	_, err = nameStore.LookupAndOpen("nonexistent.txt")
 	if err == nil {
 		t.Errorf("Expected error when looking up nonexistent file, but got none")
 	}
@@ -109,7 +109,7 @@ func TestUpdatingFiles(t *testing.T) {
 	}
 
 	// Lookup /updateTest.txt and verify the blob reflects the update
-	cf, err := nameStore.Lookup("updateTest.txt")
+	cf, err := nameStore.LookupAndOpen("updateTest.txt")
 	if err != nil {
 		t.Fatalf("Failed to lookup updateTest.txt after update: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	if err := ns.LinkBlob("dir/subdir/file.txt", nil); err != nil {
 		t.Fatalf("Failed to remove dir/subdir/file.txt: %v", err)
 	}
-	if _, err := ns.Lookup("dir/subdir/file.txt"); err == nil {
+	if _, err := ns.LookupAndOpen("dir/subdir/file.txt"); err == nil {
 		t.Error("Expected dir/subdir/file.txt to be removed, but it was found")
 	}
 
@@ -157,7 +157,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	if err := ns.LinkBlob("dir", nil); err != nil {
 		t.Fatalf("Failed to remove /dir: %v", err)
 	}
-	if _, err := ns.Lookup("dir/subdir"); err == nil {
+	if _, err := ns.LookupAndOpen("dir/subdir"); err == nil {
 		t.Error("Expected dir/subdir to be removed along with dir, but it was found")
 	}
 
@@ -195,7 +195,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 
 	// Verify that each file can be looked up correctly.
 	for _, path := range structure {
-		if _, err := nameStore.Lookup(path); err != nil {
+		if _, err := nameStore.LookupAndOpen(path); err != nil {
 			t.Errorf("Failed to lookup %s: %v", path, err)
 		}
 	}
@@ -206,7 +206,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	}
 
 	// Attempt to look up a file in the removed directory and expect an error.
-	_, err = nameStore.Lookup("dir1/dir2/file2.txt")
+	_, err = nameStore.LookupAndOpen("dir1/dir2/file2.txt")
 	if err == nil {
 		t.Errorf("Expected an error when looking up a file in a removed directory, but got none")
 	}
@@ -221,7 +221,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	}
 
 	// Attempt to look up any file after clearing the root directory.
-	_, err = nameStore.Lookup("dir1/file1.txt")
+	_, err = nameStore.LookupAndOpen("dir1/file1.txt")
 	if err == nil {
 		t.Errorf("Expected an error when looking up any file after clearing the root, but got none")
 	}
@@ -263,13 +263,13 @@ func TestConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer wgLookup.Done()
 			filePath := fmt.Sprintf("concurrent/dir%d/file%d.txt", i, i)
-			_, err := nameStore.Lookup(filePath)
+			_, err := nameStore.LookupAndOpen(filePath)
 			if err == nil {
 				return
 			}
 
 			wgLink.Wait()
-			_, err = nameStore.Lookup(filePath)
+			_, err = nameStore.LookupAndOpen(filePath)
 			if err != nil {
 				t.Errorf("Failed to lookup %s: %v", filePath, err)
 			}
@@ -282,7 +282,7 @@ func TestConcurrentAccess(t *testing.T) {
 	// After all operations complete, verify the integrity of the NameStore
 	for i := 0; i < concurrencyLevel; i++ {
 		filePath := fmt.Sprintf("concurrent/dir%d/file%d.txt", i, i)
-		_, err := nameStore.Lookup(filePath)
+		_, err := nameStore.LookupAndOpen(filePath)
 		if err != nil {
 			t.Errorf("Expected %s to be present after concurrent operations, but it was not found", filePath)
 		}
@@ -409,7 +409,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	log.Printf("--- Verify tree setup")
 	DebugPrintTree(ns.root, "")
 
-	cf, err = ns.Lookup("tree/zero")
+	cf, err = ns.LookupAndOpen("tree/zero")
 	if err != nil {
 		t.Fatalf("Failed to lookup tree/zero: %v", err)
 	}
@@ -426,7 +426,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 		newRoot["prev"] = ns.GetRoot()
 
-		cf, err := ns.Lookup("tree")
+		cf, err := ns.LookupAndOpen("tree")
 		if err != nil {
 			t.Fatalf("Failed to lookup tree: %v", err)
 		}
