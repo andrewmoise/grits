@@ -16,7 +16,7 @@ import (
 // Main API endpoints
 
 func TestLookupAndLinkEndpoints(t *testing.T) {
-	url := fmt.Sprintf("http://localhost:1887/grits/v1")
+	url := "http://localhost:1887/grits/v1"
 	server, cleanup := SetupTestServer(t, WithHttpModule(1887), WithWikiVolume("root"))
 	defer cleanup()
 
