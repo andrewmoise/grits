@@ -25,8 +25,11 @@ type Volume interface {
 	Checkpoint() error
 
 	Lookup(path string) (*grits.TypedFileAddr, error)
+	LookupNode(path string) (grits.FileNode, error)
 	LookupFull(name string) ([][]string, error)
 	Link(path string, addr *grits.TypedFileAddr) error
+
+	Release(node grits.FileNode)
 }
 
 // ModuleConfig represents a generic module configuration.
