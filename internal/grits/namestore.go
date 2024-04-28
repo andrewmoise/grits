@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 ////////////////////////
@@ -17,22 +18,24 @@ type FileNode interface {
 	Children() map[string]FileNode
 	AddressString() string
 	Address() *TypedFileAddr
+	Inode() uint64
 
 	Take()
 	Release(*BlobStore)
 }
 
-type BlobNode struct {
-	blob     *CachedFile
-	refCount int
-}
-
 type TreeNode struct {
 	blob        *CachedFile
 	ChildrenMap map[string]FileNode
+	inode       uint64 // Add inode number field
 	refCount    int
+	nameStore   *NameStore
+}
 
-	nameStore *NameStore
+type BlobNode struct {
+	blob     *CachedFile
+	inode    uint64 // Add inode number field
+	refCount int
 }
 
 // Implementations for BlobNode
@@ -51,6 +54,10 @@ func (bn *BlobNode) AddressString() string {
 
 func (bn *BlobNode) Address() *TypedFileAddr {
 	return NewTypedFileAddr(bn.blob.Address.Hash, bn.blob.Address.Size, Blob)
+}
+
+func (bn *BlobNode) Inode() uint64 {
+	return bn.inode
 }
 
 func (bn *BlobNode) Take() {
@@ -83,6 +90,10 @@ func (tn *TreeNode) Address() *TypedFileAddr {
 func (tn *TreeNode) AddressString() string {
 	tn.ensureSerialized()
 	return "tree:" + tn.blob.Address.String()
+}
+
+func (tn *TreeNode) Inode() uint64 {
+	return tn.inode
 }
 
 func (tn *TreeNode) Take() {
@@ -120,10 +131,11 @@ func DebugPrintTree(node FileNode, indent string) {
 // NameStore
 
 type NameStore struct {
-	BlobStore *BlobStore
-	root      FileNode
-	fileCache map[string]FileNode
-	mtx       sync.RWMutex
+	BlobStore  *BlobStore
+	root       FileNode
+	fileCache  map[string]FileNode
+	inodeIndex uint64 // inode index to assign inode numbers sequentially
+	mtx        sync.RWMutex
 }
 
 func (ns *NameStore) GetRoot() string {
@@ -492,11 +504,17 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 	}
 }
 
+func (ns *NameStore) nextInode() uint64 {
+	return atomic.AddUint64(&ns.inodeIndex, 1) // atomically increment the inode index
+}
+
 func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, error) {
-	return &TreeNode{
+	tn := &TreeNode{
 		ChildrenMap: children,
+		inode:       ns.nextInode(), // Assign an inode number
 		nameStore:   ns,
-	}, nil
+	}
+	return tn, nil
 }
 
 func (ns *NameStore) CreateBlobNode(fa *BlobAddr) (*BlobNode, error) {
@@ -504,8 +522,12 @@ func (ns *NameStore) CreateBlobNode(fa *BlobAddr) (*BlobNode, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", fa.String(), err)
 	}
-
-	return &BlobNode{blob: cf}, nil
+	bn := &BlobNode{
+		blob:     cf,
+		inode:    ns.nextInode(), // Assign an inode number
+		refCount: 1,              // Initially referenced
+	}
+	return bn, nil
 }
 
 func (tn *TreeNode) ensureSerialized() error {

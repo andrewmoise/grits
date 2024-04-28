@@ -40,8 +40,16 @@ func (dt *DirToTreeMirror) LookupFull(path string) ([][]string, error) {
 	return dt.ns.LookupFull(path)
 }
 
+func (dt *DirToTreeMirror) LookupNode(path string) (grits.FileNode, error) {
+	return dt.ns.LookupNode(path)
+}
+
 func (dt *DirToTreeMirror) Link(path string, addr *grits.TypedFileAddr) error {
 	return dt.ns.Link(path, addr)
+}
+
+func (dt *DirToTreeMirror) Release(node grits.FileNode) {
+	node.Release(dt.ns.BlobStore)
 }
 
 type DirToTreeMirrorConfig struct {

@@ -2,27 +2,35 @@ package server
 
 import (
 	"context"
+	"fmt"
+	"grits/internal/grits"
 	"log"
 	"os"
-	"strconv"
+	"path/filepath"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
 
+/////
+// Module stuff
+
 type MountModuleConfig struct {
 	MountPoint string `json:"MountPoint"`
+	Volume     string `json:"Volume"`
 }
 
 type MountModule struct {
-	config   *MountModuleConfig
-	fsServer *fuse.Server
+	config      *MountModuleConfig
+	fsServer    *fuse.Server
+	gritsServer *Server
 }
 
 func NewMountModule(config *MountModuleConfig, server *Server) *MountModule {
 	return &MountModule{
-		config: config,
+		config:      config,
+		gritsServer: server,
 	}
 }
 
@@ -33,7 +41,16 @@ func (*MountModule) GetModuleName() string {
 func (mm *MountModule) Start() error {
 	mntDir := mm.config.MountPoint
 	os.Mkdir(mntDir, 0755)
-	root := &numberNode{num: 10}
+
+	volume, exists := mm.gritsServer.Volumes[mm.config.Volume]
+	if !exists {
+		return fmt.Errorf("can't open volume %s", mm.config.Volume)
+	}
+
+	root := &gritsNode{
+		volume: volume,
+		path:   "",
+	}
 
 	var err error
 	mm.fsServer, err = fs.Mount(mntDir, root, &fs.Options{
@@ -62,89 +79,90 @@ func (mm *MountModule) Stop() error {
 /////
 // FUSE stuff
 
-// numberNode is a filesystem node representing an integer. Prime
-// numbers are regular files, while composite numbers are directories
-// containing all smaller numbers, eg.
-//
-//	$ ls -F  /tmp/x/6
-//	2  3  4/  5
-//
-// the file system nodes are deduplicated using inode numbers. The
-// number 2 appears in many directories, but it is actually the represented
-// by the same numberNode{} object, with inode number 2.
-//
-//	$ ls -i1  /tmp/x/2  /tmp/x/8/6/4/2
-//	2 /tmp/x/2
-//	2 /tmp/x/8/6/4/2
-type numberNode struct {
-	// Must embed an Inode for the struct to work as a node.
+type gritsNode struct {
 	fs.Inode
-
-	// num is the integer represented in this file/directory
-	num int
-}
-
-// isPrime returns whether n is prime
-func isPrime(n int) bool {
-	for i := 2; i*i <= n; i++ {
-		if n%i == 0 {
-			return false
-		}
-	}
-	return true
-}
-
-func numberToMode(n int) uint32 {
-	// prime numbers are files
-	if isPrime(n) {
-		return fuse.S_IFREG
-	}
-	// composite numbers are directories
-	return fuse.S_IFDIR
+	volume Volume
+	path   string
 }
 
 // Ensure we are implementing the NodeReaddirer interface
-var _ = (fs.NodeReaddirer)((*numberNode)(nil))
+var _ = (fs.NodeReaddirer)((*gritsNode)(nil))
 
 // Readdir is part of the NodeReaddirer interface
-func (n *numberNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	r := make([]fuse.DirEntry, 0, n.num)
-	for i := 2; i < n.num; i++ {
+func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	log.Printf("--- Okay reading directory %s\n", gn.path)
+
+	node, _ := gn.volume.LookupNode(gn.path)
+	if node == nil {
+		// FIXME - might be better for Lookup() to return (nil, nil) for "not found"
+		// And for us to return an internal error if we see non-nil error
+		return nil, syscall.ENOENT
+	}
+	defer gn.volume.Release(node)
+
+	dirNode, ok := node.(*grits.TreeNode)
+	if !ok {
+		return nil, syscall.ENOTDIR
+	}
+
+	r := make([]fuse.DirEntry, 0, len(dirNode.Children()))
+	for name, node := range dirNode.Children() {
+		_, isDir := node.(*grits.TreeNode)
+		var mode uint32
+		if isDir {
+			mode = fuse.S_IFDIR | 0o755
+		} else {
+			mode = fuse.S_IFREG | 0o644
+		}
+
 		d := fuse.DirEntry{
-			Name: strconv.Itoa(i),
-			Ino:  uint64(i),
-			Mode: numberToMode(i),
+			Name: name,
+			Ino:  node.Inode(),
+			Mode: mode,
 		}
 		r = append(r, d)
 	}
+
 	return fs.NewListDirStream(r), 0
 }
 
 // Ensure we are implementing the NodeLookuper interface
-var _ = (fs.NodeLookuper)((*numberNode)(nil))
+var _ = (fs.NodeLookuper)((*gritsNode)(nil))
 
 // Lookup is part of the NodeLookuper interface
-func (n *numberNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	i, err := strconv.Atoi(name)
-	if err != nil {
+func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	log.Printf("--- Okay looking up %s %s\n", gn.path, name)
+
+	fullPath := filepath.Join(gn.path, name)
+
+	node, _ := gn.volume.LookupNode(fullPath)
+	if node == nil {
 		return nil, syscall.ENOENT
 	}
+	defer gn.volume.Release(node)
 
-	if i >= n.num || i <= 1 {
-		return nil, syscall.ENOENT
+	_, isDir := node.(*grits.TreeNode)
+	var mode uint32
+	if isDir {
+		mode = fuse.S_IFDIR | 0o755
+	} else {
+		mode = fuse.S_IFREG | 0o644
 	}
 
 	stable := fs.StableAttr{
-		Mode: numberToMode(i),
+		Mode: mode,
 		// The child inode is identified by its Inode number.
 		// If multiple concurrent lookups try to find the same
 		// inode, they are deduplicated on this key.
-		Ino: uint64(i),
+		Ino: node.Inode(),
 	}
-	operations := &numberNode{num: i}
+	operations := &gritsNode{
+		volume: gn.volume,
+		path:   fullPath,
+	}
 
 	// The NewInode call wraps the `operations` object into an Inode.
-	child := n.NewInode(ctx, operations, stable)
+	child := gn.NewInode(ctx, operations, stable)
 
 	// In case of concurrent lookup requests, it can happen that operations !=
 	// child.Operations().
