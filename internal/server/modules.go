@@ -117,6 +117,14 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 
 			s.AddModule(NewHTTPModule(s, &httpConfig))
 
+		case "mount":
+			var mountConfig MountModuleConfig
+			if err := json.Unmarshal(rawConfig, &mountConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal mount config: %v", err)
+			}
+
+			s.AddModule(NewMountModule(&mountConfig, s))
+
 		case "serviceworker":
 			var swConfig ServiceWorkerModuleConfig
 			if err := json.Unmarshal(rawConfig, &swConfig); err != nil {
