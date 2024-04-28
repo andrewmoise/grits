@@ -213,7 +213,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 
 	err = dt.ns.Link(relPath, fileAddr)
 	if err != nil {
-		return fmt.Errorf("Can't do final link for %s: %v", scanPath, err)
+		return fmt.Errorf("can't do final link for %s: %v", scanPath, err)
 	}
 
 	return nil
