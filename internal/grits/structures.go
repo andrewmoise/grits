@@ -183,3 +183,7 @@ func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
 func (cf *CachedFile) Release() {
 	cf.blobStore.Release(cf)
 }
+
+func (cf *CachedFile) Take() {
+	cf.blobStore.Take(cf)
+}

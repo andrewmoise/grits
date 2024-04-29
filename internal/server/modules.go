@@ -31,6 +31,8 @@ type Volume interface {
 	Link(path string, addr *grits.TypedFileAddr) error
 
 	ReadFile(*grits.TypedFileAddr) (*grits.CachedFile, error)
+
+	AddBlob(path string) (*grits.CachedFile, error)
 }
 
 // ModuleConfig represents a generic module configuration.
