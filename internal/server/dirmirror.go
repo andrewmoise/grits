@@ -52,6 +52,10 @@ func (dt *DirToTreeMirror) ReadFile(addr *grits.TypedFileAddr) (*grits.CachedFil
 	return dt.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
+func (dt *DirToTreeMirror) AddBlob(path string) (*grits.CachedFile, error) {
+	return dt.ns.BlobStore.AddLocalFile(path)
+}
+
 type DirToTreeMirrorConfig struct {
 	VolumeName string `json:"VolumeName"`
 	SourceDir  string `json:"SourceDir"`

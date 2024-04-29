@@ -93,6 +93,10 @@ func (wv *WikiVolume) ReadFile(addr *grits.TypedFileAddr) (*grits.CachedFile, er
 	return wv.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
+func (wv *WikiVolume) AddBlob(path string) (*grits.CachedFile, error) {
+	return wv.ns.BlobStore.AddLocalFile(path)
+}
+
 // load retrieves the volume's NameStore root from persistent storage.
 func (wv *WikiVolume) load() error {
 	err := os.MkdirAll(wv.server.Config.ServerPath("var/wikiroots"), 0755)
