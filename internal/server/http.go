@@ -225,7 +225,7 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
-	defer s.Server.BlobStore.Release(cachedFile)
+	defer cachedFile.Release()
 
 	// Validate the file contents if hard linking is enabled
 	if s.Server.Config.ValidateBlobs {
@@ -296,7 +296,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	defer s.Server.BlobStore.Release(cachedFile)
+	defer cachedFile.Release()
 
 	// Respond with the address of the new blob
 	addrStr := cachedFile.Address.String()
@@ -503,17 +503,19 @@ func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.
 			http.Error(w, "Cannot open blob", http.StatusInternalServerError)
 		}
 	}
-	defer bs.Release(cf)
+	defer cf.Release()
 
-	cachedFile, err := bs.ReadFile(cf.Address)
-	if err != nil {
-		http.Error(w, "File not found", http.StatusNotFound)
-		return
-	}
-	defer bs.Release(cachedFile)
+	// FIXME - What? Seems like this is unnecessary:
+
+	//cachedFile, err := bs.ReadFile(cf.Address)
+	//if err != nil {
+	//	http.Error(w, "File not found", http.StatusNotFound)
+	//	return
+	//}
+	//defer cachedFile.Release()
 
 	// Open the file for reading
-	file, err := os.Open(cachedFile.Path)
+	file, err := os.Open(cf.Path)
 	if err != nil {
 		log.Printf("Error opening file: %v\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -522,7 +524,7 @@ func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.
 	defer file.Close()
 
 	// Serve the content
-	log.Printf("Serving file %s\n", cachedFile.Path)
+	log.Printf("Serving file %s\n", cf.Path)
 	http.ServeContent(w, r, filepath.Base(path), cf.LastTouched, file)
 }
 
@@ -547,7 +549,7 @@ func handleNamespacePut(bs *grits.BlobStore, volume Volume, path string, w http.
 		http.Error(w, fmt.Sprintf("Failed to store %s content", path), http.StatusInternalServerError)
 		return
 	}
-	defer bs.Release(cf)
+	defer cf.Release()
 
 	addr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
 	err = volume.Link(path, addr)

@@ -21,7 +21,7 @@ type FileNode interface {
 	Inode() uint64
 
 	Take()
-	Release(*BlobStore)
+	Release()
 }
 
 type TreeNode struct {
@@ -64,10 +64,10 @@ func (bn *BlobNode) Take() {
 	bn.refCount++
 }
 
-func (bn *BlobNode) Release(bs *BlobStore) {
+func (bn *BlobNode) Release() {
 	bn.refCount--
 	if bn.refCount == 0 {
-		bs.Release(bn.blob)
+		bn.blob.Release()
 	}
 }
 
@@ -100,14 +100,14 @@ func (tn *TreeNode) Take() {
 	tn.refCount++
 }
 
-func (tn *TreeNode) Release(bs *BlobStore) {
+func (tn *TreeNode) Release() {
 	tn.refCount--
 	if tn.refCount == 0 {
 		if tn.blob != nil {
-			bs.Release(tn.blob)
+			tn.blob.Release()
 		}
 		for _, child := range tn.ChildrenMap {
-			child.Release(bs)
+			child.Release()
 		}
 	}
 }
@@ -295,7 +295,7 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 		newRoot.Take()
 	}
 	if ns.root != nil {
-		ns.root.Release(ns.BlobStore)
+		ns.root.Release()
 	}
 
 	ns.root = newRoot
@@ -383,7 +383,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		result, err = ns.CreateTreeNode(newChildren)
 		if err != nil {
 			for _, v := range newChildren {
-				v.Release(ns.BlobStore)
+				v.Release()
 			}
 
 			return nil, err
@@ -458,7 +458,7 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			if dn != nil {
 				delete(ns.fileCache, addr.String())
 				for _, child := range dn.ChildrenMap {
-					child.Release(ns.BlobStore)
+					child.Release()
 				}
 			}
 		}()

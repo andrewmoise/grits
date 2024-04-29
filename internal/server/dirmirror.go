@@ -48,8 +48,8 @@ func (dt *DirToTreeMirror) Link(path string, addr *grits.TypedFileAddr) error {
 	return dt.ns.Link(path, addr)
 }
 
-func (dt *DirToTreeMirror) Release(node grits.FileNode) {
-	node.Release(dt.ns.BlobStore)
+func (dt *DirToTreeMirror) ReadFile(addr *grits.TypedFileAddr) (*grits.CachedFile, error) {
+	return dt.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
 type DirToTreeMirrorConfig struct {
@@ -189,7 +189,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		if err != nil {
 			return err
 		}
-		defer dt.server.BlobStore.Release(cf)
+		defer cf.Release()
 
 		relPath, err := filepath.Rel(scanPath, path)
 		if err != nil {
@@ -234,7 +234,7 @@ func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string, file *os.File) error 
 	if err != nil {
 		return err
 	}
-	defer dt.ns.BlobStore.Release(cf)
+	defer cf.Release()
 
 	relPath, err := filepath.Rel(dt.srcPath, srcPath)
 	if err != nil {
