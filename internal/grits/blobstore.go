@@ -96,6 +96,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 				Address:     blobAddr,
 				LastTouched: info.ModTime(),
 				IsHardLink:  isHardLink,
+				blobStore:   bs,
 			}
 		}
 		return nil
@@ -189,6 +190,7 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 		Address:     blobAddr,
 		LastTouched: time.Now(),
 		IsHardLink:  isHardLink,
+		blobStore:   bs,
 	}
 
 	bs.files[blobAddr.Hash] = cachedFile
@@ -229,6 +231,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 		RefCount:    1, // Initialize RefCount to 1 for new data blocks
 		Address:     blobAddr,
 		LastTouched: time.Now(),
+		blobStore:   bs,
 	}
 
 	// Add the new data block to the files map

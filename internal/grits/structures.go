@@ -161,16 +161,7 @@ type CachedFile struct {
 	Address     *BlobAddr
 	LastTouched time.Time
 	IsHardLink  bool
-}
-
-// NewCachedFile creates a new CachedFile.
-func NewCachedFile(path string, refCount int, blobAddr *BlobAddr) *CachedFile {
-	return &CachedFile{
-		Path:        path,
-		RefCount:    refCount,
-		Address:     blobAddr,
-		LastTouched: time.Now(),
-	}
+	blobStore   *BlobStore
 }
 
 // Read reads a portion of the file.
@@ -187,4 +178,8 @@ func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
 		return nil, err
 	}
 	return buffer, nil
+}
+
+func (cf *CachedFile) Release() {
+	cf.blobStore.Release(cf)
 }

@@ -65,14 +65,14 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 	if err != nil {
 		t.Errorf("Failed to lookup file.txt: %v", err)
 	}
-	defer nameStore.BlobStore.Release(cf)
+	defer cf.Release()
 
 	// Lookup /dir/file.txt
 	cf, err = nameStore.LookupAndOpen("dir/file.txt")
 	if err != nil {
 		t.Errorf("Failed to lookup dir/file.txt: %v", err)
 	}
-	defer nameStore.BlobStore.Release(cf)
+	defer cf.Release()
 
 	// Attempt to lookup a non-existent file
 	_, err = nameStore.LookupAndOpen("nonexistent.txt")
@@ -113,7 +113,7 @@ func TestUpdatingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to lookup updateTest.txt after update: %v", err)
 	}
-	defer BlobStore.Release(cf)
+	defer cf.Release()
 
 	// Read the content of the file from the BlobStore
 	readBlob, err := BlobStore.ReadFile(cf.Address)
@@ -404,7 +404,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Tree)
 
 	ns.Link("", tfa)
-	bs.Release(cf)
+	cf.Release()
 
 	log.Printf("--- Verify tree setup")
 	DebugPrintTree(ns.root, "")
@@ -417,7 +417,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	if cf.Address.Hash != allFiles[0].Address.Hash {
 		t.Errorf("Expected tree/zero to point to %s, got %s", allFiles[0].Address.Hash, cf.Address.Hash)
 	}
-	bs.Release(cf)
+	cf.Release()
 
 	log.Printf("--- Starting revisions")
 
@@ -471,7 +471,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	log.Printf("--- Release allFiles")
 
 	for _, cf := range allFiles {
-		bs.Release(cf)
+		cf.Release()
 	}
 
 	log.Printf("--- Check reference counts (in nodes)")

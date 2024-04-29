@@ -142,7 +142,7 @@ func TestBlobStore_ReadBack_AddOpenFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddOpenFile failed: %v", err)
 	}
-	defer bs.Release(addedFile)
+	defer addedFile.Release()
 
 	// Read back the file content from the blob store
 	readFile, err := os.ReadFile(addedFile.Path)
@@ -166,7 +166,7 @@ func TestBlobStore_ReadBack_AddDataBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddDataBlock failed: %v", err)
 	}
-	defer bs.Release(addedFile)
+	defer addedFile.Release()
 
 	// Read back the file content from the blob store
 	readFile, err := os.ReadFile(addedFile.Path)
@@ -197,7 +197,7 @@ func TestBlobStore_Release(t *testing.T) {
 	}
 
 	// Release the file
-	bs.Release(cachedFile)
+	cachedFile.Release()
 
 	if cachedFile.RefCount != 0 {
 		t.Errorf("Expected RefCount to be 0 after release, got %d", cachedFile.RefCount)
@@ -236,7 +236,7 @@ func TestBlobStore_EvictOldFiles(t *testing.T) {
 			heldFiles = append(heldFiles, cachedFile)
 		} else {
 			// Release the others immediately
-			bs.Release(cachedFile)
+			cachedFile.Release()
 		}
 	}
 
@@ -253,7 +253,7 @@ func TestBlobStore_EvictOldFiles(t *testing.T) {
 			t.Errorf("Couldn't find %s in store", file.Address.String())
 			continue
 		}
-		defer bs.Release(cf)
+		defer cf.Release()
 
 		if cf != file {
 			t.Errorf("File for blob %s doesn't match", file.Address.String())

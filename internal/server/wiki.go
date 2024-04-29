@@ -89,8 +89,8 @@ func (wv *WikiVolume) Link(path string, addr *grits.TypedFileAddr) error {
 	return wv.ns.Link(path, addr)
 }
 
-func (wv *WikiVolume) Release(node grits.FileNode) {
-	node.Release(wv.ns.BlobStore)
+func (wv *WikiVolume) ReadFile(addr *grits.TypedFileAddr) (*grits.CachedFile, error) {
+	return wv.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
 // load retrieves the volume's NameStore root from persistent storage.
