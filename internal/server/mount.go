@@ -7,6 +7,10 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/hanwen/go-fuse/v2/fs"
@@ -70,21 +74,17 @@ func (mm *MountModule) Start() error {
 		return fmt.Errorf("can't open volume %s", mm.config.Volume)
 	}
 
-	rootNode, err := volume.LookupNode("")
-	if err != nil {
-		return fmt.Errorf("can't find root in %s", mm.config.Volume)
-	}
-
 	root := &gritsNode{
 		volume: volume,
-		node:   rootNode,
+		path:   "",
 	}
 
+	var err error
 	mm.fsServer, err = fs.Mount(mntDir, root, &fs.Options{
 		MountOptions: fuse.MountOptions{
-			// Set to true to see how the file system works.
-			Debug:                    true,
-			FsName:                   "grits",
+			Debug: true,
+			//FsName:                   "grits",
+			Name:                     "grits",
 			DisableXAttrs:            true,
 			ExplicitDataCacheControl: true,
 		},
@@ -112,13 +112,17 @@ func (mm *MountModule) Stop() error {
 type gritsNode struct {
 	fs.Inode
 	volume Volume
-	node   grits.FileNode
+	path   string // Now storing path instead of a node reference
 }
 
 // FileHandle represents an open file. This will wrap os.File to handle file operations.
 type FileHandle struct {
 	file       *os.File
 	cachedFile *grits.CachedFile
+	node       *gritsNode
+
+	isDirty bool
+	mtx     sync.RWMutex
 }
 
 // Readdir opens a stream of directory entries.
@@ -135,7 +139,14 @@ type FileHandle struct {
 var _ = (fs.NodeReaddirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	children := gn.node.Children()
+	node, _ := gn.volume.LookupNode(gn.path)
+	if node == nil {
+		// FIXME - Should detect internal errors and do it differently
+		return nil, syscall.ENOENT
+	}
+	defer node.Release()
+
+	children := node.Children()
 	if children == nil {
 		return nil, syscall.ENOTDIR
 	}
@@ -156,6 +167,10 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		}
 		r = append(r, d)
 	}
+
+	sort.Slice(r, func(i, j int) bool {
+		return r[i].Name < r[j].Name
+	})
 
 	return fs.NewListDirStream(r), 0
 }
@@ -187,17 +202,15 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 var _ = (fs.NodeLookuper)((*gritsNode)(nil))
 
 func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	children := gn.node.Children()
-	if children == nil {
-		return nil, syscall.ENOTDIR
-	}
-
-	child, exists := children[name]
-	if !exists {
+	fullPath := filepath.Join(gn.path, name)
+	node, _ := gn.volume.LookupNode(fullPath)
+	if node == nil {
+		// FIXME - Detect internal errors
 		return nil, syscall.ENOENT
 	}
+	defer node.Release()
 
-	_, isDir := child.(*grits.TreeNode)
+	_, isDir := node.(*grits.TreeNode)
 	var mode uint32
 	if isDir {
 		mode = fuse.S_IFDIR | 0o755
@@ -210,7 +223,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 	operations := &gritsNode{
 		volume: gn.volume,
-		node:   child,
+		path:   fullPath,
 	}
 
 	// The NewInode call wraps the `operations` object into an Inode.
@@ -231,9 +244,15 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 var _ = (fs.NodeGetattrer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	out.Size = gn.node.Address().Size
+	node, _ := gn.volume.LookupNode(gn.path)
+	if node == nil {
+		return syscall.ENOENT
+	}
+	defer node.Release()
 
-	_, isDir := gn.node.(*grits.TreeNode)
+	out.Size = node.Address().Size
+
+	_, isDir := node.(*grits.TreeNode)
 	var mode uint32
 	if isDir {
 		mode = fuse.S_IFDIR | 0o755
@@ -273,32 +292,78 @@ type AttrForReference struct {
 var _ = (fs.NodeOpener)((*gritsNode)(nil))
 
 func (gn *gritsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	// Convert fuse flags to os flags
-	var fFlags int
-	if flags&fuse.O_ANYWRITE != 0 {
-		return nil, 0, syscall.EROFS
-	} else {
-		fFlags = os.O_RDONLY
-	}
-
-	cf, err := gn.volume.ReadFile(gn.node.Address())
+	node, err := gn.volume.LookupNode(gn.path)
 	if err != nil {
-		return nil, 0, syscall.EIO
-	}
-
-	// Open the file at the given path
-	file, err := os.OpenFile(cf.Path, fFlags, 0666)
-	if err != nil {
-		cf.Release()
 		return nil, 0, fs.ToErrno(err)
 	}
+	defer node.Release()
 
-	outFh := &FileHandle{
-		file:       file,
-		cachedFile: cf,
+	blobFile, err := os.Open(node.ExportedBlob().Path)
+	if err != nil {
+		return nil, 0, fs.ToErrno(err)
+	}
+	//defer blobFile.Close()
+
+	outFh := &FileHandle{node: gn}
+
+	if flags&fuse.O_ANYWRITE != 0 && flags&uint32(os.O_TRUNC) != 0 {
+		// Directly open the temp file instead of starting with the blob file
+		var tmpFile *os.File
+		tmpFile, err = os.CreateTemp("", "grits-modified-*")
+		if err != nil {
+			return nil, 0, fs.ToErrno(err)
+		}
+		outFh.file = tmpFile
+		outFh.isDirty = true
+	} else {
+		// Start with the blob file and marked as clean
+
+		outFh.file = blobFile
+		blobFile = nil // Prevent deferred close
+		outFh.isDirty = false
+		outFh.cachedFile = node.ExportedBlob()
 	}
 
 	return outFh, 0, fs.OK
+}
+
+// Create is similar to Lookup, but should create a new
+// child. It typically also returns a FileHandle as a
+// reference for future reads/writes.
+// Default is to return EROFS.
+
+var _ = (fs.NodeCreater)((*gritsNode)(nil))
+
+func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	fullPath := filepath.Join(gn.path, name)
+	if flags&uint32(os.O_EXCL) != 0 {
+		addr, _ := gn.volume.Lookup(fullPath)
+		if addr != nil {
+			return nil, nil, 0, syscall.EEXIST
+		}
+	}
+
+	outFh := &FileHandle{}
+
+	tmpFile, err := os.CreateTemp("", "grits-modified-*")
+	if err != nil {
+		return nil, nil, 0, fs.ToErrno(err)
+	}
+	outFh.file = tmpFile
+	outFh.isDirty = true
+
+	operations := &gritsNode{
+		volume: gn.volume,
+		path:   fullPath,
+	}
+	outFh.node = operations
+
+	stable := fs.StableAttr{
+		Mode: fuse.S_IFREG | 0o644,
+	}
+
+	// The NewInode call wraps the `operations` object into an Inode.
+	return gn.NewInode(ctx, operations, stable), outFh, 0, fs.OK
 }
 
 // Reads data from a file. The data should be returned as
@@ -315,6 +380,9 @@ func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 		return nil, syscall.EBADF
 	}
 
+	handle.mtx.RLock()
+	defer handle.mtx.RUnlock()
+
 	n, err := handle.file.ReadAt(dest, off)
 	if err != nil && err != io.EOF {
 		return nil, fs.ToErrno(err)
@@ -322,6 +390,117 @@ func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 
 	// If EOF was reached, it's still a successful read, but n will be less than len(dest)
 	return fuse.ReadResultData(dest[:n]), fs.OK
+}
+
+// Writes the data into the file handle at given offset. After
+// returning, the data will be reused and may not referenced.
+// The default implementation forwards to the FileHandle.
+
+var _ = (fs.NodeWriter)((*gritsNode)(nil))
+
+func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+	handle, ok := f.(*FileHandle)
+	if !ok {
+		log.Printf("--- It's not a file descriptor!")
+		return 0, syscall.EBADF
+	}
+
+	handle.mtx.Lock()
+	defer handle.mtx.Unlock()
+
+	if !handle.isDirty {
+		tempFile, err := os.CreateTemp("", "grits-temp-")
+		if err != nil {
+			return 0, syscall.EIO
+		}
+
+		_, err = handle.file.Seek(0, 0)
+		if err != nil {
+			os.Remove(tempFile.Name())
+			return 0, syscall.EIO
+		}
+
+		_, err = io.Copy(tempFile, handle.file)
+		if err != nil {
+			os.Remove(tempFile.Name())
+			return 0, syscall.EIO
+		}
+
+		err = handle.file.Close()
+		if err != nil {
+			os.Remove(tempFile.Name())
+			return 0, syscall.EIO
+		}
+		handle.file = tempFile
+
+		handle.cachedFile.Release()
+		handle.cachedFile = nil
+
+		handle.isDirty = true
+	}
+
+	log.Printf("About to write...")
+
+	n, err := handle.file.WriteAt(data, off)
+	if err != nil {
+		log.Printf("Error while writing")
+		return 0, fs.ToErrno(err)
+	}
+	return uint32(n), fs.OK
+}
+
+// Flush is called for the close(2) call on a file descriptor. In case
+// of a descriptor that was duplicated using dup(2), it may be called
+// more than once for the same FileHandle.  The default implementation
+// forwards to the FileHandle, or if the handle does not support
+// FileFlusher, returns OK.
+var _ = (fs.NodeFlusher)((*gritsNode)(nil))
+
+func (gn *gritsNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
+	log.Printf("--- We're flushing!")
+
+	handle, ok := f.(*FileHandle)
+	if !ok {
+		return syscall.EBADF
+	}
+
+	handle.mtx.Lock()
+	defer handle.mtx.Unlock()
+
+	if !handle.isDirty {
+		return fs.OK
+	}
+
+	if handle.cachedFile != nil {
+		log.Panicf("Can't happen, CF non nil")
+	}
+
+	cf, err := gn.volume.AddBlob(handle.file.Name())
+	if err != nil {
+		return syscall.EIO
+	}
+
+	err = os.Remove(handle.file.Name())
+	if err != nil {
+		return syscall.EIO
+	}
+
+	handle.cachedFile = cf
+	handle.file, err = os.Open(cf.Path)
+	if err != nil {
+		log.Panicf("Couldn't open blob cache file!")
+	}
+	handle.isDirty = false
+
+	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
+	log.Printf("--- We are linking %s to %s\n", handle.node.path, typedAddr.String())
+	gn.volume.Link(handle.node.path, typedAddr)
+
+	_, parent := gn.Parent()
+	pathParts := strings.Split(gn.path, "/")
+	parent.NotifyEntry(pathParts[len(pathParts)-1])
+
+	return fs.OK
 }
 
 // This is called to before a FileHandle is forgotten. The
@@ -336,6 +515,19 @@ func (gn *gritsNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno
 	handle, ok := f.(*FileHandle)
 	if !ok {
 		return syscall.EBADF
+	}
+
+	handle.mtx.Lock()
+	defer handle.mtx.Unlock()
+
+	if handle.isDirty {
+		log.Panicf("Releasing not-closed file handle")
+	}
+	if handle.cachedFile == nil {
+		log.Panicf("Releasing with no CF set")
+	}
+	if handle.file == nil {
+		log.Panic("Releasing with no file set")
 	}
 
 	// Release the cachedFile
