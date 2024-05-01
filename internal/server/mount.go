@@ -132,8 +132,10 @@ type FileHandle struct {
 	cachedFile *grits.CachedFile
 	node       *gritsNode
 
-	isDirty bool
-	mtx     sync.RWMutex
+	isReadOnly bool
+	isDirty    bool
+
+	mtx sync.RWMutex
 }
 
 /////
@@ -217,9 +219,15 @@ var _ = (fs.NodeLookuper)((*gritsNode)(nil))
 
 func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	node, _ := gn.volume.LookupNode(fullPath)
+	log.Printf("--- Looking up %s\n", fullPath)
+
+	node, err := gn.volume.LookupNode(fullPath)
+	if err != nil {
+		log.Printf("---   Error! %v\n", err)
+		return nil, syscall.EIO
+	}
 	if node == nil {
-		// FIXME - Detect internal errors
+		log.Printf("---   Not found")
 		return nil, syscall.ENOENT
 	}
 	defer node.Release()
@@ -256,6 +264,8 @@ var ownerUid = uint32(syscall.Getuid())
 var ownerGid = uint32(syscall.Getgid())
 
 func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	log.Printf("--- Getattr for %s\n", gn.path)
+
 	node, _ := gn.volume.LookupNode(gn.path)
 	if node == nil {
 		return syscall.ENOENT
@@ -263,6 +273,7 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 	defer node.Release()
 
 	out.Size = node.Address().Size
+	log.Printf("---   Size returning is %d\n", out.Size)
 
 	_, isDir := node.(*grits.TreeNode)
 	var mode uint32
@@ -332,12 +343,14 @@ func (gn *gritsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 			return nil, 0, fs.ToErrno(err)
 		}
 		outFh.file = tmpFile
+		outFh.isReadOnly = false
 		outFh.isDirty = true
 	} else {
 		// Start with the blob file and marked as clean
 
 		outFh.file = blobFile
 		blobFile = nil // Prevent deferred close
+		outFh.isReadOnly = (flags&fuse.O_ANYWRITE == 0)
 		outFh.isDirty = false
 		outFh.cachedFile = node.ExportedBlob()
 	}
@@ -373,6 +386,7 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 		return nil, nil, 0, fs.ToErrno(err)
 	}
 	outFh.file = tmpFile
+	outFh.isReadOnly = false
 	outFh.isDirty = true
 	outFh.node = operations
 
@@ -412,9 +426,15 @@ func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 var _ = (fs.NodeWriter)((*gritsNode)(nil))
 
 func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+	log.Printf("--- Writing at offset %d\n", off)
+
 	handle, ok := f.(*FileHandle)
 	if !ok {
 		return 0, syscall.EBADF
+	}
+
+	if handle.isReadOnly {
+		return 0, syscall.EACCES
 	}
 
 	handle.mtx.Lock()
@@ -432,11 +452,13 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 			return 0, syscall.EIO
 		}
 
-		_, err = io.Copy(tempFile, handle.file)
+		n, err := io.Copy(tempFile, handle.file)
 		if err != nil {
 			os.Remove(tempFile.Name())
 			return 0, syscall.EIO
 		}
+
+		log.Printf("---   Copied %d bytes\n", n)
 
 		err = handle.file.Close()
 		if err != nil {
@@ -484,21 +506,33 @@ func (gn *gritsNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 		log.Panicf("Can't happen, CF non nil")
 	}
 
-	cf, err := gn.volume.AddBlob(handle.file.Name())
+	fileName := handle.file.Name()
+
+	err := handle.file.Close()
 	if err != nil {
 		return syscall.EIO
 	}
 
-	err = os.Remove(handle.file.Name())
+	cf, err := gn.volume.AddBlob(fileName)
 	if err != nil {
+		return syscall.EIO
+	}
+
+	err = os.Remove(fileName)
+	if err != nil {
+		cf.Release()
+		handle.file, _ = os.CreateTemp("", "grits-temp-")
+		return syscall.EIO
+	}
+
+	handle.file, err = os.Open(cf.Path)
+	if err != nil {
+		cf.Release()
+		handle.file, _ = os.CreateTemp("", "grits-temp-")
 		return syscall.EIO
 	}
 
 	handle.cachedFile = cf
-	handle.file, err = os.Open(cf.Path)
-	if err != nil {
-		log.Panicf("Couldn't open blob cache file!")
-	}
 	handle.isDirty = false
 
 	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
@@ -569,8 +603,17 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	fullPath := filepath.Join(gn.path, name)
 	emptyAddr := grits.NewTypedFileAddr("44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", 2, grits.Tree)
 
-	err := gn.volume.Link(fullPath, emptyAddr)
+	// Create the LinkRequest with the required details
+	req := &grits.LinkRequest{
+		Path:     fullPath,
+		Addr:     emptyAddr,
+		PrevAddr: nil,
+		Assert:   grits.AssertPrevValueMatches,
+	}
+
+	err := gn.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
+		// FIXME - distinguish 'already exists' from general internal error
 		return nil, syscall.EIO
 	}
 
@@ -578,6 +621,11 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	if err != nil {
 		return nil, syscall.EIO
 	}
+
+	//errno := gn.NotifyEntry(name)
+	//if errno != fs.OK {
+	//	return nil, errno
+	//}
 
 	return newInode, fs.OK
 }
@@ -591,9 +639,14 @@ var _ = (fs.NodeUnlinker)((*gritsNode)(nil))
 func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	fullPath := filepath.Join(gn.path, name)
 
-	// FIXME - Return old value from Link() and use it to check for ENOENT
+	// Create the LinkRequest with the required details
+	req := &grits.LinkRequest{
+		Path:   fullPath,
+		Addr:   nil,
+		Assert: grits.AssertIsNonEmpty | grits.AssertIsBlob,
+	}
 
-	err := gn.volume.Link(fullPath, nil)
+	err := gn.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
 		return syscall.EIO
 	}
@@ -603,13 +656,69 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 
 // Rmdir is like Unlink but for directories.
 // Default is to return success.
-//type NodeRmdirer interface {
-//	Rmdir(ctx context.Context, name string) syscall.Errno
-//}
+
+var _ = (fs.NodeRmdirer)((*gritsNode)(nil))
+
+func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	fullPath := filepath.Join(gn.path, name)
+
+	// Create the LinkRequest with the required details
+	req := &grits.LinkRequest{
+		Path:   fullPath,
+		Addr:   nil,
+		Assert: grits.AssertIsNonEmpty | grits.AssertIsTree,
+	}
+
+	err := gn.volume.MultiLink([]*grits.LinkRequest{req})
+	if err != nil {
+		return syscall.EIO
+	}
+
+	return fs.OK
+}
 
 // Rename should move a child from one directory to a different
 // one. The change is effected in the FS tree if the return status is
 // OK. Default is to return ENOTSUP.
-//type NodeRenamer interface {
-//	Rename(ctx context.Context, name string, newParent InodeEmbedder, newName string, flags uint32) syscall.Errno
-//}
+
+var _ = (fs.NodeRmdirer)((*gritsNode)(nil))
+
+func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	fullPath := filepath.Join(gn.path, name)
+
+	newGritsNode, ok := newParent.(*gritsNode)
+	if !ok {
+		return syscall.EIO
+	}
+	newFullPath := filepath.Join(newGritsNode.path, newName)
+
+	addr, err := gn.volume.Lookup(fullPath)
+	if err != nil {
+		return syscall.EIO
+	}
+	if addr == nil {
+		return syscall.ENOENT
+	}
+
+	// Create the LinkRequest with the required details
+	oldNameReq := &grits.LinkRequest{
+		Path:     fullPath,
+		Addr:     nil,
+		PrevAddr: addr,
+		Assert:   grits.AssertPrevValueMatches,
+	}
+
+	newNameReq := &grits.LinkRequest{
+		Path:     newFullPath,
+		Addr:     addr,
+		PrevAddr: nil,
+		Assert:   grits.AssertPrevValueMatches,
+	}
+
+	err = gn.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq})
+	if err != nil {
+		return syscall.EINVAL
+	}
+
+	return fs.OK
+}
