@@ -401,7 +401,6 @@ var _ = (fs.NodeWriter)((*gritsNode)(nil))
 func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
 	handle, ok := f.(*FileHandle)
 	if !ok {
-		log.Printf("--- It's not a file descriptor!")
 		return 0, syscall.EBADF
 	}
 
@@ -439,11 +438,8 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 		handle.isDirty = true
 	}
 
-	log.Printf("About to write...")
-
 	n, err := handle.file.WriteAt(data, off)
 	if err != nil {
-		log.Printf("Error while writing")
 		return 0, fs.ToErrno(err)
 	}
 	return uint32(n), fs.OK
