@@ -3,8 +3,9 @@ package grits
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -143,42 +144,21 @@ func (ns *NameStore) GetRoot() string {
 }
 
 func (ns *NameStore) LookupAndOpen(name string) (*CachedFile, error) {
-	name = strings.TrimRight(name, "/")
-	if name != "" && name[0] == '/' {
-		return nil, fmt.Errorf("name must be relative")
-	}
-
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
-	pos := ns.root
-	parts := strings.Split(name, "/")
-
-	for _, part := range parts {
-		if pos == nil {
-			return nil, fmt.Errorf("no such file or directory: %s", name)
-		}
-
-		if part == "" {
-			continue
-		}
-
-		container := pos.Children()
-		if container == nil {
-			return nil, fmt.Errorf("non-directory in path %s", name)
-		}
-
-		nextNode, exists := container[part]
-		if !exists {
-			return nil, fmt.Errorf("no such file or directory: %s", part)
-		}
-
-		pos = nextNode
+	nodes, err := ns.resolvePath(name)
+	if err != nil {
+		return nil, err
 	}
 
-	cf := pos.ExportedBlob()
-	ns.BlobStore.Take(cf)
+	node := nodes[len(nodes)-1]
+	if node == nil {
+		return nil, fmt.Errorf("%s not found", name)
+	}
 
+	cf := node.ExportedBlob()
+	cf.Take()
 	return cf, nil
 }
 
@@ -186,83 +166,190 @@ func (ns *NameStore) LookupNode(name string) (FileNode, error) {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
-	// Normalize the name path to avoid leading/trailing slashes confusion
-	name = strings.Trim(name, "/")
-	if name == "" {
-		if ns.root != nil {
-			ns.root.Take() // Take a reference to the root node before returning
-		}
-		return ns.root, nil // Return the root node for empty path
+	nodes, err := ns.resolvePath(name)
+	if err != nil {
+		return nil, err
 	}
 
-	parts := strings.Split(name, "/")
-	node := ns.root // Start from the root node
-
-	for _, part := range parts {
-		if node == nil {
-			return nil, fmt.Errorf("path not found: %s", name)
-		}
-
-		// Only TreeNodes have children to traverse
-		treeNode, isTreeNode := node.(*TreeNode)
-		if !isTreeNode {
-			return nil, fmt.Errorf("encountered non-directory in path: %s", name)
-		}
-
-		childNode, exists := treeNode.ChildrenMap[part]
-		if !exists {
-			return nil, fmt.Errorf("path not found: %s", name)
-		}
-
-		node = childNode // Move to the next node in the path
-	}
-
+	node := nodes[len(nodes)-1]
 	if node != nil {
-		node.Take() // Take a reference to the node before returning
+		node.Take()
 	}
 	return node, nil
 }
 
-func (ns *NameStore) LookupFull(name string) ([][]string, error) {
-	if name != "" && name[0] == '/' {
-		return nil, fmt.Errorf("name must be relative")
-	}
+// FIXME - clean up this API a little
 
+func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
-	pos := ns.root
+	name = strings.TrimRight(name, "/")
+	nodes, err := ns.resolvePath(name)
+	if err != nil {
+		return nil, err
+	}
+
 	parts := strings.Split(name, "/")
 	partialPath := ""
 
 	response := make([][]string, 0, len(parts)+1) // +1 for the root
-	response = append(response, []string{partialPath, pos.AddressString()})
+	response = append(response, []string{"", nodes[0].AddressString()})
+	index := 1
 
 	for _, part := range parts {
-		if pos == nil {
-			return nil, fmt.Errorf("no such file or directory: %s", name)
+		if part == "" {
+			continue
 		}
+
+		partialPath = filepath.Join(partialPath, part)
+		node := nodes[index]
+		if node == nil {
+			return nil, fmt.Errorf("can't find %s", name)
+		}
+		// FIXME - crash if the last node is nil
+		response = append(response, []string{partialPath, nodes[index].AddressString()})
+		index += 1
+	}
+
+	return response, nil
+}
+
+// Core lookup helper function.
+
+func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
+	log.Printf("We resolve path %s (root %v)\n", path, ns.root)
+
+	path = strings.TrimRight(path, "/")
+	if path != "" && path[0] == '/' {
+		return nil, fmt.Errorf("paths must be relative")
+	}
+
+	parts := strings.Split(path, "/")
+	node := ns.root
+
+	response := make([]FileNode, 0, len(parts)+1) // +1 for the root
+	response = append(response, node)
+
+	for _, part := range parts {
+		log.Printf("  part %s\n", part)
 
 		if part == "" {
 			continue
 		}
 
-		container := pos.Children()
-		if container == nil {
-			return nil, fmt.Errorf("non-directory in path %s", name)
+		if node == nil {
+			return nil, fmt.Errorf("%s not not found traversing %s", part, path)
 		}
 
-		nextNode, exists := container[part]
-		if !exists {
-			return nil, fmt.Errorf("no such file or directory: %s", part)
+		// Only TreeNodes have children to traverse
+		treeNode, isTreeNode := node.(*TreeNode)
+		if !isTreeNode {
+			return nil, fmt.Errorf("%s is not a directory, traversing %s", part, path)
 		}
 
-		pos = nextNode
-		partialPath = path.Join(partialPath, part)
-		response = append(response, []string{partialPath, pos.AddressString()})
+		childNode := treeNode.ChildrenMap[part]
+		node = childNode // Move to the next node in the path
+		response = append(response, node)
 	}
 
 	return response, nil
+}
+
+/////
+// Link stuff
+
+const (
+	AssertPrevValueMatches = 1 << iota
+	AssertIsBlob
+	AssertIsTree
+	AssertIsNonEmpty
+)
+
+type LinkRequest struct {
+	Path     string
+	Addr     *TypedFileAddr
+	PrevAddr *TypedFileAddr
+	Assert   uint32
+}
+
+func matchesAddr(a FileNode, b *TypedFileAddr) bool {
+	if a == nil {
+		return b == nil
+	} else {
+		return b != nil && a.Address().Equals(&b.BlobAddr)
+	}
+}
+
+func (ns *NameStore) MultiLink(requests []LinkRequest) error {
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
+
+	for _, req := range requests {
+		if req.Assert == 0 {
+			continue
+		}
+
+		nodes, err := ns.resolvePath(req.Path)
+		if err != nil {
+			return err
+		}
+		node := nodes[len(nodes)-1]
+
+		if req.Assert&AssertPrevValueMatches != 0 {
+			if !matchesAddr(node, req.PrevAddr) {
+				return fmt.Errorf("prev value for %s is not %v", req.Path, req.PrevAddr)
+			}
+		}
+
+		if req.Assert&AssertIsBlob != 0 {
+			if node == nil || node.Address().Type != Blob {
+				return fmt.Errorf("prev value for %s isn't blob", req.Path)
+			}
+		}
+
+		if req.Assert&AssertIsTree != 0 {
+			if node == nil || node.Address().Type != Tree {
+				return fmt.Errorf("prev value for %s isn't tree", req.Path)
+			}
+		}
+
+		if req.Assert&AssertIsNonEmpty != 0 {
+			if node == nil {
+				return fmt.Errorf("prev value for %s is nil", req.Path)
+			}
+		}
+	}
+
+	oldRoot := ns.root
+	newRoot := ns.root
+
+	for _, req := range requests {
+		name := strings.TrimRight(req.Path, "/")
+		if name != "" && name[0] == '/' {
+			return fmt.Errorf("name must be relative")
+		}
+
+		if name == "." {
+			name = ""
+		}
+
+		var err error
+		newRoot, err = ns.recursiveLink(name, req.Addr, newRoot)
+		if err != nil {
+			return err
+		}
+	}
+
+	if newRoot != nil {
+		newRoot.Take()
+	}
+	if oldRoot != nil {
+		oldRoot.Release()
+	}
+
+	ns.root = newRoot
+	return nil
 }
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
@@ -324,7 +411,7 @@ func (ns *NameStore) LinkTree(name string, addr *BlobAddr) error {
 	return ns.Link(name, tfa)
 }
 
-// Core link function.
+// Core link function helper.
 
 // We're linking in `addr` into place as `name` within `oldParent`, and return the
 // modified version of `oldParent`.
