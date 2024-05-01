@@ -47,11 +47,23 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to add data block to BlobStore: %v", err)
 	}
+	defer cachedFile.Release()
 
 	// Link a blob to /file.txt
 	err = nameStore.LinkBlob("file.txt", cachedFile.Address)
 	if err != nil {
 		t.Errorf("Failed to link blob to file.txt: %v", err)
+	}
+
+	emptyDir, err := BlobStore.AddDataBlock([]byte("{}"))
+	if err != nil {
+		t.Errorf("Failed to add empty dir blob")
+	}
+	defer emptyDir.Release()
+
+	err = nameStore.LinkTree("dir", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir for test dir")
 	}
 
 	// Link a blob to /dir/file.txt (implicitly creating /dir)
@@ -61,18 +73,18 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 	}
 
 	// Lookup /file.txt
-	cf, err := nameStore.LookupAndOpen("file.txt")
+	mainCf, err := nameStore.LookupAndOpen("file.txt")
 	if err != nil {
 		t.Errorf("Failed to lookup file.txt: %v", err)
 	}
-	defer cf.Release()
+	defer mainCf.Release()
 
 	// Lookup /dir/file.txt
-	cf, err = nameStore.LookupAndOpen("dir/file.txt")
+	subCf, err := nameStore.LookupAndOpen("dir/file.txt")
 	if err != nil {
 		t.Errorf("Failed to lookup dir/file.txt: %v", err)
 	}
-	defer cf.Release()
+	defer subCf.Release()
 
 	// Attempt to lookup a non-existent file
 	_, err = nameStore.LookupAndOpen("nonexistent.txt")
@@ -136,6 +148,22 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	ns, bs, cleanupBlobStore := setupNameStoreTestEnv(t)
 	defer cleanupBlobStore()
 
+	emptyDir, err := bs.AddDataBlock([]byte("{}"))
+	if err != nil {
+		t.Errorf("Failed to add empty dir blob")
+	}
+	defer emptyDir.Release()
+
+	err = ns.LinkTree("dir", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir dir")
+	}
+
+	err = ns.LinkTree("dir/subdir", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir dir/subdir")
+	}
+
 	// Simulate linking a blob to "dir/subdir/file.txt"
 	cachedFile, err := bs.AddDataBlock([]byte("file content"))
 	if err != nil {
@@ -184,6 +212,27 @@ func TestComplexDirectoryStructures(t *testing.T) {
 		"dir1/file1.txt",
 		"dir1/dir2/file2.txt",
 		"dir1/dir2/dir3/file3.txt",
+	}
+
+	emptyDir, err := BlobStore.AddDataBlock([]byte("{}"))
+	if err != nil {
+		t.Errorf("Failed to add empty dir blob")
+	}
+	defer emptyDir.Release()
+
+	err = nameStore.LinkTree("dir1", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir dir1")
+	}
+
+	err = nameStore.LinkTree("dir1/dir2", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir dir2")
+	}
+
+	err = nameStore.LinkTree("dir1/dir2/dir3", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir dir3")
 	}
 
 	// Link the files into the NameStore according to the structure.
@@ -239,6 +288,17 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Fatalf("Failed to add data block to BlobStore: %v", err)
 	}
 
+	emptyDir, err := BlobStore.AddDataBlock([]byte("{}"))
+	if err != nil {
+		t.Errorf("Failed to add empty dir blob")
+	}
+	defer emptyDir.Release()
+
+	err = nameStore.LinkTree("concurrent", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir concurrent/")
+	}
+
 	var wgLink, wgLookup sync.WaitGroup
 
 	// Number of concurrent operations
@@ -249,6 +309,13 @@ func TestConcurrentAccess(t *testing.T) {
 		wgLink.Add(1)
 		go func(i int) {
 			defer wgLink.Done()
+
+			dirPath := fmt.Sprintf("concurrent/dir%d", i)
+			err = nameStore.LinkTree(dirPath, emptyDir.Address)
+			if err != nil {
+				t.Errorf("Failed to mkdir %s", dirPath)
+			}
+
 			filePath := fmt.Sprintf("concurrent/dir%d/file%d.txt", i, i)
 			err := nameStore.LinkBlob(filePath, cachedFile.Address)
 			if err != nil {
@@ -295,7 +362,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	allFiles := make([]*CachedFile, 0)
 
-	// 1. Create blobs "one" through "ten"
+	// 1. Create blobs and directories
 	for i := 0; i < 10; i++ {
 		data := []byte("Content of file " + strconv.Itoa(i))
 		cf, err := bs.AddDataBlock(data)
@@ -305,7 +372,21 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		allFiles = append(allFiles, cf)
 	}
 
-	// 2. Link one through five into the name store
+	emptyDir, err := bs.AddDataBlock([]byte("{}"))
+	if err != nil {
+		t.Errorf("Failed to add empty dir blob")
+	}
+	defer emptyDir.Release()
+
+	// 2. Link blobs and dirs
+	dirNames := []string{"someplace", "someplace/else", "dir", "dir/sub"}
+	for _, dirName := range dirNames {
+		err := ns.LinkTree(dirName, emptyDir.Address)
+		if err != nil {
+			t.Errorf("Failed to mkdir %s: %v", dirName, err)
+		}
+	}
+
 	fileNames := []string{"zero", "one", "someplace/else/two", "dir/three", "dir/sub/four", "five"}
 	for i, fileName := range fileNames {
 		err := ns.LinkBlob(fileName, allFiles[i].Address)
@@ -325,7 +406,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// 3. Unlink one and five
-	err := ns.LinkBlob(fileNames[1], nil)
+	err = ns.LinkBlob(fileNames[1], nil)
 	if err != nil {
 		t.Errorf("Failed to unlink one: %v", err)
 	}
@@ -418,6 +499,18 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Errorf("Expected tree/zero to point to %s, got %s", allFiles[0].Address.Hash, cf.Address.Hash)
 	}
 	cf.Release()
+
+	log.Printf("--- Scaffolding directories")
+
+	err = ns.LinkTree("tree/someplace", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir %s: %v", "tree/someplace", err)
+	}
+
+	err = ns.LinkTree("tree/someplace/else", emptyDir.Address)
+	if err != nil {
+		t.Errorf("Failed to mkdir %s: %v", "tree/someplace/else", err)
+	}
 
 	log.Printf("--- Starting revisions")
 

@@ -41,6 +41,13 @@ func NewBlobStore(config *Config) *BlobStore {
 		return nil
 	}
 
+	// Add empty directory as a permanent blob never to be released
+	_, err = bs.AddDataBlock([]byte("{}"))
+	if err != nil {
+		log.Printf("Can't create empty directory cachedFile")
+		return nil
+	}
+
 	return bs
 }
 

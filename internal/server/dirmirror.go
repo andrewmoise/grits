@@ -149,9 +149,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() {
-			totalFiles++
-		}
+		totalFiles++
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
@@ -166,20 +164,34 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 	}
 	defer newDirNs.Link("", nil) // Release references from temp NameStore
 
+	emptyDir, err := dt.server.BlobStore.AddDataBlock([]byte("{}"))
+	if err != nil {
+		return err
+	}
+	defer emptyDir.Release()
+
 	// Walk through the source directory and put all files into newDirNs
 	err = filepath.Walk(scanPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if info.IsDir() {
-			return nil
-		}
-
 		processedFiles++
 		completion := float32(processedFiles) / float32(totalFiles)
 		job.SetStage(path)
 		job.SetCompletion(completion)
+
+		relPath, err := filepath.Rel(scanPath, path)
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			log.Printf("Adding empty dir: %s\n", relPath)
+
+			err = newDirNs.LinkTree(relPath, emptyDir.Address)
+			return err
+		}
 
 		file, err := os.Open(path)
 		if os.IsNotExist(err) {
@@ -195,12 +207,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		}
 		defer cf.Release()
 
-		relPath, err := filepath.Rel(scanPath, path)
-		if err != nil {
-			return err
-		}
-
-		log.Printf("Adding relative path: %s -> %s is %s", dt.srcPath, path, relPath)
+		log.Printf("Adding relative path: %s -> %s is %s", scanPath, path, relPath)
 
 		err = newDirNs.LinkBlob(relPath, cf.Address)
 		if err != nil {
@@ -213,55 +220,27 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		return fmt.Errorf("error in main scan of %s: %v", scanPath, err)
 	}
 
+	var fileAddr *grits.TypedFileAddr
+	if processedFiles != 0 {
+		fileAddr, err = grits.NewTypedFileAddrFromString(newDirNs.GetRoot())
+		if err != nil {
+			return err
+		}
+	} else {
+		// If we found *nothing*, then don't even do the empty dir (e.g. deleting a regular file
+		//   triggers this branch)
+		fileAddr = nil
+	}
+
+	log.Printf("We link %s to %s\n", relPath, fileAddr)
+	log.Printf("Current root is %s\n", dt.ns.GetRoot())
+
 	dt.mtx.Lock()
 	defer dt.mtx.Unlock()
 
-	fileAddr, err := grits.NewTypedFileAddrFromString(newDirNs.GetRoot())
-	if err != nil {
-		return err
-	}
-
-	log.Printf("We link %s to %s\n", relPath, fileAddr.String())
-
 	err = dt.ns.Link(relPath, fileAddr)
 	if err != nil {
-		return fmt.Errorf("can't do final link for %s: %v", scanPath, err)
-	}
-
-	return nil
-}
-
-// Interface to NameStore, to make changes to the tree when we need to
-
-func (dt *DirToTreeMirror) addOrUpdateFile(srcPath string, file *os.File) error {
-	cf, err := dt.ns.BlobStore.AddOpenFile(file)
-	if err != nil {
-		return err
-	}
-	defer cf.Release()
-
-	relPath, err := filepath.Rel(dt.srcPath, srcPath)
-	if err != nil {
-		return fmt.Errorf("error calculating relative path: %v", err)
-	}
-
-	err = dt.ns.LinkBlob(relPath, cf.Address)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (dt *DirToTreeMirror) removeFile(filePath string) error {
-	relPath, err := filepath.Rel(dt.srcPath, filePath)
-	if err != nil {
-		return fmt.Errorf("error calculating relative path: %v", err)
-	}
-
-	err = dt.ns.LinkBlob(relPath, nil)
-	if err != nil {
-		return err
+		return fmt.Errorf("can't do final link for %s: %v", relPath, err)
 	}
 
 	return nil
