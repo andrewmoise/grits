@@ -115,6 +115,17 @@ type gritsNode struct {
 	path   string // Now storing path instead of a node reference
 }
 
+func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint32, volume Volume) (*fs.Inode, *gritsNode, error) {
+	operations := &gritsNode{
+		volume: volume,
+		path:   path,
+	}
+	stable := fs.StableAttr{
+		Mode: mode,
+	}
+	return parent.NewInode(ctx, operations, stable), operations, nil
+}
+
 // FileHandle represents an open file. This will wrap os.File to handle file operations.
 type FileHandle struct {
 	file       *os.File
@@ -124,6 +135,9 @@ type FileHandle struct {
 	isDirty bool
 	mtx     sync.RWMutex
 }
+
+/////
+// Structure reading
 
 // Readdir opens a stream of directory entries.
 //
@@ -218,16 +232,11 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		mode = fuse.S_IFREG | 0o644
 	}
 
-	stable := fs.StableAttr{
-		Mode: mode,
+	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.volume)
+	if err != nil {
+		return nil, syscall.EIO
 	}
-	operations := &gritsNode{
-		volume: gn.volume,
-		path:   fullPath,
-	}
-
-	// The NewInode call wraps the `operations` object into an Inode.
-	return gn.NewInode(ctx, operations, stable), fs.OK
+	return newInode, fs.OK
 }
 
 // GetAttr reads attributes for an Inode. The library will ensure that
@@ -242,6 +251,9 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 // originated from a fstat system call.
 
 var _ = (fs.NodeGetattrer)((*gritsNode)(nil))
+
+var ownerUid = uint32(syscall.Getuid())
+var ownerGid = uint32(syscall.Getgid())
 
 func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	node, _ := gn.volume.LookupNode(gn.path)
@@ -260,6 +272,9 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 		mode = fuse.S_IFREG | 0o644
 	}
 	out.Mode = mode
+
+	out.Owner.Uid = ownerUid
+	out.Owner.Gid = ownerGid
 
 	return fs.OK
 }
@@ -285,6 +300,9 @@ type AttrForReference struct {
 	Blksize uint32
 	Padding uint32
 }
+
+/////
+// File I/O
 
 // Open opens an Inode (of regular file type) for reading. It
 // is optional but recommended to return a FileHandle.
@@ -343,6 +361,11 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 		}
 	}
 
+	newInode, operations, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.volume)
+	if err != nil {
+		return nil, nil, 0, syscall.EIO
+	}
+
 	outFh := &FileHandle{}
 
 	tmpFile, err := os.CreateTemp("", "grits-modified-*")
@@ -351,19 +374,9 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 	}
 	outFh.file = tmpFile
 	outFh.isDirty = true
-
-	operations := &gritsNode{
-		volume: gn.volume,
-		path:   fullPath,
-	}
 	outFh.node = operations
 
-	stable := fs.StableAttr{
-		Mode: fuse.S_IFREG | 0o644,
-	}
-
-	// The NewInode call wraps the `operations` object into an Inode.
-	return gn.NewInode(ctx, operations, stable), outFh, 0, fs.OK
+	return newInode, outFh, 0, fs.OK
 }
 
 // Reads data from a file. The data should be returned as
@@ -490,11 +503,18 @@ func (gn *gritsNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 
 	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
 	log.Printf("--- We are linking %s to %s\n", handle.node.path, typedAddr.String())
-	gn.volume.Link(handle.node.path, typedAddr)
+	err = gn.volume.Link(handle.node.path, typedAddr)
 
 	_, parent := gn.Parent()
 	pathParts := strings.Split(gn.path, "/")
-	parent.NotifyEntry(pathParts[len(pathParts)-1])
+	errno := parent.NotifyEntry(pathParts[len(pathParts)-1])
+
+	if err != nil {
+		return syscall.EIO
+	}
+	if errno != fs.OK {
+		return errno
+	}
 
 	return fs.OK
 }
@@ -536,3 +556,60 @@ func (gn *gritsNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno
 
 	return fs.OK
 }
+
+/////
+// Directory and inode operations
+
+// Mkdir is similar to Lookup, but must create a directory entry and Inode.
+// Default is to return ENOTSUP.
+
+var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
+
+func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	fullPath := filepath.Join(gn.path, name)
+	emptyAddr := grits.NewTypedFileAddr("44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", 2, grits.Tree)
+
+	err := gn.volume.Link(fullPath, emptyAddr)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode|fuse.S_IFDIR, gn.volume)
+	if err != nil {
+		return nil, syscall.EIO
+	}
+
+	return newInode, fs.OK
+}
+
+// Unlink should remove a child from this directory.  If the
+// return status is OK, the Inode is removed as child in the
+// FS tree automatically. Default is to return success.
+
+var _ = (fs.NodeUnlinker)((*gritsNode)(nil))
+
+func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	fullPath := filepath.Join(gn.path, name)
+
+	// FIXME - Return old value from Link() and use it to check for ENOENT
+
+	err := gn.volume.Link(fullPath, nil)
+	if err != nil {
+		return syscall.EIO
+	}
+
+	return fs.OK
+}
+
+// Rmdir is like Unlink but for directories.
+// Default is to return success.
+//type NodeRmdirer interface {
+//	Rmdir(ctx context.Context, name string) syscall.Errno
+//}
+
+// Rename should move a child from one directory to a different
+// one. The change is effected in the FS tree if the return status is
+// OK. Default is to return ENOTSUP.
+//type NodeRenamer interface {
+//	Rename(ctx context.Context, name string, newParent InodeEmbedder, newName string, flags uint32) syscall.Errno
+//}
