@@ -25,6 +25,27 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
+	// Set up directory structure
+
+	linkData := []struct {
+		Volume string `json:"volume"`
+		Path   string `json:"path"`
+		Addr   string `json:"addr"`
+	}{
+		{Path: "dir", Addr: "tree:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a-2"},
+		{Path: "dir/subdir", Addr: "tree:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a-2"},
+	}
+
+	linkPayload, _ := json.Marshal(linkData)
+	resp, err := http.Post(url+"/link/root", "application/json", bytes.NewBuffer(linkPayload))
+	if err != nil || resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		bodyString := string(bodyBytes)
+
+		t.Fatalf("Failed to setup dir structure: %v %d %s", err, resp.StatusCode, bodyString)
+	}
+	resp.Body.Close()
+
 	// Upload blobs and link them
 	blobContents := []string{"one", "two", "three", "four", "five"}
 	addresses := make([]string, len(blobContents))
@@ -52,6 +73,8 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 			Addr   string `json:"addr"`
 		}{
 			{Path: content, Addr: "blob:" + addresses[i]},
+			//{Path: "dir", Addr: "tree:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a-2"},
+			//{Path: "dir/subdir", Addr: "tree:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a-2"},
 			{Path: "dir/subdir/" + content, Addr: "blob:" + addresses[i]},
 		}
 
@@ -68,7 +91,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 	// Perform a lookup on "dir/subdir/one"
 	lookupPayload, _ := json.Marshal("dir/subdir/one")
-	resp, err := http.Post(url+"/lookup/root", "application/json", bytes.NewBuffer(lookupPayload))
+	resp, err = http.Post(url+"/lookup/root", "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
 		t.Fatalf("Failed to perform lookup: %v", err)
 	}

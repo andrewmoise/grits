@@ -275,14 +275,6 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 		name = ""
 	}
 
-	// Somewhat weird special case for empty tree... FIXME what about whitespace?
-	if addr != nil &&
-		addr.Type == Tree &&
-		addr.Hash == "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a" &&
-		addr.Size == 2 {
-		addr = nil
-	}
-
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -317,6 +309,26 @@ func (ns *NameStore) LinkBlob(name string, addr *BlobAddr) error {
 	return ns.Link(name, tfa)
 }
 
+func (ns *NameStore) LinkTree(name string, addr *BlobAddr) error {
+	var tfa *TypedFileAddr
+
+	if addr != nil {
+		tfa = &TypedFileAddr{
+			BlobAddr: *addr,
+			Type:     Tree,
+		}
+	} else {
+		tfa = nil
+	}
+
+	return ns.Link(name, tfa)
+}
+
+// Core link function.
+
+// We're linking in `addr` into place as `name` within `oldParent`, and return the
+// modified version of `oldParent`.
+
 func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent FileNode) (FileNode, error) {
 	parts := strings.SplitN(name, "/", 2)
 
@@ -327,7 +339,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 			return nil, fmt.Errorf("non-directory in path %s", name)
 		}
 	} else {
-		oldChildren = make(map[string]FileNode)
+		return nil, fmt.Errorf("attempting to link in nonexistent directory")
 	}
 
 	var newValue FileNode
@@ -354,7 +366,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 	} else {
 		oldChild, exists := oldChildren[parts[0]]
 		if !exists {
-			oldChild = nil
+			return nil, fmt.Errorf("no such directory %s in path", parts[0])
 		}
 
 		newValue, err = ns.recursiveLink(parts[1], addr, oldChild)
@@ -378,20 +390,14 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		delete(newChildren, parts[0])
 	}
 
-	var result FileNode
-	if len(newChildren) > 0 {
-		result, err = ns.CreateTreeNode(newChildren)
-		if err != nil {
-			for _, v := range newChildren {
-				v.Release()
-			}
-
-			return nil, err
+	result, err := ns.CreateTreeNode(newChildren)
+	if err != nil {
+		for _, v := range newChildren {
+			v.Release()
 		}
-	} else {
-		result = nil
-	}
 
+		return nil, err
+	}
 	return result, nil
 }
 
