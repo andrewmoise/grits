@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"grits/internal/grits"
 	"log"
+	"os"
 )
 
 // Module is an interface that all modules must implement.
@@ -29,10 +30,12 @@ type Volume interface {
 	LookupFull(name string) ([][]string, error)
 
 	Link(path string, addr *grits.TypedFileAddr) error
+	MultiLink([]*grits.LinkRequest) error
 
 	ReadFile(*grits.TypedFileAddr) (*grits.CachedFile, error)
 
 	AddBlob(path string) (*grits.CachedFile, error)
+	AddOpenBlob(*os.File) (*grits.CachedFile, error)
 }
 
 // ModuleConfig represents a generic module configuration.

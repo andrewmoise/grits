@@ -33,7 +33,11 @@ func (dt *DirToTreeMirror) Lookup(path string) (*grits.TypedFileAddr, error) {
 		return nil, err
 	}
 
-	return node.Address(), nil
+	if node == nil {
+		return nil, nil
+	} else {
+		return node.Address(), nil
+	}
 }
 
 func (dt *DirToTreeMirror) LookupFull(path string) ([][]string, error) {
@@ -48,12 +52,20 @@ func (dt *DirToTreeMirror) Link(path string, addr *grits.TypedFileAddr) error {
 	return dt.ns.Link(path, addr)
 }
 
+func (dt *DirToTreeMirror) MultiLink(req []*grits.LinkRequest) error {
+	return dt.ns.MultiLink(req)
+}
+
 func (dt *DirToTreeMirror) ReadFile(addr *grits.TypedFileAddr) (*grits.CachedFile, error) {
 	return dt.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
 func (dt *DirToTreeMirror) AddBlob(path string) (*grits.CachedFile, error) {
 	return dt.ns.BlobStore.AddLocalFile(path)
+}
+
+func (dt *DirToTreeMirror) AddOpenBlob(file *os.File) (*grits.CachedFile, error) {
+	return dt.ns.BlobStore.AddOpenFile(file)
 }
 
 type DirToTreeMirrorConfig struct {
