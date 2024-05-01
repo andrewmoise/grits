@@ -207,7 +207,7 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 		if node == nil {
 			return nil, fmt.Errorf("can't find %s", name)
 		}
-		// FIXME - crash if the last node is nil
+		// FIXME - we crash if the last node is nil
 		response = append(response, []string{partialPath, nodes[index].AddressString()})
 		index += 1
 	}
@@ -281,7 +281,7 @@ func matchesAddr(a FileNode, b *TypedFileAddr) bool {
 	}
 }
 
-func (ns *NameStore) MultiLink(requests []LinkRequest) error {
+func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 

@@ -89,12 +89,20 @@ func (wv *WikiVolume) Link(path string, addr *grits.TypedFileAddr) error {
 	return wv.ns.Link(path, addr)
 }
 
+func (wv *WikiVolume) MultiLink(req []*grits.LinkRequest) error {
+	return wv.ns.MultiLink(req)
+}
+
 func (wv *WikiVolume) ReadFile(addr *grits.TypedFileAddr) (*grits.CachedFile, error) {
 	return wv.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
 func (wv *WikiVolume) AddBlob(path string) (*grits.CachedFile, error) {
 	return wv.ns.BlobStore.AddLocalFile(path)
+}
+
+func (wv *WikiVolume) AddOpenBlob(file *os.File) (*grits.CachedFile, error) {
+	return wv.ns.BlobStore.AddOpenFile(file)
 }
 
 // load retrieves the volume's NameStore root from persistent storage.
