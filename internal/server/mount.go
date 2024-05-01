@@ -244,6 +244,12 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	if err != nil {
 		return nil, syscall.EIO
 	}
+
+	out.Size = node.Address().Size
+	out.Mode = mode
+	out.Owner.Uid = ownerUid
+	out.Owner.Gid = ownerGid
+
 	return newInode, fs.OK
 }
 
@@ -258,10 +264,10 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 // kernel never sends a file handle, even if the Getattr call
 // originated from a fstat system call.
 
-var _ = (fs.NodeGetattrer)((*gritsNode)(nil))
-
 var ownerUid = uint32(syscall.Getuid())
 var ownerGid = uint32(syscall.Getgid())
+
+var _ = (fs.NodeGetattrer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	log.Printf("--- Getattr for %s\n", gn.path)
@@ -272,9 +278,6 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 	}
 	defer node.Release()
 
-	out.Size = node.Address().Size
-	log.Printf("---   Size returning is %d\n", out.Size)
-
 	_, isDir := node.(*grits.TreeNode)
 	var mode uint32
 	if isDir {
@@ -282,8 +285,9 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 	} else {
 		mode = fuse.S_IFREG | 0o644
 	}
-	out.Mode = mode
 
+	out.Size = node.Address().Size
+	out.Mode = mode
 	out.Owner.Uid = ownerUid
 	out.Owner.Gid = ownerGid
 
@@ -310,6 +314,40 @@ type AttrForReference struct {
 	// Blksize is the preferred size for file system operations.
 	Blksize uint32
 	Padding uint32
+}
+
+/* For later... */
+func fillAttr(cacheFile string, out *fuse.AttrOut, isDir bool) error {
+	fileInfo, err := os.Stat(cacheFile)
+	if err != nil {
+		return err
+	}
+
+	stat, ok := fileInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("failed to assert Stat_t")
+	}
+
+	out.Size = uint64(stat.Size)
+	out.Atime = uint64(stat.Atim.Sec)
+	out.Mtime = uint64(stat.Mtim.Sec)
+	out.Ctime = uint64(stat.Ctim.Sec)
+	out.Atimensec = uint32(stat.Atim.Nsec)
+	out.Mtimensec = uint32(stat.Mtim.Nsec)
+	out.Ctimensec = uint32(stat.Ctim.Nsec)
+
+	if isDir {
+		out.Mode = fuse.S_IFDIR | 0o755
+	} else {
+		out.Mode = fuse.S_IFREG | 0o644
+	}
+
+	out.Nlink = 1
+	out.Uid = ownerUid
+	out.Gid = ownerGid
+	out.Rdev = 0
+
+	return nil
 }
 
 /////
