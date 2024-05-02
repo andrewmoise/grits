@@ -739,11 +739,19 @@ var _ = (fs.NodeSetattrer)((*gritsNode)(nil))
 func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	log.Printf("--- Setattr with FH %v\n", fh)
 
+	// As currently implemented, we're only interested in changing the size.
+	if in.Valid&fuse.FATTR_SIZE == 0 {
+		return fs.OK
+	}
+
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
 	if gn.file == nil {
-		return syscall.EIO
+		errno := gn.openCachedFile()
+		if errno != fs.OK {
+			return errno
+		}
 	}
 
 	info, err := gn.file.Stat()
