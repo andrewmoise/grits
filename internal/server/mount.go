@@ -112,7 +112,15 @@ func (mm *MountModule) Stop() error {
 type gritsNode struct {
 	fs.Inode
 	volume Volume
-	path   string // Now storing path instead of a node reference
+	path   string
+
+	mtx      sync.Mutex // Protecting all the below
+	refCount int        // Reference count of open FUSE file handles
+
+	// If refCount > 0, then we also have file I/O information:
+	file       *os.File          // Represents the actual file handle
+	isTmpFile  bool              // True iff that's a handle to a writable temp file
+	cachedFile *grits.CachedFile // Immutable already-cached file info (if NOT a writeable temp file)
 }
 
 func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint32, volume Volume) (*fs.Inode, *gritsNode, error) {
@@ -124,18 +132,6 @@ func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint3
 		Mode: mode,
 	}
 	return parent.NewInode(ctx, operations, stable), operations, nil
-}
-
-// FileHandle represents an open file. This will wrap os.File to handle file operations.
-type FileHandle struct {
-	file       *os.File
-	cachedFile *grits.CachedFile
-	node       *gritsNode
-
-	isReadOnly bool
-	isDirty    bool
-
-	mtx sync.RWMutex
 }
 
 /////
@@ -353,47 +349,229 @@ func fillAttr(cacheFile string, out *fuse.AttrOut, isDir bool) error {
 /////
 // File I/O
 
+// FileHandle represents an open file. This will wrap os.File to handle file operations.
+type FileHandle struct {
+	isReadOnly bool
+}
+
+// Make sure we're okay to read from this file -- it is safe to call this if the file
+// is already opened read/write; it will leave it as read/write without harming anything
+
+func (gn *gritsNode) openCachedFile() syscall.Errno {
+	if gn.cachedFile == nil {
+		addr, err := gn.volume.Lookup(gn.path)
+		if addr == nil {
+			return syscall.ENOENT
+		}
+		if err != nil {
+			return syscall.EIO
+		}
+
+		gn.cachedFile, err = gn.volume.ReadFile(addr)
+		if err != nil {
+			return syscall.EIO
+		}
+		gn.cachedFile.Take()
+	}
+
+	if gn.file == nil {
+		var err error
+		gn.file, err = os.Open(gn.cachedFile.Path)
+		if err != nil {
+			return fs.ToErrno(err)
+		}
+
+		gn.isTmpFile = false // Otherwise leave prev value alone
+	}
+
+	return fs.OK
+}
+
+// Make sure we're okay to read or write from this file
+// Note - you do NOT need to call this on Open(); it's meant to be called from Write()
+//
+// truncLen == -1 means no truncation
+//
+// You need to call this either with truncLen == 0, or with a cachedFile
+// all set up for it to copy the temp file from
+func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
+	if gn.isTmpFile {
+		// Easy case, we already have a temp file open; we just truncate if needed, and return
+		if truncLen != -1 {
+			err := gn.file.Truncate(truncLen)
+			if err != nil {
+				return fs.ToErrno(err)
+			}
+		}
+
+		return fs.OK
+	}
+
+	// At this point, we know we need to set up a temp file
+
+	tmpFile, err := os.CreateTemp("", "grits-temp-")
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+	defer func() {
+		if tmpFile != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+		}
+	}()
+
+	// Check to see if we have a read-only file we need to copy in, and/or clean up
+
+	if !gn.isTmpFile && gn.file != nil {
+		// We have some read-only data already - nuke it (maybe copying some into the tmp file)
+
+		log.Printf("---     Truncating\n")
+
+		if truncLen != 0 {
+			_, err = gn.file.Seek(0, 0)
+			if err != nil {
+				return fs.ToErrno(err)
+			}
+
+			if truncLen == -1 {
+				_, err = io.Copy(tmpFile, gn.file)
+				if err != nil {
+					return fs.ToErrno(err)
+				}
+			} else {
+				n, err := io.CopyN(tmpFile, gn.file, truncLen)
+				if err != nil {
+					return fs.ToErrno(err)
+				}
+				if n != truncLen {
+					return syscall.EIO
+				}
+			}
+		}
+
+		log.Printf("---     Closing old file\n")
+
+		err = gn.file.Close()
+		if err != nil {
+			log.Printf("Warning! Error when closing %s\n", gn.path)
+		}
+	}
+
+	// Replace the data with the temp file we created
+
+	gn.cachedFile.Release()
+	gn.cachedFile = nil
+
+	gn.file = tmpFile
+	tmpFile = nil // Prevent cleanup
+
+	gn.isTmpFile = true
+
+	return fs.OK
+}
+
+// Write this file to the blob cache if needed, make sure our edits if any are saved
+
+func (gn *gritsNode) flush() syscall.Errno {
+	if gn.file == nil {
+		return syscall.EIO
+	}
+
+	if !gn.isTmpFile {
+		return fs.OK
+	}
+
+	tmpFile := gn.file.Name()
+	defer os.Remove(tmpFile)
+
+	err := gn.file.Close()
+	gn.file = nil
+	gn.isTmpFile = false
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+
+	cf, err := gn.volume.AddBlob(tmpFile)
+	if err != nil {
+		return syscall.EIO
+	}
+
+	if gn.cachedFile != nil {
+		log.Panicf("Can't happen - dirty file but CF is set")
+	}
+	gn.cachedFile = cf
+
+	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
+	log.Printf("--- We are linking %s to %s\n", gn.path, typedAddr.String())
+	err = gn.volume.Link(gn.path, typedAddr)
+
+	_, parent := gn.Parent()
+	pathParts := strings.Split(gn.path, "/")
+	errno := parent.NotifyEntry(pathParts[len(pathParts)-1])
+
+	if err != nil {
+		return syscall.EIO
+	}
+	if errno != fs.OK {
+		return errno
+	}
+
+	return fs.OK
+}
+
+// Wrap up all the I/O stuff for an inode; we're done with file I/O on it for the time being.
+// Should have already flushed before calling this.
+
+func (gn *gritsNode) finalize() syscall.Errno {
+	if gn.cachedFile != nil {
+		gn.cachedFile.Release()
+		gn.cachedFile = nil
+	}
+
+	if gn.isTmpFile {
+		log.Printf("Warning! Losing edits to %s because of previous errors", gn.path)
+		gn.isTmpFile = false
+	}
+
+	if gn.file != nil {
+		err := gn.file.Close()
+		gn.file = nil
+		if err != nil {
+			return fs.ToErrno(err)
+		}
+	}
+
+	return fs.OK
+}
+
 // Open opens an Inode (of regular file type) for reading. It
 // is optional but recommended to return a FileHandle.
 
 var _ = (fs.NodeOpener)((*gritsNode)(nil))
 
 func (gn *gritsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
-	node, err := gn.volume.LookupNode(gn.path)
-	if err != nil {
-		return nil, 0, fs.ToErrno(err)
-	}
-	defer node.Release()
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
 
-	blobFile, err := os.Open(node.ExportedBlob().Path)
-	if err != nil {
-		return nil, 0, fs.ToErrno(err)
-	}
-	//defer blobFile.Close()
-
-	outFh := &FileHandle{node: gn}
-
-	if flags&fuse.O_ANYWRITE != 0 && flags&uint32(os.O_TRUNC) != 0 {
-		// Directly open the temp file instead of starting with the blob file
-		var tmpFile *os.File
-		tmpFile, err = os.CreateTemp("", "grits-modified-*")
-		if err != nil {
-			return nil, 0, fs.ToErrno(err)
+	if gn.refCount == 0 {
+		var errno syscall.Errno
+		if flags&uint32(os.O_TRUNC) == 0 {
+			errno = gn.openCachedFile()
+		} else {
+			errno = gn.openTmpFile(0)
 		}
-		outFh.file = tmpFile
-		outFh.isReadOnly = false
-		outFh.isDirty = true
-	} else {
-		// Start with the blob file and marked as clean
 
-		outFh.file = blobFile
-		blobFile = nil // Prevent deferred close
-		outFh.isReadOnly = (flags&fuse.O_ANYWRITE == 0)
-		outFh.isDirty = false
-		outFh.cachedFile = node.ExportedBlob()
+		if errno != fs.OK {
+			return nil, 0, errno
+		}
+	}
+	gn.refCount++
+
+	fh := &FileHandle{
+		isReadOnly: flags&fuse.O_ANYWRITE == 0,
 	}
 
-	return outFh, 0, fs.OK
+	return fh, 0, fs.OK
 }
 
 // Create is similar to Lookup, but should create a new
@@ -412,21 +590,24 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 		}
 	}
 
+	// No lock -- we're the only one with a reference to this at this stage, so no point
+	// hopefully
+
 	newInode, operations, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.volume)
 	if err != nil {
 		return nil, nil, 0, syscall.EIO
 	}
 
-	outFh := &FileHandle{}
-
-	tmpFile, err := os.CreateTemp("", "grits-modified-*")
-	if err != nil {
-		return nil, nil, 0, fs.ToErrno(err)
+	outFh := &FileHandle{
+		isReadOnly: flags&fuse.O_ANYWRITE == 0,
 	}
-	outFh.file = tmpFile
-	outFh.isReadOnly = false
-	outFh.isDirty = true
-	outFh.node = operations
+
+	errno := operations.openTmpFile(0)
+	if errno != fs.OK {
+		return nil, nil, 0, errno
+	}
+
+	operations.refCount++
 
 	return newInode, outFh, 0, fs.OK
 }
@@ -440,15 +621,15 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 var _ = (fs.NodeReader)((*gritsNode)(nil))
 
 func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
-	handle, ok := f.(*FileHandle)
-	if !ok {
-		return nil, syscall.EBADF
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
+
+	errno := gn.openCachedFile()
+	if errno != fs.OK {
+		return nil, errno
 	}
 
-	handle.mtx.RLock()
-	defer handle.mtx.RUnlock()
-
-	n, err := handle.file.ReadAt(dest, off)
+	n, err := gn.file.ReadAt(dest, off)
 	if err != nil && err != io.EOF {
 		return nil, fs.ToErrno(err)
 	}
@@ -475,47 +656,64 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 		return 0, syscall.EACCES
 	}
 
-	handle.mtx.Lock()
-	defer handle.mtx.Unlock()
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
 
-	if !handle.isDirty {
-		tempFile, err := os.CreateTemp("", "grits-temp-")
-		if err != nil {
-			return 0, syscall.EIO
-		}
+	log.Printf("---   Opening tmp file\n")
 
-		_, err = handle.file.Seek(0, 0)
-		if err != nil {
-			os.Remove(tempFile.Name())
-			return 0, syscall.EIO
-		}
-
-		n, err := io.Copy(tempFile, handle.file)
-		if err != nil {
-			os.Remove(tempFile.Name())
-			return 0, syscall.EIO
-		}
-
-		log.Printf("---   Copied %d bytes\n", n)
-
-		err = handle.file.Close()
-		if err != nil {
-			os.Remove(tempFile.Name())
-			return 0, syscall.EIO
-		}
-		handle.file = tempFile
-
-		handle.cachedFile.Release()
-		handle.cachedFile = nil
-
-		handle.isDirty = true
+	errno := gn.openTmpFile(-1)
+	if errno != fs.OK {
+		return 0, errno
 	}
 
-	n, err := handle.file.WriteAt(data, off)
+	log.Printf("---   Writing\n")
+
+	n, err := gn.file.WriteAt(data, off)
 	if err != nil {
 		return 0, fs.ToErrno(err)
 	}
+
 	return uint32(n), fs.OK
+}
+
+// This is in here because, apparently, they do SetAttr() with size == 0 to implement Trunc()
+
+var _ = (fs.NodeSetattrer)((*gritsNode)(nil))
+
+func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
+	log.Printf("--- Setattr with FH %v\n", fh)
+
+	handle, ok := fh.(*FileHandle)
+	if !ok {
+		return syscall.EBADF
+	}
+
+	if handle.isReadOnly {
+		return syscall.EACCES
+	}
+
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
+
+	if gn.file == nil {
+		return syscall.EIO
+	}
+
+	info, err := gn.file.Stat()
+	if err != nil {
+		return syscall.EIO
+	}
+
+	fileSize := info.Size()
+
+	if in.Size != uint64(fileSize) {
+		errno := gn.openTmpFile(int64(in.Size))
+		if errno != fs.OK {
+			return errno
+		}
+	}
+
+	return fs.OK
 }
 
 // Flush is called for the close(2) call on a file descriptor. In case
@@ -528,62 +726,10 @@ var _ = (fs.NodeFlusher)((*gritsNode)(nil))
 func (gn *gritsNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 	log.Printf("--- We're flushing!")
 
-	handle, ok := f.(*FileHandle)
-	if !ok {
-		return syscall.EBADF
-	}
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
 
-	handle.mtx.Lock()
-	defer handle.mtx.Unlock()
-
-	if !handle.isDirty {
-		return fs.OK
-	}
-
-	if handle.cachedFile != nil {
-		log.Panicf("Can't happen, CF non nil")
-	}
-
-	fileName := handle.file.Name()
-
-	err := handle.file.Close()
-	if err != nil {
-		return syscall.EIO
-	}
-
-	cf, err := gn.volume.AddBlob(fileName)
-	if err != nil {
-		return syscall.EIO
-	}
-
-	err = os.Remove(fileName)
-	if err != nil {
-		cf.Release()
-		handle.file, _ = os.CreateTemp("", "grits-temp-")
-		return syscall.EIO
-	}
-
-	handle.file, err = os.Open(cf.Path)
-	if err != nil {
-		cf.Release()
-		handle.file, _ = os.CreateTemp("", "grits-temp-")
-		return syscall.EIO
-	}
-
-	handle.cachedFile = cf
-	handle.isDirty = false
-
-	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
-	log.Printf("--- We are linking %s to %s\n", handle.node.path, typedAddr.String())
-	err = gn.volume.Link(handle.node.path, typedAddr)
-
-	_, parent := gn.Parent()
-	pathParts := strings.Split(gn.path, "/")
-	errno := parent.NotifyEntry(pathParts[len(pathParts)-1])
-
-	if err != nil {
-		return syscall.EIO
-	}
+	errno := gn.flush()
 	if errno != fs.OK {
 		return errno
 	}
@@ -600,30 +746,22 @@ func (gn *gritsNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
 var _ = (fs.NodeReleaser)((*gritsNode)(nil))
 
 func (gn *gritsNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	handle, ok := f.(*FileHandle)
-	if !ok {
-		return syscall.EBADF
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
+
+	flushErrno := gn.flush()
+
+	gn.refCount--
+	if gn.refCount == 0 {
+		errno := gn.finalize()
+
+		if errno != fs.OK {
+			return errno
+		}
 	}
 
-	handle.mtx.Lock()
-	defer handle.mtx.Unlock()
-
-	if handle.isDirty {
-		log.Panicf("Releasing not-closed file handle")
-	}
-	if handle.cachedFile == nil {
-		log.Panicf("Releasing with no CF set")
-	}
-	if handle.file == nil {
-		log.Panic("Releasing with no file set")
-	}
-
-	// Release the cachedFile
-	handle.cachedFile.Release()
-
-	// Close the file
-	if err := handle.file.Close(); err != nil {
-		return fs.ToErrno(err)
+	if flushErrno != fs.OK {
+		return flushErrno
 	}
 
 	return fs.OK
