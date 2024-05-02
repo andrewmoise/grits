@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"sync"
 	"syscall"
 
@@ -113,6 +112,7 @@ type gritsNode struct {
 	fs.Inode
 	volume Volume
 	path   string
+	mode   os.FileMode
 
 	mtx      sync.Mutex // Protecting all the below
 	refCount int        // Reference count of open FUSE file handles
@@ -268,22 +268,29 @@ var _ = (fs.NodeGetattrer)((*gritsNode)(nil))
 func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	log.Printf("--- Getattr for %s\n", gn.path)
 
-	node, _ := gn.volume.LookupNode(gn.path)
-	if node == nil {
-		return syscall.ENOENT
-	}
-	defer node.Release()
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
 
-	_, isDir := node.(*grits.TreeNode)
-	var mode uint32
-	if isDir {
-		mode = fuse.S_IFDIR | 0o755
+	if !gn.isTmpFile {
+		node, _ := gn.volume.LookupNode(gn.path)
+		if node == nil {
+			return syscall.ENOENT
+		}
+		defer node.Release()
+
+		out.Size = node.Address().Size
+	} else if gn.file != nil {
+		fileInfo, err := gn.file.Stat()
+		if err != nil {
+			return fs.ToErrno(err)
+		}
+
+		out.Size = uint64(fileInfo.Size())
 	} else {
-		mode = fuse.S_IFREG | 0o644
+		return syscall.EIO
 	}
 
-	out.Size = node.Address().Size
-	out.Mode = mode
+	out.Mode = gn.Mode()
 	out.Owner.Uid = ownerUid
 	out.Owner.Gid = ownerGid
 
@@ -505,16 +512,16 @@ func (gn *gritsNode) flush() syscall.Errno {
 	log.Printf("--- We are linking %s to %s\n", gn.path, typedAddr.String())
 	err = gn.volume.Link(gn.path, typedAddr)
 
-	_, parent := gn.Parent()
-	pathParts := strings.Split(gn.path, "/")
-	errno := parent.NotifyEntry(pathParts[len(pathParts)-1])
+	//_, parent := gn.Parent()
+	//pathParts := strings.Split(gn.path, "/")
+	//errno := parent.NotifyEntry(pathParts[len(pathParts)-1])
 
 	if err != nil {
 		return syscall.EIO
 	}
-	if errno != fs.OK {
-		return errno
-	}
+	//if errno != fs.OK && errno != syscall.ENOENT {
+	//	return errno
+	//}
 
 	return fs.OK
 }
@@ -562,6 +569,8 @@ func (gn *gritsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 		}
 
 		if errno != fs.OK {
+			log.Printf("--- Nil FH! 6\n")
+
 			return nil, 0, errno
 		}
 	}
@@ -586,6 +595,7 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 	if flags&uint32(os.O_EXCL) != 0 {
 		addr, _ := gn.volume.Lookup(fullPath)
 		if addr != nil {
+			log.Printf("--- Nil FH! 1\n")
 			return nil, nil, 0, syscall.EEXIST
 		}
 	}
@@ -595,6 +605,7 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 
 	newInode, operations, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.volume)
 	if err != nil {
+		log.Printf("--- Nil FH! 2\n")
 		return nil, nil, 0, syscall.EIO
 	}
 
@@ -604,10 +615,16 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 
 	errno := operations.openTmpFile(0)
 	if errno != fs.OK {
+		log.Printf("--- Nil FH! 3\n")
 		return nil, nil, 0, errno
 	}
 
 	operations.refCount++
+
+	//errno = gn.NotifyEntry(name)
+	//if errno != fs.OK && errno != syscall.ENOENT {
+	//	return nil, nil, 0, errno
+	//}
 
 	return newInode, outFh, 0, fs.OK
 }
@@ -676,21 +693,12 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 	return uint32(n), fs.OK
 }
 
-// This is in here because, apparently, they do SetAttr() with size == 0 to implement Trunc()
+// Misc nonsense. Setattr() needs to be in here, in order to support setting size to 0 to truncate.
 
 var _ = (fs.NodeSetattrer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
 	log.Printf("--- Setattr with FH %v\n", fh)
-
-	handle, ok := fh.(*FileHandle)
-	if !ok {
-		return syscall.EBADF
-	}
-
-	if handle.isReadOnly {
-		return syscall.EACCES
-	}
 
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
@@ -713,6 +721,12 @@ func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.Set
 		}
 	}
 
+	return fs.OK
+}
+
+var _ = (fs.NodeFsyncer)((*gritsNode)(nil))
+
+func (gn *gritsNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
 	return fs.OK
 }
 
