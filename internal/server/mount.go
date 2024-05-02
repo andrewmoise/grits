@@ -51,12 +51,16 @@ type MountModule struct {
 	config      *MountModuleConfig
 	fsServer    *fuse.Server
 	gritsServer *Server
+
+	volume       Volume
+	inodeManager *InodeManager
 }
 
 func NewMountModule(config *MountModuleConfig, server *Server) *MountModule {
 	return &MountModule{
-		config:      config,
-		gritsServer: server,
+		config:       config,
+		gritsServer:  server,
+		inodeManager: NewInodeManager(),
 	}
 }
 
@@ -68,21 +72,21 @@ func (mm *MountModule) Start() error {
 	mntDir := mm.config.MountPoint
 	os.Mkdir(mntDir, 0755)
 
-	volume, exists := mm.gritsServer.Volumes[mm.config.Volume]
+	var exists bool
+	mm.volume, exists = mm.gritsServer.Volumes[mm.config.Volume]
 	if !exists {
 		return fmt.Errorf("can't open volume %s", mm.config.Volume)
 	}
 
 	root := &gritsNode{
-		volume: volume,
+		module: mm,
 		path:   "",
 	}
 
 	var err error
 	mm.fsServer, err = fs.Mount(mntDir, root, &fs.Options{
 		MountOptions: fuse.MountOptions{
-			Debug: true,
-			//FsName:                   "grits",
+			Debug:                    true,
 			Name:                     "grits",
 			DisableXAttrs:            true,
 			ExplicitDataCacheControl: true,
@@ -110,9 +114,8 @@ func (mm *MountModule) Stop() error {
 
 type gritsNode struct {
 	fs.Inode
-	volume Volume
+	module *MountModule
 	path   string
-	mode   os.FileMode
 
 	mtx      sync.Mutex // Protecting all the below
 	refCount int        // Reference count of open FUSE file handles
@@ -123,15 +126,51 @@ type gritsNode struct {
 	cachedFile *grits.CachedFile // Immutable already-cached file info (if NOT a writeable temp file)
 }
 
-func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint32, volume Volume) (*fs.Inode, *gritsNode, error) {
+func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint32, module *MountModule) (*fs.Inode, *gritsNode, error) {
 	operations := &gritsNode{
-		volume: volume,
+		module: module,
 		path:   path,
 	}
 	stable := fs.StableAttr{
 		Mode: mode,
+		Ino:  module.inodeManager.AssignInode(path),
 	}
 	return parent.NewInode(ctx, operations, stable), operations, nil
+}
+
+/////
+// Inode management
+
+type InodeManager struct {
+	sync.Mutex
+	inodeMap  map[string]uint64
+	lastInode uint64
+}
+
+func NewInodeManager() *InodeManager {
+	return &InodeManager{
+		inodeMap:  make(map[string]uint64),
+		lastInode: 1,
+	}
+}
+
+func (m *InodeManager) AssignInode(path string) uint64 {
+	m.Lock()
+	defer m.Unlock()
+
+	if inode, exists := m.inodeMap[path]; exists {
+		return inode
+	}
+	m.lastInode++
+	m.inodeMap[path] = m.lastInode
+	return m.lastInode
+}
+
+func (m *InodeManager) RemoveInode(path string) {
+	m.Lock()
+	defer m.Unlock()
+
+	delete(m.inodeMap, path)
 }
 
 /////
@@ -151,7 +190,7 @@ func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint3
 var _ = (fs.NodeReaddirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	node, _ := gn.volume.LookupNode(gn.path)
+	node, _ := gn.module.volume.LookupNode(gn.path)
 	if node == nil {
 		// FIXME - Should detect internal errors and do it differently
 		return nil, syscall.ENOENT
@@ -217,7 +256,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	fullPath := filepath.Join(gn.path, name)
 	log.Printf("--- Looking up %s\n", fullPath)
 
-	node, err := gn.volume.LookupNode(fullPath)
+	node, err := gn.module.volume.LookupNode(fullPath)
 	if err != nil {
 		log.Printf("---   Error! %v\n", err)
 		return nil, syscall.EIO
@@ -236,7 +275,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		mode = fuse.S_IFREG | 0o644
 	}
 
-	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.volume)
+	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.module)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -272,7 +311,7 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 	defer gn.mtx.Unlock()
 
 	if !gn.isTmpFile {
-		node, _ := gn.volume.LookupNode(gn.path)
+		node, _ := gn.module.volume.LookupNode(gn.path)
 		if node == nil {
 			return syscall.ENOENT
 		}
@@ -366,7 +405,7 @@ type FileHandle struct {
 
 func (gn *gritsNode) openCachedFile() syscall.Errno {
 	if gn.cachedFile == nil {
-		addr, err := gn.volume.Lookup(gn.path)
+		addr, err := gn.module.volume.Lookup(gn.path)
 		if addr == nil {
 			return syscall.ENOENT
 		}
@@ -374,7 +413,7 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 			return syscall.EIO
 		}
 
-		gn.cachedFile, err = gn.volume.ReadFile(addr)
+		gn.cachedFile, err = gn.module.volume.ReadFile(addr)
 		if err != nil {
 			return syscall.EIO
 		}
@@ -498,7 +537,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 		return fs.ToErrno(err)
 	}
 
-	cf, err := gn.volume.AddBlob(tmpFile)
+	cf, err := gn.module.volume.AddBlob(tmpFile)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -510,7 +549,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 
 	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
 	log.Printf("--- We are linking %s to %s\n", gn.path, typedAddr.String())
-	err = gn.volume.Link(gn.path, typedAddr)
+	err = gn.module.volume.Link(gn.path, typedAddr)
 
 	//_, parent := gn.Parent()
 	//pathParts := strings.Split(gn.path, "/")
@@ -593,7 +632,7 @@ var _ = (fs.NodeCreater)((*gritsNode)(nil))
 func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
 	if flags&uint32(os.O_EXCL) != 0 {
-		addr, _ := gn.volume.Lookup(fullPath)
+		addr, _ := gn.module.volume.Lookup(fullPath)
 		if addr != nil {
 			log.Printf("--- Nil FH! 1\n")
 			return nil, nil, 0, syscall.EEXIST
@@ -603,7 +642,7 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 	// No lock -- we're the only one with a reference to this at this stage, so no point
 	// hopefully
 
-	newInode, operations, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.volume)
+	newInode, operations, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.module)
 	if err != nil {
 		log.Printf("--- Nil FH! 2\n")
 		return nil, nil, 0, syscall.EIO
@@ -801,13 +840,13 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		Assert:   grits.AssertPrevValueMatches,
 	}
 
-	err := gn.volume.MultiLink([]*grits.LinkRequest{req})
+	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
 		// FIXME - distinguish 'already exists' from general internal error
 		return nil, syscall.EIO
 	}
 
-	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode|fuse.S_IFDIR, gn.volume)
+	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode|fuse.S_IFDIR, gn.module)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -836,7 +875,7 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		Assert: grits.AssertIsNonEmpty | grits.AssertIsBlob,
 	}
 
-	err := gn.volume.MultiLink([]*grits.LinkRequest{req})
+	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
 		return syscall.EIO
 	}
@@ -859,7 +898,7 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		Assert: grits.AssertIsNonEmpty | grits.AssertIsTree,
 	}
 
-	err := gn.volume.MultiLink([]*grits.LinkRequest{req})
+	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
 		return syscall.EIO
 	}
@@ -882,7 +921,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 	}
 	newFullPath := filepath.Join(newGritsNode.path, newName)
 
-	addr, err := gn.volume.Lookup(fullPath)
+	addr, err := gn.module.volume.Lookup(fullPath)
 	if err != nil {
 		return syscall.EIO
 	}
@@ -905,7 +944,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		Assert:   grits.AssertPrevValueMatches,
 	}
 
-	err = gn.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq})
+	err = gn.module.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq})
 	if err != nil {
 		return syscall.EINVAL
 	}
