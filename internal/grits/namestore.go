@@ -3,12 +3,10 @@ package grits
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
-	"sync/atomic"
 )
 
 ////////////////////////
@@ -19,7 +17,6 @@ type FileNode interface {
 	Children() map[string]FileNode
 	AddressString() string
 	Address() *TypedFileAddr
-	Inode() uint64
 
 	Take()
 	Release()
@@ -28,14 +25,12 @@ type FileNode interface {
 type TreeNode struct {
 	blob        *CachedFile
 	ChildrenMap map[string]FileNode
-	inode       uint64 // Add inode number field
 	refCount    int
 	nameStore   *NameStore
 }
 
 type BlobNode struct {
 	blob     *CachedFile
-	inode    uint64 // Add inode number field
 	refCount int
 }
 
@@ -55,10 +50,6 @@ func (bn *BlobNode) AddressString() string {
 
 func (bn *BlobNode) Address() *TypedFileAddr {
 	return NewTypedFileAddr(bn.blob.Address.Hash, bn.blob.Address.Size, Blob)
-}
-
-func (bn *BlobNode) Inode() uint64 {
-	return bn.inode
 }
 
 func (bn *BlobNode) Take() {
@@ -91,10 +82,6 @@ func (tn *TreeNode) Address() *TypedFileAddr {
 func (tn *TreeNode) AddressString() string {
 	tn.ensureSerialized()
 	return "tree:" + tn.blob.Address.String()
-}
-
-func (tn *TreeNode) Inode() uint64 {
-	return tn.inode
 }
 
 func (tn *TreeNode) Take() {
@@ -132,11 +119,10 @@ func DebugPrintTree(node FileNode, indent string) {
 // NameStore
 
 type NameStore struct {
-	BlobStore  *BlobStore
-	root       FileNode
-	fileCache  map[string]FileNode
-	inodeIndex uint64 // inode index to assign inode numbers sequentially
-	mtx        sync.RWMutex
+	BlobStore *BlobStore
+	root      FileNode
+	fileCache map[string]FileNode
+	mtx       sync.RWMutex
 }
 
 func (ns *NameStore) GetRoot() string {
@@ -218,7 +204,7 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 // Core lookup helper function.
 
 func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
-	log.Printf("We resolve path %s (root %v)\n", path, ns.root)
+	//log.Printf("We resolve path %s (root %v)\n", path, ns.root)
 
 	path = strings.TrimRight(path, "/")
 	if path != "" && path[0] == '/' {
@@ -232,7 +218,7 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
 	response = append(response, node)
 
 	for _, part := range parts {
-		log.Printf("  part %s\n", part)
+		//log.Printf("  part %s\n", part)
 
 		if part == "" {
 			continue
@@ -542,11 +528,6 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			nameStore:   ns,
 		}
 
-		dirFile, err := ns.BlobStore.ReadFile(&addr.BlobAddr)
-		if err != nil {
-			delete(ns.fileCache, addr.String())
-			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
-		}
 		defer func() {
 			if dn != nil {
 				delete(ns.fileCache, addr.String())
@@ -555,6 +536,11 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 				}
 			}
 		}()
+
+		dirFile, err := ns.BlobStore.ReadFile(&addr.BlobAddr)
+		if err != nil {
+			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
+		}
 
 		dirData, err := os.ReadFile(dirFile.Path)
 		if err != nil {
@@ -597,14 +583,9 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 	}
 }
 
-func (ns *NameStore) nextInode() uint64 {
-	return atomic.AddUint64(&ns.inodeIndex, 1) // atomically increment the inode index
-}
-
 func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, error) {
 	tn := &TreeNode{
 		ChildrenMap: children,
-		inode:       ns.nextInode(), // Assign an inode number
 		nameStore:   ns,
 	}
 	return tn, nil
@@ -617,8 +598,7 @@ func (ns *NameStore) CreateBlobNode(fa *BlobAddr) (*BlobNode, error) {
 	}
 	bn := &BlobNode{
 		blob:     cf,
-		inode:    ns.nextInode(), // Assign an inode number
-		refCount: 1,              // Initially referenced
+		refCount: 1, // Initially referenced
 	}
 	return bn, nil
 }
