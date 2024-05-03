@@ -86,7 +86,7 @@ func (mm *MountModule) Start() error {
 	var err error
 	mm.fsServer, err = fs.Mount(mntDir, root, &fs.Options{
 		MountOptions: fuse.MountOptions{
-			Debug:                    true,
+			//Debug:                    true,
 			Name:                     "grits",
 			DisableXAttrs:            true,
 			ExplicitDataCacheControl: true,
@@ -254,15 +254,15 @@ var _ = (fs.NodeLookuper)((*gritsNode)(nil))
 
 func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	log.Printf("--- Looking up %s\n", fullPath)
+	//log.Printf("--- Looking up %s\n", fullPath)
 
 	node, err := gn.module.volume.LookupNode(fullPath)
 	if err != nil {
-		log.Printf("---   Error! %v\n", err)
+		//log.Printf("---   Error! %v\n", err)
 		return nil, syscall.EIO
 	}
 	if node == nil {
-		log.Printf("---   Not found")
+		//log.Printf("---   Not found")
 		return nil, syscall.ENOENT
 	}
 	defer node.Release()
@@ -305,7 +305,7 @@ var ownerGid = uint32(syscall.Getgid())
 var _ = (fs.NodeGetattrer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	log.Printf("--- Getattr for %s\n", gn.path)
+	//log.Printf("--- Getattr for %s\n", gn.path)
 
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
@@ -471,7 +471,7 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 	if !gn.isTmpFile && gn.file != nil {
 		// We have some read-only data already - nuke it (maybe copying some into the tmp file)
 
-		log.Printf("---     Truncating\n")
+		//log.Printf("---     Truncating\n")
 
 		if truncLen != 0 {
 			_, err = gn.file.Seek(0, 0)
@@ -495,7 +495,7 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 			}
 		}
 
-		log.Printf("---     Closing old file\n")
+		//log.Printf("---     Closing old file\n")
 
 		err = gn.file.Close()
 		if err != nil {
@@ -548,7 +548,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 	gn.cachedFile = cf
 
 	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
-	log.Printf("--- We are linking %s to %s\n", gn.path, typedAddr.String())
+	//log.Printf("--- We are linking %s to %s\n", gn.path, typedAddr.String())
 	err = gn.module.volume.Link(gn.path, typedAddr)
 
 	//_, parent := gn.Parent()
@@ -608,8 +608,6 @@ func (gn *gritsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 		}
 
 		if errno != fs.OK {
-			log.Printf("--- Nil FH! 6\n")
-
 			return nil, 0, errno
 		}
 	}
@@ -634,7 +632,6 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 	if flags&uint32(os.O_EXCL) != 0 {
 		addr, _ := gn.module.volume.Lookup(fullPath)
 		if addr != nil {
-			log.Printf("--- Nil FH! 1\n")
 			return nil, nil, 0, syscall.EEXIST
 		}
 	}
@@ -644,7 +641,6 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 
 	newInode, operations, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.module)
 	if err != nil {
-		log.Printf("--- Nil FH! 2\n")
 		return nil, nil, 0, syscall.EIO
 	}
 
@@ -654,7 +650,6 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 
 	errno := operations.openTmpFile(0)
 	if errno != fs.OK {
-		log.Printf("--- Nil FH! 3\n")
 		return nil, nil, 0, errno
 	}
 
@@ -701,7 +696,7 @@ func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 var _ = (fs.NodeWriter)((*gritsNode)(nil))
 
 func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	log.Printf("--- Writing at offset %d\n", off)
+	//log.Printf("--- Writing at offset %d\n", off)
 
 	handle, ok := f.(*FileHandle)
 	if !ok {
@@ -715,14 +710,14 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
-	log.Printf("---   Opening tmp file\n")
+	//log.Printf("---   Opening tmp file\n")
 
 	errno := gn.openTmpFile(-1)
 	if errno != fs.OK {
 		return 0, errno
 	}
 
-	log.Printf("---   Writing\n")
+	//log.Printf("---   Writing\n")
 
 	n, err := gn.file.WriteAt(data, off)
 	if err != nil {
@@ -737,7 +732,7 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 var _ = (fs.NodeSetattrer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	log.Printf("--- Setattr with FH %v\n", fh)
+	//log.Printf("--- Setattr with FH %v\n", fh)
 
 	// As currently implemented, we're only interested in changing the size.
 	if in.Valid&fuse.FATTR_SIZE == 0 {
@@ -785,7 +780,7 @@ func (gn *gritsNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) s
 var _ = (fs.NodeFlusher)((*gritsNode)(nil))
 
 func (gn *gritsNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	log.Printf("--- We're flushing!")
+	//log.Printf("--- We're flushing!")
 
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
