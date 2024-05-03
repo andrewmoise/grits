@@ -199,7 +199,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		}
 
 		if info.IsDir() {
-			log.Printf("Adding empty dir: %s\n", relPath)
+			//log.Printf("Adding empty dir: %s\n", relPath)
 
 			err = newDirNs.LinkTree(relPath, emptyDir.Address)
 			return err
@@ -219,7 +219,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		}
 		defer cf.Release()
 
-		log.Printf("Adding relative path: %s -> %s is %s", scanPath, path, relPath)
+		//log.Printf("Adding relative path: %s -> %s is %s", scanPath, path, relPath)
 
 		err = newDirNs.LinkBlob(relPath, cf.Address)
 		if err != nil {
