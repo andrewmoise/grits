@@ -32,7 +32,7 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	}
 	defer blobFile.Release()
 
-	typedAddr := grits.NewTypedFileAddr(blobFile.Address.Hash, blobFile.Address.Size, grits.Blob)
+	typedAddr := grits.NewTypedFileAddr(blobFile.Address.Hash, blobFile.Size, grits.Blob)
 
 	// Link the new blob to the wiki volume using the test path.
 	err = wikiVolume.Link(testPath, typedAddr)

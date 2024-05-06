@@ -1,7 +1,6 @@
 package grits
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -140,14 +139,17 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	// Compute the SHA-256 hash and size of the file.
-	hasher := sha256.New()
-	size, err := io.Copy(hasher, file)
+	// Reset file pointer to ensure accurate size reading
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("failed to seek file: %v", err)
+	}
+
+	blobHash, err := ComputeHashFromReader(file)
 	if err != nil {
 		return nil, err
 	}
 
-	blobAddr := NewBlobAddr(fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size))
+	blobAddr := NewBlobAddr(blobHash)
 
 	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
 		cachedFile.RefCount++
@@ -191,10 +193,17 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 		}
 	}
 
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat file: %v", err)
+	}
+	size := uint64(fileInfo.Size())
+
 	cachedFile := &CachedFile{
 		Path:        destPath,
 		RefCount:    1,
 		Address:     blobAddr,
+		Size:        size,
 		LastTouched: time.Now(),
 		IsHardLink:  isHardLink,
 		blobStore:   bs,
@@ -202,7 +211,7 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 
 	bs.files[blobAddr.Hash] = cachedFile
 	if !isHardLink {
-		bs.currentSize += blobAddr.Size
+		bs.currentSize += size
 	}
 
 	return cachedFile, nil
@@ -210,13 +219,12 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 
 func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	// Compute hash and size of the data
-	hash := ComputeSHA256(data)
-	size := uint64(len(data))
+	hash := ComputeHash(data)
 
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	blobAddr := NewBlobAddr(hash, size)
+	blobAddr := NewBlobAddr(hash)
 
 	// Check if the data block already exists in the store
 	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
@@ -237,13 +245,14 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 		Path:        destPath,
 		RefCount:    1, // Initialize RefCount to 1 for new data blocks
 		Address:     blobAddr,
+		Size:        uint64(len(data)),
 		LastTouched: time.Now(),
 		blobStore:   bs,
 	}
 
 	// Add the new data block to the files map
 	bs.files[blobAddr.Hash] = cachedFile
-	bs.currentSize += size
+	bs.currentSize += uint64(len(data))
 
 	return cachedFile, nil
 }
@@ -297,7 +306,7 @@ func (bs *BlobStore) evictOldFiles() {
 		}
 
 		if !file.IsHardLink {
-			bs.currentSize -= file.Address.Size
+			bs.currentSize -= file.Size
 		}
 		delete(bs.files, file.Address.Hash)
 
