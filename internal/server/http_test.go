@@ -32,8 +32,8 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		Path   string `json:"path"`
 		Addr   string `json:"addr"`
 	}{
-		{Path: "dir", Addr: "tree:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a-2"},
-		{Path: "dir/subdir", Addr: "tree:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a-2"},
+		{Path: "dir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
+		{Path: "dir/subdir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
 	}
 
 	linkPayload, _ := json.Marshal(linkData)
@@ -72,10 +72,10 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 			Path   string `json:"path"`
 			Addr   string `json:"addr"`
 		}{
-			{Path: content, Addr: "blob:" + addresses[i]},
-			//{Path: "dir", Addr: "tree:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a-2"},
-			//{Path: "dir/subdir", Addr: "tree:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a-2"},
-			{Path: "dir/subdir/" + content, Addr: "blob:" + addresses[i]},
+			{Path: content, Addr: fmt.Sprintf("blob:%s-%d", addresses[i], len(content))},
+			//{Path: "dir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
+			//{Path: "dir/subdir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
+			{Path: "dir/subdir/" + content, Addr: fmt.Sprintf("blob:%s-%d", addresses[i], len(content))},
 		}
 
 		linkPayload, _ := json.Marshal(linkData)

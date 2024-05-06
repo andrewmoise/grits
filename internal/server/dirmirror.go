@@ -221,7 +221,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 
 		//log.Printf("Adding relative path: %s -> %s is %s", scanPath, path, relPath)
 
-		err = newDirNs.LinkBlob(relPath, cf.Address)
+		err = newDirNs.LinkBlob(relPath, cf.Address, cf.Size)
 		if err != nil {
 			return err
 		}

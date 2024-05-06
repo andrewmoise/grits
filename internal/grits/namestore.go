@@ -45,11 +45,11 @@ func (bn *BlobNode) Children() map[string]FileNode {
 }
 
 func (bn *BlobNode) AddressString() string {
-	return "blob:" + bn.blob.Address.String()
+	return fmt.Sprintf("blob:%s-%d", bn.blob.Address.String(), bn.blob.Size)
 }
 
 func (bn *BlobNode) Address() *TypedFileAddr {
-	return NewTypedFileAddr(bn.blob.Address.Hash, bn.blob.Address.Size, Blob)
+	return NewTypedFileAddr(bn.blob.Address.Hash, bn.blob.Size, Blob)
 }
 
 func (bn *BlobNode) Take() {
@@ -76,12 +76,12 @@ func (tn *TreeNode) Children() map[string]FileNode {
 
 func (tn *TreeNode) Address() *TypedFileAddr {
 	tn.ensureSerialized()
-	return NewTypedFileAddr(tn.blob.Address.Hash, tn.blob.Address.Size, Tree)
+	return NewTypedFileAddr(tn.blob.Address.Hash, tn.blob.Size, Tree)
 }
 
 func (tn *TreeNode) AddressString() string {
 	tn.ensureSerialized()
-	return "tree:" + tn.blob.Address.String()
+	return fmt.Sprintf("tree:%s-%d", tn.blob.Address.String(), tn.blob.Size)
 }
 
 func (tn *TreeNode) Take() {
@@ -367,13 +367,14 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	return nil
 }
 
-func (ns *NameStore) LinkBlob(name string, addr *BlobAddr) error {
+func (ns *NameStore) LinkBlob(name string, addr *BlobAddr, size uint64) error {
 	var tfa *TypedFileAddr
 
 	if addr != nil {
 		tfa = &TypedFileAddr{
 			BlobAddr: *addr,
 			Type:     Blob,
+			Size:     size,
 		}
 	} else {
 		tfa = nil

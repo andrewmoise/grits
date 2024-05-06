@@ -50,7 +50,7 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 	defer cachedFile.Release()
 
 	// Link a blob to /file.txt
-	err = nameStore.LinkBlob("file.txt", cachedFile.Address)
+	err = nameStore.LinkBlob("file.txt", cachedFile.Address, cachedFile.Size)
 	if err != nil {
 		t.Errorf("Failed to link blob to file.txt: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestCreateAndLookupFilesAndDirectories(t *testing.T) {
 	}
 
 	// Link a blob to /dir/file.txt (implicitly creating /dir)
-	err = nameStore.LinkBlob("dir/file.txt", cachedFile.Address)
+	err = nameStore.LinkBlob("dir/file.txt", cachedFile.Address, cachedFile.Size)
 	if err != nil {
 		t.Errorf("Failed to link blob to dir/file.txt: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestUpdatingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to add initial data block to BlobStore: %v", err)
 	}
-	err = nameStore.LinkBlob("updateTest.txt", initialBlob.Address)
+	err = nameStore.LinkBlob("updateTest.txt", initialBlob.Address, initialBlob.Size)
 	if err != nil {
 		t.Fatalf("Failed to link initial blob to updateTest.txt: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestUpdatingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to add updated data block to BlobStore: %v", err)
 	}
-	err = nameStore.LinkBlob("updateTest.txt", updatedBlob.Address)
+	err = nameStore.LinkBlob("updateTest.txt", updatedBlob.Address, updatedBlob.Size)
 	if err != nil {
 		t.Fatalf("Failed to link updated blob to updateTest.txt: %v", err)
 	}
@@ -169,12 +169,12 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to add blob to BlobStore: %v", err)
 	}
-	if err := ns.LinkBlob("dir/subdir/file.txt", cachedFile.Address); err != nil {
+	if err := ns.LinkBlob("dir/subdir/file.txt", cachedFile.Address, cachedFile.Size); err != nil {
 		t.Fatalf("Failed to link blob to dir/subdir/file.txt: %v", err)
 	}
 
 	// Remove "/dir/subdir/file.txt" and verify it's no longer found
-	if err := ns.LinkBlob("dir/subdir/file.txt", nil); err != nil {
+	if err := ns.Link("dir/subdir/file.txt", nil); err != nil {
 		t.Fatalf("Failed to remove dir/subdir/file.txt: %v", err)
 	}
 	if _, err := ns.LookupAndOpen("dir/subdir/file.txt"); err == nil {
@@ -182,7 +182,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	}
 
 	// Attempt to remove "dir" and verify its contents are also removed
-	if err := ns.LinkBlob("dir", nil); err != nil {
+	if err := ns.Link("dir", nil); err != nil {
 		t.Fatalf("Failed to remove /dir: %v", err)
 	}
 	if _, err := ns.LookupAndOpen("dir/subdir"); err == nil {
@@ -190,7 +190,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	}
 
 	// Verify that attempting to remove a non-existent directory does not cause errors
-	if err := ns.LinkBlob("nonexistent", nil); err != nil {
+	if err := ns.Link("nonexistent", nil); err != nil {
 		t.Errorf("Expected no error when attempting to remove a non-existent directory, got: %v", err)
 	}
 }
@@ -237,7 +237,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 
 	// Link the files into the NameStore according to the structure.
 	for _, path := range structure {
-		if err := nameStore.LinkBlob(path, cachedFile.Address); err != nil {
+		if err := nameStore.LinkBlob(path, cachedFile.Address, cachedFile.Size); err != nil {
 			t.Errorf("Failed to link blob to %s: %v", path, err)
 		}
 	}
@@ -250,7 +250,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	}
 
 	// Now, remove a top-level directory and verify all nested contents are also removed.
-	if err := nameStore.LinkBlob("dir1/dir2", nil); err != nil {
+	if err := nameStore.Link("dir1/dir2", nil); err != nil {
 		t.Errorf("Failed to remove dir1/dir2: %v", err)
 	}
 
@@ -261,7 +261,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	}
 
 	// Lastly, verify that removing the root directory clears everything.
-	if err := nameStore.LinkBlob("", nil); err != nil {
+	if err := nameStore.Link("", nil); err != nil {
 		t.Errorf("Failed to remove the root directory: %v", err)
 	}
 
@@ -317,7 +317,7 @@ func TestConcurrentAccess(t *testing.T) {
 			}
 
 			filePath := fmt.Sprintf("concurrent/dir%d/file%d.txt", i, i)
-			err := nameStore.LinkBlob(filePath, cachedFile.Address)
+			err := nameStore.LinkBlob(filePath, cachedFile.Address, cachedFile.Size)
 			if err != nil {
 				t.Errorf("Failed to link blob to %s: %v", filePath, err)
 			}
@@ -389,7 +389,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	fileNames := []string{"zero", "one", "someplace/else/two", "dir/three", "dir/sub/four", "five"}
 	for i, fileName := range fileNames {
-		err := ns.LinkBlob(fileName, allFiles[i].Address)
+		err := ns.LinkBlob(fileName, allFiles[i].Address, allFiles[i].Size)
 		if err != nil {
 			t.Errorf("Failed to link blob to %s: %v", fileName, err)
 		}
@@ -406,12 +406,12 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// 3. Unlink one and five
-	err = ns.LinkBlob(fileNames[1], nil)
+	err = ns.LinkBlob(fileNames[1], nil, allFiles[1].Size)
 	if err != nil {
 		t.Errorf("Failed to unlink one: %v", err)
 	}
 
-	err = ns.LinkBlob(fileNames[5], nil)
+	err = ns.LinkBlob(fileNames[5], nil, allFiles[5].Size)
 	if err != nil {
 		t.Errorf("Failed to unlink five: %v", err)
 	}
@@ -428,7 +428,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			t.Errorf("After unlinking, expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
 		}
 
-		fn, exists := ns.fileCache[NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Blob).String()]
+		fn, exists := ns.fileCache[NewTypedFileAddr(cf.Address.Hash, cf.Size, Blob).String()]
 		if !exists {
 			if expectedRefCount-1 <= 0 {
 				continue
@@ -447,7 +447,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// 5. Try unlinking a whole subdirectory
-	err = ns.LinkBlob("someplace", nil)
+	err = ns.Link("someplace", nil)
 	if err != nil {
 		t.Errorf("Failed to unlink someplace: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 	}
 
-	tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Tree)
+	tfa := NewTypedFileAddr(cf.Address.Hash, cf.Size, Tree)
 
 	ns.Link("", tfa)
 	cf.Release()
@@ -524,7 +524,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			t.Fatalf("Failed to lookup tree: %v", err)
 		}
 
-		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Tree)
+		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Size, Tree)
 		newRoot["tree"] = tfa.String()
 
 		newRootJson, err = json.Marshal(newRoot)
@@ -540,19 +540,19 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 		}
 
-		tfa = NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Tree)
+		tfa = NewTypedFileAddr(cf.Address.Hash, cf.Size, Tree)
 
 		err = ns.Link("", tfa)
 		if err != nil {
 			t.Fatalf("Failed to link new root: %v", err)
 		}
 
-		err = ns.LinkBlob(fmt.Sprintf("tree/%d", i), allFiles[i].Address)
+		err = ns.LinkBlob(fmt.Sprintf("tree/%d", i), allFiles[i].Address, allFiles[i].Size)
 		if err != nil {
 			t.Fatalf("Failed to link tree/%d: %v", i, err)
 		}
 
-		err = ns.LinkBlob(fmt.Sprintf("tree/%s", fileNames[i-6]), allFiles[i].Address)
+		err = ns.LinkBlob(fmt.Sprintf("tree/%s", fileNames[i-6]), allFiles[i].Address, allFiles[i].Size)
 		if err != nil {
 			t.Fatalf("Failed to link tree/%s: %v", fileNames[i-6], err)
 		}
@@ -573,7 +573,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	expectedRefCounts := []int{1, 0, 0, 1, 1, 0, 8, 6, 3, 2}
 
 	for i, cf := range allFiles {
-		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, Blob)
+		tfa := NewTypedFileAddr(cf.Address.Hash, cf.Size, Blob)
 
 		fileNode, exists := ns.fileCache[tfa.String()]
 		if !exists {

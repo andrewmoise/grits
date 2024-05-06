@@ -547,7 +547,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 	}
 	gn.cachedFile = cf
 
-	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
+	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Size, grits.Blob)
 	//log.Printf("--- We are linking %s to %s\n", gn.path, typedAddr.String())
 	err = gn.module.volume.Link(gn.path, typedAddr)
 
@@ -833,7 +833,7 @@ var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	emptyAddr := grits.NewTypedFileAddr("44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", 2, grits.Tree)
+	emptyAddr := grits.NewTypedFileAddr("QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK", 2, grits.Tree)
 
 	// Create the LinkRequest with the required details
 	req := &grits.LinkRequest{

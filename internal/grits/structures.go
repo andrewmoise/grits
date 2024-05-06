@@ -8,53 +8,60 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mr-tron/base58"
+	"github.com/multiformats/go-multihash"
 )
 
 ////////////////////////
 // BlobAddr
 
 type BlobAddr struct {
-	Hash string // SHA-256 hash as a lowercase hexadecimal string.
-	Size uint64 // 64-bit size.
+	Hash string // SHA-256 hash as an IPFS CID v0 string
 }
 
 // NewBlobAddr creates a new BlobAddr with a hash string and size
-func NewBlobAddr(hash string, size uint64) *BlobAddr {
-	return &BlobAddr{Hash: hash, Size: size}
+func NewBlobAddr(hash string) *BlobAddr {
+	return &BlobAddr{Hash: hash}
 }
 
-// NewBlobAddrFromString creates a BlobAddr from a string format "hash-size"
-func NewBlobAddrFromString(addrStr string) (*BlobAddr, error) {
-	parts := strings.SplitN(addrStr, "-", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid file address format - %s", addrStr)
+// NewBlobAddrFromString creates a BlobAddr from a CID v0 string.
+func NewBlobAddrFromString(cidStr string) (*BlobAddr, error) {
+	// Verify that the CID starts with 'Qm'
+	if !strings.HasPrefix(cidStr, "Qm") {
+		return nil, fmt.Errorf("invalid CID v0 format - %s", cidStr)
 	}
+	return NewBlobAddr(cidStr), nil
+}
 
-	hash := parts[0]
+// String returns the string representation of BlobAddr.
+func (ba *BlobAddr) String() string {
+	return ba.Hash
+}
 
-	size, err := strconv.ParseUint(parts[1], 10, 64)
+// Equals checks if two BlobAddr instances are equal.
+func (ba *BlobAddr) Equals(other *BlobAddr) bool {
+	return ba.Hash == other.Hash
+}
+
+func ComputeHash(data []byte) string {
+	mh, err := multihash.Sum(data, multihash.SHA2_256, -1)
 	if err != nil {
-		return nil, fmt.Errorf("invalid file size - %s", parts[1])
+		panic(err) // or handle error gracefully
 	}
-
-	return NewBlobAddr(hash, size), nil
+	return base58.Encode(mh)
 }
 
-// ComputeSHA256 takes a byte slice and returns its SHA-256 hash as a lowercase hexadecimal string.
-func ComputeSHA256(data []byte) string {
+func ComputeHashFromReader(r io.Reader) (string, error) {
 	hasher := sha256.New()
-	hasher.Write(data)                        // Write data into the hasher
-	return fmt.Sprintf("%x", hasher.Sum(nil)) // Compute the SHA-256 checksum and format it as a hex string
-}
-
-// String returns the string representation of BlobAddr, including the extension if present.
-func (fa *BlobAddr) String() string {
-	return fmt.Sprintf("%s-%d", fa.Hash, fa.Size)
-}
-
-// Equals checks if two BlobAddr instances are equal
-func (fa *BlobAddr) Equals(other *BlobAddr) bool {
-	return fa.Hash == other.Hash && fa.Size == other.Size
+	if _, err := io.Copy(hasher, r); err != nil {
+		return "", fmt.Errorf("error computing hash: %v", err)
+	}
+	mh, err := multihash.Sum(hasher.Sum(nil), multihash.SHA2_256, -1)
+	if err != nil {
+		return "", fmt.Errorf("error encoding multihash: %v", err)
+	}
+	return base58.Encode(mh), nil
 }
 
 // computeBlobAddr computes the SHA-256 hash, size, and file extension for an existing file,
@@ -66,13 +73,13 @@ func ComputeBlobAddr(path string) (*BlobAddr, error) {
 	}
 	defer file.Close()
 
-	hasher := sha256.New()
-	size, err := io.Copy(hasher, file)
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return nil, err
 	}
 
-	return NewBlobAddr(fmt.Sprintf("%x", hasher.Sum(nil)), uint64(size)), nil
+	cid := ComputeHash(data)
+	return NewBlobAddr(cid), nil
 }
 
 ////////////////////////
@@ -89,6 +96,7 @@ const (
 // TypedFileAddr embeds FileAddr and adds a type (blob or tree).
 type TypedFileAddr struct {
 	BlobAddr
+	Size uint64
 	Type AddrType
 }
 
@@ -97,8 +105,8 @@ func NewTypedFileAddr(hash string, size uint64, t AddrType) *TypedFileAddr {
 	return &TypedFileAddr{
 		BlobAddr: BlobAddr{
 			Hash: hash,
-			Size: size,
 		},
+		Size: size,
 		Type: t,
 	}
 }
@@ -109,11 +117,14 @@ func (tfa *TypedFileAddr) String() string {
 	if tfa.Type == Tree {
 		typePrefix = "tree"
 	}
-	return fmt.Sprintf("%s:%s", typePrefix, tfa.BlobAddr.String())
+	return fmt.Sprintf("%s:%s-%d", typePrefix, tfa.BlobAddr.Hash, tfa.Size)
 }
 
 // NewTypedFileAddrFromString parses a string into a TypedFileAddr.
-// The string format is expected to be "type:hash:size.extension".
+// The string format is expected to be "type:hash-size".
+
+// FIXME - extension?
+
 func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 	parts := strings.Split(s, ":")
 	if len(parts) != 2 {
@@ -121,7 +132,7 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 	}
 
 	// Identify type
-	addrType := Blob // Could be "unknown" or something
+	addrType := Blob // Default to Blob unless specified as Tree
 	switch parts[0] {
 	case "blob":
 		addrType = Blob
@@ -131,10 +142,9 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 		return nil, fmt.Errorf("unknown type prefix %s", parts[0])
 	}
 
-	// Assuming the extension is the last part and size is just before the extension, concatenated with the hash
 	hashSizeParts := strings.Split(parts[1], "-")
 	if len(hashSizeParts) != 2 {
-		return nil, fmt.Errorf("invalid format for hash:size in %s", parts[1])
+		return nil, fmt.Errorf("invalid format for hash-size in %s", parts[1])
 	}
 
 	hash := hashSizeParts[0]
@@ -146,8 +156,8 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 	return &TypedFileAddr{
 		BlobAddr: BlobAddr{
 			Hash: hash,
-			Size: size,
 		},
+		Size: size,
 		Type: addrType,
 	}, nil
 }
@@ -159,6 +169,7 @@ type CachedFile struct {
 	Path        string
 	RefCount    int
 	Address     *BlobAddr
+	Size        uint64
 	LastTouched time.Time
 	IsHardLink  bool
 	blobStore   *BlobStore

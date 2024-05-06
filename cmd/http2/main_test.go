@@ -64,7 +64,6 @@ func TestFileOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("couldn't read response body: %v", err)
 	}
-
 	log.Printf("Response body: %s", string(respBody))
 
 	if resp.StatusCode != http.StatusOK {
@@ -86,7 +85,7 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
 	}
 
-	blobURL := fmt.Sprintf("%s/grits/v1/blob/%s-%d", baseURL, treeBlobAddr.Hash, treeBlobAddr.Size)
+	blobURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, treeBlobAddr.Hash)
 	blobResp, err := http.Get(blobURL)
 	if err != nil {
 		t.Fatalf("Failed to download tree blob: %v", err)
@@ -115,7 +114,12 @@ func TestFileOperations(t *testing.T) {
 			t.Errorf("Invalid hash: %s", hash)
 		}
 
-		url := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[1])
+		parts = strings.Split(parts[1], "-")
+		if len(parts) != 2 {
+			t.Errorf("Invalid blob+size: %s", parts[0])
+		}
+
+		url := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[0])
 		resp, err := http.Get(url)
 		if err != nil {
 			t.Fatalf("GET request failed: %v", err)
@@ -218,7 +222,7 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
 	}
 
-	blobURL = fmt.Sprintf("%s/grits/v1/blob/%s-%d", baseURL, treeBlobAddr.Hash, treeBlobAddr.Size)
+	blobURL = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, treeBlobAddr.Hash)
 	blobResp, err = http.Get(blobURL)
 	if err != nil {
 		t.Fatalf("Failed to download tree blob: %v", err)
@@ -251,7 +255,12 @@ func TestFileOperations(t *testing.T) {
 			t.Errorf("Invalid hash: %s", hash)
 		}
 
-		url = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[1])
+		parts = strings.Split(parts[1], "-")
+		if len(parts) != 2 {
+			t.Errorf("Invalid blob+size: %s", parts[0])
+		}
+
+		url = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[0])
 		resp, err := http.Get(url)
 		if err != nil {
 			t.Fatalf("GET request failed: %v", err)

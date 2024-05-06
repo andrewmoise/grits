@@ -252,13 +252,13 @@ func validateFileContents(filePath string, expectedAddr *grits.BlobAddr) (bool, 
 	defer file.Close()
 
 	hasher := sha256.New()
-	size, err := io.Copy(hasher, file)
+	_, err = io.Copy(hasher, file)
 	if err != nil {
 		return false, err
 	}
 
 	computedHash := fmt.Sprintf("%x", hasher.Sum(nil))
-	if computedHash != expectedAddr.Hash || uint64(size) != expectedAddr.Size {
+	if computedHash != expectedAddr.Hash {
 		return false, fmt.Errorf("hash or size mismatch")
 	}
 
@@ -498,7 +498,7 @@ func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.
 			return
 		}
 	} else {
-		cf, err = bs.ReadFile(&grits.BlobAddr{Hash: pathAddr.Hash, Size: pathAddr.Size})
+		cf, err = bs.ReadFile(&grits.BlobAddr{Hash: pathAddr.Hash})
 		if err != nil {
 			http.Error(w, "Cannot open blob", http.StatusInternalServerError)
 		}
@@ -551,7 +551,7 @@ func handleNamespacePut(bs *grits.BlobStore, volume Volume, path string, w http.
 	}
 	defer cf.Release()
 
-	addr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Address.Size, grits.Blob)
+	addr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Size, grits.Blob)
 	err = volume.Link(path, addr)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
