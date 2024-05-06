@@ -136,6 +136,8 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 	srv.Start()
 	defer srv.Stop()
 
+	time.Sleep(1 * time.Second)
+
 	// Test upload
 	testBlobContent := "Test blob content"
 	uploadResp, err := http.Post(url+"/grits/v1/upload", "text/plain", bytes.NewBufferString(testBlobContent))

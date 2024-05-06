@@ -114,12 +114,15 @@ func (dw *DirWatcher) Stop() error {
 	dw.shutdownFunc = nil
 
 	if dw.cmd != nil && dw.cmd.Process != nil {
+		log.Printf("Okay we're stopping")
 		if err := dw.cmd.Process.Signal(syscall.SIGTERM); err != nil {
 			return fmt.Errorf("error sending termination signal: %v", err)
 		}
+		log.Printf("Done sending termination signal")
 		if _, err := dw.cmd.Process.Wait(); err != nil {
 			return fmt.Errorf("error waiting for process to exit: %v", err)
 		}
+		log.Printf("Done with waiting")
 		dw.cmd = nil
 	}
 	return nil
@@ -134,7 +137,16 @@ func (dw *DirWatcher) monitorStderr(stderr io.ReadCloser) {
 
 func (dw *DirWatcher) monitorExit() {
 	if err := dw.cmd.Wait(); err != nil {
-		log.Printf("ogwatch exited with error: %v\n", err)
+		log.Printf("Subprocess exited with error: %v\n", err)
+
+		// Check if the error is an ExitError
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			// Extract the syscall.WaitStatus from the ExitError
+			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
+				// Log the exit status code
+				log.Printf("Subprocess exited with status code: %d\n", status.ExitStatus())
+			}
+		}
 	} else {
 		log.Println("Subprocess exited without error.")
 	}
