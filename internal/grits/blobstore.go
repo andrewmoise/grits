@@ -104,6 +104,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 			// Create a LocalCachedFile object and add it to the map
 			bs.files[blobAddr.Hash] = &LocalCachedFile{
 				Path:        path,
+				Size:        uint64(stat.Size),
 				RefCount:    0, // Initially, no references to the file
 				Address:     blobAddr,
 				LastTouched: info.ModTime(),
