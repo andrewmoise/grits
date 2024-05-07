@@ -505,12 +505,13 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 
 	// Replace the data with the temp file we created
 
-	gn.cachedFile.Release()
-	gn.cachedFile = nil
+	if gn.cachedFile != nil {
+		gn.cachedFile.Release()
+		gn.cachedFile = nil
+	}
 
 	gn.file = tmpFile
 	tmpFile = nil // Prevent cleanup
-
 	gn.isTmpFile = true
 
 	return fs.OK
