@@ -32,7 +32,7 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	}
 	defer blobFile.Release()
 
-	typedAddr := grits.NewTypedFileAddr(blobFile.Address.Hash, blobFile.Size, grits.Blob)
+	typedAddr := grits.NewTypedFileAddr(blobFile.GetAddress().Hash, blobFile.GetSize(), grits.Blob)
 
 	// Link the new blob to the wiki volume using the test path.
 	err = wikiVolume.Link(testPath, typedAddr)
@@ -64,15 +64,15 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	defer cachedFile.Release()
 
 	// Read the file content from the blob store to verify it matches the original content.
-	cf, err := server.BlobStore.ReadFile(cachedFile.Address)
+	cf, err := server.BlobStore.ReadFile(cachedFile.GetAddress())
 	if err != nil {
 		t.Fatalf("Failed to read content from blob store: %v", err)
 	}
 	defer cf.Release()
 
-	contentBytes, err := os.ReadFile(cf.Path)
+	contentBytes, err := os.ReadFile(cf.GetPath())
 	if err != nil {
-		t.Fatalf("Can't read from %s: %v", cf.Path, err)
+		t.Fatalf("Can't read from %s: %v", cf.GetPath(), err)
 	}
 
 	if string(contentBytes) != testContent {

@@ -13,7 +13,7 @@ import (
 type Server struct {
 	// Core stuff
 	Config    *grits.Config
-	BlobStore *grits.BlobStore
+	BlobStore grits.BlobStore
 
 	// Module stuff
 	Modules     []Module
@@ -37,7 +37,7 @@ type Server struct {
 
 // NewServer initializes and returns a new Server instance.
 func NewServer(config *grits.Config) (*Server, error) {
-	bs := grits.NewBlobStore(config)
+	bs := grits.NewLocalBlobStore(config)
 	if bs == nil {
 		return nil, fmt.Errorf("failed to initialize blob store")
 	}

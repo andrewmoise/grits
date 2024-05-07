@@ -121,9 +121,9 @@ type gritsNode struct {
 	refCount int        // Reference count of open FUSE file handles
 
 	// If refCount > 0, then we also have file I/O information:
-	file       *os.File          // Represents the actual file handle
-	isTmpFile  bool              // True iff that's a handle to a writable temp file
-	cachedFile *grits.CachedFile // Immutable already-cached file info (if NOT a writeable temp file)
+	file       *os.File         // Represents the actual file handle
+	isTmpFile  bool             // True iff that's a handle to a writable temp file
+	cachedFile grits.CachedFile // Immutable already-cached file info (if NOT a writeable temp file)
 }
 
 func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint32, module *MountModule) (*fs.Inode, *gritsNode, error) {
@@ -422,7 +422,7 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 
 	if gn.file == nil {
 		var err error
-		gn.file, err = os.Open(gn.cachedFile.Path)
+		gn.file, err = os.Open(gn.cachedFile.GetPath())
 		if err != nil {
 			return fs.ToErrno(err)
 		}
@@ -547,7 +547,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 	}
 	gn.cachedFile = cf
 
-	typedAddr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Size, grits.Blob)
+	typedAddr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
 	//log.Printf("--- We are linking %s to %s\n", gn.path, typedAddr.String())
 	err = gn.module.volume.Link(gn.path, typedAddr)
 

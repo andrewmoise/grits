@@ -56,15 +56,15 @@ func (dt *DirToTreeMirror) MultiLink(req []*grits.LinkRequest) error {
 	return dt.ns.MultiLink(req)
 }
 
-func (dt *DirToTreeMirror) ReadFile(addr *grits.TypedFileAddr) (*grits.CachedFile, error) {
+func (dt *DirToTreeMirror) ReadFile(addr *grits.TypedFileAddr) (grits.CachedFile, error) {
 	return dt.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
-func (dt *DirToTreeMirror) AddBlob(path string) (*grits.CachedFile, error) {
+func (dt *DirToTreeMirror) AddBlob(path string) (grits.CachedFile, error) {
 	return dt.ns.BlobStore.AddLocalFile(path)
 }
 
-func (dt *DirToTreeMirror) AddOpenBlob(file *os.File) (*grits.CachedFile, error) {
+func (dt *DirToTreeMirror) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
 	return dt.ns.BlobStore.AddOpenFile(file)
 }
 
@@ -201,7 +201,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		if info.IsDir() {
 			//log.Printf("Adding empty dir: %s\n", relPath)
 
-			err = newDirNs.LinkTree(relPath, emptyDir.Address)
+			err = newDirNs.LinkTree(relPath, emptyDir.GetAddress())
 			return err
 		}
 
@@ -221,7 +221,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 
 		//log.Printf("Adding relative path: %s -> %s is %s", scanPath, path, relPath)
 
-		err = newDirNs.LinkBlob(relPath, cf.Address, cf.Size)
+		err = newDirNs.LinkBlob(relPath, cf.GetAddress(), cf.GetSize())
 		if err != nil {
 			return err
 		}
