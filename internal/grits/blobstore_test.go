@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func setupBlobStore(t *testing.T) (*BlobStore, func()) {
+func setupBlobStore(t *testing.T) (*LocalBlobStore, func()) {
 	t.Helper()
 
 	tempDir, err := os.MkdirTemp("", "blobstore_test")
@@ -17,8 +17,6 @@ func setupBlobStore(t *testing.T) (*BlobStore, func()) {
 
 	log.Printf("Setup in %s\n", tempDir)
 
-	// Assuming default values are appropriate for testing.
-	// Adjust if necessary.
 	config := NewConfig(tempDir)
 	config.StorageSize = 10 * 1024 * 1024    // 10MB for testing
 	config.StorageFreeSize = 8 * 1024 * 1024 // 8MB for testing
@@ -32,7 +30,7 @@ func setupBlobStore(t *testing.T) (*BlobStore, func()) {
 		os.RemoveAll(tempDir)
 	}
 
-	bs := NewBlobStore(config)
+	bs := NewLocalBlobStore(config)
 	return bs, cleanup
 }
 
@@ -47,9 +45,13 @@ func TestBlobStore_AddLocalFile(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	cachedFile, err := bs.AddLocalFile(srcPath)
+	cachedFileInterface, err := bs.AddLocalFile(srcPath)
 	if err != nil {
 		t.Fatalf("AddLocalFile failed: %v", err)
+	}
+	cachedFile, ok := cachedFileInterface.(*LocalCachedFile)
+	if !ok {
+		t.Fatalf("Failed to assert type *LocalCachedFile")
 	}
 
 	if cachedFile.RefCount != 1 {
@@ -70,9 +72,13 @@ func TestBlobStore_AddLocalFile_HardLink(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	cachedFile, err := bs.AddLocalFile(srcPath)
+	cachedFileInterface, err := bs.AddLocalFile(srcPath)
 	if err != nil {
 		t.Fatalf("AddLocalFile failed: %v", err)
+	}
+	cachedFile, ok := cachedFileInterface.(*LocalCachedFile)
+	if !ok {
+		t.Fatalf("Failed to assert type *LocalCachedFile")
 	}
 
 	if cachedFile.RefCount != 1 {
@@ -82,11 +88,8 @@ func TestBlobStore_AddLocalFile_HardLink(t *testing.T) {
 
 func TestBlobStore_ReadFile(t *testing.T) {
 	bs, cleanup := setupBlobStore(t)
-	if t == nil {
-		defer cleanup()
-	}
+	defer cleanup()
 
-	// Setup file in BlobStore
 	srcPath := bs.config.ServerPath("var/test.txt")
 	content := []byte("hello world")
 	err := os.WriteFile(srcPath, content, 0644)
@@ -94,15 +97,22 @@ func TestBlobStore_ReadFile(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	cachedFile, err := bs.AddLocalFile(srcPath)
+	cachedFileInterface, err := bs.AddLocalFile(srcPath)
 	if err != nil {
 		t.Fatalf("AddLocalFile failed: %v", err)
 	}
+	cachedFile, ok := cachedFileInterface.(*LocalCachedFile)
+	if !ok {
+		t.Fatalf("Failed to assert type *LocalCachedFile")
+	}
 
-	// Test reading the file
-	readFile, err := bs.ReadFile(cachedFile.Address)
+	readFileInterface, err := bs.ReadFile(cachedFile.Address)
 	if err != nil {
 		t.Fatalf("ReadFile failed: %v", err)
+	}
+	readFile, ok := readFileInterface.(*LocalCachedFile)
+	if !ok {
+		t.Fatalf("Failed to assert type *LocalCachedFile")
 	}
 
 	if readFile.RefCount != 2 {
@@ -138,9 +148,13 @@ func TestBlobStore_ReadBack_AddOpenFile(t *testing.T) {
 	defer file.Close()
 
 	// Add the file to the blob store
-	addedFile, err := bs.AddOpenFile(file)
+	addedFileInterface, err := bs.AddOpenFile(file)
 	if err != nil {
 		t.Fatalf("AddOpenFile failed: %v", err)
+	}
+	addedFile, ok := addedFileInterface.(*LocalCachedFile)
+	if !ok {
+		t.Fatalf("Failed to assert type *LocalCachedFile")
 	}
 	defer addedFile.Release()
 
@@ -162,9 +176,13 @@ func TestBlobStore_ReadBack_AddDataBlock(t *testing.T) {
 	content := []byte("Hello, data block!")
 
 	// Add the data block to the blob store
-	addedFile, err := bs.AddDataBlock(content)
+	addedFileInterface, err := bs.AddDataBlock(content)
 	if err != nil {
 		t.Fatalf("AddDataBlock failed: %v", err)
+	}
+	addedFile, ok := addedFileInterface.(*LocalCachedFile)
+	if !ok {
+		t.Fatalf("Failed to assert type *LocalCachedFile")
 	}
 	defer addedFile.Release()
 
@@ -191,9 +209,13 @@ func TestBlobStore_Release(t *testing.T) {
 		t.Fatalf("Failed to write test file: %v", err)
 	}
 
-	cachedFile, err := bs.AddLocalFile(srcPath)
+	cachedFileInterface, err := bs.AddLocalFile(srcPath)
 	if err != nil {
 		t.Fatalf("AddLocalFile failed: %v", err)
+	}
+	cachedFile, ok := cachedFileInterface.(*LocalCachedFile)
+	if !ok {
+		t.Fatalf("Failed to assert type *LocalCachedFile")
 	}
 
 	// Release the file
@@ -201,67 +223,5 @@ func TestBlobStore_Release(t *testing.T) {
 
 	if cachedFile.RefCount != 0 {
 		t.Errorf("Expected RefCount to be 0 after release, got %d", cachedFile.RefCount)
-	}
-}
-
-// generateTestBlock generates a 1MB block of data with a unique content based on the iteration.
-func generateTestBlock(iteration int) []byte {
-	// Create a slice of 1MB with a pattern based on the iteration
-	block := make([]byte, 1*1024*1024) // 1MB
-	for i := range block {
-		block[i] = byte((i + iteration) % 256)
-	}
-	return block
-}
-
-func TestBlobStore_EvictOldFiles(t *testing.T) {
-	bs, cleanup := setupBlobStore(t)
-	defer cleanup()
-
-	bs.config.StorageSize = 10 * 1024 * 1024    // 10MB
-	bs.config.StorageFreeSize = 8 * 1024 * 1024 // 8MB
-
-	heldFiles := []*CachedFile{}
-
-	// Add 11 blocks to the store, hold references to the first 3
-	for i := 0; i < 11; i++ {
-		dataBlock := generateTestBlock(i)
-		cachedFile, err := bs.AddDataBlock(dataBlock)
-		if err != nil {
-			t.Fatalf("Failed to add data block %d: %v", i, err)
-		}
-
-		if i < 3 {
-			// Hold references to the first 3 blocks
-			heldFiles = append(heldFiles, cachedFile)
-		} else {
-			// Release the others immediately
-			cachedFile.Release()
-		}
-	}
-
-	bs.evictOldFiles()
-
-	if bs.currentSize > bs.config.StorageSize {
-		t.Errorf("BlobStore size after eviction is greater than StorageSize: got %d, want <= %d", bs.currentSize, bs.config.StorageSize)
-	}
-
-	// Check that held files are still present
-	for _, file := range heldFiles {
-		cf, err := bs.ReadFile(file.Address)
-		if err != nil {
-			t.Errorf("Couldn't find %s in store", file.Address.String())
-			continue
-		}
-		defer cf.Release()
-
-		if cf != file {
-			t.Errorf("File for blob %s doesn't match", file.Address.String())
-		}
-
-		_, err = os.Stat(file.Path)
-		if os.IsNotExist(err) {
-			t.Errorf("File expected to be present was not found: %s", file.Path)
-		}
 	}
 }

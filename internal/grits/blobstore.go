@@ -12,18 +12,24 @@ import (
 	"time"
 )
 
-type BlobStore struct {
+/////
+// LocalBlobStore
+
+type LocalBlobStore struct {
 	config      *Config
-	files       map[string]*CachedFile // All files in the store
-	mtx         sync.RWMutex           // Mutex for thread-safe access
+	files       map[string]*LocalCachedFile // All files in the store
+	mtx         sync.RWMutex                // Mutex for thread-safe access
 	currentSize uint64
 	storageDir  string
 }
 
-func NewBlobStore(config *Config) *BlobStore {
-	bs := &BlobStore{
+// Ensure that LocalBlobStore implements BlobStore
+var _ BlobStore = &LocalBlobStore{}
+
+func NewLocalBlobStore(config *Config) *LocalBlobStore {
+	bs := &LocalBlobStore{
 		config: config,
-		files:  make(map[string]*CachedFile),
+		files:  make(map[string]*LocalCachedFile),
 	}
 
 	bs.storageDir = config.ServerPath("var/blobs")
@@ -33,10 +39,10 @@ func NewBlobStore(config *Config) *BlobStore {
 		return nil
 	}
 
-	// Initialize the BlobStore by scanning the existing files in the storage path
+	// Initialize the LocalBlobStore by scanning the existing files in the storage path
 	err := bs.scanAndLoadExistingFiles()
 	if err != nil {
-		log.Printf("Can't read existing BlobStore files: %v\n", err)
+		log.Printf("Can't read existing LocalBlobStore files: %v\n", err)
 		return nil
 	}
 
@@ -50,7 +56,7 @@ func NewBlobStore(config *Config) *BlobStore {
 	return bs
 }
 
-func (bs *BlobStore) scanAndLoadExistingFiles() error {
+func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
@@ -95,8 +101,8 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 				isHardLink = (stat.Nlink > 1)
 			}
 
-			// Create a CachedFile object and add it to the map
-			bs.files[blobAddr.Hash] = &CachedFile{
+			// Create a LocalCachedFile object and add it to the map
+			bs.files[blobAddr.Hash] = &LocalCachedFile{
 				Path:        path,
 				RefCount:    0, // Initially, no references to the file
 				Address:     blobAddr,
@@ -109,7 +115,7 @@ func (bs *BlobStore) scanAndLoadExistingFiles() error {
 	})
 }
 
-func (bs *BlobStore) ReadFile(blobAddr *BlobAddr) (*CachedFile, error) {
+func (bs *LocalBlobStore) ReadFile(blobAddr *BlobAddr) (CachedFile, error) {
 	bs.mtx.RLock()
 	defer bs.mtx.RUnlock()
 
@@ -123,7 +129,7 @@ func (bs *BlobStore) ReadFile(blobAddr *BlobAddr) (*CachedFile, error) {
 	return cachedFile, nil
 }
 
-func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
+func (bs *LocalBlobStore) AddLocalFile(srcPath string) (CachedFile, error) {
 	file, err := os.Open(srcPath)
 	if err != nil {
 		return nil, err
@@ -135,7 +141,7 @@ func (bs *BlobStore) AddLocalFile(srcPath string) (*CachedFile, error) {
 
 // AddOpenFile takes an already-opened file, computes its SHA-256 hash and size,
 // and adds it to the blob store if necessary.
-func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
+func (bs *LocalBlobStore) AddOpenFile(file *os.File) (CachedFile, error) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
@@ -199,7 +205,7 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 	}
 	size := uint64(fileInfo.Size())
 
-	cachedFile := &CachedFile{
+	cachedFile := &LocalCachedFile{
 		Path:        destPath,
 		RefCount:    1,
 		Address:     blobAddr,
@@ -217,7 +223,7 @@ func (bs *BlobStore) AddOpenFile(file *os.File) (*CachedFile, error) {
 	return cachedFile, nil
 }
 
-func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
+func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 	// Compute hash and size of the data
 	hash := ComputeHash(data)
 
@@ -241,7 +247,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	}
 
 	// Create a new CachedFile for the data block
-	cachedFile := &CachedFile{
+	cachedFile := &LocalCachedFile{
 		Path:        destPath,
 		RefCount:    1, // Initialize RefCount to 1 for new data blocks
 		Address:     blobAddr,
@@ -257,7 +263,7 @@ func (bs *BlobStore) AddDataBlock(data []byte) (*CachedFile, error) {
 	return cachedFile, nil
 }
 
-func (bs *BlobStore) Touch(cf *CachedFile) {
+func (bs *LocalBlobStore) Touch(cf *LocalCachedFile) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
@@ -265,21 +271,21 @@ func (bs *BlobStore) Touch(cf *CachedFile) {
 	os.Chtimes(cf.Path, time.Now(), time.Now())
 }
 
-func (bs *BlobStore) Take(cachedFile *CachedFile) {
+func (bs *LocalBlobStore) Take(cachedFile *LocalCachedFile) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
 	cachedFile.RefCount++
 }
 
-func (bs *BlobStore) Release(cachedFile *CachedFile) {
+func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
 	cachedFile.RefCount--
 }
 
-func (bs *BlobStore) evictOldFiles() {
+func (bs *LocalBlobStore) evictOldFiles() {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
@@ -287,7 +293,7 @@ func (bs *BlobStore) evictOldFiles() {
 		return
 	}
 
-	var sortedFiles []*CachedFile
+	var sortedFiles []*LocalCachedFile
 
 	for _, file := range bs.files {
 		sortedFiles = append(sortedFiles, file)
@@ -315,4 +321,65 @@ func (bs *BlobStore) evictOldFiles() {
 			panic(fmt.Sprintf("Couldn't delete expired file %s from cache! %v", file.Path, err))
 		}
 	}
+}
+
+/////
+// LocalCachedFile
+
+type LocalCachedFile struct {
+	Path        string
+	RefCount    int
+	Address     *BlobAddr
+	Size        uint64
+	LastTouched time.Time
+	IsHardLink  bool
+	blobStore   *LocalBlobStore
+}
+
+// Ensure that LocalCachedFile implements CachedFile
+var _ CachedFile = &LocalCachedFile{}
+
+func (c *LocalCachedFile) GetAddress() *BlobAddr {
+	return c.Address
+}
+
+func (c *LocalCachedFile) GetSize() uint64 {
+	return c.Size
+}
+
+func (c *LocalCachedFile) GetPath() string {
+	return c.Path
+}
+
+func (c *LocalCachedFile) Touch() {
+	c.blobStore.mtx.Lock()
+	defer c.blobStore.mtx.Unlock()
+
+	c.LastTouched = time.Now()
+}
+
+// Read reads a portion of the file.
+func (c *LocalCachedFile) Read(offset int, length int) ([]byte, error) {
+	file, err := os.Open(c.Path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	buffer := make([]byte, length)
+	_, err = file.ReadAt(buffer, int64(offset))
+	if err != nil {
+		return nil, err
+	}
+	return buffer, nil
+}
+
+func (cf *LocalCachedFile) Release() {
+	if cf != nil {
+		cf.blobStore.Release(cf)
+	}
+}
+
+func (cf *LocalCachedFile) Take() {
+	cf.blobStore.Take(cf)
 }

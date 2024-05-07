@@ -93,15 +93,15 @@ func (wv *WikiVolume) MultiLink(req []*grits.LinkRequest) error {
 	return wv.ns.MultiLink(req)
 }
 
-func (wv *WikiVolume) ReadFile(addr *grits.TypedFileAddr) (*grits.CachedFile, error) {
+func (wv *WikiVolume) ReadFile(addr *grits.TypedFileAddr) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
-func (wv *WikiVolume) AddBlob(path string) (*grits.CachedFile, error) {
+func (wv *WikiVolume) AddBlob(path string) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.AddLocalFile(path)
 }
 
-func (wv *WikiVolume) AddOpenBlob(file *os.File) (*grits.CachedFile, error) {
+func (wv *WikiVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.AddOpenFile(file)
 }
 

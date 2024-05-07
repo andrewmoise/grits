@@ -13,7 +13,7 @@ import (
 // Node Types
 
 type FileNode interface {
-	ExportedBlob() *CachedFile
+	ExportedBlob() CachedFile
 	Children() map[string]FileNode
 	AddressString() string
 	Address() *TypedFileAddr
@@ -23,20 +23,20 @@ type FileNode interface {
 }
 
 type TreeNode struct {
-	blob        *CachedFile
+	blob        CachedFile
 	ChildrenMap map[string]FileNode
 	refCount    int
 	nameStore   *NameStore
 }
 
 type BlobNode struct {
-	blob     *CachedFile
+	blob     CachedFile
 	refCount int
 }
 
 // Implementations for BlobNode
 
-func (bn *BlobNode) ExportedBlob() *CachedFile {
+func (bn *BlobNode) ExportedBlob() CachedFile {
 	return bn.blob
 }
 
@@ -45,11 +45,11 @@ func (bn *BlobNode) Children() map[string]FileNode {
 }
 
 func (bn *BlobNode) AddressString() string {
-	return fmt.Sprintf("blob:%s-%d", bn.blob.Address.String(), bn.blob.Size)
+	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress().String(), bn.blob.GetSize())
 }
 
 func (bn *BlobNode) Address() *TypedFileAddr {
-	return NewTypedFileAddr(bn.blob.Address.Hash, bn.blob.Size, Blob)
+	return NewTypedFileAddr(bn.blob.GetAddress().Hash, bn.blob.GetSize(), Blob)
 }
 
 func (bn *BlobNode) Take() {
@@ -65,7 +65,7 @@ func (bn *BlobNode) Release() {
 
 // Implementations for TreeNode
 
-func (tn *TreeNode) ExportedBlob() *CachedFile {
+func (tn *TreeNode) ExportedBlob() CachedFile {
 	tn.ensureSerialized()
 	return tn.blob
 }
@@ -76,12 +76,12 @@ func (tn *TreeNode) Children() map[string]FileNode {
 
 func (tn *TreeNode) Address() *TypedFileAddr {
 	tn.ensureSerialized()
-	return NewTypedFileAddr(tn.blob.Address.Hash, tn.blob.Size, Tree)
+	return NewTypedFileAddr(tn.blob.GetAddress().Hash, tn.blob.GetSize(), Tree)
 }
 
 func (tn *TreeNode) AddressString() string {
 	tn.ensureSerialized()
-	return fmt.Sprintf("tree:%s-%d", tn.blob.Address.String(), tn.blob.Size)
+	return fmt.Sprintf("tree:%s-%d", tn.blob.GetAddress().String(), tn.blob.GetSize())
 }
 
 func (tn *TreeNode) Take() {
@@ -119,7 +119,7 @@ func DebugPrintTree(node FileNode, indent string) {
 // NameStore
 
 type NameStore struct {
-	BlobStore *BlobStore
+	BlobStore BlobStore
 	root      FileNode
 	fileCache map[string]FileNode
 	mtx       sync.RWMutex
@@ -129,7 +129,7 @@ func (ns *NameStore) GetRoot() string {
 	return ns.root.AddressString()
 }
 
-func (ns *NameStore) LookupAndOpen(name string) (*CachedFile, error) {
+func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
@@ -475,7 +475,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 	return result, nil
 }
 
-func EmptyNameStore(bs *BlobStore) (*NameStore, error) {
+func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore: bs,
 		fileCache: make(map[string]FileNode),
@@ -491,7 +491,7 @@ func EmptyNameStore(bs *BlobStore) (*NameStore, error) {
 	return ns, nil
 }
 
-func DeserializeNameStore(bs *BlobStore, rootAddr *TypedFileAddr) (*NameStore, error) {
+func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore: bs,
 		fileCache: make(map[string]FileNode),
@@ -543,7 +543,7 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
 		}
 
-		dirData, err := os.ReadFile(dirFile.Path)
+		dirData, err := os.ReadFile(dirFile.GetPath())
 		if err != nil {
 			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
 		}

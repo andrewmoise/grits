@@ -7,7 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/mr-tron/base58"
 	"github.com/multiformats/go-multihash"
@@ -163,40 +162,27 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 }
 
 ////////////////////////
-// CachedFile
+// Blob storage interfaces
 
-type CachedFile struct {
-	Path        string
-	RefCount    int
-	Address     *BlobAddr
-	Size        uint64
-	LastTouched time.Time
-	IsHardLink  bool
-	blobStore   *BlobStore
+type BlobStore interface {
+	ReadFile(blobAddr *BlobAddr) (CachedFile, error)
+	AddLocalFile(srcPath string) (CachedFile, error)
+	AddOpenFile(file *os.File) (CachedFile, error)
+	AddDataBlock(data []byte) (CachedFile, error)
+
+	evictOldFiles()
 }
 
-// Read reads a portion of the file.
-func (c *CachedFile) Read(offset int, length int) ([]byte, error) {
-	file, err := os.Open(c.Path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
+// CachedFile defines the interface for interacting with a cached file.
+type CachedFile interface {
+	GetAddress() *BlobAddr
+	GetPath() string
+	GetSize() uint64
 
-	buffer := make([]byte, length)
-	_, err = file.ReadAt(buffer, int64(offset))
-	if err != nil {
-		return nil, err
-	}
-	return buffer, nil
-}
+	Touch()
 
-func (cf *CachedFile) Release() {
-	if cf != nil {
-		cf.blobStore.Release(cf)
-	}
-}
+	Read(offset int, length int) ([]byte, error)
 
-func (cf *CachedFile) Take() {
-	cf.blobStore.Take(cf)
+	Release()
+	Take()
 }

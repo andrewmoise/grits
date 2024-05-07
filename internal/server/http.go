@@ -229,7 +229,7 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 
 	// Validate the file contents if hard linking is enabled
 	if s.Server.Config.ValidateBlobs {
-		isValid, err := validateFileContents(cachedFile.Path, fileAddr)
+		isValid, err := validateFileContents(cachedFile.GetPath(), fileAddr)
 		if err != nil || !isValid {
 			log.Printf("Error validating file contents: %v\n", err)
 			http.Error(w, "Internal server error due to file validation failure", http.StatusInternalServerError)
@@ -238,8 +238,8 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Serve the file
-	http.ServeFile(w, r, cachedFile.Path)
-	s.Server.BlobStore.Touch(cachedFile)
+	http.ServeFile(w, r, cachedFile.GetPath())
+	cachedFile.Touch()
 }
 
 // validateFileContents opens the file, computes its SHA-256 hash and size,
@@ -299,7 +299,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	defer cachedFile.Release()
 
 	// Respond with the address of the new blob
-	addrStr := cachedFile.Address.String()
+	addrStr := cachedFile.GetAddress().String()
 	w.WriteHeader(http.StatusOK)
 
 	json.NewEncoder(w).Encode(addrStr)
@@ -464,7 +464,7 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	}
 }
 
-func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
 	fullPath, err := volume.LookupFull(path)
@@ -484,7 +484,7 @@ func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.
 		return
 	}
 
-	var cf *grits.CachedFile
+	var cf grits.CachedFile
 	if pathAddr.Type == grits.Tree {
 		addr, err := volume.Lookup(strings.TrimRight(path, "/") + "/index.html")
 		if err != nil {
@@ -515,7 +515,7 @@ func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.
 	//defer cachedFile.Release()
 
 	// Open the file for reading
-	file, err := os.Open(cf.Path)
+	file, err := os.Open(cf.GetPath())
 	if err != nil {
 		log.Printf("Error opening file: %v\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -524,11 +524,11 @@ func handleNamespaceGet(bs *grits.BlobStore, volume Volume, path string, w http.
 	defer file.Close()
 
 	// Serve the content
-	log.Printf("Serving file %s\n", cf.Path)
-	http.ServeContent(w, r, filepath.Base(path), cf.LastTouched, file)
+	log.Printf("Serving file %s\n", cf.GetPath())
+	http.ServeContent(w, r, filepath.Base(path) /* FIXME */, time.Now(), file)
 }
 
-func handleNamespacePut(bs *grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received PUT request for file: %s\n", path)
 
 	if path == "" || path == "/" {
@@ -551,7 +551,7 @@ func handleNamespacePut(bs *grits.BlobStore, volume Volume, path string, w http.
 	}
 	defer cf.Release()
 
-	addr := grits.NewTypedFileAddr(cf.Address.Hash, cf.Size, grits.Blob)
+	addr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
 	err = volume.Link(path, addr)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
