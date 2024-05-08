@@ -3,7 +3,6 @@ package grits
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -367,7 +366,7 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	return nil
 }
 
-func (ns *NameStore) LinkBlob(name string, addr *BlobAddr, size uint64) error {
+func (ns *NameStore) LinkBlob(name string, addr *BlobAddr, size int64) error {
 	var tfa *TypedFileAddr
 
 	if addr != nil {
@@ -538,14 +537,10 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			}
 		}()
 
-		dirFile, err := ns.BlobStore.ReadFile(&addr.BlobAddr)
+		// Use the new Read() method to read directory data
+		dirData, err := cf.Read(0, cf.GetSize())
 		if err != nil {
-			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
-		}
-
-		dirData, err := os.ReadFile(dirFile.GetPath())
-		if err != nil {
-			return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
+			return nil, fmt.Errorf("error reading directory data from %s: %v", addr.String(), err)
 		}
 
 		dirMap := make(map[string]string)
@@ -558,16 +553,15 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			if exists {
 				dn.ChildrenMap[name] = cachedChild
 				cachedChild.Take()
-
 				continue
 			}
 
-			addr, err := NewTypedFileAddrFromString(addrStr)
+			childAddr, err := NewTypedFileAddrFromString(addrStr)
 			if err != nil {
 				return nil, fmt.Errorf("error parsing address %s: %v", addrStr, err)
 			}
 
-			fn, err := ns.LoadFileNode(addr)
+			fn, err := ns.LoadFileNode(childAddr)
 			if err != nil {
 				return nil, fmt.Errorf("error loading %s: %v", addrStr, err)
 			}
@@ -578,7 +572,6 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 
 		ns.fileCache[addr.String()] = dn
 		resultDn := dn
-
 		dn = nil
 		return resultDn, nil
 	}

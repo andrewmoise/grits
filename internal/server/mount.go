@@ -120,10 +120,9 @@ type gritsNode struct {
 	mtx      sync.Mutex // Protecting all the below
 	refCount int        // Reference count of open FUSE file handles
 
-	// If refCount > 0, then we also have file I/O information:
-	file       *os.File         // Represents the actual file handle
-	isTmpFile  bool             // True iff that's a handle to a writable temp file
-	cachedFile grits.CachedFile // Immutable already-cached file info (if NOT a writeable temp file)
+	file       io.ReadSeekCloser // Represents the actual file handle, for reading only
+	tmpFile    *os.File          // Writable version, if it's a tmp file
+	cachedFile grits.CachedFile  // Immutable already-cached file info (if NOT a writable temp file)
 }
 
 func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint32, module *MountModule) (*fs.Inode, *gritsNode, error) {
@@ -280,7 +279,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return nil, syscall.EIO
 	}
 
-	out.Size = node.Address().Size
+	out.Size = uint64(node.ExportedBlob().GetSize())
 	out.Mode = mode
 	out.Owner.Uid = ownerUid
 	out.Owner.Gid = ownerGid
@@ -305,26 +304,24 @@ var ownerGid = uint32(syscall.Getgid())
 var _ = (fs.NodeGetattrer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
-	//log.Printf("--- Getattr for %s\n", gn.path)
-
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
-	if !gn.isTmpFile {
+	if gn.tmpFile == nil {
 		node, _ := gn.module.volume.LookupNode(gn.path)
 		if node == nil {
 			return syscall.ENOENT
 		}
 		defer node.Release()
 
-		out.Size = node.Address().Size
+		out.Size = uint64(node.Address().Size)
 	} else if gn.file != nil {
-		fileInfo, err := gn.file.Stat()
+		size, err := gn.file.Seek(0, io.SeekEnd)
 		if err != nil {
-			return fs.ToErrno(err)
+			return syscall.EIO
 		}
 
-		out.Size = uint64(fileInfo.Size())
+		out.Size = uint64(size)
 	} else {
 		return syscall.EIO
 	}
@@ -422,12 +419,10 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 
 	if gn.file == nil {
 		var err error
-		gn.file, err = os.Open(gn.cachedFile.GetPath())
+		gn.file, err = gn.cachedFile.Reader()
 		if err != nil {
 			return fs.ToErrno(err)
 		}
-
-		gn.isTmpFile = false // Otherwise leave prev value alone
 	}
 
 	return fs.OK
@@ -441,20 +436,18 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 // You need to call this either with truncLen == 0, or with a cachedFile
 // all set up for it to copy the temp file from
 func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
-	if gn.isTmpFile {
-		// Easy case, we already have a temp file open; we just truncate if needed, and return
+	if gn.tmpFile != nil {
+		// Truncate if required
 		if truncLen != -1 {
-			err := gn.file.Truncate(truncLen)
+			err := gn.tmpFile.Truncate(truncLen)
 			if err != nil {
 				return fs.ToErrno(err)
 			}
 		}
-
 		return fs.OK
 	}
 
-	// At this point, we know we need to set up a temp file
-
+	// Set up a new temp file
 	tmpFile, err := os.CreateTemp("", "grits-temp-")
 	if err != nil {
 		return fs.ToErrno(err)
@@ -466,53 +459,42 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 		}
 	}()
 
-	// Check to see if we have a read-only file we need to copy in, and/or clean up
-
-	if !gn.isTmpFile && gn.file != nil {
-		// We have some read-only data already - nuke it (maybe copying some into the tmp file)
-
-		//log.Printf("---     Truncating\n")
-
-		if truncLen != 0 {
-			_, err = gn.file.Seek(0, 0)
+	// Copy data from the read-only file if available
+	if gn.cachedFile != nil {
+		if gn.file == nil {
+			gn.file, err = gn.cachedFile.Reader()
 			if err != nil {
 				return fs.ToErrno(err)
 			}
+		}
 
-			if truncLen == -1 {
-				_, err = io.Copy(tmpFile, gn.file)
-				if err != nil {
-					return fs.ToErrno(err)
-				}
-			} else {
-				n, err := io.CopyN(tmpFile, gn.file, truncLen)
-				if err != nil {
-					return fs.ToErrno(err)
-				}
-				if n != truncLen {
-					return syscall.EIO
-				}
+		_, err = gn.file.Seek(0, 0)
+		if err != nil {
+			return fs.ToErrno(err)
+		}
+
+		if truncLen == -1 {
+			_, err = io.Copy(tmpFile, gn.file)
+			if err != nil {
+				return fs.ToErrno(err)
+			}
+		} else {
+			n, err := io.CopyN(tmpFile, gn.file, truncLen)
+			if err != nil {
+				return fs.ToErrno(err)
+			}
+			if n != truncLen {
+				return syscall.EIO
 			}
 		}
 
-		//log.Printf("---     Closing old file\n")
-
-		err = gn.file.Close()
-		if err != nil {
-			log.Printf("Warning! Error when closing %s\n", gn.path)
-		}
-	}
-
-	// Replace the data with the temp file we created
-
-	if gn.cachedFile != nil {
 		gn.cachedFile.Release()
 		gn.cachedFile = nil
 	}
 
 	gn.file = tmpFile
+	gn.tmpFile = tmpFile
 	tmpFile = nil // Prevent cleanup
-	gn.isTmpFile = true
 
 	return fs.OK
 }
@@ -524,16 +506,16 @@ func (gn *gritsNode) flush() syscall.Errno {
 		return syscall.EIO
 	}
 
-	if !gn.isTmpFile {
+	if gn.tmpFile == nil {
 		return fs.OK
 	}
 
-	tmpFile := gn.file.Name()
+	tmpFile := gn.tmpFile.Name()
 	defer os.Remove(tmpFile)
 
-	err := gn.file.Close()
+	err := gn.tmpFile.Close()
+	gn.tmpFile = nil
 	gn.file = nil
-	gn.isTmpFile = false
 	if err != nil {
 		return fs.ToErrno(err)
 	}
@@ -549,19 +531,10 @@ func (gn *gritsNode) flush() syscall.Errno {
 	gn.cachedFile = cf
 
 	typedAddr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
-	//log.Printf("--- We are linking %s to %s\n", gn.path, typedAddr.String())
 	err = gn.module.volume.Link(gn.path, typedAddr)
-
-	//_, parent := gn.Parent()
-	//pathParts := strings.Split(gn.path, "/")
-	//errno := parent.NotifyEntry(pathParts[len(pathParts)-1])
-
 	if err != nil {
-		return syscall.EIO
+		return fs.ToErrno(err)
 	}
-	//if errno != fs.OK && errno != syscall.ENOENT {
-	//	return errno
-	//}
 
 	return fs.OK
 }
@@ -575,9 +548,9 @@ func (gn *gritsNode) finalize() syscall.Errno {
 		gn.cachedFile = nil
 	}
 
-	if gn.isTmpFile {
+	if gn.tmpFile != nil {
 		log.Printf("Warning! Losing edits to %s because of previous errors", gn.path)
-		gn.isTmpFile = false
+		gn.tmpFile = nil
 	}
 
 	if gn.file != nil {
@@ -681,7 +654,12 @@ func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 		return nil, errno
 	}
 
-	n, err := gn.file.ReadAt(dest, off)
+	_, err := gn.file.Seek(off, io.SeekStart)
+	if err != nil {
+		return nil, fs.ToErrno(err)
+	}
+
+	n, err := gn.file.Read(dest)
 	if err != nil && err != io.EOF {
 		return nil, fs.ToErrno(err)
 	}
@@ -697,8 +675,6 @@ func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 var _ = (fs.NodeWriter)((*gritsNode)(nil))
 
 func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
-	//log.Printf("--- Writing at offset %d\n", off)
-
 	handle, ok := f.(*FileHandle)
 	if !ok {
 		return 0, syscall.EBADF
@@ -711,16 +687,12 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
-	//log.Printf("---   Opening tmp file\n")
-
 	errno := gn.openTmpFile(-1)
 	if errno != fs.OK {
 		return 0, errno
 	}
 
-	//log.Printf("---   Writing\n")
-
-	n, err := gn.file.WriteAt(data, off)
+	n, err := gn.tmpFile.WriteAt(data, off)
 	if err != nil {
 		return 0, fs.ToErrno(err)
 	}
@@ -733,9 +705,6 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 var _ = (fs.NodeSetattrer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	//log.Printf("--- Setattr with FH %v\n", fh)
-
-	// As currently implemented, we're only interested in changing the size.
 	if in.Valid&fuse.FATTR_SIZE == 0 {
 		return fs.OK
 	}
@@ -750,12 +719,22 @@ func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.Set
 		}
 	}
 
-	info, err := gn.file.Stat()
-	if err != nil {
-		return syscall.EIO
-	}
+	var fileSize int64
+	if gn.cachedFile != nil {
+		fileSize = gn.cachedFile.GetSize()
+	} else {
+		if gn.tmpFile == nil {
+			// Can't happen
+			return syscall.EIO
+		}
 
-	fileSize := info.Size()
+		info, err := gn.tmpFile.Stat()
+		if err != nil {
+			return syscall.EIO
+		}
+
+		fileSize = info.Size()
+	}
 
 	if in.Size != uint64(fileSize) {
 		errno := gn.openTmpFile(int64(in.Size))
@@ -811,7 +790,6 @@ func (gn *gritsNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno
 	gn.refCount--
 	if gn.refCount == 0 {
 		errno := gn.finalize()
-
 		if errno != fs.OK {
 			return errno
 		}
@@ -933,7 +911,6 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		return syscall.ENOENT
 	}
 
-	// Create the LinkRequest with the required details
 	oldNameReq := &grits.LinkRequest{
 		Path:     fullPath,
 		Addr:     nil,

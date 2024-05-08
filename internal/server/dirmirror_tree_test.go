@@ -117,7 +117,7 @@ func TestDirToTreeMirror(t *testing.T) {
 	}
 	defer file.Release()
 
-	updatedContent, err := os.ReadFile(file.GetPath())
+	updatedContent, err := file.Read(0, file.GetSize())
 	if err != nil {
 		t.Fatalf("Failed to read updated content for file5.txt: %v", err)
 	}

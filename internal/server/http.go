@@ -204,9 +204,6 @@ func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Received request (port %d): %s\n", s.Config.ThisPort, r.URL.Path)
-
-	// Extract file address from URL, expecting format "{hash}-{size}"
 	addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
 	if addrStr == "" {
 		http.Error(w, "Missing file address", http.StatusBadRequest)
@@ -219,7 +216,6 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try to read the file from the blob store using the full address
 	cachedFile, err := s.Server.BlobStore.ReadFile(fileAddr)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
@@ -227,18 +223,21 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cachedFile.Release()
 
-	// Validate the file contents if hard linking is enabled
-	if s.Server.Config.ValidateBlobs {
-		isValid, err := validateFileContents(cachedFile.GetPath(), fileAddr)
-		if err != nil || !isValid {
-			log.Printf("Error validating file contents: %v\n", err)
-			http.Error(w, "Internal server error due to file validation failure", http.StatusInternalServerError)
-			return
-		}
+	reader, err := cachedFile.Reader()
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer reader.Close()
+
+	// Seek to the beginning of the file
+	if _, err := reader.Seek(0, io.SeekStart); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
 	}
 
-	// Serve the file
-	http.ServeFile(w, r, cachedFile.GetPath())
+	// Serve the content directly using the reader
+	http.ServeContent(w, r, filepath.Base(fileAddr.Hash), time.Now(), reader)
 	cachedFile.Touch()
 }
 
@@ -515,7 +514,7 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 	//defer cachedFile.Release()
 
 	// Open the file for reading
-	file, err := os.Open(cf.GetPath())
+	file, err := cf.Reader()
 	if err != nil {
 		log.Printf("Error opening file: %v\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -524,7 +523,7 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 	defer file.Close()
 
 	// Serve the content
-	log.Printf("Serving file %s\n", cf.GetPath())
+	log.Printf("Serving file %s\n", cf.GetAddress().String())
 	http.ServeContent(w, r, filepath.Base(path) /* FIXME */, time.Now(), file)
 }
 
