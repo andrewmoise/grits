@@ -2,7 +2,7 @@ package server
 
 import (
 	"grits/internal/grits"
-	"os"
+	"io"
 	"testing"
 )
 
@@ -70,9 +70,15 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	}
 	defer cf.Release()
 
-	contentBytes, err := os.ReadFile(cf.GetPath())
+	readFile, err := cf.Reader()
 	if err != nil {
-		t.Fatalf("Can't read from %s: %v", cf.GetPath(), err)
+		t.Fatalf("Failed to open CF for checking")
+	}
+	defer readFile.Close()
+
+	contentBytes, err := io.ReadAll(readFile)
+	if err != nil {
+		t.Fatalf("Can't read from CF: %v", err)
 	}
 
 	if string(contentBytes) != testContent {

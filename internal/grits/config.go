@@ -19,11 +19,11 @@ type Config struct {
 	DirWatcherPath string `json:"DirWatcherPath"`
 
 	// Storage configuration
-	StorageSize         uint64 `json:"StorageSize"`
-	StorageFreeSize     uint64 `json:"StorageFreeSize"`
-	NamespaceSavePeriod int    `json:"NamespaceSavePeriod"`
-	HardLinkBlobs       bool   `json:"HardLinkBlobs"`
-	ValidateBlobs       bool   `json:"ValidateBlobs"`
+	StorageSize         int64 `json:"StorageSize"`
+	StorageFreeSize     int64 `json:"StorageFreeSize"`
+	NamespaceSavePeriod int   `json:"NamespaceSavePeriod"`
+	HardLinkBlobs       bool  `json:"HardLinkBlobs"`
+	ValidateBlobs       bool  `json:"ValidateBlobs"`
 
 	// Modules and configs for same
 	Modules []json.RawMessage `json:"Modules"`

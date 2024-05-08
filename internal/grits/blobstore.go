@@ -19,7 +19,7 @@ type LocalBlobStore struct {
 	config      *Config
 	files       map[string]*LocalCachedFile // All files in the store
 	mtx         sync.RWMutex                // Mutex for thread-safe access
-	currentSize uint64
+	currentSize int64
 	storageDir  string
 }
 
@@ -104,7 +104,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 			// Create a LocalCachedFile object and add it to the map
 			bs.files[blobAddr.Hash] = &LocalCachedFile{
 				Path:        path,
-				Size:        uint64(stat.Size),
+				Size:        stat.Size,
 				RefCount:    0, // Initially, no references to the file
 				Address:     blobAddr,
 				LastTouched: info.ModTime(),
@@ -204,7 +204,7 @@ func (bs *LocalBlobStore) AddOpenFile(file *os.File) (CachedFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat file: %v", err)
 	}
-	size := uint64(fileInfo.Size())
+	size := fileInfo.Size()
 
 	cachedFile := &LocalCachedFile{
 		Path:        destPath,
@@ -252,14 +252,14 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 		Path:        destPath,
 		RefCount:    1, // Initialize RefCount to 1 for new data blocks
 		Address:     blobAddr,
-		Size:        uint64(len(data)),
+		Size:        int64(len(data)),
 		LastTouched: time.Now(),
 		blobStore:   bs,
 	}
 
 	// Add the new data block to the files map
 	bs.files[blobAddr.Hash] = cachedFile
-	bs.currentSize += uint64(len(data))
+	bs.currentSize += int64(len(data))
 
 	return cachedFile, nil
 }
@@ -331,7 +331,7 @@ type LocalCachedFile struct {
 	Path        string
 	RefCount    int
 	Address     *BlobAddr
-	Size        uint64
+	Size        int64
 	LastTouched time.Time
 	IsHardLink  bool
 	blobStore   *LocalBlobStore
@@ -344,7 +344,7 @@ func (c *LocalCachedFile) GetAddress() *BlobAddr {
 	return c.Address
 }
 
-func (c *LocalCachedFile) GetSize() uint64 {
+func (c *LocalCachedFile) GetSize() int64 {
 	return c.Size
 }
 
@@ -359,8 +359,12 @@ func (c *LocalCachedFile) Touch() {
 	c.LastTouched = time.Now()
 }
 
+func (c *LocalCachedFile) Reader() (io.ReadSeekCloser, error) {
+	return os.Open(c.Path) // This opens the file and returns the file handle as an io.Reader
+}
+
 // Read reads a portion of the file.
-func (c *LocalCachedFile) Read(offset int, length int) ([]byte, error) {
+func (c *LocalCachedFile) Read(offset, length int64) ([]byte, error) {
 	file, err := os.Open(c.Path)
 	if err != nil {
 		return nil, err
@@ -368,7 +372,7 @@ func (c *LocalCachedFile) Read(offset int, length int) ([]byte, error) {
 	defer file.Close()
 
 	buffer := make([]byte, length)
-	_, err = file.ReadAt(buffer, int64(offset))
+	_, err = file.ReadAt(buffer, offset)
 	if err != nil {
 		return nil, err
 	}

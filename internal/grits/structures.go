@@ -95,12 +95,12 @@ const (
 // TypedFileAddr embeds FileAddr and adds a type (blob or tree).
 type TypedFileAddr struct {
 	BlobAddr
-	Size uint64
+	Size int64
 	Type AddrType
 }
 
 // NewTypedFileAddr creates a new TypedFileAddr.
-func NewTypedFileAddr(hash string, size uint64, t AddrType) *TypedFileAddr {
+func NewTypedFileAddr(hash string, size int64, t AddrType) *TypedFileAddr {
 	return &TypedFileAddr{
 		BlobAddr: BlobAddr{
 			Hash: hash,
@@ -147,7 +147,7 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 	}
 
 	hash := hashSizeParts[0]
-	size, err := strconv.ParseUint(hashSizeParts[1], 10, 64)
+	size, err := strconv.ParseInt(hashSizeParts[1], 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid size value: %v", err)
 	}
@@ -169,19 +169,17 @@ type BlobStore interface {
 	AddLocalFile(srcPath string) (CachedFile, error)
 	AddOpenFile(file *os.File) (CachedFile, error)
 	AddDataBlock(data []byte) (CachedFile, error)
-
-	evictOldFiles()
 }
 
 // CachedFile defines the interface for interacting with a cached file.
 type CachedFile interface {
 	GetAddress() *BlobAddr
-	GetPath() string
-	GetSize() uint64
+	GetSize() int64
 
 	Touch()
 
-	Read(offset int, length int) ([]byte, error)
+	Read(offset int64, length int64) ([]byte, error)
+	Reader() (io.ReadSeekCloser, error)
 
 	Release()
 	Take()
