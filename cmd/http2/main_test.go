@@ -80,10 +80,7 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup response did not include directory tree node")
 	}
 
-	treeBlobAddr, err := grits.NewTypedFileAddrFromString(lookupResponse[0][1])
-	if err != nil {
-		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
-	}
+	treeBlobAddr := grits.NewGNodeAddr(lookupResponse[0][1])
 
 	blobURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, treeBlobAddr.Hash)
 	blobResp, err := http.Get(blobURL)
@@ -96,9 +93,19 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Blob download failed with status code %d", blobResp.StatusCode)
 	}
 
+	// Read the response body
+	bodyBytes, err := io.ReadAll(blobResp.Body)
+	if err != nil {
+		t.Fatalf("Failed to read response body: %v", err)
+	}
+
+	// Print the response body as text
+	bodyString := string(bodyBytes)
+	fmt.Println("Response Body:", bodyString)
+
 	// Decode the directory listing from the tree blob
 	var files map[string]string // Or whatever structure you expect
-	if err := json.NewDecoder(blobResp.Body).Decode(&files); err != nil {
+	if err := json.NewDecoder(bytes.NewBuffer(bodyBytes)).Decode(&files); err != nil {
 		t.Fatalf("Failed to decode tree blob content: %v", err)
 	}
 
@@ -217,10 +224,7 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup response did not include directory tree node")
 	}
 
-	treeBlobAddr, err = grits.NewTypedFileAddrFromString(lookupResponse[0][1])
-	if err != nil {
-		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
-	}
+	treeBlobAddr = grits.NewGNodeAddr(lookupResponse[0][1])
 
 	blobURL = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, treeBlobAddr.Hash)
 	blobResp, err = http.Get(blobURL)

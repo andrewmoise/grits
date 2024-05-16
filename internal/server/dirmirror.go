@@ -27,7 +27,7 @@ func (dt *DirToTreeMirror) GetVolumeName() string {
 	return dt.volumeName
 }
 
-func (dt *DirToTreeMirror) Lookup(path string) (*grits.TypedFileAddr, error) {
+func (dt *DirToTreeMirror) Lookup(path string) (*grits.GNodeAddr, error) {
 	node, err := dt.ns.LookupNode(path)
 	if err != nil {
 		return nil, err
@@ -41,22 +41,41 @@ func (dt *DirToTreeMirror) Lookup(path string) (*grits.TypedFileAddr, error) {
 }
 
 func (dt *DirToTreeMirror) LookupFull(path string) ([][]string, error) {
-	return dt.ns.LookupFull(path)
+	// Assuming we want a structure similar to `ResolvePath` but with a detailed view.
+	nodes, err := dt.ns.ResolvePath(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var paths [][]string
+	for _, node := range nodes {
+		if node == nil {
+			paths = append(paths, []string{"nil"})
+		} else {
+			if node.IsDirectory {
+				paths = append(paths, []string{node.Address().String(), "directory"})
+			} else {
+				paths = append(paths, []string{node.Address().String(), "file"})
+			}
+		}
+	}
+
+	return paths, nil
 }
 
-func (dt *DirToTreeMirror) LookupNode(path string) (grits.FileNode, error) {
+func (dt *DirToTreeMirror) LookupNode(path string) (*grits.GNode, error) {
 	return dt.ns.LookupNode(path)
 }
 
-func (dt *DirToTreeMirror) Link(path string, addr *grits.TypedFileAddr) error {
-	return dt.ns.Link(path, addr)
+func (dt *DirToTreeMirror) Link(path string, addr *grits.GNodeAddr) error {
+	return dt.ns.LinkGNode(path, addr)
 }
 
 func (dt *DirToTreeMirror) MultiLink(req []*grits.LinkRequest) error {
 	return dt.ns.MultiLink(req)
 }
 
-func (dt *DirToTreeMirror) ReadFile(addr *grits.TypedFileAddr) (grits.CachedFile, error) {
+func (dt *DirToTreeMirror) ReadFile(addr *grits.FileContentAddr) (grits.CachedFile, error) {
 	return dt.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
@@ -92,9 +111,9 @@ func NewDirToTreeMirror(config *DirToTreeMirrorConfig, server *Server, shutdownF
 		return nil, fmt.Errorf("failed to evaluate %s: %v", config.SourceDir, err)
 	}
 
-	ns, err := grits.EmptyNameStore(server.BlobStore)
+	ns, err := grits.NewNameStore(server.BlobStore)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create NameStore: %v", err)
+		return nil, err
 	}
 
 	dt := &DirToTreeMirror{
@@ -170,13 +189,15 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 
 	log.Printf("  2 HandleScan %s\n", scanPath)
 
-	newDirNs, err := grits.EmptyNameStore(dt.server.BlobStore)
+	newDirNs, err := grits.NewNameStore(dt.server.BlobStore)
 	if err != nil {
 		return err
 	}
-	defer newDirNs.Link("", nil) // Release references from temp NameStore
+	defer newDirNs.LinkGNode("", nil) // Release references from temp NameStore
 
-	emptyDir, err := dt.server.BlobStore.AddDataBlock([]byte("{}"))
+	emptyChildren := make(map[string]*grits.GNode)
+
+	emptyDir, err := grits.CreateTreeGNode(dt.server.BlobStore, emptyChildren)
 	if err != nil {
 		return err
 	}
@@ -201,7 +222,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		if info.IsDir() {
 			//log.Printf("Adding empty dir: %s\n", relPath)
 
-			err = newDirNs.LinkTree(relPath, emptyDir.GetAddress())
+			err = newDirNs.LinkGNode(relPath, emptyDir.Address())
 			return err
 		}
 
@@ -221,7 +242,12 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 
 		//log.Printf("Adding relative path: %s -> %s is %s", scanPath, path, relPath)
 
-		err = newDirNs.LinkBlob(relPath, cf.GetAddress(), cf.GetSize())
+		gnode, err := grits.CreateBlobGNode(dt.server.BlobStore, &grits.FileContentAddr{BlobAddr: *cf.GetAddress()})
+		if err != nil {
+			return err
+		}
+
+		err = newDirNs.LinkGNode(relPath, gnode.Address())
 		if err != nil {
 			return err
 		}
@@ -232,15 +258,15 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 		return fmt.Errorf("error in main scan of %s: %v", scanPath, err)
 	}
 
-	var fileAddr *grits.TypedFileAddr
+	var fileAddr *grits.GNodeAddr
 	if processedFiles != 0 {
-		fileAddr, err = grits.NewTypedFileAddrFromString(newDirNs.GetRoot())
+		root, err := newDirNs.LookupNode("")
 		if err != nil {
 			return err
 		}
+		fileAddr = root.Address()
 	} else {
-		// If we found *nothing*, then don't even do the empty dir (e.g. deleting a regular file
-		//   triggers this branch)
+		// If we found *nothing*, then don't even do the empty dir (e.g. deleting a regular file triggers this branch)
 		fileAddr = nil
 	}
 
@@ -250,7 +276,7 @@ func (dt *DirToTreeMirror) HandleScan(scanPath string) error {
 	dt.mtx.Lock()
 	defer dt.mtx.Unlock()
 
-	err = dt.ns.Link(relPath, fileAddr)
+	err = dt.ns.LinkGNode(relPath, fileAddr)
 	if err != nil {
 		return fmt.Errorf("can't do final link for %s: %v", relPath, err)
 	}

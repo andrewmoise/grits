@@ -25,14 +25,14 @@ type Volume interface {
 	isReadOnly() bool
 	Checkpoint() error
 
-	Lookup(path string) (*grits.TypedFileAddr, error)
-	LookupNode(path string) (grits.FileNode, error)
+	Lookup(path string) (*grits.GNodeAddr, error)
+	LookupNode(path string) (*grits.GNode, error)
 	LookupFull(name string) ([][]string, error)
 
-	Link(path string, addr *grits.TypedFileAddr) error
+	Link(path string, addr *grits.GNodeAddr) error
 	MultiLink([]*grits.LinkRequest) error
 
-	ReadFile(*grits.TypedFileAddr) (grits.CachedFile, error)
+	ReadFile(*grits.FileContentAddr) (grits.CachedFile, error)
 
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)

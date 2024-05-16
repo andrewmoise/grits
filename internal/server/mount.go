@@ -86,7 +86,7 @@ func (mm *MountModule) Start() error {
 	var err error
 	mm.fsServer, err = fs.Mount(mntDir, root, &fs.Options{
 		MountOptions: fuse.MountOptions{
-			//Debug:                    true,
+			Debug:                    true,
 			Name:                     "grits",
 			DisableXAttrs:            true,
 			ExplicitDataCacheControl: true,
@@ -196,16 +196,18 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	}
 	defer node.Release()
 
-	children := node.Children()
+	children, err := node.Children()
+	if err != nil {
+		return nil, fs.ToErrno(err)
+	}
 	if children == nil {
 		return nil, syscall.ENOTDIR
 	}
 
 	r := make([]fuse.DirEntry, 0, len(children))
 	for name, node := range children {
-		_, isDir := node.(*grits.TreeNode)
 		var mode uint32
-		if isDir {
+		if node.IsDirectory {
 			mode = fuse.S_IFDIR | 0o755
 		} else {
 			mode = fuse.S_IFREG | 0o644
@@ -266,9 +268,8 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 	defer node.Release()
 
-	_, isDir := node.(*grits.TreeNode)
 	var mode uint32
-	if isDir {
+	if node.IsDirectory {
 		mode = fuse.S_IFDIR | 0o755
 	} else {
 		mode = fuse.S_IFREG | 0o644
@@ -279,7 +280,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return nil, syscall.EIO
 	}
 
-	out.Size = uint64(node.ExportedBlob().GetSize())
+	out.Size = uint64(node.ContentsCachedFile.GetSize())
 	out.Mode = mode
 	out.Owner.Uid = ownerUid
 	out.Owner.Gid = ownerGid
@@ -314,7 +315,7 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 		}
 		defer node.Release()
 
-		out.Size = uint64(node.Address().Size)
+		out.Size = uint64(node.ContentsCachedFile.GetSize())
 	} else if gn.file != nil {
 		size, err := gn.file.Seek(0, io.SeekEnd)
 		if err != nil {
@@ -402,18 +403,15 @@ type FileHandle struct {
 
 func (gn *gritsNode) openCachedFile() syscall.Errno {
 	if gn.cachedFile == nil {
-		addr, err := gn.module.volume.Lookup(gn.path)
-		if addr == nil {
+		gnode, err := gn.module.volume.LookupNode(gn.path)
+		if gnode == nil {
 			return syscall.ENOENT
 		}
 		if err != nil {
 			return syscall.EIO
 		}
 
-		gn.cachedFile, err = gn.module.volume.ReadFile(addr)
-		if err != nil {
-			return syscall.EIO
-		}
+		gn.cachedFile = gnode.ContentsCachedFile
 		gn.cachedFile.Take()
 	}
 
@@ -436,6 +434,8 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 // You need to call this either with truncLen == 0, or with a cachedFile
 // all set up for it to copy the temp file from
 func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
+	log.Printf("--- gn openTmpFile\n")
+
 	if gn.tmpFile != nil {
 		// Truncate if required
 		if truncLen != -1 {
@@ -502,6 +502,8 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 // Write this file to the blob cache if needed, make sure our edits if any are saved
 
 func (gn *gritsNode) flush() syscall.Errno {
+	log.Printf("--- gn flush\n")
+
 	if gn.file == nil {
 		return syscall.EIO
 	}
@@ -530,8 +532,12 @@ func (gn *gritsNode) flush() syscall.Errno {
 	}
 	gn.cachedFile = cf
 
-	typedAddr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
-	err = gn.module.volume.Link(gn.path, typedAddr)
+	gnode, err := grits.CreateBlobGNode(gn.module.gritsServer.BlobStore, &grits.FileContentAddr{BlobAddr: *cf.GetAddress()})
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+
+	err = gn.module.volume.Link(gn.path, gnode.Address())
 	if err != nil {
 		return fs.ToErrno(err)
 	}
@@ -812,17 +818,22 @@ var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	emptyAddr := grits.NewTypedFileAddr("QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK", 2, grits.Tree)
+
+	emptyChildren := make(map[string]*grits.GNode)
+	emptyGNode, err := grits.CreateTreeGNode(gn.module.gritsServer.BlobStore, emptyChildren)
+	if err != nil {
+		return nil, fs.ToErrno(err)
+	}
 
 	// Create the LinkRequest with the required details
 	req := &grits.LinkRequest{
 		Path:     fullPath,
-		Addr:     emptyAddr,
+		Addr:     emptyGNode.Address(),
 		PrevAddr: nil,
 		Assert:   grits.AssertPrevValueMatches,
 	}
 
-	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
+	err = gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
 		// FIXME - distinguish 'already exists' from general internal error
 		return nil, syscall.EIO

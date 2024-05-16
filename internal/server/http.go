@@ -56,21 +56,16 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 		Deployments: make(map[string]*DeploymentModule),
 	}
 
-	// Set up routes within the constructor or an initialization method
 	httpModule.setupRoutes()
-
 	server.AddModuleHook(httpModule.addDeployment)
 
 	return httpModule
 }
 
-// Start begins serving HTTP requests.
 func (hm *HTTPModule) Start() error {
-	// Starting the HTTP server in a goroutine
 	go func() {
 		var err error
 		if hm.Config.EnableTls {
-			// Paths to cert and key files
 			certPath := hm.Server.Config.ServerPath("certs/server.crt")
 			keyPath := hm.Server.Config.ServerPath("certs/server.key")
 
@@ -88,7 +83,6 @@ func (hm *HTTPModule) Start() error {
 	return nil
 }
 
-// Stop gracefully shuts down the HTTP server.
 func (hm *HTTPModule) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -148,10 +142,10 @@ func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 General route API:
 
-GET to /grits/v1/blob/{hash}-{size} returns the blob data
+GET to /grits/v1/blob/{hash} returns the blob data
 
 POST to /grits/v1/upload accepts binary data for the blob in the request body,
-   and the response is the new address ("{hash}-{size}" format) as a JSON-encoded
+   and the response is the new address ("{hash}" format) as a JSON-encoded
    bare string
 
 POST to /grits/v1/lookup/{volume} accepts a bare JSON-encoded string in the request body,
@@ -167,28 +161,16 @@ GET to /grits/v1/content/{volume}/{path} just serves file data (mainly for debug
 */
 
 func (s *HTTPModule) setupRoutes() {
-	// Deployment routes:
 	s.Mux.HandleFunc("/", s.corsMiddleware(s.handleDeployment))
-
-	// Content routes:
 	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/upload", s.corsMiddleware(s.handleBlobUpload))
-
 	s.Mux.HandleFunc("/grits/v1/lookup/", s.corsMiddleware(s.handleLookup))
 	s.Mux.HandleFunc("/grits/v1/link/", s.corsMiddleware(s.handleLink))
-
 	s.Mux.HandleFunc("/grits/v1/content/", s.corsMiddleware(s.handleContent))
-
-	// Client tooling routes:
-
-	// Special handling for serving the Service Worker JS from the root
 	s.Mux.HandleFunc("/grits/v1/service-worker.js", s.corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, s.Server.Config.ServerPath("client/service-worker.js"))
 	}))
-
-	// Handling client files with CORS enabled
 	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", s.corsMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
-
 	s.HTTPServer.Handler = s.Mux
 }
 
@@ -204,6 +186,7 @@ func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
+
 	addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
 	if addrStr == "" {
 		http.Error(w, "Missing file address", http.StatusBadRequest)
@@ -229,6 +212,13 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer reader.Close()
+
+	log.Printf("Hello! We are reading and serving %s\n", cachedFile.GetAddress().Hash)
+	reader.Seek(0, 0)
+	bytes := make([]byte, cachedFile.GetSize())
+	reader.Read(bytes)
+	log.Printf(string(bytes))
+	log.Printf("---")
 
 	// Seek to the beginning of the file
 	if _, err := reader.Seek(0, io.SeekStart); err != nil {
@@ -297,11 +287,18 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cachedFile.Release()
 
-	// Respond with the address of the new blob
-	addrStr := cachedFile.GetAddress().String()
-	w.WriteHeader(http.StatusOK)
+	//fileGNode, err := grits.CreateBlobGNode(s.Server.BlobStore, &grits.FileContentAddr{BlobAddr: *cachedFile.GetAddress()})
+	//if err != nil {
+	//	log.Printf("Failed to create GNode: %v", err)
+	//	http.Error(w, "Internal server error", http.StatusInternalServerError)
+	//	return
+	//}
+	//defer fileGNode.Release()
 
-	json.NewEncoder(w).Encode(addrStr)
+	// Respond with the address of the new GNode
+	addrStr := cachedFile.GetAddress()
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(addrStr.Hash)
 }
 
 func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
@@ -341,18 +338,16 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
-	log.Printf("Handling link request\n")
-
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var allLinkData []struct {
+	var linkRequests []struct {
 		Path string `json:"path"`
-		Addr string `json:"addr"`
+		Addr string `json:"addr"` // GNode address in string format
 	}
-	if err := json.NewDecoder(r.Body).Decode(&allLinkData); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&linkRequests); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -374,12 +369,8 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, linkData := range allLinkData {
-		addr, err := grits.NewTypedFileAddrFromString(linkData.Addr)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to decode TypedFileAddr %s", linkData.Addr), http.StatusBadRequest)
-			return
-		}
+	for _, linkData := range linkRequests {
+		addr := grits.NewGNodeAddr(linkData.Addr)
 
 		// Perform link
 		fmt.Printf("Perform link: %s to %s\n", linkData.Path, addr.String())
@@ -466,55 +457,28 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
-	fullPath, err := volume.LookupFull(path)
+	gnode, err := volume.LookupNode(path)
 	if err != nil {
-		http.Error(w, "File not found", http.StatusNotFound)
-		return
-	}
-	if len(fullPath) < 1 {
-		http.Error(w, "Empty volume", http.StatusNotFound)
+		http.Error(w, fmt.Sprintf("Can't read %s", path), http.StatusNotFound)
 		return
 	}
 
-	pathAddrStr := fullPath[len(fullPath)-1][1]
-	pathAddr, err := grits.NewTypedFileAddrFromString(pathAddrStr)
-	if err != nil {
-		http.Error(w, "Invalid tree node", http.StatusInternalServerError)
-		return
-	}
-
-	var cf grits.CachedFile
-	if pathAddr.Type == grits.Tree {
-		addr, err := volume.Lookup(strings.TrimRight(path, "/") + "/index.html")
+	if gnode.IsDirectory {
+		gnode, err = volume.LookupNode(strings.TrimRight(path, "/") + "/index.html")
 		if err != nil {
 			http.Error(w, fmt.Sprintf("No index: %v", err), http.StatusNotFound)
 			return
 		}
-
-		cf, err = bs.ReadFile(&addr.BlobAddr)
-		if err != nil {
-			http.Error(w, "Can't open file for read", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		cf, err = bs.ReadFile(&grits.BlobAddr{Hash: pathAddr.Hash})
-		if err != nil {
-			http.Error(w, "Cannot open blob", http.StatusInternalServerError)
-		}
 	}
-	defer cf.Release()
 
-	// FIXME - What? Seems like this is unnecessary:
+	fileCf, err := bs.ReadFile(&gnode.Contents.BlobAddr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Can't read contents for %s", path), http.StatusInternalServerError)
+		return
+	}
+	defer fileCf.Release()
 
-	//cachedFile, err := bs.ReadFile(cf.Address)
-	//if err != nil {
-	//	http.Error(w, "File not found", http.StatusNotFound)
-	//	return
-	//}
-	//defer cachedFile.Release()
-
-	// Open the file for reading
-	file, err := cf.Reader()
+	file, err := fileCf.Reader()
 	if err != nil {
 		log.Printf("Error opening file: %v\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -523,7 +487,7 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 	defer file.Close()
 
 	// Serve the content
-	log.Printf("Serving file %s\n", cf.GetAddress().String())
+	log.Printf("Serving file %s\n", fileCf.GetAddress().String())
 	http.ServeContent(w, r, filepath.Base(path) /* FIXME */, time.Now(), file)
 }
 
@@ -550,8 +514,13 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 	}
 	defer cf.Release()
 
-	addr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
-	err = volume.Link(path, addr)
+	gnode, err := grits.CreateBlobGNode(bs, &grits.FileContentAddr{BlobAddr: *cf.GetAddress()})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create GNode: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	err = volume.Link(path, gnode.Address())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
 		return

@@ -3,108 +3,88 @@ package grits
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
 	"sync"
 )
 
 ////////////////////////
-// Node Types
+// GNode
 
-type FileNode interface {
-	ExportedBlob() CachedFile
-	Children() map[string]FileNode
-	AddressString() string
-	Address() *TypedFileAddr
+type GNode struct {
+	IsDirectory bool             `json:"is_directory"`
+	Contents    *FileContentAddr `json:"contents,omitempty"`
 
-	Take()
-	Release()
+	ChildrenMap        *map[string]*GNode `json:"-"`
+	ContentsCachedFile CachedFile         `json:"-"` // This field should not be serialized
+
+	refCount       int        `json:"-"`
+	metaCachedFile CachedFile `json:"-"` // This is handled manually
+
+	blobStore BlobStore  `json:"-"`
+	mtx       sync.Mutex `json:"-"`
 }
 
-type TreeNode struct {
-	blob        CachedFile
-	ChildrenMap map[string]FileNode
-	refCount    int
-	nameStore   *NameStore
+func (gn *GNode) MetaBlob() (CachedFile, error) {
+	err := gn.ensureSerialized()
+	if err != nil {
+		return nil, err
+	}
+
+	return gn.metaCachedFile, nil
 }
 
-type BlobNode struct {
-	blob     CachedFile
-	refCount int
+func (gn *GNode) ContentsBlob() (CachedFile, error) {
+	err := gn.ensureSerialized()
+	if err != nil {
+		return nil, err
+	}
+
+	return gn.ContentsCachedFile, nil
 }
 
-// Implementations for BlobNode
-
-func (bn *BlobNode) ExportedBlob() CachedFile {
-	return bn.blob
-}
-
-func (bn *BlobNode) Children() map[string]FileNode {
-	return nil
-}
-
-func (bn *BlobNode) AddressString() string {
-	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress().String(), bn.blob.GetSize())
-}
-
-func (bn *BlobNode) Address() *TypedFileAddr {
-	return NewTypedFileAddr(bn.blob.GetAddress().Hash, bn.blob.GetSize(), Blob)
-}
-
-func (bn *BlobNode) Take() {
-	bn.refCount++
-}
-
-func (bn *BlobNode) Release() {
-	bn.refCount--
-	if bn.refCount == 0 {
-		bn.blob.Release()
+func (gn *GNode) Children() (map[string]*GNode, error) {
+	if gn.IsDirectory {
+		return *gn.ChildrenMap, nil
+	} else {
+		return nil, nil
 	}
 }
 
-// Implementations for TreeNode
-
-func (tn *TreeNode) ExportedBlob() CachedFile {
-	tn.ensureSerialized()
-	return tn.blob
+func (gn *GNode) Address() *GNodeAddr {
+	return &GNodeAddr{BlobAddr: *gn.metaCachedFile.GetAddress()}
 }
 
-func (tn *TreeNode) Children() map[string]FileNode {
-	return tn.ChildrenMap
+func (gn *GNode) Take() {
+	gn.mtx.Lock()
+	gn.refCount++
+	gn.mtx.Unlock()
 }
 
-func (tn *TreeNode) Address() *TypedFileAddr {
-	tn.ensureSerialized()
-	return NewTypedFileAddr(tn.blob.GetAddress().Hash, tn.blob.GetSize(), Tree)
-}
-
-func (tn *TreeNode) AddressString() string {
-	tn.ensureSerialized()
-	return fmt.Sprintf("tree:%s-%d", tn.blob.GetAddress().String(), tn.blob.GetSize())
-}
-
-func (tn *TreeNode) Take() {
-	tn.refCount++
-}
-
-func (tn *TreeNode) Release() {
-	tn.refCount--
-	if tn.refCount == 0 {
-		if tn.blob != nil {
-			tn.blob.Release()
+func (gn *GNode) Release() {
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
+	gn.refCount--
+	if gn.refCount == 0 {
+		if gn.metaCachedFile != nil {
+			gn.metaCachedFile.Release()
 		}
-		for _, child := range tn.ChildrenMap {
+		for _, child := range *gn.ChildrenMap {
 			child.Release()
 		}
 	}
 }
 
-func DebugPrintTree(node FileNode, indent string) {
+func DebugPrintTree(node *GNode, indent string) {
 	if node == nil {
 		return
 	}
 
-	children := node.Children()
+	children, err := node.Children()
+	if err != nil {
+		log.Fatalf("Can't decode tree: %v", err)
+	}
 	if children == nil {
 		return
 	}
@@ -119,39 +99,54 @@ func DebugPrintTree(node FileNode, indent string) {
 
 type NameStore struct {
 	BlobStore BlobStore
-	root      FileNode
-	fileCache map[string]FileNode
+	root      *GNode
+	fileCache map[string]*GNode
 	mtx       sync.RWMutex
 }
 
+func NewNameStore(bs BlobStore) (*NameStore, error) {
+	rootChildren := make(map[string]*GNode)
+
+	ns := &NameStore{
+		BlobStore: bs,
+		fileCache: make(map[string]*GNode),
+	}
+
+	rootGNode, err := CreateTreeGNode(ns.BlobStore, rootChildren)
+	if err != nil {
+		return nil, err
+	}
+	ns.root = rootGNode
+
+	return ns, nil
+}
+
 func (ns *NameStore) GetRoot() string {
-	return ns.root.AddressString()
+	return ns.root.Address().String()
 }
 
 func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
-	nodes, err := ns.resolvePath(name)
+	gnode, err := ns.LookupNode(name)
 	if err != nil {
 		return nil, err
 	}
 
-	node := nodes[len(nodes)-1]
-	if node == nil {
+	if gnode == nil {
 		return nil, fmt.Errorf("%s not found", name)
 	}
 
-	cf := node.ExportedBlob()
-	cf.Take()
-	return cf, nil
+	gnode.Take()
+	return gnode.ContentsCachedFile, nil
 }
 
-func (ns *NameStore) LookupNode(name string) (FileNode, error) {
+func (ns *NameStore) LookupNode(name string) (*GNode, error) {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
-	nodes, err := ns.resolvePath(name)
+	nodes, err := ns.ResolvePath(name)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +165,7 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 	defer ns.mtx.RUnlock()
 
 	name = strings.TrimRight(name, "/")
-	nodes, err := ns.resolvePath(name)
+	nodes, err := ns.ResolvePath(name)
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +174,7 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 	partialPath := ""
 
 	response := make([][]string, 0, len(parts)+1) // +1 for the root
-	response = append(response, []string{"", nodes[0].AddressString()})
+	response = append(response, []string{"", nodes[0].Address().String()})
 	index := 1
 
 	for _, part := range parts {
@@ -193,7 +188,7 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 			return nil, fmt.Errorf("can't find %s", name)
 		}
 		// FIXME - we crash if the last node is nil
-		response = append(response, []string{partialPath, nodes[index].AddressString()})
+		response = append(response, []string{partialPath, nodes[index].Address().String()})
 		index += 1
 	}
 
@@ -202,7 +197,7 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 
 // Core lookup helper function.
 
-func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
+func (ns *NameStore) ResolvePath(path string) ([]*GNode, error) {
 	//log.Printf("We resolve path %s (root %v)\n", path, ns.root)
 
 	path = strings.TrimRight(path, "/")
@@ -213,28 +208,31 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
 	parts := strings.Split(path, "/")
 	node := ns.root
 
-	response := make([]FileNode, 0, len(parts)+1) // +1 for the root
+	response := make([]*GNode, 0, len(parts)+1)
 	response = append(response, node)
 
 	for _, part := range parts {
-		//log.Printf("  part %s\n", part)
-
 		if part == "" {
 			continue
 		}
 
+		// If we hit a "does not exist" but we still have more of
+		// the path to go, then it's an error
 		if node == nil {
-			return nil, fmt.Errorf("%s not not found traversing %s", part, path)
+			return nil, fmt.Errorf("%s not found traversing %s", part, path)
 		}
 
-		// Only TreeNodes have children to traverse
-		treeNode, isTreeNode := node.(*TreeNode)
-		if !isTreeNode {
+		if !node.IsDirectory {
 			return nil, fmt.Errorf("%s is not a directory, traversing %s", part, path)
 		}
 
-		childNode := treeNode.ChildrenMap[part]
-		node = childNode // Move to the next node in the path
+		children, err := node.Children()
+		if err != nil {
+			return nil, err
+		}
+
+		childNode := children[part] // May not exist
+		node = childNode
 		response = append(response, node)
 	}
 
@@ -253,16 +251,16 @@ const (
 
 type LinkRequest struct {
 	Path     string
-	Addr     *TypedFileAddr
-	PrevAddr *TypedFileAddr
+	Addr     *GNodeAddr
+	PrevAddr *GNodeAddr
 	Assert   uint32
 }
 
-func matchesAddr(a FileNode, b *TypedFileAddr) bool {
+func matchesAddr(a *GNode, b *GNodeAddr) bool {
 	if a == nil {
 		return b == nil
 	} else {
-		return b != nil && a.Address().Equals(&b.BlobAddr)
+		return b != nil && a.Address().String() == b.Hash
 	}
 }
 
@@ -275,7 +273,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 			continue
 		}
 
-		nodes, err := ns.resolvePath(req.Path)
+		nodes, err := ns.ResolvePath(req.Path)
 		if err != nil {
 			return err
 		}
@@ -288,13 +286,13 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 		}
 
 		if req.Assert&AssertIsBlob != 0 {
-			if node == nil || node.Address().Type != Blob {
+			if node == nil || node.IsDirectory {
 				return fmt.Errorf("prev value for %s isn't blob", req.Path)
 			}
 		}
 
 		if req.Assert&AssertIsTree != 0 {
-			if node == nil || node.Address().Type != Tree {
+			if node == nil || !node.IsDirectory {
 				return fmt.Errorf("prev value for %s isn't tree", req.Path)
 			}
 		}
@@ -337,7 +335,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 	return nil
 }
 
-func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
+func (ns *NameStore) LinkGNode(name string, gnodeAddr *GNodeAddr) error {
 	name = strings.TrimRight(name, "/")
 	if name != "" && name[0] == '/' {
 		return fmt.Errorf("name must be relative")
@@ -350,7 +348,7 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	newRoot, error := ns.recursiveLink(name, addr, ns.root)
+	newRoot, error := ns.recursiveLink(name, gnodeAddr, ns.root)
 	if error != nil {
 		return error
 	}
@@ -366,48 +364,91 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	return nil
 }
 
-func (ns *NameStore) LinkBlob(name string, addr *BlobAddr, size int64) error {
-	var tfa *TypedFileAddr
-
-	if addr != nil {
-		tfa = &TypedFileAddr{
-			BlobAddr: *addr,
-			Type:     Blob,
-			Size:     size,
-		}
-	} else {
-		tfa = nil
+func CreateBlobGNode(bs BlobStore, addr *FileContentAddr) (*GNode, error) {
+	gnode := &GNode{
+		IsDirectory: false,
+		Contents:    addr,
+		blobStore:   bs,
 	}
 
-	return ns.Link(name, tfa)
-}
-
-func (ns *NameStore) LinkTree(name string, addr *BlobAddr) error {
-	var tfa *TypedFileAddr
-
-	if addr != nil {
-		tfa = &TypedFileAddr{
-			BlobAddr: *addr,
-			Type:     Tree,
-		}
-	} else {
-		tfa = nil
+	var err error
+	gnode.ContentsCachedFile, err = bs.ReadFile(&addr.BlobAddr)
+	if err != nil {
+		return nil, err
 	}
 
-	return ns.Link(name, tfa)
+	serializedGNode, err := json.Marshal(gnode)
+	if err != nil {
+		return nil, fmt.Errorf("error serializing GNode: %v", err)
+	}
+
+	serializedGNodeCF, err := bs.AddDataBlock(serializedGNode)
+	if err != nil {
+		return nil, fmt.Errorf("error storing serialized GNode: %v", err)
+	}
+
+	gnode.metaCachedFile = serializedGNodeCF
+	return gnode, nil
 }
 
-// Core link function helper.
+func CreateTreeGNode(bs BlobStore, children map[string]*GNode) (*GNode, error) {
+	gnode := &GNode{
+		IsDirectory: true,
+		ChildrenMap: &children,
+		blobStore:   bs,
+	}
 
-// We're linking in `addr` into place as `name` within `oldParent`, and return the
-// modified version of `oldParent`.
+	// Translate children into a map of strings to strings
+	childMap := make(map[string]string)
+	for name, childNode := range children {
+		if childNode.metaCachedFile == nil {
+			return nil, fmt.Errorf("child node %s does not have a metadata cache file", name)
+		}
+		childMap[name] = childNode.metaCachedFile.GetAddress().Hash
+	}
 
-func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent FileNode) (FileNode, error) {
+	// Serialize the map of children
+	serializedChildMap, err := json.Marshal(childMap)
+	if err != nil {
+		return nil, fmt.Errorf("error serializing children map: %v", err)
+	}
+
+	// Store the serialized children map as a new data block
+	contentsCachedFile, err := bs.AddDataBlock(serializedChildMap)
+	if err != nil {
+		return nil, fmt.Errorf("error storing serialized children map: %v", err)
+	}
+
+	// Set .Contents and .ContentsCachedFile based on the created data block
+	gnode.ContentsCachedFile = contentsCachedFile
+	gnode.Contents = &FileContentAddr{BlobAddr: *contentsCachedFile.GetAddress()}
+
+	// Serialize the GNode itself now that it includes the contents address
+	serializedGNode, err := json.Marshal(gnode)
+	if err != nil {
+		return nil, fmt.Errorf("error serializing GNode: %v", err)
+	}
+
+	// Store the serialized GNode as a new data block
+	metaCachedFile, err := bs.AddDataBlock(serializedGNode)
+	if err != nil {
+		return nil, fmt.Errorf("error storing serialized GNode: %v", err)
+	}
+	gnode.metaCachedFile = metaCachedFile
+
+	return gnode, nil
+}
+
+func (ns *NameStore) recursiveLink(name string, addr *GNodeAddr, oldParent *GNode) (*GNode, error) {
 	parts := strings.SplitN(name, "/", 2)
 
-	var oldChildren map[string]FileNode
+	var oldChildren map[string]*GNode
+	var err error
 	if oldParent != nil {
-		oldChildren = oldParent.Children()
+		oldChildren, err = oldParent.Children()
+		if err != nil {
+			return nil, fmt.Errorf("couldn't get children for %s", name)
+		}
 		if oldChildren == nil {
 			return nil, fmt.Errorf("non-directory in path %s", name)
 		}
@@ -415,8 +456,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		return nil, fmt.Errorf("attempting to link in nonexistent directory")
 	}
 
-	var newValue FileNode
-	var err error
+	var newValue *GNode
 
 	if len(parts) == 1 {
 		if addr == nil {
@@ -426,7 +466,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 
 			newValue, exists = ns.fileCache[addr.String()]
 			if !exists {
-				newValue, err = ns.LoadFileNode(addr)
+				newValue, err = ns.LoadGNode(addr)
 				if err != nil {
 					return nil, err
 				}
@@ -448,7 +488,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		}
 	}
 
-	newChildren := make(map[string]FileNode)
+	newChildren := make(map[string]*GNode)
 	for k, v := range oldChildren {
 		newChildren[k] = v
 		if k != parts[0] {
@@ -463,7 +503,7 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 		delete(newChildren, parts[0])
 	}
 
-	result, err := ns.CreateTreeNode(newChildren)
+	result, err := CreateTreeGNode(ns.BlobStore, newChildren)
 	if err != nil {
 		for _, v := range newChildren {
 			v.Release()
@@ -477,11 +517,11 @@ func (ns *NameStore) recursiveLink(name string, addr *TypedFileAddr, oldParent F
 func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore: bs,
-		fileCache: make(map[string]FileNode),
+		fileCache: make(map[string]*GNode),
 	}
 
-	rootNodeMap := make(map[string]FileNode)
-	dn, err := ns.CreateTreeNode(rootNodeMap)
+	rootNodeMap := make(map[string]*GNode)
+	dn, err := CreateTreeGNode(ns.BlobStore, rootNodeMap)
 	if err != nil {
 		return nil, err
 	}
@@ -490,13 +530,13 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	return ns, nil
 }
 
-func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, error) {
+func DeserializeNameStore(bs BlobStore, rootAddr *GNodeAddr) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore: bs,
-		fileCache: make(map[string]FileNode),
+		fileCache: make(map[string]*GNode),
 	}
 
-	dn, err := ns.LoadFileNode(rootAddr)
+	dn, err := ns.LoadGNode(rootAddr)
 	if err != nil {
 		return nil, fmt.Errorf("error loading root node: %v", err)
 	}
@@ -509,36 +549,62 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, er
 
 // Getting file nodes from a NameStore
 
-func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
+func (ns *NameStore) LoadGNode(addr *GNodeAddr) (*GNode, error) {
 	cf, err := ns.BlobStore.ReadFile(&addr.BlobAddr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading %s: %v", addr.String(), err)
 	}
+	defer cf.Release()
 
-	if addr.Type == Blob {
-		bn := &BlobNode{blob: cf}
-		ns.fileCache[addr.String()] = bn
-		return bn, nil
+	nodeData, err := cf.Read(0, cf.GetSize())
+	if err != nil {
+		return nil, err
+	}
+
+	gnode := &GNode{
+		blobStore: ns.BlobStore,
+	}
+
+	if err := json.Unmarshal(nodeData, &gnode); err != nil {
+		return nil, fmt.Errorf("error unmarshalling %s: %v", addr.String(), err)
+	}
+
+	contentCf, err := ns.BlobStore.ReadFile(&gnode.Contents.BlobAddr)
+	if err != nil {
+		return nil, err
+	}
+	defer contentCf.Release()
+	gnode.ContentsCachedFile = contentCf
+
+	gnode.metaCachedFile = cf
+	gnode.refCount = 1
+
+	if !gnode.IsDirectory {
+		// Simple case, just a file blob
+
+		ns.fileCache[addr.Hash] = gnode
+		cf = nil
+		contentCf = nil // Prevent release
+		return gnode, nil
 	} else {
-		ns.fileCache[addr.String()] = nil
+		// Complex case, recursive directory load
 
-		dn := &TreeNode{
-			blob:        cf,
-			ChildrenMap: make(map[string]FileNode),
-			nameStore:   ns,
-		}
+		ns.fileCache[addr.Hash] = nil
+
+		childMap := make(map[string]*GNode, 0)
+		gnode.ChildrenMap = &childMap
 
 		defer func() {
-			if dn != nil {
+			if gnode != nil {
 				delete(ns.fileCache, addr.String())
-				for _, child := range dn.ChildrenMap {
+				for _, child := range *gnode.ChildrenMap {
 					child.Release()
 				}
 			}
 		}()
 
 		// Use the new Read() method to read directory data
-		dirData, err := cf.Read(0, cf.GetSize())
+		dirData, err := gnode.ContentsCachedFile.Read(0, gnode.ContentsCachedFile.GetSize())
 		if err != nil {
 			return nil, fmt.Errorf("error reading directory data from %s: %v", addr.String(), err)
 		}
@@ -551,61 +617,42 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 		for name, addrStr := range dirMap {
 			cachedChild, exists := ns.fileCache[addrStr]
 			if exists {
-				dn.ChildrenMap[name] = cachedChild
+				(*gnode.ChildrenMap)[name] = cachedChild
 				cachedChild.Take()
 				continue
 			}
 
-			childAddr, err := NewTypedFileAddrFromString(addrStr)
-			if err != nil {
-				return nil, fmt.Errorf("error parsing address %s: %v", addrStr, err)
-			}
+			childAddr := NewGNodeAddr(addrStr)
 
-			fn, err := ns.LoadFileNode(childAddr)
+			gn, err := ns.LoadGNode(childAddr)
 			if err != nil {
 				return nil, fmt.Errorf("error loading %s: %v", addrStr, err)
 			}
 
-			dn.ChildrenMap[name] = fn
-			fn.Take()
+			(*gnode.ChildrenMap)[name] = gn
+			gn.Take()
 		}
 
-		ns.fileCache[addr.String()] = dn
-		resultDn := dn
-		dn = nil
-		return resultDn, nil
+		ns.fileCache[addr.String()] = gnode
+		resultGNode := gnode
+
+		gnode = nil // Prevent cleanup
+		cf = nil
+		contentCf = nil
+
+		return resultGNode, nil
 	}
 }
 
-func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, error) {
-	tn := &TreeNode{
-		ChildrenMap: children,
-		nameStore:   ns,
-	}
-	return tn, nil
-}
-
-func (ns *NameStore) CreateBlobNode(fa *BlobAddr) (*BlobNode, error) {
-	cf, err := ns.BlobStore.ReadFile(fa)
-	if err != nil {
-		return nil, fmt.Errorf("error reading %s: %v", fa.String(), err)
-	}
-	bn := &BlobNode{
-		blob:     cf,
-		refCount: 1, // Initially referenced
-	}
-	return bn, nil
-}
-
-func (tn *TreeNode) ensureSerialized() error {
-	if tn.blob != nil {
+func (gn *GNode) ensureSerialized() error {
+	if gn.ContentsCachedFile != nil {
 		// Already serialized
 		return nil
 	}
 
 	dirMap := make(map[string]string)
-	for name, child := range tn.Children() {
-		dirMap[name] = child.AddressString()
+	for name, child := range *gn.ChildrenMap {
+		dirMap[name] = child.Contents.Hash
 	}
 
 	dirData, err := json.Marshal(dirMap)
@@ -613,11 +660,12 @@ func (tn *TreeNode) ensureSerialized() error {
 		return fmt.Errorf("error marshalling directory: %v", err)
 	}
 
-	cf, err := tn.nameStore.BlobStore.AddDataBlock(dirData)
+	cf, err := gn.blobStore.AddDataBlock(dirData)
 	if err != nil {
 		return fmt.Errorf("error writing directory: %v", err)
 	}
 
-	tn.blob = cf
+	gn.ContentsCachedFile = cf
+
 	return nil
 }

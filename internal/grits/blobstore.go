@@ -77,7 +77,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 			}
 
 			if bs.config.ValidateBlobs {
-				computedBlobAddr, err := ComputeBlobAddr(path)
+				computedBlobAddr, err := ComputeBlobAddrFromFile(path)
 				if err != nil {
 					log.Printf("Error computing hash and size for file %s: %v\n", path, err)
 					return err // continue scanning other files even if one fails
@@ -151,12 +151,10 @@ func (bs *LocalBlobStore) AddOpenFile(file *os.File) (CachedFile, error) {
 		return nil, fmt.Errorf("failed to seek file: %v", err)
 	}
 
-	blobHash, err := ComputeHashFromReader(file)
+	blobAddr, err := ComputeBlobAddrFromReader(file)
 	if err != nil {
 		return nil, err
 	}
-
-	blobAddr := NewBlobAddr(blobHash)
 
 	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
 		cachedFile.RefCount++
@@ -226,12 +224,13 @@ func (bs *LocalBlobStore) AddOpenFile(file *os.File) (CachedFile, error) {
 
 func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 	// Compute hash and size of the data
-	hash := ComputeHash(data)
+	blobAddr, err := ComputeBlobAddrFromData(data)
+	if err != nil {
+		return nil, err
+	}
 
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
-
-	blobAddr := NewBlobAddr(hash)
 
 	// Check if the data block already exists in the store
 	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {

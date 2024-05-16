@@ -68,7 +68,7 @@ func (wv *WikiVolume) GetVolumeName() string {
 	return wv.name
 }
 
-func (wv *WikiVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
+func (wv *WikiVolume) Lookup(path string) (*grits.GNodeAddr, error) {
 	node, err := wv.ns.LookupNode(path)
 	if err != nil {
 		return nil, err
@@ -81,19 +81,19 @@ func (wv *WikiVolume) LookupFull(path string) ([][]string, error) {
 	return wv.ns.LookupFull(path)
 }
 
-func (wv *WikiVolume) LookupNode(path string) (grits.FileNode, error) {
+func (wv *WikiVolume) LookupNode(path string) (*grits.GNode, error) {
 	return wv.ns.LookupNode(path)
 }
 
-func (wv *WikiVolume) Link(path string, addr *grits.TypedFileAddr) error {
-	return wv.ns.Link(path, addr)
+func (wv *WikiVolume) Link(path string, addr *grits.GNodeAddr) error {
+	return wv.ns.LinkGNode(path, addr)
 }
 
 func (wv *WikiVolume) MultiLink(req []*grits.LinkRequest) error {
 	return wv.ns.MultiLink(req)
 }
 
-func (wv *WikiVolume) ReadFile(addr *grits.TypedFileAddr) (grits.CachedFile, error) {
+func (wv *WikiVolume) ReadFile(addr *grits.FileContentAddr) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.ReadFile(&addr.BlobAddr)
 }
 
@@ -136,10 +136,7 @@ func (wv *WikiVolume) load() error {
 		return fmt.Errorf("failed to unmarshal root address: %v", err)
 	}
 
-	rootAddr, err := grits.NewTypedFileAddrFromString(rootAddrStr)
-	if err != nil {
-		return fmt.Errorf("failed to parse root address: %v", err)
-	}
+	rootAddr := grits.NewGNodeAddr(rootAddrStr)
 
 	ns, err := grits.DeserializeNameStore(wv.server.BlobStore, rootAddr)
 	if err != nil {
