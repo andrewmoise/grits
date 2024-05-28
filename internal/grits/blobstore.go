@@ -17,8 +17,8 @@ import (
 
 type LocalBlobStore struct {
 	config      *Config
-	files       map[string]*LocalCachedFile // All files in the store
-	mtx         sync.RWMutex                // Mutex for thread-safe access
+	files       map[BlobAddr]*LocalCachedFile // All files in the store
+	mtx         sync.RWMutex                  // Mutex for thread-safe access
 	currentSize int64
 	storageDir  string
 }
@@ -29,7 +29,7 @@ var _ BlobStore = &LocalBlobStore{}
 func NewLocalBlobStore(config *Config) *LocalBlobStore {
 	bs := &LocalBlobStore{
 		config: config,
-		files:  make(map[string]*LocalCachedFile),
+		files:  make(map[BlobAddr]*LocalCachedFile),
 	}
 
 	bs.storageDir = config.ServerPath("var/blobs")
@@ -70,11 +70,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 				return fmt.Errorf("can't relativize %s: %v", path, err)
 			}
 
-			blobAddr, err := NewBlobAddrFromString(relativePath)
-			if err != nil {
-				log.Printf("File %s seems not to be a blob %s != %s. Skipping...\n", path, relativePath, blobAddr.String())
-				return nil
-			}
+			blobAddr := BlobAddr(relativePath)
 
 			if bs.config.ValidateBlobs {
 				computedBlobAddr, err := ComputeBlobAddrFromFile(path)
@@ -83,7 +79,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 					return err // continue scanning other files even if one fails
 				}
 
-				if computedBlobAddr.String() != relativePath {
+				if string(computedBlobAddr) != relativePath {
 					return fmt.Errorf("failure to verify %s", path)
 				}
 			}
@@ -102,7 +98,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 			}
 
 			// Create a LocalCachedFile object and add it to the map
-			bs.files[blobAddr.Hash] = &LocalCachedFile{
+			bs.files[blobAddr] = &LocalCachedFile{
 				Path:        path,
 				Size:        stat.Size,
 				RefCount:    0, // Initially, no references to the file
@@ -116,13 +112,13 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 	})
 }
 
-func (bs *LocalBlobStore) ReadFile(blobAddr *BlobAddr) (CachedFile, error) {
+func (bs *LocalBlobStore) ReadFile(blobAddr BlobAddr) (CachedFile, error) {
 	bs.mtx.RLock()
 	defer bs.mtx.RUnlock()
 
-	cachedFile, ok := bs.files[blobAddr.Hash]
+	cachedFile, ok := bs.files[blobAddr]
 	if !ok {
-		return nil, fmt.Errorf("file with address %s not found in cache", blobAddr.String())
+		return nil, fmt.Errorf("file with address %s not found in cache", blobAddr)
 	}
 
 	// Increment RefCount to reserve the file and protect it from cleanup
@@ -156,14 +152,14 @@ func (bs *LocalBlobStore) AddOpenFile(file *os.File) (CachedFile, error) {
 		return nil, err
 	}
 
-	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
+	if cachedFile, exists := bs.files[blobAddr]; exists {
 		cachedFile.RefCount++
 		cachedFile.LastTouched = time.Now() // Update the last touched time
 		return cachedFile, nil
 	}
 
 	// If the blob doesn't exist in the store, copy it.
-	destPath := filepath.Join(bs.storageDir, blobAddr.String())
+	destPath := filepath.Join(bs.storageDir, string(blobAddr))
 
 	isHardLink := false
 
@@ -214,7 +210,7 @@ func (bs *LocalBlobStore) AddOpenFile(file *os.File) (CachedFile, error) {
 		blobStore:   bs,
 	}
 
-	bs.files[blobAddr.Hash] = cachedFile
+	bs.files[blobAddr] = cachedFile
 	if !isHardLink {
 		bs.currentSize += size
 	}
@@ -233,14 +229,14 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 	defer bs.mtx.Unlock()
 
 	// Check if the data block already exists in the store
-	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
+	if cachedFile, exists := bs.files[blobAddr]; exists {
 		// Increment RefCount since the file is being accessed
 		cachedFile.RefCount++
 		return cachedFile, nil
 	}
 
 	// Since the data block does not exist, store it
-	destPath := filepath.Join(bs.storageDir, blobAddr.String())
+	destPath := filepath.Join(bs.storageDir, string(blobAddr))
 
 	if err := os.WriteFile(destPath, data, 0644); err != nil {
 		return nil, fmt.Errorf("error writing data block to store: %v", err)
@@ -257,7 +253,7 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 	}
 
 	// Add the new data block to the files map
-	bs.files[blobAddr.Hash] = cachedFile
+	bs.files[blobAddr] = cachedFile
 	bs.currentSize += int64(len(data))
 
 	return cachedFile, nil
@@ -314,7 +310,7 @@ func (bs *LocalBlobStore) evictOldFiles() {
 		if !file.IsHardLink {
 			bs.currentSize -= file.Size
 		}
-		delete(bs.files, file.Address.Hash)
+		delete(bs.files, file.Address)
 
 		err := os.Remove(file.Path)
 		if err != nil {
@@ -329,7 +325,7 @@ func (bs *LocalBlobStore) evictOldFiles() {
 type LocalCachedFile struct {
 	Path        string
 	RefCount    int
-	Address     *BlobAddr
+	Address     BlobAddr
 	Size        int64
 	LastTouched time.Time
 	IsHardLink  bool
@@ -339,7 +335,7 @@ type LocalCachedFile struct {
 // Ensure that LocalCachedFile implements CachedFile
 var _ CachedFile = &LocalCachedFile{}
 
-func (c *LocalCachedFile) GetAddress() *BlobAddr {
+func (c *LocalCachedFile) GetAddress() BlobAddr {
 	return c.Address
 }
 
