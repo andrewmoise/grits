@@ -8,7 +8,7 @@ So how it works is that the site's client-side code includes the ability to fetc
 
 This first cut, being able to operate as a sort of community CDN, is actually a precursor to what I'd *actually* like to do, which is to enable a type of web app where most of the app is defined purely on the client-side, and the server is primarily just responsible for CRUD semantics and revision history and permissions on the shared store. I think that'll carry a ton of benefit in terms of security, performance (potentially, depending on how it's done), and user-configurability / empowerment. But, I think it's important to start with one piece that's clearly useful now and see how it works and how difficult it is to get it into real production.
 
-And, even the initial cut has some significant advantages in addition to lowered load. E.g. because the whole thing is handed to the client as a [Merkel tree](https://en.wikipedia.org/wiki/Merkle_tree), you can get increased cache coherency right away -- on every page load, it gets from the central server the new root hash, so that if a big directory hasn't changed at all, the client won't need to spend an RTT seeing if it's up to date, but if it *has* changed you'll be guaranteed to fetch the new files instead of having to shift-reload or anything like that.
+And, even the initial cut has some significant advantages in addition to lowered load. E.g. because the whole thing is handed to the client as a [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree), you can get increased cache coherency right away -- on every page load, it gets from the central server the new root hash, so that if a big directory hasn't changed at all, the client won't need to spend an RTT seeing if it's up to date, but if it *has* changed you'll be guaranteed to fetch the new files instead of having to shift-reload or anything like that.
 
 ## Current Status
 
@@ -24,7 +24,7 @@ cp sample.cfg grits.cfg
 go run cmd/http2/main.go
 ```
 
-... and you'll get a file mount of your Merkel tree filesystem on `/tmp/x` that you can fool around with. At present, it can't do anything other than be slower than a normal filesystem -- the theory is that at some point soon, it'll be possible for it to be magically synced to other servers, and served to web clients with intelligent caching. You can just put your media directory instead of /tmp/x, and that'll let you e.g.:
+... and you'll get a file mount of your Merkle tree filesystem on `/tmp/x` that you can fool around with. At present, it can't do anything other than be slower than a normal filesystem -- the theory is that at some point soon, it'll be possible for it to be magically synced to other servers, and served to web clients with intelligent caching. You can just put your media directory instead of /tmp/x, and that'll let you e.g.:
 
 1. Run a node at home that keeps all the media backed up, so the central server doesn't have to have rarely-accessed stuff stored locally, so your server storage costs aren't too high
 2. Have some of your users run helper nodes that can serve up media data to your users, so your server bandwidth costs aren't too high
@@ -36,7 +36,7 @@ There are also bits and pieces of the web API, the service worker, things like t
 The roadmap, more or less, is:
 
 * First-cut of various core pieces and rough testing (done)
-* [Merkel tree](https://en.wikipedia.org/wiki/Merkle_tree) basic storage fundamentals (done)
+* [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree) basic storage fundamentals (done)
 * FUSE mounting (done)
 * Reuse some of IPFS instead, refactor, fix and polish (WE ARE HERE - currently in progress)
 * DHT and node-to-node communication (todo)
