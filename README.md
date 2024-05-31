@@ -15,8 +15,11 @@ And, even the initial cut has some significant advantages in addition to lowered
 It's still very much in progress. It doesn't work yet, just under construction. At present, I'm actually refactoring the whole thing to make use of [IPFS](https://ipfs.tech/) libraries instead of reinventing everything, but you can see some of the very limited functionality right now by doing:
 
 ```
+sudo apt install golang fuse3 # (or equivalent for your system)
+
 git clone https://github.com/andrewmoise/grits.git
 cd grits
+
 cp sample.cfg grits.cfg
 go run cmd/http2/main.go
 ```
@@ -32,7 +35,7 @@ Like I say, it's in the middle of some refactoring right now, so it doesn't full
 
 The roadmap, more or less, is:
 
-* First-cut of various pieces and rough testing (done)
+* First-cut of various core pieces and rough testing (done)
 * [Merkel tree](https://en.wikipedia.org/wiki/Merkle_tree) basic storage fundamentals (done)
 * FUSE mounting (done)
 * Reuse some of IPFS instead, refactor, fix and polish (WE ARE HERE - currently in progress)
@@ -48,7 +51,7 @@ The roadmap, more or less, is:
 
 Yeah, kind of. I'd like to reuse, definitely at least, IPFS's block store and transport libraries. I'm not sure it makes sense to have the nodes needing to run full IPFS nodes with their 6GiB memory requirements, or to have the service worker needing to bring in the whole IPFS client library in order to just do DHT lookups, so I may want to reimplement some pieces and then have them sit on top of already-proven IPFS stuff.
 
-Also, we're solving a substantially smaller problem than IPFS -- we're doing a small network of nodes, with a single trusted center, and so a lot of the harder problems that IPFS is solving, we don't have to pay the computational and design costs for solutions to.
+Also, we're solving a substantially smaller problem than IPFS -- we're doing a small network of fairly persistent non-anonymous nodes, with a single trusted center, and so a lot of the harder problems that IPFS is solving, we don't have to pay the computational and design costs for solutions to.
 
 * Won't this be subject to malicious nodes?
 
