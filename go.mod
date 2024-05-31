@@ -1,8 +1,6 @@
 module grits
 
-go 1.22
-
-toolchain go1.22.2
+go 1.19
 
 require (
 	github.com/hanwen/go-fuse/v2 v2.5.1
