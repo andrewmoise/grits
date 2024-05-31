@@ -24,7 +24,7 @@ cp sample.cfg grits.cfg
 go run cmd/http2/main.go
 ```
 
-... and you'll get a file mount on `/tmp/x` that you can fool around with. It can't do anything other than be slower than a normal filesystem -- the theory is that at some point soon, it'll be possible for it to be magically synced to other servers, and served to web clients with intelligent caching. You can just put your media directory instead of /tmp/x, and that'll let you e.g.:
+... and you'll get a file mount on `/tmp/x` that you can fool around with. At present, it can't do anything other than be slower than a normal filesystem -- the theory is that at some point soon, it'll be possible for it to be magically synced to other servers, and served to web clients with intelligent caching. You can just put your media directory instead of /tmp/x, and that'll let you e.g.:
 
 1. Run a node at home that keeps all the media backed up, so the central server doesn't have to have rarely-accessed stuff stored locally, so your server storage costs aren't too high
 2. Have some of your users run helper nodes that can serve up media data to your users, so your server bandwidth costs aren't too high
