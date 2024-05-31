@@ -32,10 +32,10 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	}
 	defer blobFile.Release()
 
-	typedAddr := grits.NewTypedFileAddr(blobFile.GetAddress().Hash, blobFile.GetSize(), grits.Blob)
+	gnode, err := grits.CreateBlobGNode(server.BlobStore, &grits.FileContentAddr{BlobAddr: *blobFile.GetAddress()})
 
 	// Link the new blob to the wiki volume using the test path.
-	err = wikiVolume.Link(testPath, typedAddr)
+	err = wikiVolume.Link(testPath, gnode.Address())
 	if err != nil {
 		t.Fatalf("Failed to link blob in wiki volume: %v", err)
 	}
@@ -52,12 +52,12 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	}
 
 	// Verify the content persisted by looking up the previously linked path.
-	addr, err := wikiVolumeReloaded.Lookup(testPath)
+	gnode, err = wikiVolumeReloaded.LookupNode(testPath)
 	if err != nil {
 		t.Fatalf("Failed to lookup content in wiki volume: %v", err)
 	}
 
-	cachedFile, err := server.BlobStore.ReadFile(&addr.BlobAddr)
+	cachedFile, err := server.BlobStore.ReadFile(&gnode.Contents.BlobAddr)
 	if err != nil {
 		t.Fatalf("Failed to read file contents: %v", err)
 	}

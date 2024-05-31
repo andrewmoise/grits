@@ -67,9 +67,7 @@ func verifyFileContent(ns *NameStore, path string, expected []byte, t *testing.T
 func createAndLinkGNode(ns *NameStore, bs BlobStore, path string, content []byte, isDir bool) (*GNode, error) {
 	if isDir {
 		// Create directory GNode
-		emptyChildren := make(map[string]*GNode)
-
-		dirGNode, err := CreateTreeGNode(ns.BlobStore, emptyChildren)
+		dirGNode, err := ns.CreateEmptyTreeGNode()
 		if err != nil {
 			return nil, err
 		}
@@ -84,7 +82,7 @@ func createAndLinkGNode(ns *NameStore, bs BlobStore, path string, content []byte
 		}
 		defer cachedFile.Release()
 
-		fileGNode, err := CreateBlobGNode(ns.BlobStore, FileContentAddr(cachedFile.GetAddress()))
+		fileGNode, err := ns.CreateBlobGNode(FileContentAddr(cachedFile.GetAddress()))
 		if err != nil {
 			return nil, err
 		}
@@ -220,7 +218,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	defer cleanup()
 
 	// Prepare a GNode for the root directory
-	rootDir, err := CreateTreeGNode(blobStore, make(map[string]*GNode))
+	rootDir, err := nameStore.CreateEmptyTreeGNode()
 	if err != nil {
 		t.Fatalf("Failed to create root directory GNode: %v", err)
 	}
@@ -252,7 +250,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	for _, path := range paths {
 		isDir := structure[path]
 		if isDir {
-			dirGNode, err := CreateTreeGNode(blobStore, make(map[string]*GNode))
+			dirGNode, err := nameStore.CreateEmptyTreeGNode()
 			if err != nil {
 				t.Fatalf("Failed to create directory GNode for %s: %v", path, err)
 			}
@@ -267,7 +265,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 				t.Errorf("Failed to create cached file for %s: %v", path, err)
 			}
 
-			fileGNode, err := CreateBlobGNode(blobStore, FileContentAddr(fileCachedFile.GetAddress()))
+			fileGNode, err := nameStore.CreateBlobGNode(FileContentAddr(fileCachedFile.GetAddress()))
 			if err != nil {
 				t.Fatalf("Failed to create file GNode for %s: %v", path, err)
 			}
@@ -303,7 +301,7 @@ func TestConcurrentAccess(t *testing.T) {
 	defer cleanup()
 
 	// Prepare a directory GNode for testing
-	rootDir, err := CreateTreeGNode(blobStore, make(map[string]*GNode))
+	rootDir, err := nameStore.CreateEmptyTreeGNode()
 	if err != nil {
 		t.Fatalf("Failed to create root directory GNode: %v", err)
 	}
@@ -324,7 +322,7 @@ func TestConcurrentAccess(t *testing.T) {
 			defer wgLink.Done()
 
 			dirPath := fmt.Sprintf("concurrent/dir%d", i)
-			dirGNode, err := CreateTreeGNode(blobStore, make(map[string]*GNode))
+			dirGNode, err := nameStore.CreateEmptyTreeGNode()
 			if err != nil {
 				t.Errorf("Failed to create directory GNode for %s: %v", dirPath, err)
 				return
@@ -341,7 +339,7 @@ func TestConcurrentAccess(t *testing.T) {
 				t.Errorf("Failed to create cached file for %s: %v", filePath, err)
 			}
 
-			fileGNode, err := CreateBlobGNode(blobStore, FileContentAddr(fileCachedFile.GetAddress()))
+			fileGNode, err := nameStore.CreateBlobGNode(FileContentAddr(fileCachedFile.GetAddress()))
 			if err != nil {
 				t.Errorf("Failed to create file GNode for %s: %v", filePath, err)
 				return
@@ -402,7 +400,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		}
 		allFiles = append(allFiles, cf)
 
-		gNode, err := CreateBlobGNode(bs, FileContentAddr(cf.Address))
+		gNode, err := ns.CreateBlobGNode(FileContentAddr(cf.Address))
 		if err != nil {
 			t.Fatalf("Failed to create gnode for file %d", i)
 		}
@@ -520,7 +518,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 	}
 
-	gNode, err := CreateBlobGNode(bs, FileContentAddr(cf.GetAddress()))
+	gNode, err := ns.CreateBlobGNode(FileContentAddr(cf.GetAddress()))
 	if err != nil {
 		t.Fatalf("Failed to create gnode for whole tree rev")
 	}
@@ -580,7 +578,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 		}
 
-		newRootGNode, err := CreateBlobGNode(bs, FileContentAddr(cf.GetAddress()))
+		newRootGNode, err := ns.CreateBlobGNode(FileContentAddr(cf.GetAddress()))
 		if err != nil {
 			t.Fatalf("Failed to create GNode for whole tree revision: %v", err)
 		}
@@ -592,7 +590,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		cf.Release() // Release the cached file after linking
 
 		// Link new files under the new root directory
-		fileGNode, err := CreateBlobGNode(bs, FileContentAddr(allFiles[i].GetAddress()))
+		fileGNode, err := ns.CreateBlobGNode(FileContentAddr(allFiles[i].GetAddress()))
 		if err != nil {
 			t.Fatalf("Failed to create GNode for file %s: %v", fileNames[i-6], err)
 		}

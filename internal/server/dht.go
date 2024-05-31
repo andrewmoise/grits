@@ -273,7 +273,7 @@ func (bf *BlobFinder) GetClosestPeers(blobAddr *grits.BlobAddr, n int) ([]*Peer,
 		return nil, fmt.Errorf("no peers")
 	}
 
-	target := convertBlobAddrToInteger(blobAddr.Hash)
+	target := convertBlobAddrToInteger(string(*blobAddr))
 	left, right := 0, len(bf.SortedPeers)-1
 
 	for right-left > 1 {

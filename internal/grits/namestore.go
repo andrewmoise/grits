@@ -137,14 +137,12 @@ type NameStore struct {
 }
 
 func NewNameStore(bs BlobStore) (*NameStore, error) {
-	rootChildren := make(map[string]*GNode)
-
 	ns := &NameStore{
 		BlobStore: bs,
 		fileCache: make(map[GNodeAddr]*GNode),
 	}
 
-	rootGNode, err := CreateTreeGNode(ns.BlobStore, rootChildren)
+	rootGNode, err := ns.CreateEmptyTreeGNode()
 	if err != nil {
 		return nil, err
 	}
@@ -394,16 +392,16 @@ func (ns *NameStore) LinkGNode(name string, gnode *GNode) error {
 	return nil
 }
 
-func CreateBlobGNode(bs BlobStore, addr FileContentAddr) (*GNode, error) {
+func (ns *NameStore) CreateBlobGNode(addr FileContentAddr) (*GNode, error) {
 	gnode := &GNode{
 		IsDirectory: false,
 		Contents:    addr,
-		blobStore:   bs,
+		blobStore:   ns.BlobStore,
 		refCount:    1,
 	}
 
 	var err error
-	cf, err := bs.ReadFile(BlobAddr(addr))
+	cf, err := ns.BlobStore.ReadFile(BlobAddr(addr))
 	if err != nil {
 		return nil, err
 	}
@@ -414,24 +412,92 @@ func CreateBlobGNode(bs BlobStore, addr FileContentAddr) (*GNode, error) {
 		return nil, fmt.Errorf("error serializing GNode: %v", err)
 	}
 
-	serializedGNodeCF, err := bs.AddDataBlock(serializedGNode)
+	serializedGNodeCF, err := ns.BlobStore.AddDataBlock(serializedGNode)
 	if err != nil {
 		return nil, fmt.Errorf("error storing serialized GNode: %v", err)
 	}
 
-	gnode.metaCachedFile = serializedGNodeCF
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
+	existingGNode, ok := ns.fileCache[GNodeAddr(serializedGNodeCF.GetAddress())]
+	if ok {
+		serializedGNodeCF.Release()
+		existingGNode.Take()
+		return existingGNode, nil
+	}
+	ns.fileCache[GNodeAddr(serializedGNodeCF.GetAddress())] = gnode
+
+	gnode.metaCachedFile = serializedGNodeCF
 	gnode.ContentsCachedFile = cf
 	cf = nil // Prevent cleanup
 
 	return gnode, nil
 }
 
-func CreateTreeGNode(bs BlobStore, children map[string]*GNode) (*GNode, error) {
+func (ns *NameStore) CreateEmptyTreeGNode() (*GNode, error) {
+	gnode := &GNode{
+		IsDirectory: true,
+		blobStore:   ns.BlobStore,
+		refCount:    1,
+	}
+
+	// Translate children into a map of strings to strings
+	childMap := make(map[string]*GNode)
+	gnode.ChildrenMap = &childMap
+
+	// Serialize the map of children
+	serializedChildMap, err := json.Marshal(childMap)
+	if err != nil {
+		return nil, fmt.Errorf("error serializing children map: %v", err)
+	}
+
+	// Store the serialized children map as a new data block
+	contentsCachedFile, err := ns.BlobStore.AddDataBlock(serializedChildMap)
+	if err != nil {
+		return nil, fmt.Errorf("error storing serialized children map: %v", err)
+	}
+	defer contentsCachedFile.Release()
+
+	gnode.Contents = FileContentAddr(contentsCachedFile.GetAddress())
+
+	// Serialize the GNode itself now that it includes the contents address
+	serializedGNode, err := json.Marshal(gnode)
+	if err != nil {
+		return nil, fmt.Errorf("error serializing GNode: %v", err)
+	}
+
+	// Store the serialized GNode as a new data block
+	metaCachedFile, err := ns.BlobStore.AddDataBlock(serializedGNode)
+	if err != nil {
+		return nil, fmt.Errorf("error storing serialized GNode: %v", err)
+	}
+	gnode.metaCachedFile = metaCachedFile
+
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
+
+	previousGNode, ok := ns.fileCache[GNodeAddr(metaCachedFile.GetAddress())]
+	if ok {
+		metaCachedFile.Release()
+		previousGNode.Take()
+		return previousGNode, nil
+	}
+	ns.fileCache[GNodeAddr(metaCachedFile.GetAddress())] = gnode
+
+	gnode.ContentsCachedFile = contentsCachedFile
+	contentsCachedFile = nil // Prevent cleanup
+
+	//log.Printf("Returning gnode!")
+
+	return gnode, nil
+}
+
+func (ns *NameStore) createTreeGNode(children map[string]*GNode) (*GNode, error) {
 	gnode := &GNode{
 		IsDirectory: true,
 		ChildrenMap: &children,
-		blobStore:   bs,
+		blobStore:   ns.BlobStore,
 		refCount:    1,
 	}
 
@@ -452,7 +518,7 @@ func CreateTreeGNode(bs BlobStore, children map[string]*GNode) (*GNode, error) {
 	}
 
 	// Store the serialized children map as a new data block
-	contentsCachedFile, err := bs.AddDataBlock(serializedChildMap)
+	contentsCachedFile, err := ns.BlobStore.AddDataBlock(serializedChildMap)
 	if err != nil {
 		return nil, fmt.Errorf("error storing serialized children map: %v", err)
 	}
@@ -467,11 +533,19 @@ func CreateTreeGNode(bs BlobStore, children map[string]*GNode) (*GNode, error) {
 	}
 
 	// Store the serialized GNode as a new data block
-	metaCachedFile, err := bs.AddDataBlock(serializedGNode)
+	metaCachedFile, err := ns.BlobStore.AddDataBlock(serializedGNode)
 	if err != nil {
 		return nil, fmt.Errorf("error storing serialized GNode: %v", err)
 	}
 	gnode.metaCachedFile = metaCachedFile
+
+	previousGNode, ok := ns.fileCache[GNodeAddr(metaCachedFile.GetAddress())]
+	if ok {
+		metaCachedFile.Release()
+		previousGNode.Take()
+		return previousGNode, nil
+	}
+	ns.fileCache[GNodeAddr(metaCachedFile.GetAddress())] = gnode
 
 	for _, childNode := range children {
 		childNode.Take()
@@ -509,7 +583,7 @@ func (ns *NameStore) recursiveLink(name string, addr GNodeAddr, oldParent *GNode
 			newValue = nil
 		} else {
 			var exists bool
-			log.Printf("Searching in fileCache for %s; has %d entries\n", addr, len(ns.fileCache))
+			log.Printf("    Searching in fileCache for %s; has %d entries\n", addr, len(ns.fileCache))
 			newValue, exists = ns.fileCache[addr]
 			if exists {
 				newValue.Take()
@@ -556,7 +630,7 @@ func (ns *NameStore) recursiveLink(name string, addr GNodeAddr, oldParent *GNode
 		delete(newChildren, parts[0])
 	}
 
-	result, err := CreateTreeGNode(ns.BlobStore, newChildren)
+	result, err := ns.createTreeGNode(newChildren)
 	if err != nil {
 		for _, v := range newChildren {
 			log.Printf("Releasing reference due to error for %s\n", v.Address())
@@ -574,8 +648,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 		fileCache: make(map[GNodeAddr]*GNode),
 	}
 
-	rootNodeMap := make(map[string]*GNode)
-	dn, err := CreateTreeGNode(ns.BlobStore, rootNodeMap)
+	dn, err := ns.CreateEmptyTreeGNode()
 	if err != nil {
 		return nil, err
 	}
