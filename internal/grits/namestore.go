@@ -22,15 +22,17 @@ type FileNode interface {
 }
 
 type TreeNode struct {
-	blob        CachedFile
-	ChildrenMap map[string]FileNode
-	refCount    int
-	nameStore   *NameStore
+	blob         CachedFile
+	metadataBlob CachedFile
+	ChildrenMap  map[string]FileNode
+	refCount     int
+	nameStore    *NameStore
 }
 
 type BlobNode struct {
-	blob     CachedFile
-	refCount int
+	blob         CachedFile
+	metadataBlob CachedFile
+	refCount     int
 }
 
 // Implementations for BlobNode
@@ -58,7 +60,12 @@ func (bn *BlobNode) Take() {
 func (bn *BlobNode) Release() {
 	bn.refCount--
 	if bn.refCount == 0 {
-		bn.blob.Release()
+		if bn.blob != nil {
+			bn.blob.Release()
+		}
+		if bn.metadataBlob != nil {
+			bn.metadataBlob.Release()
+		}
 	}
 }
 
@@ -92,6 +99,9 @@ func (tn *TreeNode) Release() {
 	if tn.refCount == 0 {
 		if tn.blob != nil {
 			tn.blob.Release()
+		}
+		if tn.metadataBlob != nil {
+			tn.metadataBlob.Release()
 		}
 		for _, child := range tn.ChildrenMap {
 			child.Release()
