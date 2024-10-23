@@ -11,8 +11,22 @@ import (
 ////////////////////////
 // Node Types
 
+type GNodeType int
+
+const (
+	GNodeTypeFile GNodeType = iota
+	GNodeTypeDirectory
+)
+
+type GNodeMetadata struct {
+	Type GNodeType `json:"type"`
+	Size int64     `json:"size"`
+}
+
 type FileNode interface {
 	ExportedBlob() CachedFile
+	MetadataBlob() CachedFile
+	Metadata() *GNodeMetadata
 	Children() map[string]FileNode
 	AddressString() string
 	Address() *TypedFileAddr
@@ -39,6 +53,17 @@ type BlobNode struct {
 
 func (bn *BlobNode) ExportedBlob() CachedFile {
 	return bn.blob
+}
+
+func (bn *BlobNode) MetadataBlob() CachedFile {
+	return bn.metadataBlob
+}
+
+func (bn *BlobNode) Metadata() *GNodeMetadata {
+	return &GNodeMetadata{
+		Type: GNodeTypeFile,
+		Size: bn.blob.GetSize(),
+	}
 }
 
 func (bn *BlobNode) Children() map[string]FileNode {
@@ -74,6 +99,18 @@ func (bn *BlobNode) Release() {
 func (tn *TreeNode) ExportedBlob() CachedFile {
 	tn.ensureSerialized()
 	return tn.blob
+}
+
+func (tn *TreeNode) MetadataBlob() CachedFile {
+	return tn.metadataBlob
+}
+
+func (tn *TreeNode) Metadata() *GNodeMetadata {
+	tn.ensureSerialized() // Need this to get the size
+	return &GNodeMetadata{
+		Type: GNodeTypeDirectory,
+		Size: tn.blob.GetSize(), // Size of the serialized directory structure
+	}
 }
 
 func (tn *TreeNode) Children() map[string]FileNode {
@@ -526,7 +563,26 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 	}
 
 	if addr.Type == Blob {
-		bn := &BlobNode{blob: cf}
+		metadata := &GNodeMetadata{
+			Type: GNodeTypeFile,
+			Size: cf.GetSize(),
+		}
+
+		metadataData, err := json.Marshal(metadata)
+		if err != nil {
+			return nil, fmt.Errorf("error marshalling metadata: %v", err)
+		}
+
+		metadataCf, err := ns.BlobStore.AddDataBlock(metadataData)
+		if err != nil {
+			return nil, fmt.Errorf("error writing metadata: %v", err)
+		}
+
+		bn := &BlobNode{
+			blob:         cf,
+			metadataBlob: metadataCf,
+			refCount:     0,
+		}
 		ns.fileCache[addr.String()] = bn
 		return bn, nil
 	} else {
@@ -538,6 +594,24 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			nameStore:   ns,
 		}
 
+		// Create metadata for directory
+		metadata := &GNodeMetadata{
+			Type: GNodeTypeDirectory,
+			Size: cf.GetSize(), // Size of the serialized directory structure
+		}
+
+		metadataData, err := json.Marshal(metadata)
+		if err != nil {
+			return nil, fmt.Errorf("error marshalling directory metadata: %v", err)
+		}
+
+		metadataCf, err := ns.BlobStore.AddDataBlock(metadataData)
+		if err != nil {
+			return nil, fmt.Errorf("error writing directory metadata: %v", err)
+		}
+
+		dn.metadataBlob = metadataCf
+
 		defer func() {
 			if dn != nil {
 				delete(ns.fileCache, addr.String())
@@ -547,7 +621,6 @@ func (ns *NameStore) LoadFileNode(addr *TypedFileAddr) (FileNode, error) {
 			}
 		}()
 
-		// Use the new Read() method to read directory data
 		dirData, err := cf.Read(0, cf.GetSize())
 		if err != nil {
 			return nil, fmt.Errorf("error reading directory data from %s: %v", addr.String(), err)
