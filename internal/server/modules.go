@@ -104,20 +104,6 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 
 			s.AddModule(module)
 
-		case "dirmirror":
-			var mirrorConfig DirToTreeMirrorConfig
-			if err := json.Unmarshal(rawConfig, &mirrorConfig); err != nil {
-				return fmt.Errorf("failed to unmarshal DirToTreeMirror module config: %v", err)
-			}
-
-			module, err := NewDirToTreeMirror(&mirrorConfig, s, s.Shutdown)
-			if err != nil {
-				return fmt.Errorf("failed to instantiate DirToTreeMirror: %v", err)
-			}
-
-			s.AddModule(module)
-			s.AddVolume(module)
-
 		case "http":
 			var httpConfig HTTPModuleConfig
 			if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {
