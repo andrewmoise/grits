@@ -169,6 +169,7 @@ type BlobStore interface {
 	AddLocalFile(srcPath string) (CachedFile, error)
 	AddOpenFile(file *os.File) (CachedFile, error)
 	AddDataBlock(data []byte) (CachedFile, error)
+	DumpStats()
 }
 
 // CachedFile defines the interface for interacting with a cached file.
@@ -183,4 +184,5 @@ type CachedFile interface {
 
 	Release()
 	Take()
+	GetRefCount() int
 }

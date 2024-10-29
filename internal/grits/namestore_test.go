@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -404,13 +405,23 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 }
 
+// Helper to find a FileNode by its content blob address
+func (ns *NameStore) lookupNodeByContent(contentAddr string) FileNode {
+	for _, node := range ns.fileCache {
+		if node != nil && node.ExportedBlob().GetAddress().String() == contentAddr {
+			return node
+		}
+	}
+	return nil
+}
+
 func TestFileNodeReferenceCounting(t *testing.T) {
 	ns, bs, cleanup := setupNameStoreTestEnv(t)
 	defer cleanup()
 
 	allFiles := make([]*LocalCachedFile, 0)
 
-	// 1. Create blobs and directories
+	// 1. Create content blobs
 	for i := 0; i < 10; i++ {
 		data := []byte("Content of file " + strconv.Itoa(i))
 		cfInterface, err := bs.AddDataBlock(data)
@@ -424,89 +435,211 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		allFiles = append(allFiles, cf)
 	}
 
-	emptyDirInterface, err := bs.AddDataBlock([]byte("{}"))
+	// Create empty directory node
+	emptyDirMap := make(map[string]FileNode)
+	emptyDirNode, err := ns.CreateTreeNode(emptyDirMap)
 	if err != nil {
-		t.Errorf("Failed to add empty dir blob")
+		t.Fatalf("Failed to create empty tree node: %v", err)
 	}
-	emptyDir, ok := emptyDirInterface.(*LocalCachedFile)
+	emptyDirNode.Take()
+	defer emptyDirNode.Release()
+
+	emptyTfa := &TypedFileAddr{
+		BlobAddr: *emptyDirNode.blob.GetAddress(),
+		Type:     Tree,
+	}
+
+	ns.DumpFileCache()
+
+	if emptyDirNode.refCount != 1 {
+		t.Fatalf("Expected ref count 1 for emptyDirNode, got %d", emptyDirNode.refCount)
+	}
+
+	// Check the metadata blob ref count
+	metadataBlob, ok := emptyDirNode.metadataBlob.(*LocalCachedFile)
 	if !ok {
-		t.Fatalf("Failed to assert type *LocalCachedFile for empty dir")
+		t.Fatalf("Failed to cast metadata blob to LocalCachedFile")
 	}
-	defer emptyDir.Release()
+	if metadataBlob.RefCount != 2 {
+		t.Fatalf("Expected metadata blob ref count 2, got %d", metadataBlob.RefCount)
+	}
+
+	// Check the content blob ref count
+	contentBlob, ok := emptyDirNode.blob.(*LocalCachedFile)
+	if !ok {
+		t.Fatalf("Failed to cast content blob to LocalCachedFile")
+	}
+	if contentBlob.RefCount != 2 {
+		t.Fatalf("Expected content blob ref count 2, got %d", contentBlob.RefCount)
+	}
 
 	// 2. Link blobs and dirs
 	dirNames := []string{"someplace", "someplace/else", "dir", "dir/sub"}
 	for _, dirName := range dirNames {
-		err := ns.LinkTree(dirName, emptyDir.GetAddress())
+		err := ns.Link(dirName, emptyTfa)
 		if err != nil {
-			t.Errorf("Failed to mkdir %s: %v", dirName, err)
+			t.Fatalf("Failed to mkdir %s: %v", dirName, err)
 		}
 	}
+
+	ns.DumpFileCache()
 
 	fileNames := []string{"zero", "one", "someplace/else/two", "dir/three", "dir/sub/four", "five"}
 	for i, fileName := range fileNames {
 		err := ns.LinkBlob(fileName, allFiles[i].GetAddress(), allFiles[i].GetSize())
 		if err != nil {
-			t.Errorf("Failed to link blob to %s: %v", fileName, err)
+			t.Fatalf("Failed to link blob to %s: %v", fileName, err)
 		}
 	}
 
+	ns.DumpFileCache()
+
+	var errors []string
+
+	// Check both content and metadata reference counts
 	for i, cf := range allFiles {
-		expectedRefCount := 1
+		expectedContentRefCount := 1
 		if i <= 5 {
-			expectedRefCount = 2
+			expectedContentRefCount = 2
 		}
-		if cf.RefCount != expectedRefCount {
-			t.Errorf("Expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
+
+		// Check content blob reference count
+		if cf.RefCount != expectedContentRefCount {
+			errors = append(errors, fmt.Sprintf(
+				"File %d: Expected content reference count of %d, got %d",
+				i, expectedContentRefCount, cf.RefCount))
 		}
+
+		// Only files 0-5 should have FileNodes
+		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		if i <= 5 {
+			// Should have FileNode with ref count 1
+			if fn == nil {
+				errors = append(errors, fmt.Sprintf(
+					"File %d: Expected FileNode but not found in cache",
+					i))
+				continue
+			}
+
+			bn, ok := fn.(*BlobNode)
+			if !ok {
+				errors = append(errors, fmt.Sprintf(
+					"File %d: FileNode is not a BlobNode",
+					i))
+				continue
+			}
+
+			// Both node and metadata blob should have ref count 1
+			if bn.refCount != 1 {
+				errors = append(errors, fmt.Sprintf(
+					"File %d: Expected node reference count of 1, got %d",
+					i, bn.refCount))
+			}
+
+			metadataRef := bn.metadataBlob.(*LocalCachedFile)
+			if metadataRef.RefCount != 1 {
+				errors = append(errors, fmt.Sprintf(
+					"File %d: Expected metadata reference count of 1, got %d",
+					i, metadataRef.RefCount))
+			}
+		} else {
+			// Files > 5 should not have FileNodes
+			if fn != nil {
+				errors = append(errors, fmt.Sprintf(
+					"File %d: Expected no FileNode but found one in cache",
+					i))
+			}
+		}
+	}
+
+	if len(errors) > 0 {
+		t.Fatalf("Found %d errors:\n%s", len(errors), strings.Join(errors, "\n"))
 	}
 
 	// 3. Unlink one and five
 	err = ns.LinkBlob(fileNames[1], nil, allFiles[1].GetSize())
 	if err != nil {
-		t.Errorf("Failed to unlink one: %v", err)
+		t.Fatalf("Failed to unlink one: %v", err)
 	}
 
 	err = ns.LinkBlob(fileNames[5], nil, allFiles[5].GetSize())
 	if err != nil {
-		t.Errorf("Failed to unlink five: %v", err)
+		t.Fatalf("Failed to unlink five: %v", err)
 	}
+
+	ns.DumpFileCache()
 
 	// 4. Check reference counts again
 	for i, cf := range allFiles {
-		var expectedRefCount int
+		var expectedContentRefCount int
 		if i == 1 || i == 5 || i > 5 {
-			expectedRefCount = 1
+			expectedContentRefCount = 1
 		} else {
-			expectedRefCount = 2
-		}
-		if cf.RefCount != expectedRefCount {
-			t.Errorf("After unlinking, expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
+			expectedContentRefCount = 2
 		}
 
-		fn, exists := ns.fileCache[NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), Blob).String()]
-		if !exists {
-			if expectedRefCount-1 <= 0 {
-				continue
+		// Check content blob reference
+		if cf.RefCount != expectedContentRefCount {
+			errors = append(errors, fmt.Sprintf(
+				"File %d: After unlinking, expected content reference count of %d, got %d",
+				i, expectedContentRefCount, cf.RefCount))
+		}
+
+		// Check for FileNode presence/absence
+		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+
+		// Shouldn't have FileNodes for stuff that was never added
+		if i >= 6 {
+			if fn != nil {
+				errors = append(errors, fmt.Sprintf(
+					"File %d: FileNode in cache, it shouldn't be",
+					i))
 			}
-			t.Errorf("FileNode for %s not found in cache", cf.GetAddress().String())
+			continue
+		}
+
+		// Should have FileNode
+		if fn == nil {
+			errors = append(errors, fmt.Sprintf(
+				"File %d: FileNode not found in cache",
+				i))
+			continue
 		}
 
 		bn, ok := fn.(*BlobNode)
 		if !ok {
-			t.Errorf("FileNode for %s is not a BlobNode", cf.GetAddress().String())
+			errors = append(errors, fmt.Sprintf(
+				"File %d: FileNode is not a BlobNode",
+				i))
+			continue
 		}
 
-		if bn.refCount != expectedRefCount-1 {
-			t.Errorf("After unlinking, expected reference count of %d for file node %d, got %d", expectedRefCount-1, i, bn.refCount)
+		// Check node and metadata reference counts
+		if bn.refCount != (expectedContentRefCount - 1) {
+			errors = append(errors, fmt.Sprintf(
+				"File %d: After unlinking, expected node reference count of %d, got %d",
+				expectedContentRefCount-1, i, bn.refCount))
 		}
+
+		metadataRef := bn.metadataBlob.(*LocalCachedFile)
+		if metadataRef.RefCount != expectedContentRefCount-1 {
+			errors = append(errors, fmt.Sprintf(
+				"File %d: After unlinking, expected metadata reference count of %d, got %d",
+				expectedContentRefCount-1, i, metadataRef.RefCount))
+		}
+	}
+
+	if len(errors) > 0 {
+		t.Fatalf("Found %d errors:\n%s", len(errors), strings.Join(errors, "\n"))
 	}
 
 	// 5. Try unlinking a whole subdirectory
 	err = ns.Link("someplace", nil)
 	if err != nil {
-		t.Errorf("Failed to unlink someplace: %v", err)
+		t.Fatalf("Failed to unlink someplace: %v", err)
 	}
+
+	ns.DumpFileCache()
 
 	for i, cf := range allFiles {
 		var expectedRefCount int
@@ -516,7 +649,21 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			expectedRefCount = 2
 		}
 		if cf.RefCount != expectedRefCount {
-			t.Errorf("After unlinking, expected reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
+			t.Fatalf("After unlinking someplace, expected content reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
+		}
+
+		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		if fn != nil {
+			bn, ok := fn.(*BlobNode)
+			if !ok {
+				t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress().String())
+				continue
+			}
+			metadataRef := bn.metadataBlob.(*LocalCachedFile)
+			if metadataRef.RefCount != expectedRefCount-1 {
+				t.Fatalf("After unlinking someplace, expected metadata reference count of %d for %d, got %d",
+					expectedRefCount-1, i, metadataRef.RefCount)
+			}
 		}
 	}
 
@@ -525,63 +672,61 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	DebugPrintTree(ns.root, "")
 
 	newRoot := make(map[string]string)
-	newRoot["tree"] = ns.GetRoot()
+	newRoot["tree"] = ns.root.MetadataBlob().GetAddress().String()
 
 	newRootJson, err := json.Marshal(newRoot)
 	if err != nil {
 		t.Fatalf("Failed to serialize newRoot to JSON: %v", err)
 	}
 
-	// Add the JSON as a new data block to the BlobStore
-	cf, err := bs.AddDataBlock(newRootJson)
+	rootContent, err := bs.AddDataBlock(newRootJson)
 	if err != nil {
 		t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 	}
 
-	tfa := NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), Tree)
+	tfa := NewTypedFileAddr(rootContent.GetAddress().Hash, rootContent.GetSize(), Tree)
 
 	ns.Link("", tfa)
-	cf.Release()
+	rootContent.Release()
 
 	log.Printf("--- Verify tree setup")
 	DebugPrintTree(ns.root, "")
 
-	cf, err = ns.LookupAndOpen("tree/zero")
+	cf, err := ns.LookupAndOpen("tree/zero")
 	if err != nil {
 		t.Fatalf("Failed to lookup tree/zero: %v", err)
 	}
 
 	if cf.GetAddress().Hash != allFiles[0].GetAddress().Hash {
-		t.Errorf("Expected tree/zero to point to %s, got %s", allFiles[0].GetAddress().Hash, cf.GetAddress().Hash)
+		t.Fatalf("Expected tree/zero to point to %s, got %s", allFiles[0].GetAddress().Hash, cf.GetAddress().Hash)
 	}
 	cf.Release()
 
 	log.Printf("--- Scaffolding directories")
 
-	err = ns.LinkTree("tree/someplace", emptyDir.GetAddress())
+	err = ns.Link("tree/someplace", emptyTfa)
 	if err != nil {
-		t.Errorf("Failed to mkdir %s: %v", "tree/someplace", err)
+		t.Fatalf("Failed to mkdir %s: %v", "tree/someplace", err)
 	}
 
-	err = ns.LinkTree("tree/someplace/else", emptyDir.GetAddress())
+	err = ns.Link("tree/someplace/else", emptyTfa)
 	if err != nil {
-		t.Errorf("Failed to mkdir %s: %v", "tree/someplace/else", err)
+		t.Fatalf("Failed to mkdir %s: %v", "tree/someplace/else", err)
 	}
 
 	log.Printf("--- Starting revisions")
 
 	for i := 6; i < 10; i++ {
 		newRoot := make(map[string]string)
+		newRoot["prev"] = ns.root.MetadataBlob().GetAddress().String()
 
-		newRoot["prev"] = ns.GetRoot()
-
-		cf, err := ns.LookupAndOpen("tree")
+		treeNode, err := ns.LookupNode("tree")
 		if err != nil {
 			t.Fatalf("Failed to lookup tree: %v", err)
 		}
 
-		tfa := NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), Tree)
-		newRoot["tree"] = tfa.String()
+		newRoot["tree"] = treeNode.MetadataBlob().GetAddress().String()
+		treeNode.Release()
 
 		newRootJson, err = json.Marshal(newRoot)
 		if err != nil {
@@ -590,18 +735,18 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 		log.Printf("We serialize JSON: %s\n", newRootJson)
 
-		// Add the JSON as a new data block to the BlobStore
-		cf, err = bs.AddDataBlock(newRootJson)
+		rootContent, err := bs.AddDataBlock(newRootJson)
 		if err != nil {
-			t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
+			t.Fatalf("Failed to add new root content to BlobStore: %v", err)
 		}
 
-		tfa = NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), Tree)
-
-		err = ns.Link("", tfa)
+		err = ns.LinkTree("", rootContent.GetAddress())
 		if err != nil {
+			rootContent.Release()
 			t.Fatalf("Failed to link new root: %v", err)
 		}
+
+		rootContent.Release()
 
 		err = ns.LinkBlob(fmt.Sprintf("tree/%d", i), allFiles[i].GetAddress(), allFiles[i].GetSize())
 		if err != nil {
@@ -618,7 +763,6 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	log.Printf("--- Release allFiles")
-
 	for _, cf := range allFiles {
 		cf.Release()
 	}
@@ -629,21 +773,20 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	expectedRefCounts := []int{1, 0, 0, 1, 1, 0, 8, 6, 3, 2}
 
 	for i, cf := range allFiles {
-		tfa := NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), Blob)
-
-		fileNode, exists := ns.fileCache[tfa.String()]
-		if !exists {
-			t.Errorf("FileNode for %s not found in cache", cf.GetAddress().String())
+		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		if fn == nil {
+			t.Fatalf("FileNode for %s not found in cache", cf.GetAddress().String())
 			continue
 		}
 
-		blobNode, isBlobNode := fileNode.(*BlobNode)
+		blobNode, isBlobNode := fn.(*BlobNode)
 		if !isBlobNode {
-			t.Errorf("FileNode for %s is not a BlobNode", cf.GetAddress().String())
+			t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress().String())
 			continue
 		}
 
 		actualRefCount := blobNode.refCount
+		metadataRef := blobNode.metadataBlob.(*LocalCachedFile)
 
 		var fileName string
 		if i < 6 {
@@ -651,10 +794,18 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		} else {
 			fileName = fmt.Sprintf("%d", i)
 		}
-		log.Printf("File %d - %s: expected %d, got %d (hash is %s)", i, fileName, expectedRefCounts[i], actualRefCount, cf.GetAddress().Hash)
+		log.Printf("File %d - %s: expected %d, got node:%d content:%d metadata:%d (hash is %s)",
+			i, fileName, expectedRefCounts[i], actualRefCount, cf.RefCount, metadataRef.RefCount, cf.GetAddress().Hash)
 
 		if actualRefCount != expectedRefCounts[i] {
-			t.Errorf("After big revision setup, expected reference count of %d for file %d, got %d", expectedRefCounts[i], i, actualRefCount)
+			t.Fatalf("After big revision setup, expected reference count of %d for file %d, got %d",
+				expectedRefCounts[i], i, actualRefCount)
+		}
+
+		// Content and metadata blobs should have same reference count
+		if cf.RefCount != metadataRef.RefCount {
+			t.Fatalf("After big revision setup, content ref count %d doesn't match metadata ref count %d for file %d",
+				cf.RefCount, metadataRef.RefCount, i)
 		}
 	}
 
@@ -664,13 +815,26 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	err = ns.Link("", nil)
 	if err != nil {
-		t.Errorf("Failed to unlink root: %v", err)
+		t.Fatalf("Failed to unlink root: %v", err)
 	}
 
 	DebugPrintTree(ns.root, "")
 	for i, cf := range allFiles {
 		if cf.RefCount != 0 {
-			t.Errorf("Expected ending reference count of 0 for %d, got %d", i, cf.RefCount)
+			t.Fatalf("Expected ending content reference count of 0 for %d, got %d", i, cf.RefCount)
+		}
+
+		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		if fn != nil {
+			bn, ok := fn.(*BlobNode)
+			if !ok {
+				t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress().String())
+				continue
+			}
+			metadataRef := bn.metadataBlob.(*LocalCachedFile)
+			if metadataRef.RefCount != 0 {
+				t.Fatalf("Expected ending metadata reference count of 0 for %d, got %d", i, metadataRef.RefCount)
+			}
 		}
 	}
 }

@@ -18,10 +18,8 @@ type Module interface {
 // Special for storage modules:
 type Volume interface {
 	GetVolumeName() string
-
 	Start() error
 	Stop() error
-
 	isReadOnly() bool
 	Checkpoint() error
 
@@ -33,9 +31,11 @@ type Volume interface {
 	MultiLink([]*grits.LinkRequest) error
 
 	ReadFile(*grits.TypedFileAddr) (grits.CachedFile, error)
-
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
+
+	// New method to get the address of the empty directory (metadata blob)
+	GetEmptyDirAddr() *grits.TypedFileAddr
 }
 
 // ModuleConfig represents a generic module configuration.
