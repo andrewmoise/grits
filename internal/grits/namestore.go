@@ -497,11 +497,11 @@ func (ns *NameStore) LinkTree(name string, addr *BlobAddr) error {
 
 // Core link function helper
 func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParent FileNode) (FileNode, error) {
-	if metadataAddr != nil {
-		log.Printf("We're trying to link %s under path %s\n", metadataAddr.String(), name)
-	} else {
-		log.Printf("We're trying to link nil under path %s\n", name)
-	}
+	//if metadataAddr != nil {
+	//	log.Printf("We're trying to link %s under path %s\n", metadataAddr.String(), name)
+	//} else {
+	//	log.Printf("We're trying to link nil under path %s\n", name)
+	//}
 
 	parts := strings.SplitN(name, "/", 2)
 
@@ -652,7 +652,7 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 
 // Convert to private function that takes a metadata blob address
 func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
-	log.Printf("We try to chase down %s\n", metadataAddr.String())
+	//log.Printf("We try to chase down %s\n", metadataAddr.String())
 
 	// First load and parse the metadata
 	metadataCf, err := ns.BlobStore.ReadFile(metadataAddr)
@@ -680,7 +680,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 		return nil, fmt.Errorf("error reading content: %v", err)
 	}
 
-	log.Printf("We got it. The content addr is %s\n", contentAddr.String())
+	//log.Printf("We got it. The content addr is %s\n", contentAddr.String())
 
 	if metadata.Type == GNodeTypeFile {
 		bn := &BlobNode{
@@ -715,7 +715,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 			return nil, fmt.Errorf("error reading directory data: %v", err)
 		}
 
-		log.Printf("We check contents of %s: %s\n", contentAddr.String(), string(dirData))
+		//log.Printf("We check contents of %s: %s\n", contentAddr.String(), string(dirData))
 
 		dirMap := make(map[string]string)
 		if err := json.Unmarshal(dirData, &dirMap); err != nil {
@@ -748,9 +748,9 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 }
 
 func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, error) {
-	log.Printf("Creating tree node for map with %d children", len(children))
+	//log.Printf("Creating tree node for map with %d children", len(children))
 
-	ns.BlobStore.DumpStats()
+	//ns.BlobStore.DumpStats()
 
 	tn := &TreeNode{
 		ChildrenMap: children,
@@ -773,9 +773,9 @@ func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, er
 		return nil, fmt.Errorf("error writing directory: %v", err)
 	}
 
-	log.Printf("Added content blob, addr %s, rc %d", contentBlob.GetAddress().String(), contentBlob.GetRefCount())
+	//log.Printf("Added content blob, addr %s, rc %d", contentBlob.GetAddress().String(), contentBlob.GetRefCount())
 
-	ns.BlobStore.DumpStats()
+	//ns.BlobStore.DumpStats()
 
 	// Create metadata
 	metadata := &GNodeMetadata{
@@ -796,7 +796,7 @@ func (ns *NameStore) CreateTreeNode(children map[string]FileNode) (*TreeNode, er
 		return nil, fmt.Errorf("error writing metadata: %v", err)
 	}
 
-	log.Printf("Added metadata blob, addr %s, rc %d", metadataBlob.GetAddress().String(), metadataBlob.GetRefCount())
+	//log.Printf("Added metadata blob, addr %s, rc %d", metadataBlob.GetAddress().String(), metadataBlob.GetRefCount())
 
 	tn.blob = contentBlob
 	tn.metadataBlob = metadataBlob
