@@ -26,6 +26,7 @@ type Volume interface {
 	Lookup(path string) (*grits.TypedFileAddr, error)
 	LookupNode(path string) (grits.FileNode, error)
 	LookupFull(name string) ([][]string, error)
+	GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode, error)
 
 	Link(path string, addr *grits.TypedFileAddr) error
 	MultiLink([]*grits.LinkRequest) error
