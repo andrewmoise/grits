@@ -27,7 +27,7 @@ func NewWikiVolume(config *WikiVolumeConfig, server *Server) (*WikiVolume, error
 	}
 
 	// Create empty directory node
-	emptyDirMap := make(map[string]grits.FileNode)
+	emptyDirMap := make(map[string]*grits.BlobAddr)
 	emptyDirNode, err := ns.CreateTreeNode(emptyDirMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create empty directory node: %v", err)
@@ -82,6 +82,12 @@ func (wv *WikiVolume) GetModuleName() string {
 
 func (wv *WikiVolume) GetVolumeName() string {
 	return wv.name
+}
+
+// Get a FileNode from a metadata address, either from cache or loaded on demand.
+// Takes a reference to the node before returning it.
+func (wv *WikiVolume) GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode, error) {
+	return wv.ns.GetFileNode(metadataAddr)
 }
 
 // TODO - Is this really right? I don't really like this allowing LookupNode() to return nil, nil.

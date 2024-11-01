@@ -202,7 +202,12 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	}
 
 	r := make([]fuse.DirEntry, 0, len(children))
-	for name, node := range children {
+	for name, nodeAddr := range children {
+		node, err := gn.module.volume.GetFileNode(nodeAddr)
+		if err != nil {
+			return nil, syscall.EIO
+		}
+
 		_, isDir := node.(*grits.TreeNode)
 		var mode uint32
 		if isDir {
