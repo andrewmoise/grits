@@ -22,9 +22,13 @@ cd grits
 go test ./...
 
 cp sample.cfg grits.cfg
-mkdir certs
-sudo cp /etc/letsencrypt/live/$SERVER/privkey.pem certs/
-sudo cp /etc/letsencrypt/live/$SERVER/fullchain.pem certs/
+nano grits.cfg # Check SSL and hostname settings
+
+# If you're using SSL and real domain names, then:
+#mkdir certs
+#sudo cp /etc/letsencrypt/live/$SERVER/privkey.pem certs/
+#sudo cp /etc/letsencrypt/live/$SERVER/fullchain.pem certs/
+# Change certs/* ownership to yourself, set mode to 0600
 
 go run cmd/http2/main.go
 ```
@@ -38,7 +42,7 @@ curl https://localhost:1787/test
 
 You can make any type of changes to /tmp/grits-test that you want, and they'll be synced to the merkle tree, and exposed via the web root. Not much other than that works. There's also an API at /grits/v1/ that can do various operations, suitable for use from a serviceworker or another node in a swarm, but it doesn't do all that much other than that, right now.
 
-Don't do heavy write loads (npm compiles or etc). It'll rewrite tons of copies of the merkle tree and your storage will fill up.
+Don't do heavy write loads (npm compiles or etc). It'll rewrite tons of copies of the merkle tree and your storage will fill up. Fixing that is right in progress, at the moment.
 
 The theory is that at some point soon, it'll be possible for it to be magically synced to other servers, and served to web clients with intelligent caching. You can just put your media directory instead of /tmp/x, and that'll let you e.g.:
 
