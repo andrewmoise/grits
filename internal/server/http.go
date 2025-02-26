@@ -71,8 +71,8 @@ func (hm *HTTPModule) Start() error {
 		var err error
 		if hm.Config.EnableTls {
 			// Paths to cert and key files
-			certPath := hm.Server.Config.ServerPath("certs/server.crt")
-			keyPath := hm.Server.Config.ServerPath("certs/server.key")
+			certPath := hm.Server.Config.ServerPath("certs/fullchain.pem")
+			keyPath := hm.Server.Config.ServerPath("certs/privkey.pem")
 
 			log.Printf("Starting HTTPS server on %s\n", hm.HTTPServer.Addr)
 			err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
