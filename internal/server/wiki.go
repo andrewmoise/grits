@@ -74,7 +74,11 @@ func (wv *WikiVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
 		return nil, err
 	}
 
-	return node.Address(), nil
+	if node == nil {
+		return nil, nil
+	} else {
+		return node.Address(), nil
+	}
 }
 
 func (wv *WikiVolume) LookupFull(path string) ([][]string, error) {
