@@ -47,11 +47,11 @@ func NewLocalBlobStore(config *Config) *LocalBlobStore {
 	}
 
 	// Add empty directory as a permanent blob never to be released
-	//_, err = bs.AddDataBlock([]byte("{}"))
-	//if err != nil {
-	//	log.Printf("Can't create empty directory cachedFile")
-	//	return nil
-	//}
+	_, err = bs.AddDataBlock([]byte("{}"))
+	if err != nil {
+		log.Printf("Can't create empty directory cachedFile")
+		return nil
+	}
 
 	return bs
 }
@@ -387,49 +387,4 @@ func (cf *LocalCachedFile) Release() {
 
 func (cf *LocalCachedFile) Take() {
 	cf.blobStore.Take(cf)
-}
-
-func (cf *LocalCachedFile) GetRefCount() int {
-	return cf.RefCount
-}
-
-func (bs *LocalBlobStore) DumpStats() {
-	bs.mtx.RLock()
-	defer bs.mtx.RUnlock()
-
-	log.Printf("=== BlobStore Stats ===")
-	log.Printf("Total files: %d", len(bs.files))
-	log.Printf("Current size: %d bytes", bs.currentSize)
-
-	// Sort files by hash for consistent output
-	hashes := make([]string, 0, len(bs.files))
-	for hash := range bs.files {
-		hashes = append(hashes, hash)
-	}
-	sort.Strings(hashes)
-
-	for _, hash := range hashes {
-		file := bs.files[hash]
-		if file.RefCount <= 0 {
-			continue
-		}
-
-		log.Printf("File: %s", file.Address.String())
-		log.Printf("  Size: %d bytes", file.Size)
-		log.Printf("  RefCount: %d", file.RefCount)
-		log.Printf("  Path: %s", file.Path)
-		log.Printf("  IsHardlink: %v", file.IsHardLink)
-
-		if file.Size <= 200 {
-			// Read and print contents for small files
-			data, err := file.Read(0, file.Size)
-			if err != nil {
-				log.Printf("  Contents: <error reading: %v>", err)
-			} else {
-				log.Printf("  Contents: %s", string(data))
-			}
-		}
-		log.Printf("  ---")
-	}
-	log.Printf("=== End BlobStore Stats ===")
 }

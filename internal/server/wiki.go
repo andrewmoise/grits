@@ -8,42 +8,34 @@ import (
 	"sync"
 )
 
+// WikiVolume represents a writable volume for storing and retrieving content.
 type WikiVolume struct {
-	name         string
-	server       *Server
-	ns           *grits.NameStore
-	persistMtx   sync.Mutex
-	emptyDirNode grits.FileNode // Keep our reference to the empty directory node
+	name       string
+	server     *Server
+	ns         *grits.NameStore
+	persistMtx sync.Mutex
 }
 
 type WikiVolumeConfig struct {
 	VolumeName string `json:"VolumeName"`
 }
 
+// NewWikiVolume creates a new WikiVolume with the given name.
 func NewWikiVolume(config *WikiVolumeConfig, server *Server) (*WikiVolume, error) {
 	ns, err := grits.EmptyNameStore(server.BlobStore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NameStore: %v", err)
 	}
 
-	// Create empty directory node
-	emptyDirMap := make(map[string]*grits.BlobAddr)
-	emptyDirNode, err := ns.CreateTreeNode(emptyDirMap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create empty directory node: %v", err)
-	}
-	emptyDirNode.Take() // Take reference that we'll hold
-
+	// Initialize WikiVolume with name from config
 	wv := &WikiVolume{
-		name:         config.VolumeName,
-		server:       server,
-		ns:           ns,
-		emptyDirNode: emptyDirNode,
+		name:   config.VolumeName,
+		server: server,
+		ns:     ns,
 	}
 
 	err = wv.load()
 	if err != nil {
-		emptyDirNode.Release() // Clean up if we fail
 		return nil, fmt.Errorf("failed to load WikiVolume %s: %v", wv.name, err)
 	}
 
@@ -57,15 +49,7 @@ func (wv *WikiVolume) Start() error {
 
 func (wv *WikiVolume) Stop() error {
 	// Ensure any final persistence operations are completed
-	result := wv.save()
-
-	// Clean up our empty dir reference when stopping
-	if wv.emptyDirNode != nil {
-		wv.emptyDirNode.Release()
-	}
-
-	return result
-	// FIXME - We do stop, whether or not we return error -- we should think about that
+	return wv.save()
 }
 
 func (wv *WikiVolume) isReadOnly() bool {
@@ -84,21 +68,10 @@ func (wv *WikiVolume) GetVolumeName() string {
 	return wv.name
 }
 
-// Get a FileNode from a metadata address, either from cache or loaded on demand.
-// Takes a reference to the node before returning it.
-func (wv *WikiVolume) GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode, error) {
-	return wv.ns.GetFileNode(metadataAddr)
-}
-
-// TODO - Is this really right? I don't really like this allowing LookupNode() to return nil, nil.
-
 func (wv *WikiVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
 	node, err := wv.ns.LookupNode(path)
 	if err != nil {
 		return nil, err
-	}
-	if node == nil {
-		return nil, nil
 	}
 
 	return node.Address(), nil
@@ -116,17 +89,6 @@ func (wv *WikiVolume) Link(path string, addr *grits.TypedFileAddr) error {
 	return wv.ns.Link(path, addr)
 }
 
-func (wv *WikiVolume) GetEmptyDirAddr() *grits.TypedFileAddr {
-	return &grits.TypedFileAddr{
-		BlobAddr: grits.BlobAddr{
-			Hash: wv.emptyDirNode.Address().Hash,
-		},
-		Size: wv.emptyDirNode.Address().Size,
-		Type: grits.Tree,
-	}
-}
-
-// MultiLink also needs updating since it's part of the same transition
 func (wv *WikiVolume) MultiLink(req []*grits.LinkRequest) error {
 	return wv.ns.MultiLink(req)
 }

@@ -202,12 +202,7 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	}
 
 	r := make([]fuse.DirEntry, 0, len(children))
-	for name, nodeAddr := range children {
-		node, err := gn.module.volume.GetFileNode(nodeAddr)
-		if err != nil {
-			return nil, syscall.EIO
-		}
-
+	for name, node := range children {
 		_, isDir := node.(*grits.TreeNode)
 		var mode uint32
 		if isDir {
@@ -817,8 +812,9 @@ var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	emptyAddr := gn.module.volume.GetEmptyDirAddr()
+	emptyAddr := grits.NewTypedFileAddr("QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK", 2, grits.Tree)
 
+	// Create the LinkRequest with the required details
 	req := &grits.LinkRequest{
 		Path:     fullPath,
 		Addr:     emptyAddr,
@@ -836,6 +832,11 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	if err != nil {
 		return nil, syscall.EIO
 	}
+
+	//errno := gn.NotifyEntry(name)
+	//if errno != fs.OK {
+	//	return nil, errno
+	//}
 
 	return newInode, fs.OK
 }
