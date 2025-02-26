@@ -15,21 +15,37 @@ And, even the initial cut has some significant advantages in addition to lowered
 It's still very much in progress. It doesn't work yet, just under construction. At present, I'm actually refactoring the whole thing to make use of [IPFS](https://ipfs.tech/) libraries instead of reinventing everything, but you can see some of the very limited functionality right now by doing:
 
 ```
-sudo apt install golang fuse3 # (or equivalent for your system)
+sudo apt install golang fuse3 # (or equivalent - NOTE! Go >= 2.21 is needed)
 
 git clone https://github.com/andrewmoise/grits.git
 cd grits
+go test ./...
 
 cp sample.cfg grits.cfg
+mkdir certs
+sudo cp /etc/letsencrypt/live/$SERVER/privkey.pem certs/
+sudo cp /etc/letsencrypt/live/$SERVER/fullchain.pem certs/
+
 go run cmd/http2/main.go
 ```
 
-... and you'll get a file mount of your Merkle tree filesystem on `/tmp/x` that you can fool around with. At present, it can't do anything other than be slower than a normal filesystem -- the theory is that at some point soon, it'll be possible for it to be magically synced to other servers, and served to web clients with intelligent caching. You can just put your media directory instead of /tmp/x, and that'll let you e.g.:
+Then, from a separate console:
+
+```
+echo hello > /tmp/grits-test/test
+curl https://localhost:1787/test
+```
+
+You can make any type of changes to /tmp/grits-test that you want, and they'll be synced to the merkle tree, and exposed via the web root. Not much other than that works. There's also an API at /grits/v1/ that can do various operations, suitable for use from a serviceworker or another node in a swarm, but it doesn't do all that much other than that, right now.
+
+Don't do heavy write loads (npm compiles or etc). It'll rewrite tons of copies of the merkle tree and your storage will fill up.
+
+The theory is that at some point soon, it'll be possible for it to be magically synced to other servers, and served to web clients with intelligent caching. You can just put your media directory instead of /tmp/x, and that'll let you e.g.:
 
 1. Run a node at home that keeps all the media backed up, so the central server doesn't have to have rarely-accessed stuff stored locally, so your server storage costs aren't too high
 2. Have some of your users run helper nodes that can serve up media data to your users, so your server bandwidth costs aren't too high
 
-There are also bits and pieces of the web API, the service worker, things like that, but at present it's in the middle of some refactoring to use IPFS things, so it doesn't fully work. I'm currently investigating how much of IPFS can be reused without locking the software into dependencies that will make anything difficult for the end user, but the next piece involved once that's done will be to get the swarm of proxies to be able to coordinate with one another.
+There are also bits and pieces of the web API, the service worker, things like that, but at present it's in the middle of some refactoring, so it doesn't fully work.
 
 ## Roadmap
 
