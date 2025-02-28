@@ -202,7 +202,13 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	}
 
 	r := make([]fuse.DirEntry, 0, len(children))
-	for name, node := range children {
+	for name, nodeAddr := range children {
+		node, err := gn.module.volume.GetFileNode(nodeAddr)
+		if err != nil {
+			log.Printf("Readdir fail %v", err)
+			return nil, syscall.EIO
+		}
+
 		_, isDir := node.(*grits.TreeNode)
 		var mode uint32
 		if isDir {
@@ -256,13 +262,12 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	//log.Printf("--- Looking up %s\n", fullPath)
 
 	node, err := gn.module.volume.LookupNode(fullPath)
-	if err != nil {
-		//log.Printf("---   Error! %v\n", err)
-		return nil, syscall.EIO
-	}
-	if node == nil {
-		//log.Printf("---   Not found")
+	if grits.IsNotExist(err) {
+		log.Printf("---   lookup Not found")
 		return nil, syscall.ENOENT
+	} else if err != nil {
+		log.Printf("---   lookup Error! %v\n", err)
+		return nil, syscall.EIO
 	}
 	defer node.Release()
 
@@ -276,6 +281,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 
 	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.module)
 	if err != nil {
+		log.Printf("NGN fail %v", err)
 		return nil, syscall.EIO
 	}
 
@@ -318,11 +324,13 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 	} else if gn.file != nil {
 		size, err := gn.file.Seek(0, io.SeekEnd)
 		if err != nil {
+			log.Printf("Seek fail %v", err)
 			return syscall.EIO
 		}
 
 		out.Size = uint64(size)
 	} else {
+		log.Printf("7 GN fail")
 		return syscall.EIO
 	}
 
@@ -407,11 +415,13 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 			return syscall.ENOENT
 		}
 		if err != nil {
+			log.Printf("1 OCF fail %v", err)
 			return syscall.EIO
 		}
 
 		gn.cachedFile, err = gn.module.volume.ReadFile(addr)
 		if err != nil {
+			log.Printf("RF fail %v", err)
 			return syscall.EIO
 		}
 		gn.cachedFile.Take()
@@ -484,6 +494,7 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 				return fs.ToErrno(err)
 			}
 			if n != truncLen {
+				log.Printf("TL fail %d != %d", n, truncLen)
 				return syscall.EIO
 			}
 		}
@@ -503,6 +514,7 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 
 func (gn *gritsNode) flush() syscall.Errno {
 	if gn.file == nil {
+		log.Printf("flush fail")
 		return syscall.EIO
 	}
 
@@ -522,6 +534,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 
 	cf, err := gn.module.volume.AddBlob(tmpFile)
 	if err != nil {
+		log.Printf("ab fail %v", err)
 		return syscall.EIO
 	}
 
@@ -615,6 +628,7 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 
 	newInode, operations, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.module)
 	if err != nil {
+		log.Printf("NGN fail %v", err)
 		return nil, nil, 0, syscall.EIO
 	}
 
@@ -725,11 +739,13 @@ func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.Set
 	} else {
 		if gn.tmpFile == nil {
 			// Can't happen
+			log.Printf("TF CH fail")
 			return syscall.EIO
 		}
 
 		info, err := gn.tmpFile.Stat()
 		if err != nil {
+			log.Printf("stat fail %v", err)
 			return syscall.EIO
 		}
 
@@ -812,9 +828,8 @@ var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	emptyAddr := grits.NewTypedFileAddr("QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK", 2, grits.Tree)
+	emptyAddr := gn.module.volume.GetEmptyDirAddr()
 
-	// Create the LinkRequest with the required details
 	req := &grits.LinkRequest{
 		Path:     fullPath,
 		Addr:     emptyAddr,
@@ -825,18 +840,15 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
 		// FIXME - distinguish 'already exists' from general internal error
+		log.Printf("ML fail %v", err)
 		return nil, syscall.EIO
 	}
 
 	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode|fuse.S_IFDIR, gn.module)
 	if err != nil {
+		log.Printf("3 NGN fail %v", err)
 		return nil, syscall.EIO
 	}
-
-	//errno := gn.NotifyEntry(name)
-	//if errno != fs.OK {
-	//	return nil, errno
-	//}
 
 	return newInode, fs.OK
 }
@@ -859,6 +871,7 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 
 	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
+		log.Printf("4 NGN fail %v", err)
 		return syscall.EIO
 	}
 
@@ -882,6 +895,7 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 
 	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
+		log.Printf("5 NGN fail %v", err)
 		return syscall.EIO
 	}
 
@@ -899,12 +913,14 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 
 	newGritsNode, ok := newParent.(*gritsNode)
 	if !ok {
+		log.Printf("Rename fail")
 		return syscall.EIO
 	}
 	newFullPath := filepath.Join(newGritsNode.path, newName)
 
 	addr, err := gn.module.volume.Lookup(fullPath)
 	if err != nil {
+		log.Printf("LU fail 6 %v", err)
 		return syscall.EIO
 	}
 	if addr == nil {
