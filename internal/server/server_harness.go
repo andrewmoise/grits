@@ -2,6 +2,7 @@ package server
 
 import (
 	"grits/internal/grits"
+	"log"
 	"os"
 	"testing"
 )
@@ -28,6 +29,7 @@ func SetupTestServer(t *testing.T, initializers ...TestModuleInitializer) (*Serv
 	}
 
 	cleanup := func() {
+		log.Printf("Doing server cleanup")
 		os.RemoveAll(tempDir)
 	}
 
