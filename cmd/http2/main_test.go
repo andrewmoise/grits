@@ -7,7 +7,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -28,7 +27,6 @@ func TestFileOperations(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// 1. Create 5 files
-
 	for i := 1; i <= 5; i++ {
 		url := fmt.Sprintf("%s/grits/v1/content/root/%d", baseURL, i)
 		content := fmt.Sprintf("Test data %d", i)
@@ -75,72 +73,82 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
 
-	// Extract blob address for the directory tree node and download it
+	// Extract blob address for the directory metadata and download it
 	if len(lookupResponse) < 1 {
-		t.Fatalf("Lookup response did not include directory tree node")
+		t.Fatalf("Lookup response did not include directory metadata")
 	}
 
-	treeBlobAddr, err := grits.NewTypedFileAddrFromString(lookupResponse[0][1])
+	// First get the directory's metadata
+	dirContentAddr, err := grits.NewTypedFileAddrFromString(lookupResponse[0][1])
 	if err != nil {
 		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
 	}
 
-	blobURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, treeBlobAddr.Hash)
-	blobResp, err := http.Get(blobURL)
+	// Now fetch the directory content
+	dirURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, dirContentAddr.Hash)
+	dirResp, err := http.Get(dirURL)
 	if err != nil {
-		t.Fatalf("Failed to download tree blob: %v", err)
+		t.Fatalf("Failed to fetch directory content: %v", err)
 	}
-	defer blobResp.Body.Close()
+	defer dirResp.Body.Close()
 
-	if blobResp.StatusCode != http.StatusOK {
-		t.Fatalf("Blob download failed with status code %d", blobResp.StatusCode)
-	}
-
-	// Decode the directory listing from the tree blob
-	var files map[string]string // Or whatever structure you expect
-	if err := json.NewDecoder(blobResp.Body).Decode(&files); err != nil {
-		t.Fatalf("Failed to decode tree blob content: %v", err)
+	var dirListing map[string]string // filename => metadata CID
+	if err := json.NewDecoder(dirResp.Body).Decode(&dirListing); err != nil {
+		t.Fatalf("Failed to decode directory listing: %v", err)
 	}
 
 	log.Printf("Files listed\n")
-
 	count := 0
 
-	for name, hash := range files {
-		log.Printf("%s -> %s\n", name, hash)
+	for name, metadataCID := range dirListing {
+		log.Printf("%s -> %s\n", name, metadataCID)
 
-		parts := strings.Split(hash, ":")
-		if len(parts) != 2 {
-			t.Errorf("Invalid hash: %s", hash)
-		}
-
-		parts = strings.Split(parts[1], "-")
-		if len(parts) != 2 {
-			t.Errorf("Invalid blob+size: %s", parts[0])
-		}
-
-		url := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[0])
-		resp, err := http.Get(url)
+		// Fetch file metadata
+		metadataURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadataCID)
+		metadataResp, err := http.Get(metadataURL)
 		if err != nil {
-			t.Fatalf("GET request failed: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("Expected OK status; got %d", resp.StatusCode)
+			t.Fatalf("Failed to fetch metadata for %s: %v", name, err)
 		}
 
-		content := fmt.Sprintf("Test data %s", name)
-		body, err := io.ReadAll(resp.Body)
+		var metadata grits.GNodeMetadata
+		if err := json.NewDecoder(metadataResp.Body).Decode(&metadata); err != nil {
+			metadataResp.Body.Close()
+			t.Fatalf("Failed to decode metadata for %s: %v", name, err)
+		}
+		metadataResp.Body.Close()
+
+		if metadata.Type != grits.GNodeTypeFile {
+			t.Errorf("Expected file type for %s", name)
+		}
+
+		// Fetch the actual content
+		contentURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadata.ContentAddr)
+		contentResp, err := http.Get(contentURL)
+		if err != nil {
+			t.Fatalf("Failed to fetch content for %s: %v", name, err)
+		}
+
+		if contentResp.StatusCode != http.StatusOK {
+			contentResp.Body.Close()
+			t.Fatalf("Expected OK status; got %d", contentResp.StatusCode)
+		}
+
+		expectedContent := fmt.Sprintf("Test data %s", name)
+		body, err := io.ReadAll(contentResp.Body)
+		contentResp.Body.Close()
 		if err != nil {
 			t.Fatalf("Error reading file %s: %v", name, err)
 		}
 
-		if string(body) != content {
-			t.Errorf("Expected content %s; got %s", content, body)
+		if string(body) != expectedContent {
+			t.Errorf("Expected content %s; got %s", expectedContent, body)
 		}
 
-		count += 1
+		if metadata.Size != int64(len(expectedContent)) {
+			t.Errorf("Expected size %d for %s, got %d", len(expectedContent), name, metadata.Size)
+		}
+
+		count++
 	}
 
 	if count != 5 {
@@ -148,7 +156,6 @@ func TestFileOperations(t *testing.T) {
 	}
 
 	// 3. Delete file 3
-
 	url := fmt.Sprintf("%s/grits/v1/content/root/3", baseURL)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
@@ -163,11 +170,9 @@ func TestFileOperations(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected OK status; got %d", resp.StatusCode)
 	}
-
 	resp.Body.Close()
 
 	// 4. Overwrite file 5
-
 	url = fmt.Sprintf("%s/grits/v1/content/root/5", baseURL)
 	content := "Overwritten test data 5"
 	req, err = http.NewRequest(http.MethodPut, url, bytes.NewBufferString(content))
@@ -183,13 +188,9 @@ func TestFileOperations(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected OK status; got %d", resp.StatusCode)
 	}
-
 	resp.Body.Close()
 
-	// 5. Final listing and verification of files and their content
-
-	lookupURL = fmt.Sprintf("%s/grits/v1/lookup/root", baseURL)
-	lookupPayload = []byte(`""`)
+	// 5. Final verification
 	resp, err = http.Post(lookupURL, "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
 		t.Fatalf("failed to perform lookup: %v", err)
@@ -212,86 +213,91 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
 
-	// Extract blob address for the directory tree node and download it
 	if len(lookupResponse) < 1 {
-		t.Fatalf("Lookup response did not include directory tree node")
+		t.Fatalf("Lookup response did not include directory metadata")
 	}
 
-	treeBlobAddr, err = grits.NewTypedFileAddrFromString(lookupResponse[0][1])
+	// Get the updated directory metadata
+	dirContentAddr, err = grits.NewTypedFileAddrFromString(lookupResponse[0][1])
 	if err != nil {
 		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
 	}
 
-	blobURL = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, treeBlobAddr.Hash)
-	blobResp, err = http.Get(blobURL)
+	// Get the updated directory listing
+	dirURL = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, dirContentAddr.Hash)
+	dirResp, err = http.Get(dirURL)
 	if err != nil {
-		t.Fatalf("Failed to download tree blob: %v", err)
+		t.Fatalf("Failed to fetch directory content: %v", err)
 	}
-	defer blobResp.Body.Close()
+	defer dirResp.Body.Close()
 
-	if blobResp.StatusCode != http.StatusOK {
-		t.Fatalf("Blob download failed with status code %d", blobResp.StatusCode)
-	}
-
-	files = make(map[string]string)
-	if err := json.NewDecoder(blobResp.Body).Decode(&files); err != nil {
-		t.Fatalf("Error decoding file list: %v", err)
-		return
+	dirListing = make(map[string]string)
+	if err := json.NewDecoder(dirResp.Body).Decode(&dirListing); err != nil {
+		t.Fatalf("Failed to decode directory listing: %v", err)
 	}
 
 	log.Printf("Files listed\n")
-
 	count = 0
 
-	for name, hash := range files {
-		log.Printf("%s -> %s\n", name, hash)
+	for name, metadataCID := range dirListing {
+		log.Printf("%s -> %s\n", name, metadataCID)
 
 		if name == "3" {
 			t.Errorf("File 3 should have been deleted")
+			continue
 		}
 
-		parts := strings.Split(hash, ":")
-		if len(parts) != 2 {
-			t.Errorf("Invalid hash: %s", hash)
-		}
-
-		parts = strings.Split(parts[1], "-")
-		if len(parts) != 2 {
-			t.Errorf("Invalid blob+size: %s", parts[0])
-		}
-
-		url = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, parts[0])
-		resp, err := http.Get(url)
+		// Fetch file metadata
+		metadataURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadataCID)
+		metadataResp, err := http.Get(metadataURL)
 		if err != nil {
-			t.Fatalf("GET request failed: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("Expected OK status; got %d", resp.StatusCode)
+			t.Fatalf("Failed to fetch metadata for %s: %v", name, err)
 		}
 
-		var content string
+		var metadata grits.GNodeMetadata
+		if err := json.NewDecoder(metadataResp.Body).Decode(&metadata); err != nil {
+			metadataResp.Body.Close()
+			t.Fatalf("Failed to decode metadata for %s: %v", name, err)
+		}
+		metadataResp.Body.Close()
+
+		// Fetch content
+		contentURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadata.ContentAddr)
+		contentResp, err := http.Get(contentURL)
+		if err != nil {
+			t.Fatalf("Failed to fetch content for %s: %v", name, err)
+		}
+
+		if contentResp.StatusCode != http.StatusOK {
+			contentResp.Body.Close()
+			t.Fatalf("Expected OK status; got %d", contentResp.StatusCode)
+		}
+
+		var expectedContent string
 		if name == "5" {
-			content = "Overwritten test data 5"
+			expectedContent = "Overwritten test data 5"
 		} else {
-			content = fmt.Sprintf("Test data %s", name)
+			expectedContent = fmt.Sprintf("Test data %s", name)
 		}
 
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(contentResp.Body)
+		contentResp.Body.Close()
 		if err != nil {
 			t.Fatalf("Error reading file %s: %v", name, err)
 		}
 
-		if string(body) != content {
-			t.Errorf("Expected content %s; got %s", content, resp.Body)
+		if string(body) != expectedContent {
+			t.Errorf("Expected content %s; got %s", expectedContent, body)
 		}
 
-		count += 1
+		if metadata.Size != int64(len(expectedContent)) {
+			t.Errorf("Expected size %d for %s, got %d", len(expectedContent), name, metadata.Size)
+		}
+
+		count++
 	}
 
 	if count != 4 {
 		t.Errorf("Expected 4 files; got %d", count)
 	}
-
 }
