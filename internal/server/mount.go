@@ -103,6 +103,7 @@ func (mm *MountModule) Start() error {
 
 func (mm *MountModule) Stop() error {
 	log.Printf("We are stopping mount module")
+	log.Printf("  (unmount FUSE mounts if this hangs)")
 
 	// Wait until unmount before exiting
 	mm.fsServer.Wait()

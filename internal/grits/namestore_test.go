@@ -360,8 +360,8 @@ func TestConcurrentAccess(t *testing.T) {
 			defer wgLink.Done()
 
 			dirPath := fmt.Sprintf("concurrent/dir%d", i)
-			err = nameStore.LinkTree(dirPath, emptyDir.GetAddress())
-			if err != nil {
+			localErr := nameStore.LinkTree(dirPath, emptyDir.GetAddress())
+			if localErr != nil {
 				t.Errorf("Failed to mkdir %s", dirPath)
 			}
 
@@ -407,8 +407,8 @@ func TestConcurrentAccess(t *testing.T) {
 
 // Helper to find a FileNode by its content blob address
 func (ns *NameStore) lookupNodeByContent(contentAddr string) FileNode {
-	ns.cacheMtx.RLock()
-	defer ns.cacheMtx.RUnlock()
+	ns.mtx.RLock()
+	defer ns.mtx.RUnlock()
 
 	for _, node := range ns.fileCache {
 		if node != nil && node.ExportedBlob().GetAddress().String() == contentAddr {
@@ -675,7 +675,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	// 6. Try revision of the whole tree
 	log.Printf("--- Starting test 6, tree revision")
-	ns.DebugPrintTree(ns.root, "")
+	ns.DebugPrintTree(ns.root)
 
 	newRoot := make(map[string]string)
 	newRoot["tree"] = ns.root.MetadataBlob().GetAddress().String()
@@ -696,7 +696,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	rootContent.Release()
 
 	log.Printf("--- Verify tree setup")
-	ns.DebugPrintTree(ns.root, "")
+	ns.DebugPrintTree(ns.root)
 
 	cf, err := ns.LookupAndOpen("tree/zero")
 	if err != nil {
@@ -765,7 +765,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		}
 
 		log.Printf("--- Modification %d\n", i)
-		ns.DebugPrintTree(ns.root, "")
+		ns.DebugPrintTree(ns.root)
 	}
 
 	log.Printf("--- Release allFiles")
@@ -774,7 +774,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	log.Printf("--- Check reference counts (in nodes)")
-	ns.DebugPrintTree(ns.root, "")
+	ns.DebugPrintTree(ns.root)
 
 	expectedRefCounts := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 
@@ -817,14 +817,14 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	// 7. Try unlinking the whole tree and make sure things get cleaned up
 	log.Printf("--- Starting test 7, full unlink")
-	ns.DebugPrintTree(ns.root, "")
+	ns.DebugPrintTree(ns.root)
 
 	err = ns.Link("", nil)
 	if err != nil {
 		t.Fatalf("Failed to unlink root: %v", err)
 	}
 
-	ns.DebugPrintTree(ns.root, "")
+	ns.DebugPrintTree(ns.root)
 	for i, cf := range allFiles {
 		var expectedRefCount int
 		//if i <= 5 {

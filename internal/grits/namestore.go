@@ -46,12 +46,14 @@ type TreeNode struct {
 	ChildrenMap  map[string]*BlobAddr
 	refCount     int
 	nameStore    *NameStore
+	mtx          sync.Mutex
 }
 
 type BlobNode struct {
 	blob         CachedFile
 	metadataBlob CachedFile
 	refCount     int
+	mtx          sync.Mutex
 }
 
 // Implementations for BlobNode
@@ -86,10 +88,16 @@ func (bn *BlobNode) Address() *TypedFileAddr {
 }
 
 func (bn *BlobNode) Take() {
+	bn.mtx.Lock()
+	defer bn.mtx.Unlock()
+
 	bn.refCount++
 }
 
 func (bn *BlobNode) Release() {
+	bn.mtx.Lock()
+	defer bn.mtx.Unlock()
+
 	bn.refCount--
 	if bn.refCount == 0 {
 		if bn.blob != nil {
@@ -101,6 +109,8 @@ func (bn *BlobNode) Release() {
 	}
 }
 
+// FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
+// might cause take/release of references
 func (bn *BlobNode) RefCount() int {
 	return bn.refCount
 }
@@ -141,10 +151,16 @@ func (tn *TreeNode) AddressString() string {
 }
 
 func (tn *TreeNode) Take() {
+	tn.mtx.Lock()
+	defer tn.mtx.Unlock()
+
 	tn.refCount++
 }
 
 func (tn *TreeNode) Release() {
+	tn.mtx.Lock()
+	defer tn.mtx.Unlock()
+
 	tn.refCount--
 	if tn.refCount == 0 {
 		if tn.blob != nil {
@@ -156,11 +172,20 @@ func (tn *TreeNode) Release() {
 	}
 }
 
+// FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
+// might cause take/release of references
 func (tn *TreeNode) RefCount() int {
 	return tn.refCount
 }
 
-func (ns *NameStore) DebugPrintTree(node FileNode, indent string) {
+func (ns *NameStore) DebugPrintTree(node FileNode) {
+	ns.mtx.RLock()
+	defer ns.mtx.RUnlock()
+
+	ns.debugPrintTree(node, "")
+}
+
+func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 	if node == nil {
 		return
 	}
@@ -171,9 +196,7 @@ func (ns *NameStore) DebugPrintTree(node FileNode, indent string) {
 	}
 
 	for _, childAddr := range children {
-		ns.cacheMtx.RLock()
 		childNode, exists := ns.fileCache[childAddr.String()]
-		ns.cacheMtx.RUnlock()
 		if !exists {
 			var err error
 			childNode, err = ns.loadFileNode(childAddr)
@@ -181,7 +204,7 @@ func (ns *NameStore) DebugPrintTree(node FileNode, indent string) {
 				log.Panicf("couldn't load %s: %v", childAddr.String(), err)
 			}
 		}
-		ns.DebugPrintTree(childNode, indent+"  ")
+		ns.debugPrintTree(childNode, indent+"  ")
 	}
 }
 
@@ -193,8 +216,6 @@ type NameStore struct {
 	root      FileNode
 	fileCache map[string]FileNode
 	mtx       sync.RWMutex
-	cacheMtx  sync.RWMutex // Protects just fileCache
-
 }
 
 // Sentinel error for nonexistent files
@@ -210,8 +231,8 @@ func (ns *NameStore) GetRoot() string {
 }
 
 func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
 	nodes, err := ns.resolvePath(name)
 	if err != nil {
@@ -229,8 +250,8 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 }
 
 func (ns *NameStore) LookupNode(name string) (FileNode, error) {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
 	nodes, err := ns.resolvePath(name)
 	if err != nil {
@@ -249,8 +270,8 @@ func (ns *NameStore) LookupNode(name string) (FileNode, error) {
 // FIXME - clean up this API a little
 
 func (ns *NameStore) LookupFull(name string) ([][]string, error) {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
 	name = strings.TrimRight(name, "/")
 	nodes, err := ns.resolvePath(name)
@@ -291,17 +312,14 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 // Get a FileNode from a metadata address, either from cache or loaded on demand.
 // Takes a reference to the node before returning it.
 func (ns *NameStore) GetFileNode(metadataAddr *BlobAddr) (FileNode, error) {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
 	// Check cache first
-	ns.cacheMtx.RLock()
 	if node, exists := ns.fileCache[metadataAddr.String()]; exists {
-		ns.cacheMtx.RUnlock()
 		node.Take()
 		return node, nil
 	}
-	ns.cacheMtx.RUnlock()
 
 	// Not in cache, load it
 	node, err := ns.loadFileNode(metadataAddr)
@@ -362,9 +380,7 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
 			}
 		}
 
-		ns.cacheMtx.RLock()
 		childNode, exists := ns.fileCache[childAddr.String()]
-		ns.cacheMtx.RUnlock()
 		if !exists {
 			var err error
 			childNode, err = ns.loadFileNode(childAddr)
@@ -593,9 +609,7 @@ func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParen
 			newValue = nil
 		} else {
 			var exists bool
-			ns.cacheMtx.RLock()
 			newValue, exists = ns.fileCache[metadataAddr.String()]
-			ns.cacheMtx.RUnlock()
 			if !exists {
 				newValue, err = ns.loadFileNode(metadataAddr)
 				if err != nil {
@@ -613,9 +627,7 @@ func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParen
 			return nil, fmt.Errorf("no such directory %s in path", parts[0])
 		}
 
-		ns.cacheMtx.RLock()
 		oldChild, exists := ns.fileCache[oldChildAddr.String()]
-		ns.cacheMtx.RUnlock()
 		if !exists {
 			oldChild, err = ns.loadFileNode(oldChildAddr)
 			if err != nil {
@@ -722,7 +734,6 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 	return metadataCf, nil
 }
 
-// Convert to private function that takes a metadata blob address
 func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 	//log.Printf("We try to chase down %s\n", metadataAddr.String())
 
@@ -760,14 +771,10 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 			metadataBlob: metadataCf,
 			refCount:     0,
 		}
-		ns.cacheMtx.Lock()
 		ns.fileCache[metadataAddr.String()] = bn // Now using metadata addr as cache key
-		ns.cacheMtx.Unlock()
 		return bn, nil
 	} else {
-		ns.cacheMtx.Lock()
 		ns.fileCache[metadataAddr.String()] = nil
-		ns.cacheMtx.Unlock()
 
 		dn := &TreeNode{
 			blob:         contentCf,
@@ -778,13 +785,10 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 
 		defer func() { // In case of error
 			if dn != nil {
-				ns.cacheMtx.Lock()
 				delete(ns.fileCache, metadataAddr.String())
-				ns.cacheMtx.Unlock()
 			}
 		}()
 
-		// Rest stays mostly the same, but no need to create temp TypedFileAddr
 		dirData, err := contentCf.Read(0, contentCf.GetSize())
 		if err != nil {
 			return nil, fmt.Errorf("error reading directory data: %v", err)
@@ -801,9 +805,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 			dn.ChildrenMap[name] = &BlobAddr{Hash: childMetadataCID}
 		}
 
-		ns.cacheMtx.Lock()
 		ns.fileCache[metadataAddr.String()] = dn
-		ns.cacheMtx.Unlock()
 		resultDn := dn
 		dn = nil // Prevent deferred cleanup / release
 		return resultDn, nil
@@ -927,9 +929,6 @@ func (ns *NameStore) DumpFileCache() error {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
-	ns.cacheMtx.RLock()
-	defer ns.cacheMtx.RUnlock()
-
 	log.Printf("=== File Cache Contents ===")
 	for cid, node := range ns.fileCache {
 		log.Printf("CID: %s", cid)
@@ -1021,9 +1020,7 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 				log.Panicf("couldn't find %s", childName)
 			}
 
-			ns.cacheMtx.RLock()
 			childNode, exists := ns.fileCache[childAddr.String()]
-			ns.cacheMtx.RUnlock()
 			if !exists {
 				var err error
 				childNode, err = ns.loadFileNode(childAddr)

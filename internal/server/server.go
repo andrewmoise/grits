@@ -30,9 +30,9 @@ type Server struct {
 	jobsLock sync.Mutex
 
 	// Shutdown channel
-	shutdownChan chan struct{}
-	shutdownOnce sync.Once // Ensures shutdown logic runs only once
-	shutdownWg   sync.WaitGroup
+	shutdownChan   chan struct{}
+	shutdownOnce   sync.Once // Ensures shutdown logic runs only once
+	shutdownDoneWg sync.WaitGroup
 }
 
 // NewServer initializes and returns a new Server instance.
@@ -75,8 +75,10 @@ func (s *Server) Start() error {
 		}
 	}
 
-	// Start a goroutine to wait for shutdown signal
+	s.shutdownDoneWg.Add(1)
 	go func() {
+		defer s.shutdownDoneWg.Done()
+
 		<-s.shutdownChan
 
 		s.StopPeriodicTasks()
@@ -98,7 +100,7 @@ func (s *Server) Stop() {
 	})
 
 	// Wait for all shutdown tasks to complete
-	s.shutdownWg.Wait()
+	s.shutdownDoneWg.Wait()
 }
 
 func (s *Server) Shutdown() {
