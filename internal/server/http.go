@@ -133,9 +133,9 @@ func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 	hm.serviceWorkerModule = swModule
 
 	// Add routes
-	hm.Mux.HandleFunc("/grits-bootstrap.js", hm.corsMiddleware(swModule.serveBootstrap))
-	hm.Mux.HandleFunc("/grits-serviceworker.js", hm.corsMiddleware(swModule.serveServiceWorker))
-	hm.Mux.HandleFunc("/grits-serviceworker-config.json", hm.corsMiddleware(swModule.serveServiceWorker))
+	hm.Mux.HandleFunc("/grits-bootstrap.js", hm.corsMiddleware(swModule.serveTemplate))
+	hm.Mux.HandleFunc("/grits-serviceworker.js", hm.corsMiddleware(swModule.serveTemplate))
+	hm.Mux.HandleFunc("/grits-serviceworker-config.json", hm.corsMiddleware(swModule.serveConfig))
 }
 
 // corsMiddleware is a middleware function that adds CORS headers to the response.
