@@ -54,7 +54,7 @@ func WithWikiVolume(volumeName string) TestModuleInitializer {
 			VolumeName: volumeName,
 		}
 
-		wikiVolume, err := NewWikiVolume(wikiConfig, s)
+		wikiVolume, err := NewWikiVolume(wikiConfig, s, false)
 		if err != nil {
 			t.Fatalf("Can't create %s volume: %v", volumeName, err)
 		}

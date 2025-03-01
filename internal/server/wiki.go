@@ -9,9 +9,11 @@ import (
 )
 
 type WikiVolume struct {
-	name         string
-	server       *Server
-	ns           *grits.NameStore
+	name     string
+	server   *Server
+	ns       *grits.NameStore
+	readOnly bool
+
 	persistMtx   sync.Mutex
 	emptyDirNode grits.FileNode // Keep our reference to the empty directory node
 }
@@ -20,7 +22,7 @@ type WikiVolumeConfig struct {
 	VolumeName string `json:"VolumeName"`
 }
 
-func NewWikiVolume(config *WikiVolumeConfig, server *Server) (*WikiVolume, error) {
+func NewWikiVolume(config *WikiVolumeConfig, server *Server, readOnly bool) (*WikiVolume, error) {
 	ns, err := grits.EmptyNameStore(server.BlobStore)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NameStore: %v", err)
@@ -35,9 +37,11 @@ func NewWikiVolume(config *WikiVolumeConfig, server *Server) (*WikiVolume, error
 	emptyDirNode.Take() // Take reference that we'll hold
 
 	wv := &WikiVolume{
-		name:         config.VolumeName,
-		server:       server,
-		ns:           ns,
+		name:     config.VolumeName,
+		server:   server,
+		ns:       ns,
+		readOnly: false,
+
 		emptyDirNode: emptyDirNode,
 	}
 
@@ -69,7 +73,7 @@ func (wv *WikiVolume) Stop() error {
 }
 
 func (wv *WikiVolume) isReadOnly() bool {
-	return false
+	return wv.readOnly
 }
 
 func (wv *WikiVolume) Checkpoint() error {
@@ -90,22 +94,13 @@ func (wv *WikiVolume) GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode,
 	return wv.ns.GetFileNode(metadataAddr)
 }
 
-// TODO - Is this really right? I don't really like this allowing LookupNode() to return nil, nil.
-
 func (wv *WikiVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
 	node, err := wv.ns.LookupNode(path)
 	if err != nil {
 		return nil, err
 	}
-	if node == nil {
-		return nil, nil
-	}
 
-	if node == nil {
-		return nil, nil
-	} else {
-		return node.Address(), nil
-	}
+	return node.Address(), nil
 }
 
 func (wv *WikiVolume) LookupFull(path string) ([][]string, error) {

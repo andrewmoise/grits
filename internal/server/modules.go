@@ -127,7 +127,10 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 				return fmt.Errorf("failed to unmarshal ServiceWorker module config: %v", err)
 			}
 
-			swModule := NewServiceWorkerModule(s, &swConfig)
+			swModule, err := NewServiceWorkerModule(s, &swConfig)
+			if err != nil {
+				return fmt.Errorf("failed to instantiate service worker module: %v", err)
+			}
 			s.AddModule(swModule)
 
 		case "wiki":
@@ -135,7 +138,7 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 			if err := json.Unmarshal(rawConfig, &wikiConfig); err != nil {
 				return fmt.Errorf("failed to unmarshal WikiVolume module config: %v", err)
 			}
-			wikiVolume, err := NewWikiVolume(&wikiConfig, s)
+			wikiVolume, err := NewWikiVolume(&wikiConfig, s, false)
 			if err != nil {
 				return fmt.Errorf("failed to instantiate WikiVolume: %v", err)
 			}

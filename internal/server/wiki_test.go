@@ -13,7 +13,7 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 
 	volumeName := "testwiki"
 	wikiConfig := &WikiVolumeConfig{VolumeName: volumeName}
-	wikiVolume, err := NewWikiVolume(wikiConfig, server)
+	wikiVolume, err := NewWikiVolume(wikiConfig, server, false)
 	if err != nil {
 		t.Fatalf("Failed to create wiki volume: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 	}
 
 	// Reload the wiki volume to simulate reading from disk after a restart.
-	wikiVolumeReloaded, err := NewWikiVolume(wikiConfig, server)
+	wikiVolumeReloaded, err := NewWikiVolume(wikiConfig, server, false)
 	if err != nil {
 		t.Fatalf("Failed to reload wiki volume: %v", err)
 	}
