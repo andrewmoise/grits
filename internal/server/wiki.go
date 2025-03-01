@@ -95,7 +95,7 @@ func (wv *WikiVolume) GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode,
 }
 
 func (wv *WikiVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
-	node, err := wv.ns.LookupNode(path)
+	node, err := wv.ns.LookupNode(path) // FIXME FIXME - Need to release after this
 	if err != nil {
 		return nil, err
 	}
