@@ -20,6 +20,10 @@ location /grits-[a-f0-9\.\-]+ {
 location /grits/ {
     proxy_pass http://localhost:1787/grits/;
 }
+
+Here's what's needed in your pages:
+
+<script src="/grits-bootstrap.js" async></script>
 */
 
 // ServiceWorkerModuleConfig holds the configuration for the service worker module.
