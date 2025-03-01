@@ -196,14 +196,29 @@ func (swm *ServiceWorkerModule) serveServiceWorker(w http.ResponseWriter, r *htt
 	log.Printf("Requested service worker with hash: %s", scriptHash)
 
 	// Set appropriate headers for no caching during development
+	// Also do security checks -- FIXME it's fine, but it's sloppy
+	var correctPath string
 	if strings.HasSuffix(r.URL.Path, ".json") {
+		correctPath = "serviceworker/grits-serviceworker-config.json"
 		w.Header().Set("Content-Type", "application/json")
 	} else {
+		correctPath = "serviceworker/grits-serviceworker.js"
 		w.Header().Set("Content-Type", "application/javascript")
 	}
 	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
+
+	correctHash, err := swm.clientVolume.Lookup(correctPath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Missing %s from client volume", correctPath), http.StatusInternalServerError)
+		return
+	}
+
+	if correctHash.Hash != scriptHash {
+		http.Error(w, "Mismatch in requested hash to appropriate hash", http.StatusBadRequest)
+		return
+	}
 
 	// Serve the service worker file from the blob store
 	swAddr, err := grits.NewBlobAddrFromString(scriptHash)
