@@ -29,7 +29,8 @@ type HTTPModule struct {
 	HTTPServer *http.Server
 	Mux        *http.ServeMux
 
-	Deployments map[string]*DeploymentModule
+	deployments         map[string]*DeploymentModule
+	serviceWorkerModule *ServiceWorkerModule
 }
 
 func (*HTTPModule) GetModuleName() string {
@@ -53,13 +54,14 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 		HTTPServer: HTTPServer,
 		Mux:        mux,
 
-		Deployments: make(map[string]*DeploymentModule),
+		deployments: make(map[string]*DeploymentModule),
 	}
 
 	// Set up routes within the constructor or an initialization method
 	httpModule.setupRoutes()
 
-	server.AddModuleHook(httpModule.addDeployment)
+	server.AddModuleHook(httpModule.addDeploymentModule)
+	server.AddModuleHook(httpModule.addServiceWorkerModule)
 
 	return httpModule
 }
@@ -102,19 +104,37 @@ func (hm *HTTPModule) Stop() error {
 	return nil
 }
 
-func (hm *HTTPModule) addDeployment(module Module) {
+func (hm *HTTPModule) addDeploymentModule(module Module) {
 	deployment, ok := module.(*DeploymentModule)
 	if ok {
 		hostname := deployment.Config.HostName
-		if _, exists := hm.Deployments[hostname]; exists {
+		if _, exists := hm.deployments[hostname]; exists {
 			log.Fatalf("Deployment for %s is defined twice", hostname)
 		}
 
-		hm.Deployments[hostname] = deployment
+		hm.deployments[hostname] = deployment
 	}
 }
 
+func (hm *HTTPModule) addServiceWorkerModule(module Module) {
+	swModule, ok := module.(*ServiceWorkerModule)
+	if !ok {
+		return
+	}
+
+	// Check if we already have a service worker module
+	if hm.serviceWorkerModule != nil {
+		log.Fatalf("Only one ServiceWorkerModule can be registered")
+	}
+
+	log.Printf("Registering ServiceWorkerModule in HTTP module")
+
+	// Store the service worker module
+	hm.serviceWorkerModule = swModule
+}
+
 // corsMiddleware is a middleware function that adds CORS headers to the response.
+// NOTE: Also adds service worker dir hash
 func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
@@ -138,6 +158,13 @@ func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
+		}
+
+		// Also do service worker cache control header
+		if srv.serviceWorkerModule != nil {
+			// Get the hash from the service worker module's volume
+			clientDirHash := srv.serviceWorkerModule.getClientDirHash()
+			w.Header().Set("X-Grits-Service-Worker-Hash", clientDirHash)
 		}
 
 		next(w, r)
@@ -406,7 +433,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPModule) handleDeployment(w http.ResponseWriter, r *http.Request) {
 	// Extract hostname from the request
 	hostname := r.Host
-	deployment, exists := s.Deployments[hostname]
+	deployment, exists := s.deployments[hostname]
 	if !exists {
 		http.Error(w, fmt.Sprintf("Host deployment %s not found", hostname), http.StatusNotFound)
 		return

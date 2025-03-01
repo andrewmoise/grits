@@ -2,8 +2,8 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
-	"net/http"
 )
 
 // ServiceWorkerModuleConfig holds the configuration for the service worker module.
@@ -22,18 +22,103 @@ type PathMapping struct {
 type ServiceWorkerModule struct {
 	Config *ServiceWorkerModuleConfig
 	Server *Server
+
+	clientVolume Volume
 }
 
 // NewServiceWorkerModule initializes a new instance of the service worker module.
-func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) *ServiceWorkerModule {
+func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (*ServiceWorkerModule, error) {
 	swm := &ServiceWorkerModule{
 		Config: config,
 		Server: server,
 	}
 
-	server.AddModuleHook(swm.setupRoutes)
+	log.Printf("Making volume")
 
-	return swm
+	wvc := &WikiVolumeConfig{
+		VolumeName: "_client",
+	}
+	wv, err := NewWikiVolume(wvc, server, true)
+	if err != nil {
+		return nil, err
+	}
+
+	err = wv.Link("", wv.GetEmptyDirAddr())
+	if err != nil {
+		return nil, err
+	}
+
+	err = wv.Link("client", wv.GetEmptyDirAddr())
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Loading client/serviceworker/grits-bootstrap.js")
+
+	bootstrapCf, err := wv.AddBlob("client/serviceworker/grits-bootstrap.js")
+	if err != nil {
+		return nil, err
+	}
+	defer bootstrapCf.Release()
+
+	log.Printf("Linking")
+	err = wv.ns.Link("serviceworker", wv.GetEmptyDirAddr())
+	if err != nil {
+		return nil, err
+	}
+
+	// FIXME fix up the API pls
+	err = wv.ns.LinkBlob("serviceworker/grits-bootstrap.js", bootstrapCf.GetAddress(), bootstrapCf.GetSize())
+	if err != nil {
+		return nil, err
+	}
+
+	log.Printf("Loading client/serviceworker/grits-serviceworker.js")
+
+	swCf, err := wv.AddBlob("client/serviceworker/grits-serviceworker.js")
+	if err != nil {
+		return nil, err
+	}
+	defer swCf.Release()
+	// FIXME fix up the API pls
+	err = wv.ns.LinkBlob("serviceworker/grits-serviceworker.js", swCf.GetAddress(), swCf.GetSize())
+	if err != nil {
+		return nil, err
+	}
+
+	configBytes, err := json.Marshal(swm.Config)
+	if err != nil {
+		return nil, err
+	}
+	configCf, err := server.BlobStore.AddDataBlock(configBytes)
+	if err != nil {
+		return nil, err
+	}
+	defer configCf.Release()
+	err = wv.ns.LinkBlob("serviceworker/grits-serviceworker-config.json", configCf.GetAddress(), configCf.GetSize())
+	if err != nil {
+		return nil, err
+	}
+
+	swm.clientVolume = wv
+
+	server.AddModule(wv)
+	server.AddVolume(wv)
+
+	return swm, nil
+}
+
+func (swm *ServiceWorkerModule) getClientDirHash() string {
+	clientDirNode, err := swm.clientVolume.LookupNode("serviceworker")
+	if err != nil {
+		return fmt.Sprintf("(error: %v)", err)
+	}
+	if clientDirNode == nil {
+		return "(nil)"
+	}
+	defer clientDirNode.Release()
+
+	return clientDirNode.Address().Hash
 }
 
 func (swm *ServiceWorkerModule) Start() error {
@@ -46,45 +131,4 @@ func (swm *ServiceWorkerModule) Stop() error {
 
 func (swm *ServiceWorkerModule) GetModuleName() string {
 	return "serviceworker"
-}
-
-// setupRoutes sets up the routes for serving the service worker and its configuration.
-func (swm *ServiceWorkerModule) setupRoutes(module Module) {
-	log.Printf("We do hook for %s\n", module.GetModuleName())
-
-	httpModule, ok := module.(*HTTPModule)
-	if !ok {
-		return
-	}
-
-	log.Printf("We set up routes\n")
-
-	httpModule.Mux.HandleFunc("/grits/v1/serviceworker/config", swm.serveConfig)
-
-	// Add routes for serving serviceworker.js and bootstrap.js
-	httpModule.Mux.HandleFunc("/serviceworker.js", func(w http.ResponseWriter, r *http.Request) {
-		swm.serveJSFile(w, r, "client/serviceworker/serviceworker.js")
-	})
-	httpModule.Mux.HandleFunc("/bootstrap.js", func(w http.ResponseWriter, r *http.Request) {
-		swm.serveJSFile(w, r, "client/serviceworker/bootstrap.js")
-	})
-}
-
-// serveConfig handles requests for the service worker configuration.
-func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Request) {
-	// Serialize and send the configuration to the client.
-	json.NewEncoder(w).Encode(swm.Config)
-}
-
-// serveJSFile serves a JavaScript file with appropriate caching and content type headers.
-func (swm *ServiceWorkerModule) serveJSFile(w http.ResponseWriter, r *http.Request, filePath string) {
-	// Set headers to instruct the client to revalidate the file every time and set MIME type to JavaScript
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Content-Type", "application/javascript")
-
-	filePath = swm.Server.Config.ServerPath(filePath)
-	log.Printf("We attempt to serve bootstrapping %s\n", filePath)
-
-	// Serve the file from the given path
-	http.ServeFile(w, r, swm.Server.Config.ServerPath(filePath))
 }
