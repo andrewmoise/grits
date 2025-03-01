@@ -1,107 +1,59 @@
-let AppConfig = {
-    PathMappings: [] // This will be filled with the fetched configuration
-};
+// grits-serviceworker.js
+let appConfig = null;
+let currentSwDirHash = null;
+let swScriptAddr = null;
+let swConfigAddr = null;
 
-console.log("We're loading");
-
-self.addEventListener('message', (event) => {
-    console.log('Received message in service worker:', event.data);
-    if (event.data && event.data.type === 'DUMMY_EVENT') {
-        console.log('Handling dummy event');
-        // Handle your dummy event here
-    }
-});
-
-// Use self.skipWaiting() to force the waiting service worker to become active
-self.addEventListener('install', event => {
-    console.log('Service Worker installing.');
-    // Force this installing service worker to become the active service worker
-    event.waitUntil(self.skipWaiting());
-});
-
-// Fetch and apply configuration upon service worker activation
-self.addEventListener('activate', event => {
-    console.log('Service Worker activating.');
-    // Take immediate control of the page
-    event.waitUntil(
-        fetchConfig().then(config => {
-            AppConfig = config;
-            console.log('Service Worker configuration updated', AppConfig);
-        }).catch(err => {
-            console.error('Error during service worker activation or fetching config:', err);
-        }).then(() => self.clients.claim())
-    );
-});
-
-self.addEventListener('fetch', event => {
-    const url = new URL(event.request.url);
-
-    // Check if the fetch event is for a navigation request
-    if (event.request.mode === 'navigate') {
-        // Update configuration before continuing with the fetch
-        event.respondWith(
-            fetchConfig().then(config => {
-                AppConfig = config; // Update the global AppConfig with the new configuration
-                console.log('Service Worker configuration updated', AppConfig);
-                return handleFetchRequest(event.request, AppConfig);
-            }).catch(err => {
-                console.error('Error fetching config:', err);
-            })
-        );
-    } else {
-        // Handle non-navigation fetch events as before
-        event.respondWith(handleFetchRequest(event.request, AppConfig));
-    }
-});
-
-async function handleFetchRequest(request, config) {
-    const url = new URL(request.url);
-    console.log("Checking for override of " + url.pathname)
-
-    for (const mapping of config.PathMappings) {
-        console.log("  " + mapping.urlPrefix);
-        if (url.pathname.startsWith(mapping.urlPrefix)) {
-            console.log('Match found:', mapping);
-            return serveFromStorage(mapping.volume, mapping.path);
-        }
-    }
-
-    // If no special handling is needed, proceed with a standard fetch
-    return fetch(request);
-}
-
-async function serveFromStorage(volume, path) {
-    try {
-        const resourceUrl = `/grits/v1/content/${volume}/${path}`;
-        console.log('Overriding fetch from ' + resourceUrl);
+// Wait for the init config message before doing anything
+self.addEventListener('message', event => {
+    if (event.data && event.data.type === 'INIT_CONFIG') {
+        currentSwDirHash = event.data.swDirHash;
+        swScriptAddr = event.data.swScriptAddr;
+        swConfigAddr = event.data.swConfigAddr;
         
-        const response = await fetch(resourceUrl);
-        if (!response.ok) throw new Error('Resource fetch failed');
-        return response;
-    } catch (error) {
-        return new Response('Resource not found or error fetching', { status: 404 });
+        // Now fetch the actual config
+        fetchConfig().then(config => {
+            appConfig = config;
+            console.log('[Grits] Service worker initialized with config');
+        });
     }
-}
+});
 
+// Fetch the configuration from blob address
 async function fetchConfig() {
     try {
-        // Attempt to fetch the configuration from the specified URL
-        const response = await fetch('/grits/v1/serviceworker/config');
+        const response = await fetch(`/grits/v1/blob/${swConfigAddr}`);
         if (!response.ok) {
-            // If the fetch fails, throw an error with the status
-            throw new Error(`Configuration fetch failed with status: ${response.status}`);
+            throw new Error(`Config fetch failed: ${response.status}`);
         }
-        // Decode the response as JSON
-        const config = await response.json();
-        // Update the global AppConfig with the fetched configuration
-        AppConfig = config;
-        // Log the fetched configuration to the console
-        console.log('Fetched configuration:', AppConfig);
-        // Return the fetched configuration for any further use
-        return config;
+        return await response.json();
     } catch (error) {
-        // Log any errors to the console
-        console.error('Failed to fetch configuration:', error);
-        throw error; // Re-throw the error to handle it in the calling context
+        console.error('[Grits] Error fetching config:', error);
+        return null;
     }
 }
+
+// Check all responses for the service worker hash header
+self.addEventListener('fetch', event => {
+    event.respondWith(
+        fetch(event.request).then(response => {
+            // Check if the hash has changed
+            const newHash = response.headers.get('X-Grits-Service-Worker-Hash');
+            if (newHash && currentSwDirHash && newHash !== currentSwDirHash) {
+                console.log('[Grits] Service worker config changed, notifying clients');
+                
+                // Notify all controlled clients about the update
+                self.clients.matchAll().then(clients => {
+                    clients.forEach(client => {
+                        client.postMessage({
+                            type: 'UPDATE_SERVICE_WORKER',
+                            newHash: newHash
+                        });
+                    });
+                });
+            }
+            
+            return response;
+        })
+    );
+});
