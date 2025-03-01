@@ -209,6 +209,30 @@ func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 }
 
 ////////////////////////
+// Error sentinels
+
+// Nonexistent files
+var ErrNotExist = errors.New("file does not exist")
+
+func IsNotExist(err error) bool {
+	return errors.Is(err, ErrNotExist)
+}
+
+// Assertion failures in MultiLink operations
+var ErrAssertionFailed = errors.New("assertion conditions not satisfied")
+
+func IsAssertionFailed(err error) bool {
+	return errors.Is(err, ErrAssertionFailed)
+}
+
+// Path traversal hits a non-directory component
+var ErrNotDir = errors.New("path component is not a directory")
+
+func IsNotDir(err error) bool {
+	return errors.Is(err, ErrNotDir)
+}
+
+////////////////////////
 // NameStore
 
 type NameStore struct {
@@ -216,14 +240,6 @@ type NameStore struct {
 	root      FileNode
 	fileCache map[string]FileNode
 	mtx       sync.RWMutex
-}
-
-// Sentinel error for nonexistent files
-var ErrNotExist = errors.New("file does not exist")
-
-// Helper function to check if an error is a "not exist" error
-func IsNotExist(err error) bool {
-	return errors.Is(err, ErrNotExist)
 }
 
 func (ns *NameStore) GetRoot() string {
@@ -250,6 +266,8 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 }
 
 func (ns *NameStore) LookupNode(name string) (FileNode, error) {
+	log.Printf("LookupNode(%s)", name)
+
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -297,7 +315,7 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 		partialPath = filepath.Join(partialPath, part)
 		node := nodes[index]
 		if node == nil {
-			return nil, fmt.Errorf("can't find %s", name)
+			return nil, ErrNotExist
 		}
 		// FIXME - we crash if the last node is nil
 		response = append(response, []string{partialPath, nodes[index].AddressString()})
@@ -355,17 +373,13 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
 		}
 
 		if node == nil {
-			return nil, fmt.Errorf("%s not not found traversing %s", part, path)
+			return nil, ErrNotExist
 		}
 
 		// Only TreeNodes have children to traverse
 		treeNode, isTreeNode := node.(*TreeNode)
 		if !isTreeNode {
-			if n > 0 {
-				return nil, fmt.Errorf("%s is not a directory, traversing %s", parts[n-1], path)
-			} else {
-				return nil, fmt.Errorf("%s is not a directory, traversing %s", "(root)", path)
-			}
+			return nil, ErrNotDir
 		}
 
 		childAddr, exists := treeNode.ChildrenMap[part]
@@ -376,7 +390,7 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
 				break
 			} else {
 				// All other times, it's an error
-				return nil, fmt.Errorf("%s not found, traversing %s", part, path)
+				return nil, ErrNotExist
 			}
 		}
 
@@ -438,25 +452,25 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 
 		if req.Assert&AssertPrevValueMatches != 0 {
 			if !matchesAddr(node, req.PrevAddr) {
-				return fmt.Errorf("prev value for %s is not %v", req.Path, req.PrevAddr)
+				return ErrAssertionFailed
 			}
 		}
 
 		if req.Assert&AssertIsBlob != 0 {
 			if node == nil || node.Address().Type != Blob {
-				return fmt.Errorf("prev value for %s isn't blob", req.Path)
+				return ErrAssertionFailed
 			}
 		}
 
 		if req.Assert&AssertIsTree != 0 {
 			if node == nil || node.Address().Type != Tree {
-				return fmt.Errorf("prev value for %s isn't tree", req.Path)
+				return ErrAssertionFailed
 			}
 		}
 
 		if req.Assert&AssertIsNonEmpty != 0 {
 			if node == nil {
-				return fmt.Errorf("prev value for %s is nil", req.Path)
+				return ErrAssertionFailed
 			}
 		}
 	}
@@ -595,7 +609,7 @@ func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParen
 	if oldParent != nil {
 		oldChildren = oldParent.Children()
 		if oldChildren == nil {
-			return nil, fmt.Errorf("non-directory in path %s", name)
+			return nil, ErrNotDir
 		}
 	} else {
 		return nil, fmt.Errorf("attempting to link in nonexistent directory")
@@ -624,7 +638,7 @@ func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParen
 	} else {
 		oldChildAddr, exists := oldChildren[parts[0]]
 		if !exists {
-			return nil, fmt.Errorf("no such directory %s in path", parts[0])
+			return nil, ErrNotExist
 		}
 
 		oldChild, exists := ns.fileCache[oldChildAddr.String()]

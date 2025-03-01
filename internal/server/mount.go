@@ -90,6 +90,7 @@ func (mm *MountModule) Start() error {
 			Name:                     "grits",
 			DisableXAttrs:            true,
 			ExplicitDataCacheControl: true,
+			//AllowOther:               true,
 		},
 	})
 	if err != nil {
@@ -107,8 +108,10 @@ func (mm *MountModule) Stop() error {
 	// First attempt to unmount
 	err := mm.fsServer.Unmount()
 	if err != nil {
-		log.Printf("Failed to unmount: %v", err)
-		log.Printf("Please exit / close, and unmount by hand.")
+		log.Printf("==========")
+		log.Printf("FAILED to unmount: %v", err)
+		log.Printf("Please close open files, and unmount by hand.")
+		log.Printf("==========")
 	} else {
 		log.Printf("Successfully unmounted %s", mm.config.MountPoint)
 	}
@@ -201,10 +204,11 @@ func (m *InodeManager) RemoveInode(path string) {
 var _ = (fs.NodeReaddirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
-	node, _ := gn.module.volume.LookupNode(gn.path)
-	if node == nil {
-		// FIXME - Should detect internal errors and do it differently
+	node, err := gn.module.volume.LookupNode(gn.path)
+	if grits.IsNotExist(err) {
 		return nil, syscall.ENOENT
+	} else if err != nil {
+		return nil, syscall.EIO
 	}
 	defer node.Release()
 
@@ -326,9 +330,11 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 	defer gn.mtx.Unlock()
 
 	if gn.tmpFile == nil {
-		node, _ := gn.module.volume.LookupNode(gn.path)
-		if node == nil {
+		node, err := gn.module.volume.LookupNode(gn.path)
+		if grits.IsNotExist(err) {
 			return syscall.ENOENT
+		} else if err != nil {
+			return syscall.EIO
 		}
 		defer node.Release()
 
@@ -423,10 +429,9 @@ type FileHandle struct {
 func (gn *gritsNode) openCachedFile() syscall.Errno {
 	if gn.cachedFile == nil {
 		addr, err := gn.module.volume.Lookup(gn.path)
-		if addr == nil {
+		if grits.IsNotExist(err) {
 			return syscall.ENOENT
-		}
-		if err != nil {
+		} else if err != nil {
 			log.Printf("1 OCF fail %v", err)
 			return syscall.EIO
 		}
@@ -844,7 +849,7 @@ func (gn *gritsNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno
 var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	log.Printf("Mkdir() %s %s", gn.path, name)
+	log.Printf("Mkdir() called for %s with mode %o", name, mode)
 
 	fullPath := filepath.Join(gn.path, name)
 	emptyAddr := gn.module.volume.GetEmptyDirAddr()
@@ -857,8 +862,9 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	}
 
 	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
-	if err != nil {
-		// FIXME - distinguish 'already exists' from general internal error
+	if grits.IsAssertionFailed(err) {
+		return nil, syscall.EEXIST
+	} else if err != nil {
 		log.Printf("ML fail %v", err)
 		return nil, syscall.EIO
 	}
