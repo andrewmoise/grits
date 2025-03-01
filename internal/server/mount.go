@@ -103,9 +103,17 @@ func (mm *MountModule) Start() error {
 
 func (mm *MountModule) Stop() error {
 	log.Printf("We are stopping mount module")
-	log.Printf("  (unmount FUSE mounts if this hangs)")
 
-	// Wait until unmount before exiting
+	// First attempt to unmount
+	err := mm.fsServer.Unmount()
+	if err != nil {
+		log.Printf("Failed to unmount: %v", err)
+		log.Printf("Please exit / close, and unmount by hand.")
+	} else {
+		log.Printf("Successfully unmounted %s", mm.config.MountPoint)
+	}
+
+	// Wait until unmount completes
 	mm.fsServer.Wait()
 	return nil
 }
@@ -121,9 +129,12 @@ type gritsNode struct {
 	mtx      sync.Mutex // Protecting all the below
 	refCount int        // Reference count of open FUSE file handles
 
-	file       io.ReadSeekCloser // Represents the actual file handle, for reading only
-	tmpFile    *os.File          // Writable version, if it's a tmp file
-	cachedFile grits.CachedFile  // Immutable already-cached file info (if NOT a writable temp file)
+	// These are mutually exclusive:
+	tmpFile    *os.File         // If dirty, the temp file
+	cachedFile grits.CachedFile // If clean, the backing file from the blob store
+
+	// This is the open FH, in both cases, meaning you need to close + reopen it when you're switching:
+	openFile io.ReadSeekCloser
 }
 
 func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint32, module *MountModule) (*fs.Inode, *gritsNode, error) {
@@ -260,7 +271,7 @@ var _ = (fs.NodeLookuper)((*gritsNode)(nil))
 
 func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	//log.Printf("--- Looking up %s\n", fullPath)
+	log.Printf("--- Looking up %s %s => %s\n", gn.path, name, fullPath)
 
 	node, err := gn.module.volume.LookupNode(fullPath)
 	if grits.IsNotExist(err) {
@@ -322,8 +333,8 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 		defer node.Release()
 
 		out.Size = uint64(node.Address().Size)
-	} else if gn.file != nil {
-		size, err := gn.file.Seek(0, io.SeekEnd)
+	} else if gn.openFile != nil {
+		size, err := gn.openFile.Seek(0, io.SeekEnd)
 		if err != nil {
 			log.Printf("Seek fail %v", err)
 			return syscall.EIO
@@ -428,9 +439,9 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 		gn.cachedFile.Take()
 	}
 
-	if gn.file == nil {
+	if gn.openFile == nil {
 		var err error
-		gn.file, err = gn.cachedFile.Reader()
+		gn.openFile, err = gn.cachedFile.Reader()
 		if err != nil {
 			return fs.ToErrno(err)
 		}
@@ -472,25 +483,25 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 
 	// Copy data from the read-only file if available
 	if gn.cachedFile != nil {
-		if gn.file == nil {
-			gn.file, err = gn.cachedFile.Reader()
+		if gn.openFile == nil {
+			gn.openFile, err = gn.cachedFile.Reader()
 			if err != nil {
 				return fs.ToErrno(err)
 			}
 		}
 
-		_, err = gn.file.Seek(0, 0)
+		_, err = gn.openFile.Seek(0, 0)
 		if err != nil {
 			return fs.ToErrno(err)
 		}
 
 		if truncLen == -1 {
-			_, err = io.Copy(tmpFile, gn.file)
+			_, err = io.Copy(tmpFile, gn.openFile)
 			if err != nil {
 				return fs.ToErrno(err)
 			}
 		} else {
-			n, err := io.CopyN(tmpFile, gn.file, truncLen)
+			n, err := io.CopyN(tmpFile, gn.openFile, truncLen)
 			if err != nil {
 				return fs.ToErrno(err)
 			}
@@ -504,7 +515,7 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 		gn.cachedFile = nil
 	}
 
-	gn.file = tmpFile
+	gn.openFile = tmpFile
 	gn.tmpFile = tmpFile
 	tmpFile = nil // Prevent cleanup
 
@@ -514,12 +525,7 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 // Write this file to the blob cache if needed, make sure our edits if any are saved
 
 func (gn *gritsNode) flush() syscall.Errno {
-	if gn.file == nil {
-		log.Printf("flush fail")
-		return syscall.EIO
-	}
-
-	if gn.tmpFile == nil {
+	if gn.openFile == nil || gn.tmpFile == nil {
 		return fs.OK
 	}
 
@@ -528,7 +534,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 
 	err := gn.tmpFile.Close()
 	gn.tmpFile = nil
-	gn.file = nil
+	gn.openFile = nil
 	if err != nil {
 		return fs.ToErrno(err)
 	}
@@ -567,9 +573,9 @@ func (gn *gritsNode) finalize() syscall.Errno {
 		gn.tmpFile = nil
 	}
 
-	if gn.file != nil {
-		err := gn.file.Close()
-		gn.file = nil
+	if gn.openFile != nil {
+		err := gn.openFile.Close()
+		gn.openFile = nil
 		if err != nil {
 			return fs.ToErrno(err)
 		}
@@ -669,12 +675,12 @@ func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 		return nil, errno
 	}
 
-	_, err := gn.file.Seek(off, io.SeekStart)
+	_, err := gn.openFile.Seek(off, io.SeekStart)
 	if err != nil {
 		return nil, fs.ToErrno(err)
 	}
 
-	n, err := gn.file.Read(dest)
+	n, err := gn.openFile.Read(dest)
 	if err != nil && err != io.EOF {
 		return nil, fs.ToErrno(err)
 	}
@@ -727,7 +733,7 @@ func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.Set
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
-	if gn.file == nil {
+	if gn.openFile == nil {
 		errno := gn.openCachedFile()
 		if errno != fs.OK {
 			return errno
@@ -766,6 +772,16 @@ func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.Set
 var _ = (fs.NodeFsyncer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) syscall.Errno {
+	log.Printf("--- We're fsyncing")
+
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
+
+	errno := gn.flush()
+	if errno != fs.OK {
+		return errno
+	}
+
 	return fs.OK
 }
 
@@ -777,7 +793,7 @@ func (gn *gritsNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) s
 var _ = (fs.NodeFlusher)((*gritsNode)(nil))
 
 func (gn *gritsNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	//log.Printf("--- We're flushing!")
+	log.Printf("--- We're flushing!")
 
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
@@ -828,6 +844,8 @@ func (gn *gritsNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno
 var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	log.Printf("Mkdir() %s %s", gn.path, name)
+
 	fullPath := filepath.Join(gn.path, name)
 	emptyAddr := gn.module.volume.GetEmptyDirAddr()
 
