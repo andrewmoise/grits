@@ -1,92 +1,81 @@
-// grits-bootstrap.js
 (function() {
-    // Configuration values that will be replaced by the server
-    const SW_DIR_HASH = "{{SW_DIR_HASH}}";
-    const SW_SCRIPT_HASH = "{{SW_SCRIPT_HASH}}";
-    const SW_CONFIG_HASH = "{{SW_CONFIG_HASH}}";
-    
-    // Track the current hash to detect changes
-    let currentSwHash = SW_DIR_HASH;
-    
-    function registerServiceWorker() {
-        if (!('serviceWorker' in navigator)) {
-            console.error('[Grits] Service Workers not supported in this browser');
-            return Promise.reject('Service Workers not supported');
-        }
-        
-        // Register with the hash in filename for cache busting
-        return navigator.serviceWorker.register(`/grits-serviceworker.js?hash=${SW_SCRIPT_HASH}`)
-            .then(function(registration) {
-                console.log('[Grits] ServiceWorker registration successful');
-                
-                // Send configuration to the service worker
-                function sendConfig(worker) {
-                    worker.postMessage({
-                        type: 'INIT_CONFIG',
-                        swDirHash: hash,
-                        swConfigAddr: SW_CONFIG_HASH
-                    });
-                }
-                
-                // Wait for the service worker to be ready
-                if (registration.installing) {
-                    registration.installing.addEventListener('statechange', function() {
-                        if (this.state === 'activated') {
-                            sendConfig(registration.active);
-                        }
-                    });
-                } else if (registration.active) {
-                    sendConfig(registration.active);
-                }
-                
-                return registration;
-            })
-            .catch(function(err) {
-                console.error('[Grits] ServiceWorker registration failed:', err);
-                throw err;
-            });
+    if (!('serviceWorker' in navigator)) {
+        console.warn('[Grits] Service Workers not supported');
+        return null;
     }
-    
-    // Function to update service worker when hash changes
-    function updateServiceWorker(newHash) {
-        if (newHash === currentSwHash) {
-            return Promise.resolve('Already at latest version');
-        }
-        
-        console.log(`[Grits] Updating service worker from ${currentSwHash} to ${newHash}`);
-        
-        // Unregister existing service worker
-        return navigator.serviceWorker.getRegistration()
-            .then(registration => {
-                if (registration) {
-                    return registration.unregister();
-                }
-                return Promise.resolve();
-            })
-            .then(() => {
-                // Register the new one with new hash
-                currentSwHash = newHash;
-                return registerServiceWorker(newHash);
-            });
-    }
-    
-    // Set up message listener right away
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.addEventListener('message', event => {
-            if (event.data && event.data.type === 'UPDATE_SERVICE_WORKER') {
-                updateServiceWorker(event.data.newHash);
-            }
-        });
-    }
-    
-    // Initialize on page load
-    window.addEventListener('load', function() {
-        registerServiceWorker(currentSwHash);
-    });
-    
-    // Expose the update function globally for manual updates
-    window.gritsUpdateServiceWorker = function(newHash) {
-        return updateServiceWorker(newHash);
-    };
 
+    navigator.serviceWorker.getRegistration().then(async registration => {
+        if (registration && registration.active) {
+            console.log('[Grits] Service worker already active, skipping initialization');
+            return;
+        }
+
+        try {
+
+            let isUpdating = false;
+
+            const SW_DIR_HASH = "{{SW_DIR_HASH}}";
+            const SW_SCRIPT_HASH = "{{SW_SCRIPT_HASH}}";
+            const SW_CONFIG_HASH = "{{SW_CONFIG_HASH}}";
+            
+            // Register with new hash
+            const registration = await navigator.serviceWorker.register(
+                `/grits-serviceworker.js?hash=${SW_SCRIPT_HASH}`
+            );
+            
+            navigator.serviceWorker.addEventListener('message', async event => {
+                if (event.data?.type === 'UPDATE_SERVICE_WORKER' && !isUpdating) {
+                    console.log(`[Grits] Updating service worker`);
+                    isUpdating = true;
+                    
+                    try {
+                        // Fetch the latest bootstrap code with new hash values
+                        const response = await fetch('/grits-bootstrap.js', { 
+                            cache: 'no-store' 
+                        });
+                        const newBootstrapCode = await response.text();
+
+                        // Unregister out of date service worker
+                        const registration = await navigator.serviceWorker.getRegistration();
+                        if (registration) {
+                            const unregistered = await registration.unregister();
+                            console.log('[Grits] Unregistered old service worker:', unregistered);
+                        }
+
+                        // Execute the new bootstrap code to redefine initGritsServiceWorker
+                        // with new hash values
+                        eval(newBootstrapCode);
+                    } catch (err) {
+                        console.error('[Grits] Service worker update failed:', err);
+                        return null;
+                    }
+            
+                }    
+            });
+
+            // Send configuration when appropriate
+            const sendConfig = (worker) => {
+                worker.postMessage({
+                    type: 'INIT_CONFIG',
+                    swDirHash: SW_DIR_HASH,
+                    swConfigHash: SW_CONFIG_HASH
+                });
+            };
+                    
+            if (registration.installing) {
+                registration.installing.addEventListener('statechange', function() {
+                    if (this.state === 'activated') {
+                        sendConfig(registration.active);
+                    } else if (this.state === 'redundant') {
+                        console.warn('[Grits] Service worker installation failed');
+                    }
+                });
+            } else if (registration.active) {
+                sendConfig(registration.active);
+            }
+        } catch (err) {
+            console.error('[Grits] Service worker installation failed:', err);
+            return null;
+        }
+    });
 })();

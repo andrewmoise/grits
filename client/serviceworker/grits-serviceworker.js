@@ -8,8 +8,7 @@ let swConfigAddr = null;
 self.addEventListener('message', event => {
     if (event.data && event.data.type === 'INIT_CONFIG') {
         currentSwDirHash = event.data.swDirHash;
-        swScriptAddr = event.data.swScriptAddr;
-        swConfigAddr = event.data.swConfigAddr;
+        swConfigHash = event.data.swConfigHash;
         
         // Now fetch the actual config
         fetchConfig().then(config => {
@@ -22,7 +21,7 @@ self.addEventListener('message', event => {
 // Fetch the configuration from blob address
 async function fetchConfig() {
     try {
-        const response = await fetch(`/grits/v1/blob/${swConfigAddr}`);
+        const response = await fetch(`/grits-serviceworker-config.json?hash=${swConfigHash}`);
         if (!response.ok) {
             throw new Error(`Config fetch failed: ${response.status}`);
         }
