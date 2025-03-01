@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"grits/internal/grits"
 	"io"
 	"log"
 	"net/http"
@@ -141,113 +140,102 @@ func (swm *ServiceWorkerModule) getClientDirHash() string {
 	return clientDirNode.Address().Hash
 }
 
-func (swm *ServiceWorkerModule) serveBootstrap(w http.ResponseWriter, r *http.Request) {
+func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Request) {
+	// Determine which file to serve based on URL path
+	var templatePath string
+	if strings.HasSuffix(r.URL.Path, "grits-bootstrap.js") {
+		templatePath = "serviceworker/grits-bootstrap.js"
+		w.Header().Set("Content-Type", "application/javascript")
+	} else if strings.HasSuffix(r.URL.Path, "grits-serviceworker.js") {
+		templatePath = "serviceworker/grits-serviceworker.js"
+		w.Header().Set("Content-Type", "application/javascript")
+	} else {
+		http.Error(w, "Unknown template file requested", http.StatusBadRequest)
+		return
+	}
+
 	// Set appropriate headers
-	w.Header().Set("Content-Type", "application/javascript")
 	w.Header().Set("Cache-Control", "no-cache")
 
-	// Get current hash of the serviceworker directory
+	// Get current hash values for template substitution
 	swDirHash := swm.getClientDirHash()
 
-	// Look up TypedFileAddr for the service worker script
 	swAddr, err := swm.clientVolume.Lookup("serviceworker/grits-serviceworker.js")
 	if err != nil {
 		http.Error(w, "Service worker not found", http.StatusInternalServerError)
 		return
 	}
 
-	// Look up TypedFileAddr for the configuration
 	configAddr, err := swm.clientVolume.Lookup("serviceworker/grits-serviceworker-config.json")
 	if err != nil {
 		http.Error(w, "Service worker config not found", http.StatusInternalServerError)
 		return
 	}
 
-	// Read the bootstrap template
-	bootstrapNode, err := swm.clientVolume.LookupNode("serviceworker/grits-bootstrap.js")
+	// Read the template file
+	templateNode, err := swm.clientVolume.LookupNode(templatePath)
 	if err != nil {
-		http.Error(w, "Error looking up bootstrap script", http.StatusInternalServerError)
+		http.Error(w, "Error looking up template file", http.StatusInternalServerError)
 		return
 	}
-	defer bootstrapNode.Release()
+	defer templateNode.Release()
 
-	bootstrapCf := bootstrapNode.ExportedBlob()
-
-	bootstrapData, err := bootstrapCf.Read(0, bootstrapCf.GetSize())
+	templateCf := templateNode.ExportedBlob()
+	templateData, err := templateCf.Read(0, templateCf.GetSize())
 	if err != nil {
-		http.Error(w, "Error loading bootstrap script", http.StatusInternalServerError)
+		http.Error(w, "Error loading template file", http.StatusInternalServerError)
 		return
 	}
 
-	// Replace placeholders with actual values
-	bootstrapStr := string(bootstrapData)
-	bootstrapStr = strings.Replace(bootstrapStr, "{{SW_DIR_HASH}}", swDirHash, -1)
-	bootstrapStr = strings.Replace(bootstrapStr, "{{SW_SCRIPT_HASH}}", swAddr.Hash, -1)
-	bootstrapStr = strings.Replace(bootstrapStr, "{{SW_CONFIG_HASH}}", configAddr.Hash, -1)
+	// Perform the substitutions
+	templateStr := string(templateData)
+	templateStr = strings.Replace(templateStr, "{{SW_DIR_HASH}}", swDirHash, -1)
+	templateStr = strings.Replace(templateStr, "{{SW_SCRIPT_HASH}}", swAddr.Hash, -1)
+	templateStr = strings.Replace(templateStr, "{{SW_CONFIG_HASH}}", configAddr.Hash, -1)
 
-	// Send the final script
-	fmt.Fprint(w, bootstrapStr)
+	// Send the processed template
+	fmt.Fprint(w, templateStr)
 }
 
-func (swm *ServiceWorkerModule) serveServiceWorker(w http.ResponseWriter, r *http.Request) {
-	// Get the hash from query parameter instead of the URL path
-	scriptHash := r.URL.Query().Get("hash")
-	if scriptHash == "" {
-		http.Error(w, "Missing script hash parameter", http.StatusBadRequest)
+func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Request) {
+	// Get the hash from query parameter
+	requestedHash := r.URL.Query().Get("dirHash")
+	if requestedHash == "" {
+		http.Error(w, "Missing hash parameter", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Requested service worker with hash: %s", scriptHash)
-
-	// Set appropriate headers for no caching during development
-	// Also do security checks -- FIXME it's fine, but it's sloppy
-	var correctPath string
-	if strings.HasSuffix(r.URL.Path, ".json") {
-		correctPath = "serviceworker/grits-serviceworker-config.json"
-		w.Header().Set("Content-Type", "application/json")
-	} else {
-		correctPath = "serviceworker/grits-serviceworker.js"
-		w.Header().Set("Content-Type", "application/javascript")
-	}
-	w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-	w.Header().Set("Pragma", "no-cache")
-	w.Header().Set("Expires", "0")
-
-	correctHash, err := swm.clientVolume.Lookup(correctPath)
+	// Validate hash against current config hash
+	currentDir, err := swm.clientVolume.Lookup("serviceworker")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Missing %s from client volume", correctPath), http.StatusInternalServerError)
+		http.Error(w, "Config file not found", http.StatusInternalServerError)
 		return
 	}
 
-	if correctHash.Hash != scriptHash {
-		http.Error(w, "Mismatch in requested hash to appropriate hash", http.StatusBadRequest)
+	if currentDir.Hash != requestedHash {
+		http.Error(w, "Hash mismatch - config has been updated", http.StatusBadRequest)
 		return
 	}
 
-	// Serve the service worker file from the blob store
-	swAddr, err := grits.NewBlobAddrFromString(scriptHash)
+	// Serve the config file
+	w.Header().Set("Content-Type", "application/json")
+
+	currentConfig, err := swm.clientVolume.LookupNode("serviceworker/grits-serviceworker-config.json")
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid hash format: %s", scriptHash), http.StatusBadRequest)
+		http.Error(w, "Can't load config", http.StatusInternalServerError)
+		return
+	}
+	defer currentConfig.Release()
+
+	configReader, err := currentConfig.ExportedBlob().Reader()
+	if err != nil {
+		http.Error(w, "Can't read config", http.StatusInternalServerError)
 		return
 	}
 
-	swCf, err := swm.Server.BlobStore.ReadFile(swAddr)
+	_, err = io.Copy(w, configReader)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Service worker script not found: %s", scriptHash), http.StatusNotFound)
-		return
-	}
-	defer swCf.Release()
-
-	swReader, err := swCf.Reader()
-	if err != nil {
-		http.Error(w, "Failed to read service worker script", http.StatusInternalServerError)
-		return
-	}
-	defer swReader.Close()
-
-	_, err = io.Copy(w, swReader)
-	if err != nil {
-		log.Printf("Error streaming service worker script: %v", err)
+		log.Printf("Error streaming client config: %v", err)
 	}
 }
 

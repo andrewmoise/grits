@@ -1,58 +1,58 @@
 // grits-serviceworker.js
-let appConfig = null;
-let currentSwDirHash = null;
-let swScriptAddr = null;
-let swConfigAddr = null;
+const swConfigHash = "{{SW_CONFIG_HASH}}";
+const swDirhash = "{{SW_DIR_HASH}}";
+let pathConfig = null;
 
-// Wait for the init config message before doing anything
-self.addEventListener('message', event => {
-    if (event.data && event.data.type === 'INIT_CONFIG') {
-        currentSwDirHash = event.data.swDirHash;
-        swConfigHash = event.data.swConfigHash;
-        
-        // Now fetch the actual config
-        fetchConfig().then(config => {
-            appConfig = config;
-            console.log('[Grits] Service worker initialized with config');
-        });
-    }
+self.addEventListener('install', event => {
+    console.log('[Grits] New service worker installing');
+    event.waitUntil(
+        fetchConfig()
+            .then(() => self.skipWaiting())
+            .catch(error => {
+                console.error('[Grits] Install failed during config fetch:', error);
+                throw new Error('Failed to load grits SW configuration');
+            })
+    );
+});
+
+self.addEventListener('activate', event => {
+    console.log('[Grits] New service worker activating and claiming clients');
+    event.waitUntil(self.clients.claim());
+});
+  
+self.addEventListener('fetch', event => {
+    event.respondWith(
+        fetch(event.request).then(response => {
+            // Check if config hash has changed
+            const newDirHash = response.headers.get('X-Grits-Service-Worker-Hash');
+            console.log(`[Grits] Intercepted fetch, hash is ${newDirHash}`);
+            if (newDirHash && swDirHash !== newDirHash) {
+                console.log('[Grits] Configuration has changed, updating');
+                // Add error handling for both operations
+                self.registration.update().catch(err => {
+                    console.error('[Grits] Failed to update service worker:', err);
+                });
+            }
+            
+            return response;
+        }).catch(error => {
+            console.error('[Grits] Fetch error:', error);
+            return fetch(event.request); // Fallback to network
+        })
+    );
 });
 
 // Fetch the configuration from blob address
 async function fetchConfig() {
     try {
-        const response = await fetch(`/grits-serviceworker-config.json?hash=${swConfigHash}`);
+        const response = await fetch(`/grits-serviceworker-config.json?dirHash=${swDirHash}`);
         if (!response.ok) {
             throw new Error(`Config fetch failed: ${response.status}`);
         }
-        return await response.json();
+        pathConfig = await response.json();
+        console.log('[Grits] Config initialized successfully');
     } catch (error) {
         console.error('[Grits] Error fetching config:', error);
         return null;
     }
 }
-
-// Check all responses for the service worker hash header
-self.addEventListener('fetch', event => {
-    event.respondWith(
-        fetch(event.request).then(response => {
-            // Check if the hash has changed
-            const newHash = response.headers.get('X-Grits-Service-Worker-Hash');
-            if (newHash && currentSwDirHash && newHash !== currentSwDirHash) {
-                console.log('[Grits] Service worker config changed, notifying clients');
-                
-                // Notify all controlled clients about the update
-                self.clients.matchAll().then(clients => {
-                    clients.forEach(client => {
-                        client.postMessage({
-                            type: 'UPDATE_SERVICE_WORKER',
-                            newHash: newHash
-                        });
-                    });
-                });
-            }
-            
-            return response;
-        })
-    );
-});
