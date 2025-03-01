@@ -667,6 +667,9 @@ func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParen
 	}
 
 	result, err := ns.CreateTreeNode(newChildren)
+	if err != nil {
+		return nil, err
+	}
 
 	return result, nil
 }
