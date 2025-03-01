@@ -133,7 +133,7 @@ func (bs *LocalBlobStore) ReadFile(blobAddr *BlobAddr) (CachedFile, error) {
 func (bs *LocalBlobStore) AddLocalFile(srcPath string) (CachedFile, error) {
 	file, err := os.Open(srcPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open file %s: %w", srcPath, err)
 	}
 	defer file.Close()
 
