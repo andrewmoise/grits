@@ -1,6 +1,6 @@
 // grits-serviceworker.js
 const swConfigHash = "{{SW_CONFIG_HASH}}";
-const swDirhash = "{{SW_DIR_HASH}}";
+const swDirHash = "{{SW_DIR_HASH}}";
 let pathConfig = null;
 
 self.addEventListener('install', event => {
@@ -22,12 +22,13 @@ self.addEventListener('activate', event => {
   
 self.addEventListener('fetch', event => {
     event.respondWith(
-        fetch(event.request).then(response => {
+        fetch(event.request).then(async response => {
             // Check if config hash has changed
             const newDirHash = response.headers.get('X-Grits-Service-Worker-Hash');
             console.log(`[Grits] Intercepted fetch, hash is ${newDirHash}`);
             if (newDirHash && swDirHash !== newDirHash) {
                 console.log('[Grits] Configuration has changed, updating');
+                await fetchConfig();
                 // Add error handling for both operations
                 self.registration.update().catch(err => {
                     console.error('[Grits] Failed to update service worker:', err);
