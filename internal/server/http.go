@@ -493,20 +493,24 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received GET request for file: %s\n", path)
 
-	fullPath, err := volume.LookupFull(path)
+	// Look up the resource in the volume to get its address
+	pathAddr, err := volume.Lookup(path)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
-	if len(fullPath) < 1 {
-		http.Error(w, "Empty volume", http.StatusNotFound)
-		return
-	}
 
-	pathAddrStr := fullPath[len(fullPath)-1][1]
-	pathAddr, err := grits.NewTypedFileAddrFromString(pathAddrStr)
-	if err != nil {
-		http.Error(w, "Invalid tree node", http.StatusInternalServerError)
+	// Use the address hash as the ETag
+	etag := fmt.Sprintf("\"%s\"", pathAddr.String())
+	w.Header().Set("ETag", etag)
+
+	// Tell browsers to revalidate every time
+	w.Header().Set("Cache-Control", "no-cache")
+
+	// Check If-None-Match header for conditional requests
+	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+		// Resource hasn't changed, return 304 Not Modified
+		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 
@@ -530,15 +534,6 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 		}
 	}
 	defer cf.Release()
-
-	// FIXME - What? Seems like this is unnecessary:
-
-	//cachedFile, err := bs.ReadFile(cf.Address)
-	//if err != nil {
-	//	http.Error(w, "File not found", http.StatusNotFound)
-	//	return
-	//}
-	//defer cachedFile.Release()
 
 	// Open the file for reading
 	file, err := cf.Reader()
