@@ -6,6 +6,7 @@ import (
 	"grits/internal/grits"
 	"os"
 	"sync"
+	"time"
 )
 
 type WikiVolume struct {
@@ -55,6 +56,8 @@ func NewWikiVolume(config *WikiVolumeConfig, server *Server, readOnly bool) (*Wi
 }
 
 func (wv *WikiVolume) Start() error {
+	wv.server.AddPeriodicTask(time.Second*15, wv.ns.DebugReferenceCounts)
+
 	// Potentially load the volume or other start tasks
 	return nil
 }

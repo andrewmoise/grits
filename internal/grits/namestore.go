@@ -1084,3 +1084,143 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 		}
 	}
 }
+
+/////
+// Debug stuff
+
+// DebugReferenceCountsRecursive walks the entire namespace tree and prints reference count information
+// for all nodes, while also identifying orphaned blobs
+func (ns *NameStore) DebugReferenceCounts() error {
+	ns.mtx.RLock()
+	defer ns.mtx.RUnlock()
+
+	// Map to track which blobs we've seen
+	seenBlobs := make(map[string]bool)
+
+	fmt.Println("=== Reference Count Debugging ===")
+	fmt.Println("Root node:", ns.GetRoot())
+
+	// Start recursive walk from root
+	ns.debugRefCountsWalk("", ns.root, seenBlobs)
+
+	// Now check for orphaned blobs
+	fmt.Println("\n=== Orphaned Blobs ===")
+
+	// Get all blobs from BlobStore
+	if localBS, ok := ns.BlobStore.(*LocalBlobStore); ok {
+		localBS.mtx.RLock()
+		defer localBS.mtx.RUnlock()
+
+		orphanCount := 0
+		totalSize := int64(0)
+
+		for hash, file := range localBS.files {
+			if !seenBlobs[hash] {
+				orphanCount++
+				totalSize += file.Size
+				fmt.Printf("Orphaned blob: %s\n", hash)
+				fmt.Printf("  Size: %d bytes\n", file.Size)
+				fmt.Printf("  RefCount: %d\n", file.RefCount)
+				fmt.Printf("  Path: %s\n", file.Path)
+
+				// For small blobs, print content for debugging
+				if file.Size <= 200 {
+					data, err := file.Read(0, file.Size)
+					if err != nil {
+						fmt.Printf("  Contents: <error reading: %v>\n", err)
+					} else {
+						fmt.Printf("  Contents: %s\n", string(data))
+					}
+				}
+				fmt.Println()
+			}
+		}
+
+		fmt.Printf("Total orphaned blobs: %d (%.2f MB)\n", orphanCount, float64(totalSize)/1024/1024)
+	} else {
+		fmt.Println("BlobStore is not a LocalBlobStore, cannot check for orphaned blobs")
+	}
+
+	fmt.Println("=== End Reference Count Debugging ===")
+
+	return nil
+}
+
+// Helper function to recursively walk the tree
+func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs map[string]bool) {
+	if node == nil {
+		fmt.Printf("%s: <nil>\n", path)
+		return
+	}
+
+	contentBlob := node.ExportedBlob()
+	metadataBlob := node.MetadataBlob()
+
+	// Mark these blobs as seen
+	seenBlobs[contentBlob.GetAddress().Hash] = true
+	seenBlobs[metadataBlob.GetAddress().Hash] = true
+
+	// Get reference counts
+	var contentRefCount, metadataRefCount int
+
+	if lcf, ok := contentBlob.(*LocalCachedFile); ok {
+		contentRefCount = lcf.RefCount
+	}
+
+	if lcf, ok := metadataBlob.(*LocalCachedFile); ok {
+		metadataRefCount = lcf.RefCount
+	}
+
+	// Print node info
+	fmt.Printf("Path: %s\n", path)
+	fmt.Printf("  Node Type: %T\n", node)
+	fmt.Printf("  Node RefCount: %d\n", node.RefCount())
+	fmt.Printf("  Content Blob Hash: %s\n", contentBlob.GetAddress().Hash)
+	fmt.Printf("  Content Blob RefCount: %d\n", contentRefCount)
+	fmt.Printf("  Metadata Blob Hash: %s\n", metadataBlob.GetAddress().Hash)
+	fmt.Printf("  Metadata Blob RefCount: %d\n", metadataRefCount)
+
+	// Print small blob contents
+	if contentBlob.GetSize() <= 200 {
+		data, err := contentBlob.Read(0, contentBlob.GetSize())
+		if err != nil {
+			fmt.Printf("  Contents: <error reading: %v>\n", err)
+		} else {
+			fmt.Printf("  Contents: %s\n", string(data))
+		}
+	}
+
+	fmt.Println()
+
+	// Recursively process children if this is a directory
+	if children := node.Children(); children != nil {
+		// Sort children names for consistent output
+		names := make([]string, 0, len(children))
+		for name := range children {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+
+		for _, childName := range names {
+			childAddr := children[childName]
+			childNode, exists := ns.fileCache[childAddr.String()]
+			if !exists {
+				var err error
+				childNode, err = ns.loadFileNode(childAddr)
+				if err != nil {
+					fmt.Printf("  ERROR loading child %s: %v\n", childName, err)
+					continue
+				}
+			}
+
+			childPath := path
+			if childPath == "" {
+				childPath = childName
+			} else {
+				childPath = childPath + "/" + childName
+			}
+
+			ns.debugRefCountsWalk(childPath, childNode, seenBlobs)
+		}
+	}
+}
