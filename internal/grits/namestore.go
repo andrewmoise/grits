@@ -686,6 +686,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 		return nil, err
 	}
 
+	dn.Take()
 	ns.root = dn
 	return ns, nil
 }
