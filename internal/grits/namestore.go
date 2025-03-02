@@ -11,6 +11,39 @@ import (
 	"sync"
 )
 
+// Notes for transitioning to on-demand serialization and general API cleanup:
+
+// Link() can start to take a FileNode as the target, instead of an address. If you want to link
+// by address, you need to fetch the FileNode for that address, then do your Link(), then release
+// the ref count after.
+
+// Same for MultiLink().
+
+// LinkBlob() and LinkTree() should go away. Honestly? What that should look like instead is a
+// helper method that constructs a metadata node for a given blob or tree, and then another thing
+// that gives you the FileNode for the metadata you constructed. This stuff shouldn't really be
+// needed but there are places where I think we're doing it for compatibility. (Ugh - we don't even
+// use it outside of tests. Okay, whatever, it can stay, maybe uncapitalized, and help keep the
+// tests running but be deprecated for everything else, maybe even become helper methods within
+// the test scaffold. It shouldn't be a main interface.)
+//
+// recursiveLink() can work in exactly the same fashion with mutable nodes as with immutable
+// ones. It's just going to be winding up making mutable copies of any immutable stuff it finds,
+// or modifying in-place any mutable stuff it finds and then returning it unchanged. We just have
+// to keep our invariant that if a mutable node every gets a reference count taken (taking its
+// refCount to 2), it needs to become immutable before returning. That means it's being linked
+// in two places and the second one shouldn't change because the first did.
+
+// LookupAndOpen() should go away I think. We should be able to Open() and do I/O on the file
+// nodes directly, since they are getting more capable and stateful now.
+
+// LookupNode() is perfect, no change
+
+// LookupFull() should start to return nodes. We just need to take away the ".AddressString()"
+// in it, and worry slightly about reference counting or something.
+
+// Likewise resolvePath() is already converted, nothing to do for now.
+
 ////////////////////////
 // Node Types
 
