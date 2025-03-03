@@ -219,13 +219,14 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 
 	r := make([]fuse.DirEntry, 0, len(children))
 	for name, nodeAddr := range children {
-		node, err := gn.module.volume.GetFileNode(nodeAddr)
+		childNode, err := gn.module.volume.GetFileNode(nodeAddr)
 		if err != nil {
 			log.Printf("Readdir fail %v", err)
 			return nil, syscall.EIO
 		}
+		defer childNode.Release()
 
-		_, isDir := node.(*grits.TreeNode)
+		_, isDir := childNode.(*grits.TreeNode)
 		var mode uint32
 		if isDir {
 			mode = fuse.S_IFDIR | 0o755
