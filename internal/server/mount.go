@@ -276,14 +276,14 @@ var _ = (fs.NodeLookuper)((*gritsNode)(nil))
 
 func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	log.Printf("--- Looking up %s %s => %s\n", gn.path, name, fullPath)
+	//log.Printf("--- Looking up %s %s => %s\n", gn.path, name, fullPath)
 
 	node, err := gn.module.volume.LookupNode(fullPath)
 	if grits.IsNotExist(err) {
-		log.Printf("---   lookup Not found")
+		//log.Printf("---   lookup Not found")
 		return nil, syscall.ENOENT
 	} else if err != nil {
-		log.Printf("---   lookup Error! %v\n", err)
+		//log.Printf("---   lookup Error! %v\n", err)
 		return nil, syscall.EIO
 	}
 	defer node.Release()
@@ -799,7 +799,7 @@ func (gn *gritsNode) Fsync(ctx context.Context, f fs.FileHandle, flags uint32) s
 var _ = (fs.NodeFlusher)((*gritsNode)(nil))
 
 func (gn *gritsNode) Flush(ctx context.Context, f fs.FileHandle) syscall.Errno {
-	log.Printf("--- We're flushing!")
+	//log.Printf("--- We're flushing!")
 
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
@@ -850,7 +850,7 @@ func (gn *gritsNode) Release(ctx context.Context, f fs.FileHandle) syscall.Errno
 var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	log.Printf("Mkdir() called for %s with mode %o", name, mode)
+	//log.Printf("Mkdir() called for %s with mode %o", name, mode)
 
 	fullPath := filepath.Join(gn.path, name)
 	emptyAddr := gn.module.volume.GetEmptyDirAddr()
