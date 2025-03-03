@@ -56,9 +56,10 @@ func NewWikiVolume(config *WikiVolumeConfig, server *Server, readOnly bool) (*Wi
 }
 
 func (wv *WikiVolume) Start() error {
-	wv.server.AddPeriodicTask(time.Second*15, wv.ns.DebugReferenceCounts)
+	if grits.DebugBlobStorage {
+		wv.server.AddPeriodicTask(time.Second*10, wv.ns.PrintBlobStorageDebugging)
+	}
 
-	// Potentially load the volume or other start tasks
 	return nil
 }
 

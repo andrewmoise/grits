@@ -59,8 +59,21 @@ func NewServer(config *grits.Config) (*Server, error) {
 	return srv, nil
 }
 
+func (s *Server) BlobStoreMaintenance() error {
+	// Type assertion to access the enhanced methods we added
+	if localBS, ok := s.BlobStore.(*grits.LocalBlobStore); ok {
+		log.Println("Running scheduled blob store maintenance...")
+		localBS.EvictOldFiles()
+	} else {
+		log.Println("Blob store doesn't support enhanced maintenance")
+	}
+	return nil
+}
+
 func (s *Server) Start() error {
 	s.AddPeriodicTask(5*time.Second, s.ReportJobs)
+
+	//s.AddPeriodicTask(15*time.Second, s.BlobStoreMaintenance)
 
 	// Load modules from config
 	if err := s.LoadModules(s.Config.Modules); err != nil {

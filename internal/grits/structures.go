@@ -4,7 +4,10 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -185,4 +188,34 @@ type CachedFile interface {
 	Release()
 	Take()
 	GetRefCount() int
+}
+
+/////
+// Generic utility and debugging
+
+var DebugRefCounts bool = false // Check reference counts when taking/releasing nodes
+var DebugBlobStorage = false    // Print periodic detailed stats about the blob store
+
+func PrintStack() {
+	// Get stack trace info
+	pc := make([]uintptr, 10)
+	n := runtime.Callers(2, pc) // Skip runtime.Callers and this function
+	frames := runtime.CallersFrames(pc[:n])
+
+	// Format caller info
+	var callers []string
+	for i := 0; i < 15 && frames != nil; i++ {
+		frame, more := frames.Next()
+		if !more {
+			break
+		}
+		// Extract just the function name and file:line
+		funcName := filepath.Base(frame.Function)
+		fileName := filepath.Base(frame.File)
+		callers = append(callers, fmt.Sprintf("%s() at %s:%d", funcName, fileName, frame.Line))
+	}
+
+	// Log the operation
+	log.Printf("Stack:\n\t%s\n",
+		strings.Join(callers, "\n\t"))
 }

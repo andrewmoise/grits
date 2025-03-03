@@ -16,11 +16,10 @@ import (
 // LocalBlobStore
 
 type LocalBlobStore struct {
-	config      *Config
-	files       map[string]*LocalCachedFile // All files in the store
-	mtx         sync.RWMutex                // Mutex for thread-safe access
-	currentSize int64
-	storageDir  string
+	config     *Config
+	files      map[string]*LocalCachedFile // All files in the store
+	mtx        sync.RWMutex                // Mutex for thread-safe access
+	storageDir string
 }
 
 // Ensure that LocalBlobStore implements BlobStore
@@ -217,9 +216,6 @@ func (bs *LocalBlobStore) AddOpenFile(file *os.File) (CachedFile, error) {
 	}
 
 	bs.files[blobAddr.Hash] = cachedFile
-	if !isHardLink {
-		bs.currentSize += size
-	}
 
 	return cachedFile, nil
 }
@@ -259,7 +255,6 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 
 	// Add the new data block to the files map
 	bs.files[blobAddr.Hash] = cachedFile
-	bs.currentSize += int64(len(data))
 
 	return cachedFile, nil
 }
@@ -274,54 +269,160 @@ func (bs *LocalBlobStore) Touch(cf *LocalCachedFile) {
 
 func (bs *LocalBlobStore) Take(cachedFile *LocalCachedFile) {
 	bs.mtx.Lock()
-	defer bs.mtx.Unlock()
 
+	// Log the operation
+	if DebugRefCounts {
+		log.Printf("TAKE: %s (count: %d)",
+			cachedFile.Address.Hash,
+			cachedFile.RefCount)
+		PrintStack()
+	}
+
+	// Perform the actual operation
 	cachedFile.RefCount++
+	bs.mtx.Unlock()
 }
 
 func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 	bs.mtx.Lock()
-	defer bs.mtx.Unlock()
 
+	// Log the operation
+	if DebugRefCounts {
+		log.Printf("RELEASE: %s (count: %d)",
+			cachedFile.Address.Hash,
+			cachedFile.RefCount)
+		PrintStack()
+	}
+
+	// Perform the actual operation
 	cachedFile.RefCount--
+	if cachedFile.RefCount < 0 {
+		log.Fatalf("Reduced ref count for %s to < 0", cachedFile.GetAddress())
+	}
+
+	bs.mtx.Unlock()
 }
 
-func (bs *LocalBlobStore) evictOldFiles() {
+// BlobStoreStat represents statistics for a specific reference count
+type BlobStoreStat struct {
+	RefCount   int
+	FileCount  int
+	TotalBytes int64
+}
+
+// CollectStats gathers statistics about the blob store, broken down by reference count
+
+// Need to hold a lock while calling this
+func (bs *LocalBlobStore) collectStats() []BlobStoreStat {
+	// Map to store stats by reference count
+	statsByRef := make(map[int]*BlobStoreStat)
+
+	// Collect stats for each file
+	for _, file := range bs.files {
+		refCount := file.RefCount
+
+		if _, exists := statsByRef[refCount]; !exists {
+			statsByRef[refCount] = &BlobStoreStat{
+				RefCount: refCount,
+			}
+		}
+
+		// Update statistics for this reference count
+		statsByRef[refCount].FileCount++
+		statsByRef[refCount].TotalBytes += file.Size
+	}
+
+	// Convert to slice and sort by reference count (descending)
+	stats := make([]BlobStoreStat, 0, len(statsByRef))
+	for _, stat := range statsByRef {
+		stats = append(stats, *stat)
+	}
+
+	sort.Slice(stats, func(i, j int) bool {
+		return stats[i].RefCount > stats[j].RefCount
+	})
+
+	return stats
+}
+
+// PrintStats prints statistics about the blob store to the log
+
+// Need to hold a lock while calling this
+func (bs *LocalBlobStore) printStats(currentSize int64) {
+	stats := bs.collectStats()
+
+	log.Printf("=== BlobStore Statistics ===")
+	log.Printf("Total files: %d", len(bs.files))
+	log.Printf("Current size: %d bytes", currentSize)
+	log.Printf("Storage capacity: %d bytes", bs.config.StorageSize)
+	log.Printf("Target free size: %d bytes", bs.config.StorageFreeSize)
+
+	log.Printf("\nFiles by reference count (descending):")
+	for _, stat := range stats {
+		log.Printf("  RefCount %d: %d files, %d bytes",
+			stat.RefCount, stat.FileCount, stat.TotalBytes)
+	}
+
+	log.Printf("=== End BlobStore Statistics ===")
+}
+
+func (bs *LocalBlobStore) EvictOldFiles() {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	if bs.currentSize <= bs.config.StorageSize {
+	var currentSize int64
+	for _, file := range bs.files {
+		if !file.IsHardLink {
+			currentSize += file.Size
+		}
+	}
+
+	log.Printf("Check stats:")
+	bs.printStats(currentSize)
+
+	if currentSize <= bs.config.StorageSize {
+		log.Printf("Storage usage (%d bytes) within capacity (%d bytes), no eviction needed",
+			currentSize, bs.config.StorageSize)
 		return
 	}
 
-	var sortedFiles []*LocalCachedFile
-
+	// Collect files with zero reference count
+	var evictionCandidates []*LocalCachedFile
 	for _, file := range bs.files {
-		sortedFiles = append(sortedFiles, file)
+		if file.RefCount <= 0 {
+			evictionCandidates = append(evictionCandidates, file)
+		}
 	}
 
-	sort.Slice(sortedFiles, func(i, j int) bool {
-		return sortedFiles[i].LastTouched.Before(sortedFiles[j].LastTouched)
+	// Sort files by last touched time (oldest first)
+	sort.Slice(evictionCandidates, func(i, j int) bool {
+		return evictionCandidates[i].LastTouched.Before(evictionCandidates[j].LastTouched)
 	})
 
-	for _, file := range sortedFiles {
-		if bs.currentSize <= bs.config.StorageFreeSize {
+	// Track eviction statistics
+	var evictedCount int
+	var evictedBytes int64
+
+	// Evict files until we're under the target free size
+	for _, file := range evictionCandidates {
+		if currentSize-evictedBytes <= bs.config.StorageFreeSize {
 			break
-		}
-		if file.RefCount > 0 {
-			continue
 		}
 
 		if !file.IsHardLink {
-			bs.currentSize -= file.Size
+			evictedBytes += file.Size
 		}
+
 		delete(bs.files, file.Address.Hash)
+		evictedCount++
 
 		err := os.Remove(file.Path)
 		if err != nil {
-			panic(fmt.Sprintf("Couldn't delete expired file %s from cache! %v", file.Path, err))
+			log.Printf("Warning: couldn't delete expired file %s from cache: %v", file.Path, err)
 		}
 	}
+
+	log.Printf("Evicted %d files, freed %d bytes, %d total now used", evictedCount, evictedBytes, currentSize-evictedBytes)
 }
 
 /////
@@ -399,7 +500,6 @@ func (bs *LocalBlobStore) DumpStats() {
 
 	log.Printf("=== BlobStore Stats ===")
 	log.Printf("Total files: %d", len(bs.files))
-	log.Printf("Current size: %d bytes", bs.currentSize)
 
 	// Sort files by hash for consistent output
 	hashes := make([]string, 0, len(bs.files))
