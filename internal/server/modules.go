@@ -123,13 +123,15 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 
 			s.AddModule(NewMountModule(s, &mountConfig))
 
-		case "pin":
-			var pinConfig PinConfig
-			if err := json.Unmarshal(rawConfig, &pinConfig); err != nil {
-				return fmt.Errorf("failed to unmarshal pin config: %v", err)
-			}
+		// Configured pins are not enabled for a bit longer
 
-			s.AddModule(NewPinModule(s, &pinConfig))
+		//case "pin":
+		//	var pinConfig PinConfig
+		//	if err := json.Unmarshal(rawConfig, &pinConfig); err != nil {
+		//		return fmt.Errorf("failed to unmarshal pin config: %v", err)
+		//	}
+
+		//	s.AddModule(NewPinModule(s, &pinConfig))
 
 		case "serviceworker":
 			var swConfig ServiceWorkerModuleConfig
