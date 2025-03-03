@@ -132,14 +132,11 @@ func (bn *BlobNode) Release() {
 	defer bn.mtx.Unlock()
 
 	bn.refCount--
-	if bn.refCount == 0 {
-		if bn.blob != nil {
-			bn.blob.Release()
-		}
-		if bn.metadataBlob != nil {
-			bn.metadataBlob.Release()
-		}
+	if bn.refCount < 0 {
+		log.Fatalf("Reduced ref count for %s to < 0", bn.AddressString())
 	}
+
+	// This is where we used to release the actual storage; now we're not doing that.
 }
 
 // FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
@@ -195,14 +192,11 @@ func (tn *TreeNode) Release() {
 	defer tn.mtx.Unlock()
 
 	tn.refCount--
-	if tn.refCount == 0 {
-		if tn.blob != nil {
-			tn.blob.Release()
-		}
-		if tn.metadataBlob != nil {
-			tn.metadataBlob.Release()
-		}
+	if tn.refCount < 0 {
+		log.Fatalf("Reduced ref count for %s to < 0", tn.AddressString())
 	}
+
+	// This is where we used to release the actual storage; now we do not do that.
 }
 
 // FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
@@ -265,6 +259,61 @@ func IsNotDir(err error) bool {
 	return errors.Is(err, ErrNotDir)
 }
 
+/////
+// Watch and notification interface
+
+type FileTreeWatcher interface {
+	// OnFileTreeChange is called whenever a path in the tree changes
+	OnFileTreeChange(path string, oldValue FileNode, newValue FileNode) error
+}
+
+// RegisterWatcher adds a watcher to be notified of tree changes
+func (ns *NameStore) RegisterWatcher(watcher FileTreeWatcher) {
+	ns.wmtx.Lock()
+	defer ns.wmtx.Unlock()
+
+	for _, w := range ns.watchers {
+		if w == watcher {
+			return
+		}
+	}
+
+	ns.watchers = append(ns.watchers, watcher)
+}
+
+// UnregisterWatcher removes a watcher from notification list
+func (ns *NameStore) UnregisterWatcher(watcher FileTreeWatcher) {
+	ns.wmtx.Lock()
+	defer ns.wmtx.Unlock()
+
+	for i, w := range ns.watchers {
+		if w == watcher {
+			// Remove by replacing with last element and truncating
+			ns.watchers[i] = ns.watchers[len(ns.watchers)-1]
+			ns.watchers = ns.watchers[:len(ns.watchers)-1]
+			break
+		}
+	}
+}
+
+// notifyWatchers sends event to all registered watchers
+func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue FileNode) error {
+	ns.wmtx.RLock()
+	watchers := make([]FileTreeWatcher, len(ns.watchers))
+	copy(watchers, ns.watchers) // Copy to avoid holding lock during callbacks
+	ns.wmtx.RUnlock()
+
+	// Notify each watcher
+	for _, watcher := range watchers {
+		err := watcher.OnFileTreeChange(path, oldValue, newValue)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 ////////////////////////
 // NameStore
 
@@ -273,6 +322,9 @@ type NameStore struct {
 	root      FileNode
 	fileCache map[string]FileNode
 	mtx       sync.RWMutex
+
+	watchers []FileTreeWatcher
+	wmtx     sync.RWMutex // Separate mutex for watchers list to avoid lock contention
 }
 
 func (ns *NameStore) GetRoot() string {
@@ -298,13 +350,13 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 	return cf, nil
 }
 
-func (ns *NameStore) LookupNode(name string) (FileNode, error) {
-	log.Printf("LookupNode(%s)", name)
+func (ns *NameStore) LookupNode(path string) (FileNode, error) {
+	log.Printf("LookupNode(%s)", path)
 
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	nodes, err := ns.resolvePath(name)
+	nodes, err := ns.resolvePath(path)
 	if err != nil {
 		return nil, err
 	}
@@ -511,8 +563,6 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 	oldRoot := ns.root
 	newRoot := ns.root
 
-	// FIXME - We need to defer a newRoot release here, in case of error
-
 	for _, req := range requests {
 		name := strings.TrimRight(req.Path, "/")
 		if name != "" && name[0] == '/' {
@@ -536,17 +586,22 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 		}
 
 		var err error
-		newRoot, err = ns.recursiveLink(name, linkAddr, newRoot)
+		newRoot, err = ns.recursiveLink("", name, linkAddr, newRoot)
 		if err != nil {
 			return err
 		}
 	}
 
+	err := ns.notifyWatchers("", oldRoot, newRoot)
+	if err != nil {
+		return err
+	}
+
 	if newRoot != nil {
 		newRoot.Take()
 	}
-	if oldRoot != nil {
-		oldRoot.Release()
+	if ns.root != nil {
+		ns.root.Release()
 	}
 
 	ns.root = newRoot
@@ -576,7 +631,12 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 		defer metadataBlob.Release()
 	}
 
-	newRoot, err := ns.recursiveLink(name, metadataAddr, ns.root)
+	newRoot, err := ns.recursiveLink("", name, metadataAddr, ns.root)
+	if err != nil {
+		return err
+	}
+
+	err = ns.notifyWatchers("", ns.root, newRoot)
 	if err != nil {
 		return err
 	}
@@ -625,18 +685,25 @@ func (ns *NameStore) LinkTree(name string, addr *BlobAddr) error {
 
 // Core link function helper.
 
-// We link in `addr` into place as `name` within `oldParent`, and return the
+// We link in `metadataAddr` into place as `name` within `oldParent`, and return the
 // modified version of `oldParent`.
 
 // Core link function helper
-func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParent FileNode) (FileNode, error) {
-	//if metadataAddr != nil {
-	//	log.Printf("We're trying to link %s under path %s\n", metadataAddr.String(), name)
-	//} else {
-	//	log.Printf("We're trying to link nil under path %s\n", name)
-	//}
+func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *BlobAddr, oldParent FileNode) (FileNode, error) {
+	if metadataAddr != nil {
+		log.Printf("We're trying to link %s under path %s /// %s\n", metadataAddr.String(), prevPath, name)
+	} else {
+		log.Printf("We're trying to link nil under path %s /// %s\n", prevPath, name)
+	}
 
 	parts := strings.SplitN(name, "/", 2)
+
+	var currPath string
+	if prevPath == "" {
+		currPath = parts[0]
+	} else {
+		currPath = fmt.Sprintf("%s/%s", prevPath, parts[0])
+	}
 
 	var oldChildren map[string]*BlobAddr
 	if oldParent != nil {
@@ -645,11 +712,26 @@ func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParen
 			return nil, ErrNotDir
 		}
 	} else {
-		return nil, fmt.Errorf("attempting to link in nonexistent directory")
+		return nil, ErrNotExist
 	}
 
 	var newValue FileNode
 	var err error
+
+	oldChildAddr, exists := oldChildren[parts[0]]
+	var oldChild FileNode
+	if exists {
+		oldChild, exists = ns.fileCache[oldChildAddr.String()]
+		if !exists {
+			oldChild, err = ns.loadFileNode(oldChildAddr)
+			if err != nil {
+				return nil, fmt.Errorf("can't load %s: %v", oldChildAddr.String(), err)
+			}
+		}
+	} else if len(parts) > 1 {
+		// Directory doesn't exist while searching down in the path while doing a link
+		return nil, ErrNotExist
+	}
 
 	if len(parts) == 1 {
 		if metadataAddr == nil {
@@ -669,20 +751,7 @@ func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParen
 			return newValue, nil
 		}
 	} else {
-		oldChildAddr, exists := oldChildren[parts[0]]
-		if !exists {
-			return nil, ErrNotExist
-		}
-
-		oldChild, exists := ns.fileCache[oldChildAddr.String()]
-		if !exists {
-			oldChild, err = ns.loadFileNode(oldChildAddr)
-			if err != nil {
-				return nil, fmt.Errorf("can't load %s: %v", oldChildAddr.String(), err)
-			}
-		}
-
-		newValue, err = ns.recursiveLink(parts[1], metadataAddr, oldChild)
+		newValue, err = ns.recursiveLink(currPath, parts[1], metadataAddr, oldChild)
 		if err != nil {
 			return nil, err
 		}
@@ -698,6 +767,8 @@ func (ns *NameStore) recursiveLink(name string, metadataAddr *BlobAddr, oldParen
 	} else {
 		delete(newChildren, parts[0])
 	}
+
+	ns.notifyWatchers(currPath, oldChild, newValue)
 
 	result, err := ns.CreateTreeNode(newChildren)
 	if err != nil {
@@ -719,7 +790,6 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 		return nil, err
 	}
 
-	dn.Take()
 	ns.root = dn
 	return ns, nil
 }
@@ -858,7 +928,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 
 		ns.fileCache[metadataAddr.String()] = dn
 		resultDn := dn
-		dn = nil // Prevent deferred cleanup / release
+		dn = nil // Prevent deferred cleanup + removal from file cache
 		return resultDn, nil
 	}
 }

@@ -35,8 +35,10 @@ type Volume interface {
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
 
-	// New method to get the address of the empty directory (metadata blob)
 	GetEmptyDirAddr() *grits.TypedFileAddr
+
+	RegisterWatcher(watcher grits.FileTreeWatcher)
+	UnregisterWatcher(watcher grits.FileTreeWatcher)
 }
 
 // ModuleConfig represents a generic module configuration.
@@ -119,7 +121,15 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 				return fmt.Errorf("failed to unmarshal mount config: %v", err)
 			}
 
-			s.AddModule(NewMountModule(&mountConfig, s))
+			s.AddModule(NewMountModule(s, &mountConfig))
+
+		case "pin":
+			var pinConfig PinConfig
+			if err := json.Unmarshal(rawConfig, &pinConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal pin config: %v", err)
+			}
+
+			s.AddModule(NewPinModule(s, &pinConfig))
 
 		case "serviceworker":
 			var swConfig ServiceWorkerModuleConfig

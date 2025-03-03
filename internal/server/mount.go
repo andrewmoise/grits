@@ -56,7 +56,7 @@ type MountModule struct {
 	inodeManager *InodeManager
 }
 
-func NewMountModule(config *MountModuleConfig, server *Server) *MountModule {
+func NewMountModule(server *Server, config *MountModuleConfig) *MountModule {
 	return &MountModule{
 		config:       config,
 		gritsServer:  server,
