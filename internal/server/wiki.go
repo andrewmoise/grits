@@ -145,6 +145,14 @@ func (wv *WikiVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.AddOpenFile(file)
 }
 
+func (wv *WikiVolume) RegisterWatcher(watcher grits.FileTreeWatcher) {
+	wv.ns.RegisterWatcher(watcher)
+}
+
+func (wv *WikiVolume) UnregisterWatcher(watcher grits.FileTreeWatcher) {
+	wv.ns.UnregisterWatcher(watcher)
+}
+
 // load retrieves the volume's NameStore root from persistent storage.
 func (wv *WikiVolume) load() error {
 	err := os.MkdirAll(wv.server.Config.ServerPath("var/wikiroots"), 0755)
