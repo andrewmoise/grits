@@ -458,7 +458,9 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 }
 
 func (ns *NameStore) LookupNode(path string) (FileNode, error) {
-	log.Printf("LookupNode(%s)", path)
+	if DebugNameStore {
+		log.Printf("LookupNode(%s)", path)
+	}
 
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
@@ -537,7 +539,9 @@ func (ns *NameStore) GetFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 // Core lookup helper function.
 
 func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
-	log.Printf("We resolve path %s (root %v)\n", path, ns.root)
+	if DebugNameStore {
+		log.Printf("We resolve path %s (root %v)\n", path, ns.root)
+	}
 
 	path = strings.TrimRight(path, "/")
 	if path != "" && path[0] == '/' {
@@ -551,7 +555,7 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
 	response = append(response, node)
 
 	for n, part := range parts {
-		log.Printf("  part %s\n", part)
+		//log.Printf("  part %s\n", part)
 
 		if part == "" {
 			continue
@@ -791,10 +795,12 @@ func (ns *NameStore) LinkTree(name string, addr *BlobAddr) error {
 
 // Core link function helper
 func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *BlobAddr, oldParent FileNode) (FileNode, error) {
-	if metadataAddr != nil {
-		log.Printf("We're trying to link %s under path %s /// %s\n", metadataAddr.String(), prevPath, name)
-	} else {
-		log.Printf("We're trying to link nil under path %s /// %s\n", prevPath, name)
+	if DebugNameStore {
+		if metadataAddr != nil {
+			log.Printf("We're trying to link %s under path %s /// %s\n", metadataAddr.String(), prevPath, name)
+		} else {
+			log.Printf("We're trying to link nil under path %s /// %s\n", prevPath, name)
+		}
 	}
 
 	parts := strings.SplitN(name, "/", 2)
