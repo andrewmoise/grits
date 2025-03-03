@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 )
 
+// TODO: This clearly needs to move to the server package
+
 // CoreConfig represents the core server configuration.
 type Config struct {
 	// General networking configuration
