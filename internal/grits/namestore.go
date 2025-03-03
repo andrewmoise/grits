@@ -257,9 +257,9 @@ func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 
 	for _, childAddr := range children {
 		childNode, err := ns.loadFileNode(childAddr)
-			if err != nil {
-				log.Panicf("couldn't load %s: %v", childAddr.String(), err)
-			}
+		if err != nil {
+			log.Panicf("couldn't load %s: %v", childAddr.String(), err)
+		}
 		ns.debugPrintTree(childNode, indent+"  ")
 	}
 }
@@ -343,6 +343,82 @@ func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue Fil
 	return nil
 }
 
+/////
+// Pins
+
+type Pin struct {
+	path     string
+	refCount map[string]int
+}
+
+func NewPin(path string) *Pin {
+	return &Pin{
+		path:     path,
+		refCount: make(map[string]int),
+	}
+}
+
+func (ns *NameStore) recursiveTake(pm *Pin, fn FileNode) error {
+	metadataHash := fn.AddressString() // FIXME - transition to metadata addr as we fix the rest
+
+	refCount, exists := pm.refCount[metadataHash]
+
+	if exists {
+		if refCount <= 0 {
+			return fmt.Errorf("ref count for %s is nonpositive", metadataHash)
+		}
+
+		pm.refCount[metadataHash] = refCount + 1
+	} else {
+		fn.Take()
+		pm.refCount[metadataHash] = 1
+
+		children := fn.Children()
+		if children == nil {
+			return nil
+		}
+
+		for _, childMetadataAddr := range children {
+			childNode, err := ns.loadFileNode(childMetadataAddr)
+			if err != nil {
+				return err
+			}
+
+			ns.recursiveTake(pm, childNode)
+		}
+	}
+
+	return nil
+}
+
+func (ns *NameStore) recursiveRelease(pm *Pin, fn FileNode) error {
+	metadataHash := fn.AddressString()
+
+	refCount, exists := pm.refCount[metadataHash]
+	if !exists {
+		return fmt.Errorf("can't find %s in ref count to release", metadataHash)
+	}
+
+	if refCount <= 1 {
+		children := fn.Children()
+		for _, childMetadataAddr := range children {
+			childNode, err := ns.loadFileNode(childMetadataAddr)
+			if err != nil {
+				return err
+			}
+
+			ns.recursiveRelease(pm, childNode)
+		}
+
+		fn.Release()
+		delete(pm.refCount, metadataHash)
+	} else {
+		pm.refCount[metadataHash] = refCount - 1
+	}
+
+	return nil
+}
+
 ////////////////////////
 // NameStore
 
@@ -354,6 +430,8 @@ type NameStore struct {
 
 	watchers []FileTreeWatcher
 	wmtx     sync.RWMutex // Separate mutex for watchers list to avoid lock contention
+
+	rootPin *Pin
 }
 
 func (ns *NameStore) GetRoot() string {
@@ -502,8 +580,8 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
 		}
 
 		childNode, err := ns.loadFileNode(childAddr)
-			if err != nil {
-				return nil, err
+		if err != nil {
+			return nil, err
 		}
 
 		node = childNode // Move to the next node in the path
@@ -617,9 +695,12 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 
 	if newRoot != nil {
 		newRoot.Take()
+		ns.recursiveTake(ns.rootPin, newRoot)
 	}
+
 	if ns.root != nil {
 		ns.root.Release()
+		ns.recursiveRelease(ns.rootPin, ns.root)
 	}
 
 	ns.root = newRoot
@@ -661,9 +742,11 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 
 	if newRoot != nil {
 		newRoot.Take()
+		ns.recursiveTake(ns.rootPin, newRoot)
 	}
 	if ns.root != nil {
 		ns.root.Release()
+		ns.recursiveRelease(ns.rootPin, ns.root)
 	}
 
 	ns.root = newRoot
@@ -739,9 +822,9 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 	oldChildAddr, exists := oldChildren[parts[0]]
 	var oldChild FileNode
 	if exists {
-			oldChild, err = ns.loadFileNode(oldChildAddr)
-			if err != nil {
-				return nil, fmt.Errorf("can't load %s: %v", oldChildAddr.String(), err)
+		oldChild, err = ns.loadFileNode(oldChildAddr)
+		if err != nil {
+			return nil, fmt.Errorf("can't load %s: %v", oldChildAddr.String(), err)
 		}
 	} else if len(parts) > 1 {
 		// Directory doesn't exist while searching down in the path while doing a link
@@ -752,9 +835,9 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 		if metadataAddr == nil {
 			newValue = nil
 		} else {
-				newValue, err = ns.loadFileNode(metadataAddr)
-				if err != nil {
-					return nil, err
+			newValue, err = ns.loadFileNode(metadataAddr)
+			if err != nil {
+				return nil, err
 			}
 		}
 
@@ -793,17 +876,19 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore: bs,
 		fileCache: make(map[string]FileNode),
+		rootPin:   NewPin(""),
 	}
 
 	rootNodeMap := make(map[string]*BlobAddr)
-	dn, err := ns.CreateTreeNode(rootNodeMap)
+	root, err := ns.CreateTreeNode(rootNodeMap)
 	if err != nil {
 		return nil, err
 	}
 
-	dn.Take()
+	root.Take()
+	ns.recursiveTake(ns.rootPin, root)
 
-	ns.root = dn
+	ns.root = root
 	return ns, nil
 }
 
@@ -811,6 +896,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, er
 	ns := &NameStore{
 		BlobStore: bs,
 		fileCache: make(map[string]FileNode),
+		rootPin:   NewPin(""),
 	}
 
 	rootCf, err := ns.typeToMetadata(rootAddr)
@@ -825,6 +911,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, er
 	}
 
 	root.Take()
+	ns.recursiveTake(ns.rootPin, root)
 
 	ns.root = root
 	return ns, nil
@@ -1167,8 +1254,8 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 			}
 
 			childNode, err := ns.loadFileNode(childAddr)
-				if err != nil {
-					log.Panicf("couldn't load %s: %v", childAddr.String(), err)
+			if err != nil {
+				log.Panicf("couldn't load %s: %v", childAddr.String(), err)
 			}
 
 			ns.dumpTreeNode(indent+"  ", childNode, childName)
@@ -1295,9 +1382,9 @@ func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs ma
 		for _, childName := range names {
 			childAddr := children[childName]
 			childNode, err := ns.loadFileNode(childAddr)
-				if err != nil {
-					fmt.Printf("  ERROR loading child %s: %v\n", childName, err)
-					continue
+			if err != nil {
+				fmt.Printf("  ERROR loading child %s: %v\n", childName, err)
+				continue
 			}
 
 			childPath := path
