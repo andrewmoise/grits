@@ -256,14 +256,10 @@ func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 	}
 
 	for _, childAddr := range children {
-		childNode, exists := ns.fileCache[childAddr.String()]
-		if !exists {
-			var err error
-			childNode, err = ns.loadFileNode(childAddr)
+		childNode, err := ns.loadFileNode(childAddr)
 			if err != nil {
 				log.Panicf("couldn't load %s: %v", childAddr.String(), err)
 			}
-		}
 		ns.debugPrintTree(childNode, indent+"  ")
 	}
 }
@@ -451,13 +447,6 @@ func (ns *NameStore) GetFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	// Check cache first
-	if node, exists := ns.fileCache[metadataAddr.String()]; exists {
-		node.Take()
-		return node, nil
-	}
-
-	// Not in cache, load it
 	node, err := ns.loadFileNode(metadataAddr)
 	if err != nil {
 		return nil, err
@@ -512,13 +501,9 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
 			}
 		}
 
-		childNode, exists := ns.fileCache[childAddr.String()]
-		if !exists {
-			var err error
-			childNode, err = ns.loadFileNode(childAddr)
+		childNode, err := ns.loadFileNode(childAddr)
 			if err != nil {
 				return nil, err
-			}
 		}
 
 		node = childNode // Move to the next node in the path
@@ -754,12 +739,9 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 	oldChildAddr, exists := oldChildren[parts[0]]
 	var oldChild FileNode
 	if exists {
-		oldChild, exists = ns.fileCache[oldChildAddr.String()]
-		if !exists {
 			oldChild, err = ns.loadFileNode(oldChildAddr)
 			if err != nil {
 				return nil, fmt.Errorf("can't load %s: %v", oldChildAddr.String(), err)
-			}
 		}
 	} else if len(parts) > 1 {
 		// Directory doesn't exist while searching down in the path while doing a link
@@ -770,13 +752,9 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 		if metadataAddr == nil {
 			newValue = nil
 		} else {
-			var exists bool
-			newValue, exists = ns.fileCache[metadataAddr.String()]
-			if !exists {
 				newValue, err = ns.loadFileNode(metadataAddr)
 				if err != nil {
 					return nil, err
-				}
 			}
 		}
 
@@ -841,13 +819,6 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, er
 	}
 	defer rootCf.Release()
 
-	// Check if we already have this node cached
-	if root, exists := ns.fileCache[rootCf.GetAddress().String()]; exists {
-		ns.root = root
-		return ns, nil
-	}
-
-	// If not, load and set it up
 	root, err := ns.loadFileNode(rootCf.GetAddress())
 	if err != nil {
 		return nil, err
@@ -892,10 +863,17 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 	return metadataCf, nil
 }
 
+// Get a file node, return it (same as GetFileNode(), but no reference or lock taken)
+
 func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 	//log.Printf("We try to chase down %s\n", metadataAddr.String())
 
-	// First load and parse the metadata
+	cachedNode, exists := ns.fileCache[metadataAddr.String()]
+	if exists {
+		return cachedNode, nil
+	}
+
+	// If not, we have to load it. First load and parse the metadata.
 	metadataCf, err := ns.BlobStore.ReadFile(metadataAddr)
 	if err != nil {
 		return nil, fmt.Errorf("error reading metadata %s: %v", metadataAddr.String(), err)
@@ -1188,13 +1166,9 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 				log.Panicf("couldn't find %s", childName)
 			}
 
-			childNode, exists := ns.fileCache[childAddr.String()]
-			if !exists {
-				var err error
-				childNode, err = ns.loadFileNode(childAddr)
+			childNode, err := ns.loadFileNode(childAddr)
 				if err != nil {
 					log.Panicf("couldn't load %s: %v", childAddr.String(), err)
-				}
 			}
 
 			ns.dumpTreeNode(indent+"  ", childNode, childName)
@@ -1320,14 +1294,10 @@ func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs ma
 
 		for _, childName := range names {
 			childAddr := children[childName]
-			childNode, exists := ns.fileCache[childAddr.String()]
-			if !exists {
-				var err error
-				childNode, err = ns.loadFileNode(childAddr)
+			childNode, err := ns.loadFileNode(childAddr)
 				if err != nil {
 					fmt.Printf("  ERROR loading child %s: %v\n", childName, err)
 					continue
-				}
 			}
 
 			childPath := path
