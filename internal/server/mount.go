@@ -17,24 +17,7 @@ import (
 )
 
 /////
-// Timeline
-
-// * Already done, I think: NodeLookuper,
-//   NodeReaddirer
-
-// * Minimal implementation phase (we need this right away if we're
-//   even trying to just do reading and navigation): NodeGetattrer,
-//   NodeOpener, NodeReader
-
-// * Writing implementation (somewhat complex because of copy-on-write
-//   semantics -- I'll honestly have to construct a new abstraction of
-//   an "in flight being-modified file" in order for this thing to
-//   work): NodeWriter, NodeFlusher, NodeReleaser (we need to manage
-//   some of our object lifetimes in ways that will wind up a little
-//   bit complex), NodeCreater, NodeUnlinker
-
-// * Directories (needs even more modifications for weird reasons,
-//   nice to do it in 2 phases): NodeMkdirer, NodeRmdirer
+// Todo list
 
 // * Polish (not really needed but what the heck let's try to make it
 //   nice and all): NodeStatfser, NodeFsyncer, NodeRenamer
