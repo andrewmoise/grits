@@ -124,6 +124,14 @@ func (bn *BlobNode) Take() {
 	bn.mtx.Lock()
 	defer bn.mtx.Unlock()
 
+	if DebugRefCounts {
+		log.Printf("TAKE: %s %p (count: %d)",
+			bn.AddressString(),
+			bn,
+			bn.refCount+1)
+		PrintStack()
+	}
+
 	bn.refCount++
 }
 
@@ -131,8 +139,17 @@ func (bn *BlobNode) Release() {
 	bn.mtx.Lock()
 	defer bn.mtx.Unlock()
 
+	if DebugRefCounts {
+		log.Printf("RELEASE: %s %p (count: %d)",
+			bn.AddressString(),
+			bn,
+			bn.refCount-1)
+		PrintStack()
+	}
+
 	bn.refCount--
 	if bn.refCount < 0 {
+		PrintStack()
 		log.Fatalf("Reduced ref count for %s to < 0", bn.AddressString())
 	}
 
@@ -184,12 +201,28 @@ func (tn *TreeNode) Take() {
 	tn.mtx.Lock()
 	defer tn.mtx.Unlock()
 
+	if DebugRefCounts {
+		log.Printf("TAKE: %s %p (count: %d)",
+			tn.AddressString(),
+			tn,
+			tn.refCount+1)
+		PrintStack()
+	}
+
 	tn.refCount++
 }
 
 func (tn *TreeNode) Release() {
 	tn.mtx.Lock()
 	defer tn.mtx.Unlock()
+
+	if DebugRefCounts {
+		log.Printf("RELEASE: %s %p (count: %d)",
+			tn.AddressString(),
+			tn,
+			tn.refCount-1)
+		PrintStack()
+	}
 
 	tn.refCount--
 	if tn.refCount < 0 {
@@ -908,6 +941,11 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 			nameStore:    ns,
 		}
 
+		if DebugRefCounts {
+			log.Printf("Creating tree node %p", dn)
+			PrintStack()
+		}
+
 		defer func() { // In case of error
 			if dn != nil {
 				delete(ns.fileCache, metadataAddr.String())
@@ -945,6 +983,11 @@ func (ns *NameStore) CreateTreeNode(children map[string]*BlobAddr) (*TreeNode, e
 	tn := &TreeNode{
 		ChildrenMap: children,
 		nameStore:   ns,
+	}
+
+	if DebugRefCounts {
+		log.Printf("Creating tree node %p", tn)
+		PrintStack()
 	}
 
 	// Create and serialize the directory listing
@@ -1164,7 +1207,7 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 
 // DebugReferenceCountsRecursive walks the entire namespace tree and prints reference count information
 // for all nodes, while also identifying orphaned blobs
-func (ns *NameStore) DebugReferenceCounts() error {
+func (ns *NameStore) PrintBlobStorageDebugging() error {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
