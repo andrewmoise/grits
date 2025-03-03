@@ -790,6 +790,8 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 		return nil, err
 	}
 
+	dn.Take()
+
 	ns.root = dn
 	return ns, nil
 }
@@ -817,6 +819,8 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, er
 	if err != nil {
 		return nil, err
 	}
+
+	root.Take()
 
 	ns.root = root
 	return ns, nil
