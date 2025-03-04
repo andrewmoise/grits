@@ -30,7 +30,7 @@ import (
 // recursiveLink() can work in exactly the same fashion with mutable nodes as with immutable
 // ones. It's just going to be winding up making mutable copies of any immutable stuff it finds,
 // or modifying in-place any mutable stuff it finds and then returning it unchanged. We just have
-// to keep our invariant that if a mutable node every gets a reference count taken (taking its
+// to keep our invariant that if a mutable node ever gets a reference count taken (taking its
 // refCount to 2), it needs to become immutable before returning. That means it's being linked
 // in two places and the second one shouldn't change because the first did.
 
@@ -40,7 +40,7 @@ import (
 // LookupNode() is perfect, no change
 
 // LookupFull() should start to return nodes. We just need to take away the ".AddressString()"
-// in it, and worry slightly about reference counting or something.
+// in it, and worry about reference counting.
 
 // Likewise resolvePath() is already converted, nothing to do for now.
 
