@@ -35,6 +35,7 @@ type Volume interface {
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
 
+	GetEmptyDirContentAddr() *grits.BlobAddr
 	GetEmptyDirAddr() *grits.TypedFileAddr
 
 	RegisterWatcher(watcher grits.FileTreeWatcher)

@@ -628,16 +628,16 @@ const (
 
 type LinkRequest struct {
 	Path     string
-	Addr     *TypedFileAddr
-	PrevAddr *TypedFileAddr
+	Addr     *TypedFileAddr // We'll create a new metadata blob for this
+	PrevAddr *BlobAddr      // Must be the existing metadata addr
 	Assert   uint32
 }
 
-func matchesAddr(a FileNode, b *TypedFileAddr) bool {
+func matchesAddr(a FileNode, b *BlobAddr) bool {
 	if a == nil {
 		return b == nil
 	} else {
-		return b != nil && a.Address().Equals(&b.BlobAddr)
+		return b != nil && a.MetadataBlob().GetAddress().Equals(b)
 	}
 }
 
@@ -646,6 +646,10 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 	defer ns.mtx.Unlock()
 
 	for _, req := range requests {
+		if DebugLinks {
+			log.Printf("Checking assertion: %d", req.Assert)
+		}
+
 		if req.Assert == 0 {
 			continue
 		}
@@ -657,26 +661,50 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 		node := nodes[len(nodes)-1]
 
 		if req.Assert&AssertPrevValueMatches != 0 {
+			if DebugLinks {
+				log.Printf("  Prev value matches")
+			}
 			if !matchesAddr(node, req.PrevAddr) {
 				return ErrAssertionFailed
+			}
+			if DebugLinks {
+				log.Printf("  pass")
 			}
 		}
 
 		if req.Assert&AssertIsBlob != 0 {
+			if DebugLinks {
+				log.Printf("  Is blob")
+			}
 			if node == nil || node.Address().Type != Blob {
 				return ErrAssertionFailed
+			}
+			if DebugLinks {
+				log.Printf("  pass")
 			}
 		}
 
 		if req.Assert&AssertIsTree != 0 {
+			if DebugLinks {
+				log.Printf("  Is tree")
+			}
 			if node == nil || node.Address().Type != Tree {
 				return ErrAssertionFailed
+			}
+			if DebugLinks {
+				log.Printf("  pass")
 			}
 		}
 
 		if req.Assert&AssertIsNonEmpty != 0 {
+			if DebugLinks {
+				log.Printf("  Is nonempty")
+			}
 			if node == nil {
 				return ErrAssertionFailed
+			}
+			if DebugLinks {
+				log.Printf("  pass")
 			}
 		}
 	}
