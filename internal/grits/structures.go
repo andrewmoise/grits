@@ -217,6 +217,6 @@ func PrintStack() {
 	}
 
 	// Log the operation
-	log.Printf("Stack:\n\t%s\n",
+	log.Printf("Stack:\n\t%s\n\n",
 		strings.Join(callers, "\n\t"))
 }

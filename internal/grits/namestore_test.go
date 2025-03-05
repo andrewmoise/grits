@@ -106,6 +106,8 @@ func TestUpdatingFiles(t *testing.T) {
 	nameStore, blobStore, cleanup := setupNameStoreTestEnv(t)
 	defer cleanup()
 
+	nameStore.DebugDumpNamespace()
+
 	// Initial setup: Link a blob to /updateTest.txt
 	initialContent := []byte("Initial content")
 	initialBlobInterface, err := blobStore.AddDataBlock(initialContent)
@@ -120,6 +122,7 @@ func TestUpdatingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to link initial blob to updateTest.txt: %v", err)
 	}
+	nameStore.DebugDumpNamespace()
 
 	// Update the file: Link a new blob to /updateTest.txt
 	updatedContent := []byte("Updated content")
@@ -135,6 +138,7 @@ func TestUpdatingFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to link updated blob to updateTest.txt: %v", err)
 	}
+	nameStore.DebugDumpNamespace()
 
 	// Lookup /updateTest.txt and verify the blob reflects the update
 	cfInterface, err := nameStore.LookupAndOpen("updateTest.txt")
@@ -146,6 +150,7 @@ func TestUpdatingFiles(t *testing.T) {
 		t.Fatalf("Failed to assert type *LocalCachedFile")
 	}
 	defer cf.Release()
+	nameStore.DebugDumpNamespace()
 
 	// Read the content of the file from the BlobStore
 	readBlobInterface, err := blobStore.ReadFile(cf.GetAddress())
@@ -156,6 +161,7 @@ func TestUpdatingFiles(t *testing.T) {
 	if !ok {
 		t.Fatalf("Failed to assert type *LocalCachedFile")
 	}
+	nameStore.DebugDumpNamespace()
 
 	content, err := os.ReadFile(readBlob.GetPath())
 	if err != nil {
@@ -183,15 +189,19 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	}
 	defer emptyDir.Release()
 
+	nameStore.DebugDumpNamespace()
+
 	err = nameStore.LinkTree("dir", emptyDir.GetAddress())
 	if err != nil {
 		t.Errorf("Failed to mkdir dir")
 	}
+	nameStore.DebugDumpNamespace()
 
 	err = nameStore.LinkTree("dir/subdir", emptyDir.GetAddress())
 	if err != nil {
 		t.Errorf("Failed to mkdir dir/subdir")
 	}
+	nameStore.DebugDumpNamespace()
 
 	// Simulate linking a blob to "dir/subdir/file.txt"
 	cachedFileInterface, err := blobStore.AddDataBlock([]byte("file content"))
@@ -205,11 +215,13 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	if err := nameStore.LinkBlob("dir/subdir/file.txt", cachedFile.GetAddress(), cachedFile.GetSize()); err != nil {
 		t.Fatalf("Failed to link blob to dir/subdir/file.txt: %v", err)
 	}
+	nameStore.DebugDumpNamespace()
 
 	// Remove "/dir/subdir/file.txt" and verify it's no longer found
 	if err := nameStore.Link("dir/subdir/file.txt", nil); err != nil {
 		t.Fatalf("Failed to remove dir/subdir/file.txt: %v", err)
 	}
+	nameStore.DebugDumpNamespace()
 	if _, err := nameStore.LookupAndOpen("dir/subdir/file.txt"); err == nil {
 		t.Error("Expected dir/subdir/file.txt to be removed, but it was found")
 	}
@@ -218,6 +230,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	if err := nameStore.Link("dir", nil); err != nil {
 		t.Fatalf("Failed to remove /dir: %v", err)
 	}
+	nameStore.DebugDumpNamespace()
 	if _, err := nameStore.LookupAndOpen("dir/subdir"); err == nil {
 		t.Error("Expected dir/subdir to be removed along with dir, but it was found")
 	}
@@ -454,8 +467,8 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	ns.DumpFileCache()
 
-	if emptyDirNode.refCount != 1 {
-		t.Fatalf("Expected ref count 1 for emptyDirNode, got %d", emptyDirNode.refCount)
+	if emptyDirNode.refCount != 2 {
+		t.Fatalf("Expected ref count 2 for emptyDirNode, got %d", emptyDirNode.refCount)
 	}
 
 	// Check the metadata blob ref count
@@ -463,8 +476,8 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	if !ok {
 		t.Fatalf("Failed to cast metadata blob to LocalCachedFile")
 	}
-	if metadataBlob.RefCount != 2 {
-		t.Fatalf("Expected metadata blob ref count 2, got %d", metadataBlob.RefCount)
+	if metadataBlob.RefCount != 1 {
+		t.Fatalf("Expected metadata blob ref count 1, got %d", metadataBlob.RefCount)
 	}
 
 	// Check the content blob ref count
@@ -472,8 +485,8 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	if !ok {
 		t.Fatalf("Failed to cast content blob to LocalCachedFile")
 	}
-	if contentBlob.RefCount != 2 {
-		t.Fatalf("Expected content blob ref count 2, got %d", contentBlob.RefCount)
+	if contentBlob.RefCount != 1 {
+		t.Fatalf("Expected content blob ref count 1, got %d", contentBlob.RefCount)
 	}
 
 	// 2. Link blobs and dirs
@@ -495,6 +508,8 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		}
 	}
 
+	log.Printf("About to check step 2.")
+	ns.DebugDumpNamespace()
 	ns.DumpFileCache()
 
 	var errors []string
@@ -533,9 +548,9 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			}
 
 			// Both node and metadata blob should have ref count 1
-			if bn.refCount != 0 {
+			if bn.refCount != 1 {
 				errors = append(errors, fmt.Sprintf(
-					"File %d: Expected node reference count of 0, got %d",
+					"File %d: Expected node reference count of 1, got %d",
 					i, bn.refCount))
 			}
 
@@ -570,6 +585,13 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Fatalf("Failed to unlink five: %v", err)
 	}
 
+	log.Printf("About to check step 4.")
+	ns.DebugDumpNamespace()
+	ns.DumpFileCache()
+
+	log.Printf("Cleanup unreferenced nodes.")
+	ns.CleanupUnreferencedNodes()
+	ns.DebugDumpNamespace()
 	ns.DumpFileCache()
 
 	// FIXME -- All this reference count stuff is semi-obselete at this point,
@@ -578,7 +600,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	// 4. Check reference counts again
 	for i, cf := range allFiles {
 		var expectedContentRefCount int
-		if i > 5 {
+		if i > 5 || i == 1 || i == 5 {
 			expectedContentRefCount = 1
 		} else {
 			expectedContentRefCount = 2
@@ -595,7 +617,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		fn := ns.lookupNodeByContent(cf.GetAddress().String())
 
 		// Shouldn't have FileNodes for stuff that was never added
-		if i >= 6 {
+		if i >= 6 || expectedContentRefCount == 1 {
 			if fn != nil {
 				errors = append(errors, fmt.Sprintf(
 					"File %d: FileNode in cache, it shouldn't be",
@@ -621,7 +643,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		}
 
 		// Check node and metadata reference counts
-		if bn.refCount != 0 {
+		if bn.refCount != 1 {
 			errors = append(errors, fmt.Sprintf(
 				"File %d: After unlinking, expected node reference count of %d, got %d",
 				i, 0, bn.refCount))
@@ -645,11 +667,13 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Fatalf("Failed to unlink someplace: %v", err)
 	}
 
+	log.Printf("About to check step 5.")
+	ns.DebugDumpNamespace()
 	ns.DumpFileCache()
 
 	for i, cf := range allFiles {
 		var expectedRefCount int
-		if i > 5 {
+		if i > 5 || i == 1 || i == 5 {
 			expectedRefCount = 1
 		} else {
 			expectedRefCount = 2
@@ -675,9 +699,11 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	// 6. Try revision of the whole tree
 	log.Printf("--- Starting test 6, tree revision")
-	ns.DebugPrintTree(ns.root)
+
+	ns.DumpFileCache()
 
 	newRoot := make(map[string]string)
+	log.Printf("Old root metadata is: %s", ns.root.MetadataBlob().GetAddress().String())
 	newRoot["tree"] = ns.root.MetadataBlob().GetAddress().String()
 
 	newRootJson, err := json.Marshal(newRoot)
@@ -696,7 +722,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	rootContent.Release()
 
 	log.Printf("--- Verify tree setup")
-	ns.DebugPrintTree(ns.root)
+	ns.DebugDumpNamespace()
 
 	cf, err := ns.LookupAndOpen("tree/zero")
 	if err != nil {
@@ -765,7 +791,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		}
 
 		log.Printf("--- Modification %d\n", i)
-		ns.DebugPrintTree(ns.root)
+		ns.DebugDumpNamespace()
 	}
 
 	log.Printf("--- Release allFiles")
@@ -773,16 +799,21 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		cf.Release()
 	}
 
-	log.Printf("--- Check reference counts (in nodes)")
-	ns.DebugPrintTree(ns.root)
+	log.Printf("About to check step 6.")
+	ns.CleanupUnreferencedNodes()
 
-	expectedRefCounts := []int{0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+	// This is in the root pin refCount structure:
+	//expectedRefCounts := []int{1, 0, 0, 1, 1, 0, 2, 2, 2, 2}
+
+	// And this is actual in-node refCount:
+	expectedRefCounts := []int{1, 0, 0, 1, 1, 0, 1, 1, 1, 1}
 
 	for i, cf := range allFiles {
 		fn := ns.lookupNodeByContent(cf.GetAddress().String())
-		if fn == nil {
-			t.Fatalf("FileNode for %s not found in cache", cf.GetAddress().String())
+		if fn == nil && expectedRefCounts[i] == 0 {
 			continue
+		} else if fn != nil && expectedRefCounts[i] == 0 {
+			t.Fatalf("FileNode for %s shouldn't be in cache", cf.GetAddress().String())
 		}
 
 		blobNode, isBlobNode := fn.(*BlobNode)
@@ -817,20 +848,22 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	// 7. Try unlinking the whole tree and make sure things get cleaned up
 	log.Printf("--- Starting test 7, full unlink")
-	ns.DebugPrintTree(ns.root)
+	ns.DebugDumpNamespace()
 
 	err = ns.Link("", nil)
 	if err != nil {
 		t.Fatalf("Failed to unlink root: %v", err)
 	}
+	ns.CleanupUnreferencedNodes()
 
-	ns.DebugPrintTree(ns.root)
+	log.Printf("About to check step 7.")
+
 	for i, cf := range allFiles {
-		var expectedRefCount int
-		//if i <= 5 {
-		expectedRefCount = 1
+		//var expectedRefCount int
+		//if i <= 5 && i != 1 && i != 5 {
+		//	expectedRefCount := 1
 		//} else {
-		//	expectedRefCount = 0
+		expectedRefCount := 0
 		//}
 
 		if cf.RefCount != expectedRefCount {
