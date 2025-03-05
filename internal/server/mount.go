@@ -895,14 +895,28 @@ var _ = (fs.NodeRmdirer)((*gritsNode)(nil))
 func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	fullPath := filepath.Join(gn.path, name)
 
-	// Create the LinkRequest with the required details
-	req := &grits.LinkRequest{
-		Path:   fullPath,
-		Addr:   nil,
-		Assert: grits.AssertIsNonEmpty | grits.AssertIsTree,
+	dirNode, err := gn.module.volume.LookupNode(fullPath)
+	if grits.IsNotExist(err) {
+		return syscall.EEXIST
+	} else if err != nil {
+		return syscall.EIO
+	}
+	defer dirNode.Release()
+
+	emptyAddr := gn.module.volume.GetEmptyDirContentAddr()
+	if !dirNode.ExportedBlob().GetAddress().Equals(emptyAddr) {
+		return syscall.ENOTEMPTY
 	}
 
-	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
+	// Create the LinkRequest with the required details
+	req := &grits.LinkRequest{
+		Path:     fullPath,
+		Addr:     nil,
+		PrevAddr: dirNode.MetadataBlob().GetAddress(),
+		Assert:   grits.AssertIsTree | grits.AssertPrevValueMatches,
+	}
+
+	err = gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
 		log.Printf("5 NGN fail %v", err)
 		return syscall.EIO
@@ -927,25 +941,24 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 	}
 	newFullPath := filepath.Join(newGritsNode.path, newName)
 
-	addr, err := gn.module.volume.Lookup(fullPath)
-	if err != nil {
-		log.Printf("LU fail 6 %v", err)
-		return syscall.EIO
-	}
-	if addr == nil {
+	prevNode, err := gn.module.volume.LookupNode(fullPath)
+	if grits.IsNotExist(err) {
 		return syscall.ENOENT
+	} else if err != nil {
+		log.Printf("Error on rename: %v", err)
 	}
+	defer prevNode.Release()
 
 	oldNameReq := &grits.LinkRequest{
 		Path:     fullPath,
 		Addr:     nil,
-		PrevAddr: addr,
+		PrevAddr: prevNode.MetadataBlob().GetAddress(),
 		Assert:   grits.AssertPrevValueMatches,
 	}
 
 	newNameReq := &grits.LinkRequest{
 		Path:     newFullPath,
-		Addr:     addr,
+		Addr:     prevNode.Address(), // FIXME - this remakes a new metadata node, we should move the old one
 		PrevAddr: nil,
 		Assert:   grits.AssertPrevValueMatches,
 	}

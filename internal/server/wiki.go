@@ -70,6 +70,7 @@ func (wv *WikiVolume) Stop() error {
 	// Clean up our empty dir reference when stopping
 	if wv.emptyDirNode != nil {
 		wv.emptyDirNode.Release()
+		wv.emptyDirNode = nil
 	}
 
 	return result
@@ -119,14 +120,12 @@ func (wv *WikiVolume) Link(path string, addr *grits.TypedFileAddr) error {
 	return wv.ns.Link(path, addr)
 }
 
+func (wv *WikiVolume) GetEmptyDirContentAddr() *grits.BlobAddr {
+	return &wv.emptyDirNode.Address().BlobAddr
+}
+
 func (wv *WikiVolume) GetEmptyDirAddr() *grits.TypedFileAddr {
-	return &grits.TypedFileAddr{
-		BlobAddr: grits.BlobAddr{
-			Hash: wv.emptyDirNode.Address().Hash,
-		},
-		Size: wv.emptyDirNode.Address().Size,
-		Type: grits.Tree,
-	}
+	return wv.emptyDirNode.Address()
 }
 
 // MultiLink also needs updating since it's part of the same transition

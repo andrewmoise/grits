@@ -197,6 +197,7 @@ var DebugRefCounts = false   // Check reference counts when taking/releasing nod
 var DebugBlobStorage = false // Print periodic detailed stats about the blob store
 var DebugNameStore = false   // Debug NameStore main operations
 var DebugFileCache = false   // Debug NameStore file cache
+var DebugLinks = false       // Debug calls to Link()
 
 func PrintStack() {
 	// Get stack trace info
