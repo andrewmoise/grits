@@ -196,6 +196,7 @@ type CachedFile interface {
 var DebugRefCounts = false   // Check reference counts when taking/releasing nodes
 var DebugBlobStorage = false // Print periodic detailed stats about the blob store
 var DebugNameStore = false   // Debug NameStore main operations
+var DebugFileCache = false   // Debug NameStore file cache
 
 func PrintStack() {
 	// Get stack trace info

@@ -370,15 +370,21 @@ func (ns *NameStore) recursiveTake(pm *Pin, fn FileNode) error {
 	refCount, exists := pm.refCount[metadataHash]
 
 	if exists {
-		log.Printf("  already exists")
+		if DebugRefCounts {
+			log.Printf("  already exists")
+		}
 		if refCount <= 0 {
 			log.Fatalf("ref count for %s is nonpositive", metadataHash)
 		}
 
 		pm.refCount[metadataHash] = refCount + 1
-		log.Printf("Increment count! For %s, we go to %d", metadataHash, refCount+1)
+		if DebugRefCounts {
+			log.Printf("Increment count! For %s, we go to %d", metadataHash, refCount+1)
+		}
 	} else {
-		log.Printf("  doesn't exist")
+		if DebugRefCounts {
+			log.Printf("  doesn't exist")
+		}
 
 		fn.Take()
 		pm.refCount[metadataHash] = 1
@@ -979,13 +985,13 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 // This metadataAddr that is the index, it is
 
 func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (FileNode, error) {
-	if printDebug {
+	if printDebug && DebugFileCache {
 		log.Printf("We try to chase down %s\n", metadataAddr.String())
 	}
 
 	cachedNode, exists := ns.fileCache[metadataAddr.String()]
 	if exists {
-		if printDebug {
+		if printDebug && DebugFileCache {
 			log.Printf("  found: %p", cachedNode)
 		}
 		return cachedNode, nil
@@ -1025,7 +1031,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 			metadataBlob: metadataCf,
 			refCount:     0,
 		}
-		if printDebug {
+		if printDebug && DebugFileCache {
 			log.Printf("  created blob: %p", bn)
 		}
 
@@ -1041,7 +1047,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 			nameStore:    ns,
 		}
 
-		if printDebug {
+		if printDebug && DebugFileCache {
 			log.Printf("  created tree: %p", dn)
 		}
 
@@ -1075,7 +1081,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 		}
 
 		ns.fileCache[metadataAddr.String()] = dn
-		if printDebug {
+		if printDebug && DebugFileCache {
 			log.Printf("  putting in file cache at %s", metadataAddr.String())
 		}
 		resultDn := dn
