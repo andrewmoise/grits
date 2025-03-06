@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -37,13 +38,17 @@ type MountModule struct {
 
 	volume       Volume
 	inodeManager *InodeManager
+
+	dirtyNodesMtx sync.RWMutex
+	dirtyNodesMap map[string]*gritsNode
 }
 
 func NewMountModule(server *Server, config *MountModuleConfig) *MountModule {
 	return &MountModule{
-		config:       config,
-		gritsServer:  server,
-		inodeManager: NewInodeManager(),
+		config:        config,
+		gritsServer:   server,
+		inodeManager:  NewInodeManager(),
+		dirtyNodesMap: make(map[string]*gritsNode),
 	}
 }
 
@@ -66,10 +71,15 @@ func (mm *MountModule) Start() error {
 		path:   "",
 	}
 
+	// Root is always inode 1 in FUSE
+	mm.inodeManager.Lock()
+	mm.inodeManager.inodeMap[""] = 1
+	mm.inodeManager.Unlock()
+
 	var err error
 	mm.fsServer, err = fs.Mount(mntDir, root, &fs.Options{
 		MountOptions: fuse.MountOptions{
-			//Debug:                    true,
+			Debug:                    grits.DebugFuse,
 			Name:                     "grits",
 			DisableXAttrs:            true,
 			ExplicitDataCacheControl: true,
@@ -110,10 +120,10 @@ func (mm *MountModule) Stop() error {
 type gritsNode struct {
 	fs.Inode
 	module *MountModule
-	path   string
+	mtx    sync.Mutex // Protecting all the below
 
-	mtx      sync.Mutex // Protecting all the below
-	refCount int        // Reference count of open FUSE file handles
+	path     string
+	refCount int // Reference count of open FUSE file handles
 
 	// These are mutually exclusive:
 	tmpFile    *os.File         // If dirty, the temp file
@@ -121,18 +131,60 @@ type gritsNode struct {
 
 	// This is the open FH, in both cases, meaning you need to close + reopen it when you're switching:
 	openFile io.ReadSeekCloser
+
+	// Odd corner case: If this file is dirty, and has been unlinked already or something
+	isDangling bool
 }
 
 func newGritsNode(ctx context.Context, parent *fs.Inode, path string, mode uint32, module *MountModule) (*fs.Inode, *gritsNode, error) {
 	operations := &gritsNode{
-		module: module,
-		path:   path,
+		module:     module,
+		path:       path,
+		isDangling: false,
 	}
 	stable := fs.StableAttr{
 		Mode: mode,
 		Ino:  module.inodeManager.AssignInode(path),
 	}
 	return parent.NewInode(ctx, operations, stable), operations, nil
+}
+
+/////
+// Dirty node tracking
+
+// Track a node as dirty
+func (mm *MountModule) addDirtyNode(path string, node *gritsNode) {
+	mm.dirtyNodesMtx.Lock()
+	defer mm.dirtyNodesMtx.Unlock()
+	mm.dirtyNodesMap[path] = node
+
+	if grits.DebugFuse {
+		log.Printf("Added dirty node. Full list:")
+		for path := range mm.dirtyNodesMap {
+			log.Printf("  %s", path)
+		}
+	}
+}
+
+// Remove a node from the dirty list
+func (mm *MountModule) removeDirtyNode(path string) {
+	mm.dirtyNodesMtx.Lock()
+	defer mm.dirtyNodesMtx.Unlock()
+	delete(mm.dirtyNodesMap, path)
+
+	if grits.DebugFuse {
+		log.Printf("Removed dirty node. Full list after:")
+		for path := range mm.dirtyNodesMap {
+			log.Printf("  %s", path)
+		}
+	}
+}
+
+// Check if a path exists in the dirty nodes map
+func (mm *MountModule) getDirtyNode(path string) *gritsNode {
+	mm.dirtyNodesMtx.RLock()
+	defer mm.dirtyNodesMtx.RUnlock()
+	return mm.dirtyNodesMap[path]
 }
 
 /////
@@ -200,7 +252,10 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		return nil, syscall.ENOTDIR
 	}
 
+	// Build the initial result set from the underlying storage
 	r := make([]fuse.DirEntry, 0, len(children))
+	existingNames := make(map[string]struct{}) // Track existing names to avoid duplicates
+
 	for name, nodeAddr := range children {
 		childNode, err := gn.module.volume.GetFileNode(nodeAddr)
 		if err != nil {
@@ -222,8 +277,50 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 			Mode: mode,
 		}
 		r = append(r, d)
+		existingNames[name] = struct{}{} // Mark this name as existing
 	}
 
+	// Now check the dirty nodes map for additional entries
+	gn.module.dirtyNodesMtx.RLock()
+	prefix := gn.path
+	if prefix != "/" && !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
+	for dirtyPath, dirtyNode := range gn.module.dirtyNodesMap {
+		// Skip if this isn't a direct child of the current directory
+		if !strings.HasPrefix(dirtyPath, prefix) {
+			continue
+		}
+
+		// Skip if already deleted
+		if dirtyNode.isDangling {
+			continue
+		}
+
+		// Extract name (remaining path after prefix)
+		remainingPath := dirtyPath[len(prefix):]
+
+		// Skip if this contains any subdirectories
+		if strings.Contains(remainingPath, "/") {
+			continue
+		}
+
+		// Skip if we already have this entry from the underlying storage
+		if _, exists := existingNames[remainingPath]; exists {
+			continue
+		}
+
+		// Add this entry to the results
+		d := fuse.DirEntry{
+			Name: remainingPath,
+			Mode: dirtyNode.Mode(),
+		}
+		r = append(r, d)
+	}
+	gn.module.dirtyNodesMtx.RUnlock()
+
+	// Sort the combined results
 	sort.Slice(r, func(i, j int) bool {
 		return r[i].Name < r[j].Name
 	})
@@ -259,7 +356,41 @@ var _ = (fs.NodeLookuper)((*gritsNode)(nil))
 
 func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
-	//log.Printf("--- Looking up %s %s => %s\n", gn.path, name, fullPath)
+	if grits.DebugFuse {
+		log.Printf("--- Looking up %s %s => %s\n", gn.path, name, fullPath)
+	}
+
+	// First check if this path is in the dirty nodes map
+	gn.module.dirtyNodesMtx.Lock()
+	if dirtyNode := gn.module.dirtyNodesMap[fullPath]; dirtyNode != nil {
+		// We found a dirty node, use its inode directly
+		dirtyNode.mtx.Lock()
+		defer dirtyNode.mtx.Unlock()
+		gn.module.dirtyNodesMtx.Unlock()
+
+		if dirtyNode.isDangling {
+			log.Printf("Can't happen - node %s is dangling but in dirty map", fullPath)
+			return nil, syscall.EIO
+		}
+
+		out.Size = 0 // Will be determined based on the dirty file
+		out.Mode = dirtyNode.Mode()
+		out.Owner.Uid = ownerUid
+		out.Owner.Gid = ownerGid
+
+		// If the node has a tmpFile, get its size
+		if dirtyNode.tmpFile != nil {
+			stat, err := dirtyNode.tmpFile.Stat()
+			if err == nil {
+				out.Size = uint64(stat.Size())
+			}
+		}
+
+		log.Printf("  Return result %v for %s", &dirtyNode.Inode, name)
+		return &dirtyNode.Inode, fs.OK
+	} else {
+		gn.module.dirtyNodesMtx.Unlock()
+	}
 
 	node, err := gn.module.volume.LookupNode(fullPath)
 	if grits.IsNotExist(err) {
@@ -290,6 +421,10 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	out.Owner.Uid = ownerUid
 	out.Owner.Gid = ownerGid
 
+	if grits.DebugFuse {
+		log.Printf("  New clean result %v for %s", newInode, fullPath)
+	}
+
 	return newInode, fs.OK
 }
 
@@ -313,27 +448,52 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
+	if grits.DebugFuse {
+		log.Printf("Getattr")
+	}
+
 	if gn.tmpFile == nil {
+		if grits.DebugFuse {
+			log.Printf("  no tmpfile")
+		}
 		node, err := gn.module.volume.LookupNode(gn.path)
 		if grits.IsNotExist(err) {
+			if grits.DebugFuse {
+				log.Printf("    no lookup success on %s", gn.path)
+			}
 			return syscall.ENOENT
 		} else if err != nil {
+			if grits.DebugFuse {
+				log.Printf("    internal error")
+			}
 			return syscall.EIO
 		}
 		defer node.Release()
 
 		out.Size = uint64(node.Address().Size)
 	} else if gn.openFile != nil {
+		if grits.DebugFuse {
+			log.Printf("  no open file")
+		}
+
 		size, err := gn.openFile.Seek(0, io.SeekEnd)
 		if err != nil {
+			if grits.DebugFuse {
+				log.Printf("    internal error")
+			}
+
 			log.Printf("Seek fail %v", err)
 			return syscall.EIO
 		}
 
 		out.Size = uint64(size)
 	} else {
-		log.Printf("7 GN fail")
+		log.Printf("  7 GN fail")
 		return syscall.EIO
+	}
+
+	if grits.DebugFuse {
+		log.Printf("  all good")
 	}
 
 	out.Mode = gn.Mode()
@@ -446,7 +606,12 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 //
 // You need to call this either with truncLen == 0, or with a cachedFile
 // all set up for it to copy the temp file from
+//
+// You need to have the gn mutex held when calling this
+
 func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
+	wasDirty := (gn.tmpFile != nil)
+
 	if gn.tmpFile != nil {
 		// Truncate if required
 		if truncLen != -1 {
@@ -508,10 +673,18 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 	gn.tmpFile = tmpFile
 	tmpFile = nil // Prevent cleanup
 
+	// FIXME - Can this get reached from multiple calls at once, simultaneous operations on the
+	// same file or etc?
+	if !wasDirty {
+		gn.module.addDirtyNode(gn.path, gn)
+	}
+
 	return fs.OK
 }
 
 // Write this file to the blob cache if needed, make sure our edits if any are saved
+//
+// You need to hold the lock on gn when calling this
 
 func (gn *gritsNode) flush() syscall.Errno {
 	if gn.openFile == nil || gn.tmpFile == nil {
@@ -528,21 +701,26 @@ func (gn *gritsNode) flush() syscall.Errno {
 		return fs.ToErrno(err)
 	}
 
-	cf, err := gn.module.volume.AddBlob(tmpFile)
-	if err != nil {
-		log.Printf("ab fail %v", err)
-		return syscall.EIO
-	}
+	if !gn.isDangling {
+		cf, err := gn.module.volume.AddBlob(tmpFile)
+		if err != nil {
+			log.Printf("ab fail %v", err)
+			return syscall.EIO
+		}
 
-	if gn.cachedFile != nil {
-		log.Panicf("Can't happen - dirty file but CF is set")
-	}
-	gn.cachedFile = cf
+		if gn.cachedFile != nil {
+			log.Panicf("Can't happen - dirty file but CF is set")
+		}
+		gn.cachedFile = cf
 
-	typedAddr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
-	err = gn.module.volume.Link(gn.path, typedAddr)
-	if err != nil {
-		return fs.ToErrno(err)
+		typedAddr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
+		err = gn.module.volume.Link(gn.path, typedAddr)
+		if err != nil {
+			return fs.ToErrno(err)
+		}
+
+		// Node is now clean, remove from dirty map
+		gn.module.removeDirtyNode(gn.path)
 	}
 
 	return fs.OK
@@ -869,6 +1047,14 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 var _ = (fs.NodeUnlinker)((*gritsNode)(nil))
 
 func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	gn.mtx.Lock()
+	defer gn.mtx.Unlock()
+
+	if gn.isDangling {
+		// Pretty sure this can't happen -- it's already been unlinked in this case
+		return syscall.EIO
+	}
+
 	fullPath := filepath.Join(gn.path, name)
 
 	// Create the LinkRequest with the required details
@@ -883,6 +1069,8 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		log.Printf("4 NGN fail %v", err)
 		return syscall.EIO
 	}
+
+	gn.module.removeDirtyNode(fullPath)
 
 	return fs.OK
 }
@@ -929,44 +1117,163 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 // one. The change is effected in the FS tree if the return status is
 // OK. Default is to return ENOTSUP.
 
-var _ = (fs.NodeRmdirer)((*gritsNode)(nil))
+var _ = (fs.NodeRenamer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
+	if grits.DebugFuse {
+		log.Printf("Rename (in %s): %s to %s", gn.path, name, newName)
+	}
+
 	fullPath := filepath.Join(gn.path, name)
 
 	newGritsNode, ok := newParent.(*gritsNode)
 	if !ok {
-		log.Printf("Rename fail")
+		log.Printf("Rename fail - new parent not a gritsNode")
 		return syscall.EIO
 	}
-	newFullPath := filepath.Join(newGritsNode.path, newName)
+	fullNewPath := filepath.Join(newGritsNode.path, newName)
 
-	prevNode, err := gn.module.volume.LookupNode(fullPath)
-	if grits.IsNotExist(err) {
-		return syscall.ENOENT
-	} else if err != nil {
-		log.Printf("Error on rename: %v", err)
-	}
-	defer prevNode.Release()
+	gn.module.dirtyNodesMtx.Lock()
 
-	oldNameReq := &grits.LinkRequest{
-		Path:     fullPath,
-		Addr:     nil,
-		PrevAddr: prevNode.MetadataBlob().GetAddress(),
-		Assert:   grits.AssertPrevValueMatches,
+	if grits.DebugFuse {
+		log.Printf("  dirty nodes lock")
+		log.Printf("  look for %s in:", fullPath)
+		for path, _ := range gn.module.dirtyNodesMap {
+			log.Printf("    %s", path)
+		}
 	}
 
-	newNameReq := &grits.LinkRequest{
-		Path:     newFullPath,
-		Addr:     prevNode.Address(), // FIXME - this remakes a new metadata node, we should move the old one
-		PrevAddr: nil,
-		Assert:   grits.AssertPrevValueMatches,
+	dirtyNode, exists := gn.module.dirtyNodesMap[fullPath]
+	if exists {
+		// Source is dirty, so it's complex
+
+		log.Printf("  dirty node lock")
+
+		dirtyNode.mtx.Lock()
+		dirtyNode.path = fullNewPath
+
+		err := gn.module.volume.Link(fullPath, nil)
+		if grits.IsNotDir(err) || grits.IsNotExist(err) {
+			// Having an error is actually fine here, we don't care too much about the source
+			// as it may not exist yet in the merkle tree. As long as it's not some internal
+			// issue, we're fine.
+		} else if err != nil {
+			dirtyNode.mtx.Unlock()
+			gn.module.dirtyNodesMtx.Unlock()
+			return syscall.EIO
+		}
+
+		// Note! if there's already something there, in the dirty map, we may make it
+		// unreachable. That should be fine, FUSE can still find it and we'll wind up
+		// finding it again when it's flushed.
+		gn.module.dirtyNodesMap[fullNewPath] = dirtyNode
+		delete(gn.module.dirtyNodesMap, fullPath)
+
+		dirtyNode.mtx.Unlock()
+		gn.module.dirtyNodesMtx.Unlock()
+
+	} else {
+		gn.module.dirtyNodesMtx.Unlock()
+
+		// Source is clean, we do merkle tree operations
+
+		if grits.DebugFuse {
+			log.Printf("  lookup node")
+		}
+
+		prevNode, err := gn.module.volume.LookupNode(fullPath)
+		if grits.IsNotExist(err) {
+			return syscall.ENOENT
+		} else if err != nil {
+			log.Printf("Error on rename: %v", err)
+			return syscall.EIO
+		}
+
+		oldNameReq := &grits.LinkRequest{
+			Path:     fullPath,
+			Addr:     nil,
+			PrevAddr: prevNode.MetadataBlob().GetAddress(),
+			Assert:   grits.AssertPrevValueMatches,
+		}
+
+		newNameReq := &grits.LinkRequest{
+			Path: fullNewPath,
+			Addr: prevNode.Address(), // FIXME - this remakes a new metadata node, we should move the old one
+			//PrevAddr: nil,
+			//Assert:   grits.AssertPrevValueMatches,
+		}
+
+		err = gn.module.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq})
+		prevNode.Release()
+		if grits.IsNotDir(err) {
+			return syscall.ENOTDIR
+		} else if grits.IsAssertionFailed(err) {
+			return syscall.EINVAL
+		} else if err != nil {
+			log.Printf("Problems doing rename of %s to %s: %v", fullPath, fullNewPath, err)
+			// Internal error? Of some kind?
+			return syscall.EIO
+		}
 	}
 
-	err = gn.module.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq})
-	if err != nil {
-		return syscall.EINVAL
+	// Try to get the node that's being renamed
+	childInode := gn.GetChild(name)
+	var childNode *gritsNode
+	if childInode != nil {
+		if cn, ok := childInode.Operations().(*gritsNode); ok {
+			childNode = cn
+			// Update the path in the node itself
+			childNode.mtx.Lock()
+			childNode.path = fullNewPath
+			childNode.mtx.Unlock()
+			if grits.DebugFuse {
+				log.Printf("Updated path for node %s to %s", name, fullNewPath)
+			}
+		}
 	}
 
+	// Okay, if we got to this point, we succeeded. Need to update our inode manager
+	// that things have changed.
+
+	if grits.DebugFuse {
+		log.Printf("  inode manager lock")
+	}
+
+	gn.module.inodeManager.Lock()
+	gn.module.inodeManager.inodeMap[fullNewPath] = gn.module.inodeManager.inodeMap[fullPath]
+	oldParentInode, oldParentExists := gn.module.inodeManager.inodeMap[gn.path]
+	newParentInode, newParentExists := gn.module.inodeManager.inodeMap[newGritsNode.path]
+	oldChildInode, oldChildExists := gn.module.inodeManager.inodeMap[fullPath]
+	delete(gn.module.inodeManager.inodeMap, fullPath)
+	gn.module.inodeManager.Unlock()
+
+	if !oldParentExists {
+		log.Printf("Can't find old parent in inode map for %s", gn.path)
+		return syscall.EIO
+	}
+	if !oldChildExists {
+		log.Printf("Can't find old child in inode map for %s", fullPath)
+		return syscall.EIO
+	}
+	if !newParentExists {
+		log.Printf("Can't find new parent in inode map for %s", fullNewPath)
+		return syscall.EIO
+	}
+
+	go func() {
+		if grits.DebugFuse {
+			log.Printf("Notifying: oldParent=%d, child=%d, newParent=%d",
+				oldParentInode, oldChildInode, newParentInode)
+		}
+		gn.module.fsServer.DeleteNotify(oldParentInode, oldChildInode, name)
+		gn.module.fsServer.EntryNotify(newParentInode, newName)
+		if grits.DebugFuse {
+			log.Printf("Done with notifications.")
+		}
+	}()
+
+	if grits.DebugFuse {
+		log.Printf("  all done")
+	}
 	return fs.OK
 }
