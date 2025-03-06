@@ -198,6 +198,7 @@ var DebugBlobStorage = false // Print periodic detailed stats about the blob sto
 var DebugNameStore = false   // Debug NameStore main operations
 var DebugFileCache = false   // Debug NameStore file cache
 var DebugLinks = false       // Debug calls to Link()
+var DebugFuse = false        // Debug FUSE mounting
 
 func PrintStack() {
 	// Get stack trace info
