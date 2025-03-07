@@ -53,17 +53,33 @@ There are also bits and pieces of the web API, the service worker, things like t
 
 ## Roadmap
 
-The roadmap, more or less, is:
+The big roadmap, more or less, is:
 
-* First-cut of various core pieces and rough testing (done)
+* First cut of various core pieces and rough testing (done)
 * [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree) basic storage fundamentals (done)
-* FUSE mounting (done)
-* Reuse some of IPFS instead, refactor, fix and polish (WE ARE HERE - currently in progress)
+* FUSE mounting (semi-done, needs work)
+* Reuse some of IPFS instead, refactor, fix and polish (done)
+* Service worker (WIP)
+* Remote mounting (todo)
 * DHT and node-to-node communication (todo)
-* Service worker (todo)
 * Real production server tooling / testing / configurability / polish (todo)
 * Performance (todo)
 * Production polish and what's needed for real server operation (todo)
+
+Smaller roadmap, sort of immediate big chunks:
+* Make the service worker work
+* Make remote mounts work
+* Make deployments work
+
+Minor punch list:
+
+* Why do intermediate directory entry blobs stay around when they should be getting freed?
+* Why does `git checkout` fail on pread() in the FUSE mount?
+* Switch to mmap instead of stream file I/O for blobs
+* Chunking of files
+* Useful file metadata (owner, file mode, timestamp), make "type" not numeric
+* Make rename() transition the metadata node, instead of constructing a new one
+* Chunked directories
 
 ## Obvious questions
 
@@ -71,7 +87,7 @@ The roadmap, more or less, is:
 
 Yeah, kind of. I'd like to reuse, definitely at least, IPFS's block store and transport libraries. I'm not sure it makes sense to have the nodes needing to run full IPFS nodes with their 6GiB memory requirements, or to have the service worker needing to bring in the whole IPFS client library in order to just do DHT lookups, so I may want to reimplement some pieces and then have them sit on top of already-proven IPFS stuff.
 
-Also, we're solving a substantially smaller problem than IPFS -- we're doing a small network of fairly persistent non-anonymous nodes, with a single trusted center, and so a lot of the harder problems that IPFS is solving, we don't have to pay the computational and design costs for solutions to.
+Also, we're solving a substantially smaller problem than IPFS -- we're doing a small network of fairly persistent non-anonymous nodes, with a single trusted center, and so a lot of the harder problems that IPFS is solving, we don't have to pay the computational and design costs for solutions to. We can have lower latency, we can give more direct control over some things like pinning and volume permissions, that sort of thing.
 
 ### Won't this be subject to malicious nodes?
 
