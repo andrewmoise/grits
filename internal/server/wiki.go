@@ -120,8 +120,8 @@ func (wv *WikiVolume) Link(path string, addr *grits.TypedFileAddr) error {
 	return wv.ns.Link(path, addr)
 }
 
-func (wv *WikiVolume) GetEmptyDirContentAddr() *grits.BlobAddr {
-	return &wv.emptyDirNode.Address().BlobAddr
+func (wv *WikiVolume) GetEmptyDirMetadataAddr() *grits.BlobAddr {
+	return wv.emptyDirNode.MetadataBlob().GetAddress()
 }
 
 func (wv *WikiVolume) GetEmptyDirAddr() *grits.TypedFileAddr {
