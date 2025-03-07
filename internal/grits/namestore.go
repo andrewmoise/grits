@@ -1415,30 +1415,40 @@ func (ns *NameStore) PrintBlobStorageDebugging() error {
 		defer localBS.mtx.RUnlock()
 
 		orphanCount := 0
+		maxOrphans := 10
 		totalSize := int64(0)
 
 		for hash, file := range localBS.files {
 			if !seenBlobs[hash] {
 				orphanCount++
 				totalSize += file.Size
-				fmt.Printf("Orphaned blob: %s\n", hash)
-				fmt.Printf("  Size: %d bytes\n", file.Size)
-				fmt.Printf("  RefCount: %d\n", file.RefCount)
-				fmt.Printf("  Path: %s\n", file.Path)
-
-				// For small blobs, print content for debugging
-				if file.Size <= 200 {
-					data, err := file.Read(0, file.Size)
-					if err != nil {
-						fmt.Printf("  Contents: <error reading: %v>\n", err)
-					} else {
-						fmt.Printf("  Contents: %s\n", string(data))
-					}
+				if orphanCount >= maxOrphans {
+					continue
 				}
-				fmt.Println()
+
+				if true || VerboseDebugBlobStorage {
+					fmt.Printf("Orphaned blob: %s\n", hash)
+					fmt.Printf("  Size: %d bytes\n", file.Size)
+					fmt.Printf("  RefCount: %d\n", file.RefCount)
+					fmt.Printf("  Path: %s\n", file.Path)
+
+					// For small blobs, print content for debugging
+					if file.Size <= 200 {
+						data, err := file.Read(0, file.Size)
+						if err != nil {
+							fmt.Printf("  Contents: <error reading: %v>\n", err)
+						} else {
+							fmt.Printf("  Contents: %s\n", string(data))
+						}
+					}
+					fmt.Println()
+				}
 			}
 		}
 
+		if orphanCount >= maxOrphans {
+			fmt.Printf("  (%d orphans not shown)", orphanCount-maxOrphans+1)
+		}
 		fmt.Printf("Total orphaned blobs: %d (%.2f MB)\n", orphanCount, float64(totalSize)/1024/1024)
 	} else {
 		fmt.Println("BlobStore is not a LocalBlobStore, cannot check for orphaned blobs")
@@ -1452,6 +1462,7 @@ func (ns *NameStore) PrintBlobStorageDebugging() error {
 // Helper function to recursively walk the tree
 func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs map[string]bool) {
 	if node == nil {
+		// ??? Can't happen
 		log.Printf("%s: <nil>\n", path)
 		return
 	}
@@ -1475,25 +1486,27 @@ func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs ma
 	}
 
 	// Print node info
-	log.Printf("Path: %s\n", path)
-	log.Printf("  Node Type: %T\n", node)
-	log.Printf("  Node RefCount: %d\n", node.RefCount())
-	log.Printf("  Content Blob Hash: %s\n", contentBlob.GetAddress().Hash)
-	log.Printf("  Content Blob RefCount: %d\n", contentRefCount)
-	log.Printf("  Metadata Blob Hash: %s\n", metadataBlob.GetAddress().Hash)
-	log.Printf("  Metadata Blob RefCount: %d\n", metadataRefCount)
+	if VerboseDebugBlobStorage {
+		log.Printf("Path: %s\n", path)
+		log.Printf("  Node Type: %T\n", node)
+		log.Printf("  Node RefCount: %d\n", node.RefCount())
+		log.Printf("  Content Blob Hash: %s\n", contentBlob.GetAddress().Hash)
+		log.Printf("  Content Blob RefCount: %d\n", contentRefCount)
+		log.Printf("  Metadata Blob Hash: %s\n", metadataBlob.GetAddress().Hash)
+		log.Printf("  Metadata Blob RefCount: %d\n", metadataRefCount)
 
-	// Print small blob contents
-	if contentBlob.GetSize() <= 200 {
-		data, err := contentBlob.Read(0, contentBlob.GetSize())
-		if err != nil {
-			log.Printf("  Contents: <error reading: %v>\n", err)
-		} else {
-			log.Printf("  Contents: %s\n", string(data))
+		// Print small blob contents
+		if contentBlob.GetSize() <= 200 {
+			data, err := contentBlob.Read(0, contentBlob.GetSize())
+			if err != nil {
+				log.Printf("  Contents: <error reading: %v>\n", err)
+			} else {
+				log.Printf("  Contents: %s\n", string(data))
+			}
 		}
-	}
 
-	log.Println()
+		log.Println()
+	}
 
 	// Recursively process children if this is a directory
 	if children := node.Children(); children != nil {
@@ -1628,7 +1641,7 @@ func (ns *NameStore) CleanupUnreferencedNodes() {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	log.Printf("Starting cleanup of unreferenced nodes")
+	//log.Printf("Starting cleanup of unreferenced nodes")
 	nodesToRemove := make([]string, 0)
 
 	// First, identify all nodes with zero references
@@ -1650,7 +1663,7 @@ func (ns *NameStore) CleanupUnreferencedNodes() {
 	// Now remove the nodes and release their storage
 	for _, metadataAddr := range nodesToRemove {
 		node := ns.fileCache[metadataAddr]
-		log.Printf("Removing unreferenced node %p with metadata %s", node, metadataAddr)
+		//log.Printf("Removing unreferenced node %p with metadata %s", node, metadataAddr)
 
 		// Release the underlying storage
 		contentBlob := node.ExportedBlob()
@@ -1668,5 +1681,7 @@ func (ns *NameStore) CleanupUnreferencedNodes() {
 		delete(ns.fileCache, metadataAddr)
 	}
 
-	log.Printf("Cleanup complete. Removed %d unreferenced nodes", len(nodesToRemove))
+	if DebugBlobStorage {
+		log.Printf("NS cleanup complete. Removed %d unreferenced nodes", len(nodesToRemove))
+	}
 }
