@@ -628,8 +628,8 @@ const (
 
 type LinkRequest struct {
 	Path     string
-	Addr     *TypedFileAddr // We'll create a new metadata blob for this
-	PrevAddr *BlobAddr      // Must be the existing metadata addr
+	NewAddr  *BlobAddr // new metadata blob
+	PrevAddr *BlobAddr // Must be the existing metadata addr
 	Assert   uint32
 }
 
@@ -722,20 +722,8 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 			name = ""
 		}
 
-		var linkAddr *BlobAddr
-		if req.Addr != nil {
-			linkMetadataBlob, err := ns.typeToMetadata(req.Addr)
-			if err != nil {
-				return err
-			}
-			defer linkMetadataBlob.Release()
-			linkAddr = linkMetadataBlob.GetAddress()
-		} else {
-			linkAddr = nil
-		}
-
 		var err error
-		newRoot, err = ns.recursiveLink("", name, linkAddr, newRoot)
+		newRoot, err = ns.recursiveLink("", name, req.NewAddr, newRoot)
 		if err != nil {
 			return err
 		}

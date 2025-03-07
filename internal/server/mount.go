@@ -1014,11 +1014,11 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	//log.Printf("Mkdir() called for %s with mode %o", name, mode)
 
 	fullPath := filepath.Join(gn.path, name)
-	emptyAddr := gn.module.volume.GetEmptyDirAddr()
+	emptyAddr := gn.module.volume.GetEmptyDirMetadataAddr()
 
 	req := &grits.LinkRequest{
 		Path:     fullPath,
-		Addr:     emptyAddr,
+		NewAddr:  emptyAddr,
 		PrevAddr: nil,
 		Assert:   grits.AssertPrevValueMatches,
 	}
@@ -1059,9 +1059,9 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 
 	// Create the LinkRequest with the required details
 	req := &grits.LinkRequest{
-		Path:   fullPath,
-		Addr:   nil,
-		Assert: grits.AssertIsNonEmpty | grits.AssertIsBlob,
+		Path:    fullPath,
+		NewAddr: nil,
+		Assert:  grits.AssertIsNonEmpty | grits.AssertIsBlob,
 	}
 
 	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
@@ -1091,15 +1091,15 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	}
 	defer dirNode.Release()
 
-	emptyAddr := gn.module.volume.GetEmptyDirContentAddr()
+	emptyAddr := gn.module.volume.GetEmptyDirMetadataAddr()
 	if !dirNode.ExportedBlob().GetAddress().Equals(emptyAddr) {
-		return syscall.ENOTEMPTY
+		return syscall.ENOTEMPTY // Only for compatibility With Unix expectations
 	}
 
 	// Create the LinkRequest with the required details
 	req := &grits.LinkRequest{
 		Path:     fullPath,
-		Addr:     nil,
+		NewAddr:  nil,
 		PrevAddr: dirNode.MetadataBlob().GetAddress(),
 		Assert:   grits.AssertIsTree | grits.AssertPrevValueMatches,
 	}
@@ -1191,15 +1191,15 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 
 		oldNameReq := &grits.LinkRequest{
 			Path:     fullPath,
-			Addr:     nil,
+			NewAddr:  nil,
 			PrevAddr: prevNode.MetadataBlob().GetAddress(),
 			Assert:   grits.AssertPrevValueMatches,
 		}
 
 		newNameReq := &grits.LinkRequest{
-			Path: fullNewPath,
-			Addr: prevNode.Address(), // FIXME - this remakes a new metadata node, we should move the old one
-			//PrevAddr: nil,
+			Path:    fullNewPath,
+			NewAddr: prevNode.MetadataBlob().GetAddress(),
+			//PrevAddr: nil, // this is for refusing to overwrite an existing thing
 			//Assert:   grits.AssertPrevValueMatches,
 		}
 
