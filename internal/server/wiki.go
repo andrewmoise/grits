@@ -145,6 +145,11 @@ func (wv *WikiVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.AddOpenFile(file)
 }
 
+func (wv *WikiVolume) Cleanup() error {
+	wv.ns.CleanupUnreferencedNodes()
+	return nil
+}
+
 func (wv *WikiVolume) RegisterWatcher(watcher grits.FileTreeWatcher) {
 	wv.ns.RegisterWatcher(watcher)
 }

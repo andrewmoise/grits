@@ -45,13 +45,6 @@ func NewLocalBlobStore(config *Config) *LocalBlobStore {
 		return nil
 	}
 
-	// Add empty directory as a permanent blob never to be released
-	//_, err = bs.AddDataBlock([]byte("{}"))
-	//if err != nil {
-	//	log.Printf("Can't create empty directory cachedFile")
-	//	return nil
-	//}
-
 	return bs
 }
 
@@ -286,7 +279,6 @@ func (bs *LocalBlobStore) Take(cachedFile *LocalCachedFile) {
 func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 	bs.mtx.Lock()
 
-	// Log the operation
 	if DebugRefCounts {
 		log.Printf("RELEASE: %s (count: %d)",
 			cachedFile.Address.Hash,
@@ -294,10 +286,24 @@ func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 		PrintStack()
 	}
 
-	// Perform the actual operation
+	// Decrement ref count
 	cachedFile.RefCount--
 	if cachedFile.RefCount < 0 {
 		log.Fatalf("Reduced ref count for %s to < 0", cachedFile.GetAddress())
+	}
+
+	// Delete file, if we're done with it
+	if !bs.config.DelayedEviction && cachedFile.RefCount == 0 {
+		// Remove from the files map
+		delete(bs.files, cachedFile.Address.Hash)
+
+		// Delete the file from disk (without the lock, in case of slowness)
+		bs.mtx.Unlock()
+		err := os.Remove(cachedFile.Path)
+		if err != nil {
+			log.Printf("Warning: couldn't delete file %s from cache: %v", cachedFile.Path, err)
+		}
+		return
 	}
 
 	bs.mtx.Unlock()
@@ -377,8 +383,15 @@ func (bs *LocalBlobStore) EvictOldFiles() {
 		}
 	}
 
-	log.Printf("Check stats:")
-	bs.printStats(currentSize)
+	if DebugBlobStorage {
+		log.Printf("Check stats:")
+		bs.printStats(currentSize)
+	}
+
+	if !bs.config.DelayedEviction {
+		// Nothing to do, we do it on demand
+		return
+	}
 
 	if currentSize <= bs.config.StorageSize {
 		log.Printf("Storage usage (%d bytes) within capacity (%d bytes), no eviction needed",

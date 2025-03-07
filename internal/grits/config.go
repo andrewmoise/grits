@@ -26,6 +26,7 @@ type Config struct {
 	NamespaceSavePeriod int   `json:"NamespaceSavePeriod"`
 	HardLinkBlobs       bool  `json:"HardLinkBlobs"`
 	ValidateBlobs       bool  `json:"ValidateBlobs"`
+	DelayedEviction     bool  `json:"DelayedEviction"`
 
 	// Modules and configs for same
 	Modules []json.RawMessage `json:"Modules"`
@@ -48,6 +49,7 @@ func NewConfig(serverDir string) *Config {
 		NamespaceSavePeriod: 30,                // # of seconds between namespace checkpoints
 		HardLinkBlobs:       false,
 		ValidateBlobs:       false,
+		DelayedEviction:     true,
 	}
 }
 

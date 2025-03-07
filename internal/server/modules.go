@@ -38,6 +38,8 @@ type Volume interface {
 	GetEmptyDirContentAddr() *grits.BlobAddr
 	GetEmptyDirAddr() *grits.TypedFileAddr
 
+	Cleanup() error
+
 	RegisterWatcher(watcher grits.FileTreeWatcher)
 	UnregisterWatcher(watcher grits.FileTreeWatcher)
 }
