@@ -79,6 +79,7 @@ type FileNode interface {
 type TreeNode struct {
 	blob         CachedFile
 	metadataBlob CachedFile
+	metadata     *GNodeMetadata
 	ChildrenMap  map[string]*BlobAddr
 	refCount     int
 	nameStore    *NameStore
@@ -88,6 +89,7 @@ type TreeNode struct {
 type BlobNode struct {
 	blob         CachedFile
 	metadataBlob CachedFile
+	metadata     *GNodeMetadata
 	refCount     int
 	mtx          sync.Mutex
 }
@@ -103,11 +105,7 @@ func (bn *BlobNode) MetadataBlob() CachedFile {
 }
 
 func (bn *BlobNode) Metadata() *GNodeMetadata {
-	return &GNodeMetadata{
-		Type:        GNodeTypeFile,
-		Size:        bn.blob.GetSize(),
-		ContentAddr: bn.blob.GetAddress().String(),
-	}
+	return bn.metadata
 }
 
 func (bn *BlobNode) Children() map[string]*BlobAddr {
@@ -158,7 +156,8 @@ func (bn *BlobNode) Release() {
 		log.Fatalf("Reduced ref count for %s to < 0", bn.metadataBlob.GetAddress())
 	}
 
-	// This is where we used to release the actual storage; now we're not doing that.
+	// This is where we used to release the actual storage; now we're not doing that until
+	// deferred cleanup
 }
 
 // FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
@@ -170,7 +169,13 @@ func (bn *BlobNode) RefCount() int {
 // Implementations for TreeNode
 
 func (tn *TreeNode) ExportedBlob() CachedFile {
-	tn.ensureSerialized()
+	err := tn.ensureSerialized()
+	if err != nil {
+		// FIXME -- need better handling
+		log.Printf("Error! Deserializing %p, got %v", tn, err)
+		return nil
+	}
+
 	return tn.blob
 }
 
@@ -179,12 +184,8 @@ func (tn *TreeNode) MetadataBlob() CachedFile {
 }
 
 func (tn *TreeNode) Metadata() *GNodeMetadata {
-	tn.ensureSerialized() // Need this to get the size
-	return &GNodeMetadata{
-		Type:        GNodeTypeDirectory,
-		Size:        tn.blob.GetSize(),
-		ContentAddr: tn.blob.GetAddress().String(),
-	}
+	tn.ensureSerialized()
+	return tn.metadata
 }
 
 func (tn *TreeNode) Children() map[string]*BlobAddr {
@@ -1001,8 +1002,6 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 
 // Get a file node, return it (same as GetFileNode(), but no reference or lock taken)
 
-// This metadataAddr that is the index, it is
-
 func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (FileNode, error) {
 	if printDebug && DebugFileCache {
 		log.Printf("We try to chase down %s\n", metadataAddr.String())
@@ -1048,6 +1047,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 		bn := &BlobNode{
 			blob:         contentCf,
 			metadataBlob: metadataCf,
+			metadata:     &metadata,
 			refCount:     0,
 		}
 		if printDebug && DebugFileCache {
@@ -1062,6 +1062,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 		dn := &TreeNode{
 			blob:         contentCf,
 			metadataBlob: metadataCf,
+			metadata:     &metadata,
 			ChildrenMap:  make(map[string]*BlobAddr),
 			nameStore:    ns,
 		}
@@ -1115,7 +1116,7 @@ func CreateTimestamp() string {
 }
 
 // Create a metadata node with proper mode and timestamps
-func (ns *NameStore) createMetadataBlob(contentAddr *BlobAddr, size int64, isDir bool, mode uint32) (CachedFile, error) {
+func (ns *NameStore) createMetadataBlob(contentAddr *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
 	// If mode is 0, set default modes
 	if mode == 0 {
 		if isDir {
@@ -1149,15 +1150,15 @@ func (ns *NameStore) createMetadataBlob(contentAddr *BlobAddr, size int64, isDir
 	// Serialize and store the metadata
 	metadataData, err := json.Marshal(metadata)
 	if err != nil {
-		return nil, fmt.Errorf("error marshalling metadata: %v", err)
+		return nil, nil, fmt.Errorf("error marshalling metadata: %v", err)
 	}
 
 	metadataCf, err := ns.BlobStore.AddDataBlock(metadataData)
 	if err != nil {
-		return nil, fmt.Errorf("error writing metadata: %v", err)
+		return nil, nil, fmt.Errorf("error writing metadata: %v", err)
 	}
 
-	return metadataCf, nil
+	return &metadata, metadataCf, nil
 }
 
 func (ns *NameStore) CreateTreeNode(children map[string]*BlobAddr) (*TreeNode, error) {
@@ -1196,7 +1197,7 @@ func (ns *NameStore) createTreeNode(children map[string]*BlobAddr, takeLock bool
 		return nil, fmt.Errorf("error writing directory: %v", err)
 	}
 
-	metadataBlob, err := ns.createMetadataBlob(contentBlob.GetAddress(), contentBlob.GetSize(), true, 0)
+	metadata, metadataBlob, err := ns.createMetadataBlob(contentBlob.GetAddress(), contentBlob.GetSize(), true, 0)
 	if err != nil {
 		contentBlob.Release()
 		return nil, fmt.Errorf("error creating metadata: %v", err)
@@ -1205,6 +1206,7 @@ func (ns *NameStore) createTreeNode(children map[string]*BlobAddr, takeLock bool
 	//log.Printf("Added metadata blob, addr %s, rc %d", metadataBlob.GetAddress().String(), metadataBlob.GetRefCount())
 
 	tn.blob = contentBlob
+	tn.metadata = metadata
 	tn.metadataBlob = metadataBlob
 
 	if takeLock {
@@ -1227,51 +1229,6 @@ func (ns *NameStore) createTreeNode(children map[string]*BlobAddr, takeLock bool
 		ns.fileCache[tn.metadataBlob.GetAddress().String()] = tn
 		return tn, nil
 	}
-
-	// We do not release the cachedFiles for the content or metadata. Ownership of them has been
-	// taken over by the FileNode, at this point.
-}
-
-func (ns *NameStore) CreateBlobNode(ba *BlobAddr) (*BlobNode, error) {
-	return ns.createBlobNode(ba, true)
-}
-
-func (ns *NameStore) createBlobNode(fa *BlobAddr, takeLock bool) (*BlobNode, error) {
-	contentBlob, err := ns.BlobStore.ReadFile(fa)
-	if err != nil {
-		return nil, fmt.Errorf("error reading %s: %v", fa.String(), err)
-	}
-
-	metadataBlob, err := ns.createMetadataBlob(contentBlob.GetAddress(), contentBlob.GetSize(), false, 0)
-	if err != nil {
-		contentBlob.Release()
-		return nil, fmt.Errorf("error creating metadata: %v", err)
-	}
-
-	if takeLock {
-		ns.mtx.Lock()
-		defer ns.mtx.Unlock()
-	}
-
-	existingNode, exists := ns.fileCache[metadataBlob.GetAddress().String()]
-	if exists {
-		contentBlob.Release()
-		metadataBlob.Release()
-
-		existingBlobNode, ok := existingNode.(*BlobNode)
-		if !ok {
-			return nil, fmt.Errorf("non blob node found in file cache for blob node %s", metadataBlob.GetAddress())
-		}
-
-		return existingBlobNode, nil
-	}
-
-	bn := &BlobNode{
-		blob:         contentBlob,
-		metadataBlob: metadataBlob,
-		refCount:     1,
-	}
-	return bn, nil
 
 	// We do not release the cachedFiles for the content or metadata. Ownership of them has been
 	// taken over by the FileNode, at this point.
