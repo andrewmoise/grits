@@ -34,6 +34,7 @@ type Volume interface {
 	ReadFile(*grits.TypedFileAddr) (grits.CachedFile, error)
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
+	AddMetadataBlob(*grits.GNodeMetadata) (grits.CachedFile, error)
 
 	GetEmptyDirMetadataAddr() *grits.BlobAddr
 	GetEmptyDirAddr() *grits.TypedFileAddr
