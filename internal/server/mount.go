@@ -12,16 +12,11 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 )
-
-/////
-// Todo list
-
-// * Polish (not really needed but what the heck let's try to make it
-//   nice and all): NodeStatfser, NodeFsyncer, NodeRenamer
 
 /////
 // Module stuff
@@ -126,8 +121,11 @@ type gritsNode struct {
 	refCount int // Reference count of open FUSE file handles
 
 	// These are mutually exclusive:
-	tmpFile    *os.File         // If dirty, the temp file
-	cachedFile grits.CachedFile // If clean, the backing file from the blob store
+	tmpFile     *os.File             // If dirty, the temp file
+	tmpMetadata *grits.GNodeMetadata // If dirty (and content hash + size in this are not valid)
+	// and:
+	cachedFile     grits.CachedFile     // If clean, the backing file for contents from the blob store
+	cachedMetadata *grits.GNodeMetadata // If clean, the metadata
 
 	// This is the open FH, in both cases, meaning you need to close + reopen it when you're switching:
 	openFile io.ReadSeekCloser
@@ -239,6 +237,8 @@ func (m *InodeManager) RemoveInode(path string) {
 var _ = (fs.NodeReaddirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	// FIXME: Lock gn
+
 	node, err := gn.module.volume.LookupNode(gn.path)
 	if grits.IsNotExist(err) {
 		return nil, syscall.ENOENT
@@ -355,6 +355,10 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 var _ = (fs.NodeLookuper)((*gritsNode)(nil))
 
 func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
+	// FIXME - What if multiple Lookup() calls return multiple gritsNodes, but then someone
+	// notices that their inodes are different? Or what if one of them is written and becomes
+	// dirty, and the others are not?
+
 	fullPath := filepath.Join(gn.path, name)
 	if grits.DebugFuse {
 		log.Printf("--- Looking up %s %s => %s\n", gn.path, name, fullPath)
@@ -471,6 +475,23 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 		defer node.Release()
 
 		out.Size = uint64(node.Address().Size)
+
+		// Use metadata for mode if available
+		metadata := node.Metadata()
+		if metadata != nil && metadata.Mode != 0 {
+			out.Mode = metadata.Mode
+		} else {
+			// Use default mode if not in metadata
+			out.Mode = gn.Mode()
+		}
+
+		// Set timestamps if available
+		if metadata != nil && metadata.Timestamp != "" {
+			if modTime, err := time.Parse(time.RFC3339, metadata.Timestamp); err == nil {
+				out.Mtime = uint64(modTime.Unix())
+				out.Mtimensec = uint32(modTime.Nanosecond())
+			}
+		}
 	} else if gn.openFile != nil {
 		if grits.DebugFuse {
 			log.Printf("  no open file")
@@ -485,18 +506,23 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 			log.Printf("Seek fail %v", err)
 			return syscall.EIO
 		}
-
 		out.Size = uint64(size)
+		out.Mode = gn.Mode()
+
+		// For dirty files, use current time for timestamps
+		now := time.Now()
+		out.Mtime = uint64(now.Unix())
+		out.Mtimensec = 0
+		out.Ctime = out.Mtime
+		out.Ctimensec = out.Mtimensec
+		out.Atime = out.Mtime
+		out.Atimensec = out.Mtimensec
 	} else {
 		log.Printf("  7 GN fail")
 		return syscall.EIO
 	}
 
-	if grits.DebugFuse {
-		log.Printf("  all good")
-	}
-
-	out.Mode = gn.Mode()
+	// Set owner regardless of path taken above
 	out.Owner.Uid = ownerUid
 	out.Owner.Gid = ownerGid
 
@@ -563,6 +589,8 @@ func fillAttr(cacheFile string, out *fuse.AttrOut, isDir bool) error {
 // File I/O
 
 // FileHandle represents an open file. This will wrap os.File to handle file operations.
+
+// FIXME - Merge this with the dirty file map? Something?
 type FileHandle struct {
 	isReadOnly bool
 }
@@ -572,20 +600,23 @@ type FileHandle struct {
 
 func (gn *gritsNode) openCachedFile() syscall.Errno {
 	if gn.cachedFile == nil {
-		addr, err := gn.module.volume.Lookup(gn.path)
+		if gn.tmpFile != nil {
+			return fs.OK
+		}
+
+		fileNode, err := gn.module.volume.LookupNode(gn.path)
 		if grits.IsNotExist(err) {
 			return syscall.ENOENT
 		} else if err != nil {
 			log.Printf("1 OCF fail %v", err)
 			return syscall.EIO
 		}
+		defer fileNode.Release()
 
-		gn.cachedFile, err = gn.module.volume.ReadFile(addr)
-		if err != nil {
-			log.Printf("RF fail %v", err)
-			return syscall.EIO
-		}
+		gn.cachedFile = fileNode.ExportedBlob()
 		gn.cachedFile.Take()
+
+		gn.cachedMetadata = fileNode.Metadata()
 	}
 
 	if gn.openFile == nil {
@@ -604,9 +635,6 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 //
 // truncLen == -1 means no truncation
 //
-// You need to call this either with truncLen == 0, or with a cachedFile
-// all set up for it to copy the temp file from
-//
 // You need to have the gn mutex held when calling this
 
 func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
@@ -620,6 +648,7 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 				return fs.ToErrno(err)
 			}
 		}
+		gn.tmpMetadata.Timestamp = grits.CreateTimestamp()
 		return fs.OK
 	}
 
@@ -635,49 +664,71 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 		}
 	}()
 
-	// Copy data from the read-only file if available
-	if gn.cachedFile != nil {
-		if gn.openFile == nil {
-			gn.openFile, err = gn.cachedFile.Reader()
-			if err != nil {
-				return fs.ToErrno(err)
+	//log.Printf("Ready to set up - %s (TL %d)", gn.path, truncLen)
+
+	if truncLen != 0 {
+		// We need to have an already-open file, to set up contents (and metadata)
+
+		if gn.cachedFile == nil {
+			errno := gn.openCachedFile()
+			if errno != fs.OK {
+				return errno
 			}
 		}
 
-		_, err = gn.openFile.Seek(0, 0)
+		_, err := gn.openFile.Seek(0, 0)
 		if err != nil {
 			return fs.ToErrno(err)
 		}
 
 		if truncLen == -1 {
-			_, err = io.Copy(tmpFile, gn.openFile)
-			if err != nil {
-				return fs.ToErrno(err)
-			}
-		} else {
-			n, err := io.CopyN(tmpFile, gn.openFile, truncLen)
-			if err != nil {
-				return fs.ToErrno(err)
-			}
-			if n != truncLen {
-				log.Printf("TL fail %d != %d", n, truncLen)
-				return syscall.EIO
-			}
+			truncLen = gn.cachedFile.GetSize()
 		}
 
+		n, err := io.CopyN(tmpFile, gn.openFile, truncLen)
+		if err != nil {
+			return fs.ToErrno(err)
+		}
+		if n != truncLen {
+			log.Printf("TL fail %d != %d", n, truncLen)
+			return syscall.EIO
+		}
+	}
+
+	//log.Printf("Ready to check cached MD")
+
+	if gn.cachedMetadata != nil {
+		// Copy the metadata we had before.
+		tmpMetadata := *gn.cachedMetadata
+		gn.tmpMetadata = &tmpMetadata
+		gn.cachedMetadata = nil
+	} else {
+		// Make up some new partial metadata
+		// FIXME - This is messy.
+		gn.tmpMetadata = &grits.GNodeMetadata{
+			Type:      grits.GNodeTypeFile,
+			Mode:      0644,
+			Timestamp: grits.CreateTimestamp(),
+		}
+	}
+
+	//log.Printf("Done")
+
+	gn.openFile = tmpFile
+	gn.tmpFile = tmpFile
+	if gn.cachedFile != nil {
 		gn.cachedFile.Release()
 		gn.cachedFile = nil
 	}
 
-	gn.openFile = tmpFile
-	gn.tmpFile = tmpFile
-	tmpFile = nil // Prevent cleanup
+	tmpFile = nil // Prevent cleanup, now that we know we succeeded
 
-	// FIXME - Can this get reached from multiple calls at once, simultaneous operations on the
-	// same file or etc?
+	// Do we need to hold a global lock when calling this? In order to be safe? (FIXME - check)
 	if !wasDirty {
 		gn.module.addDirtyNode(gn.path, gn)
 	}
+
+	//log.Printf("All done")
 
 	return fs.OK
 }
@@ -691,38 +742,70 @@ func (gn *gritsNode) flush() syscall.Errno {
 		return fs.OK
 	}
 
-	tmpFile := gn.tmpFile.Name()
-	defer os.Remove(tmpFile)
+	defer func() {
+		if gn.tmpFile != nil {
+			// Something went wrong. Clean up to a hopefully-okay state.
 
-	err := gn.tmpFile.Close()
-	gn.tmpFile = nil
-	gn.openFile = nil
+			tmpFile := gn.tmpFile.Name()
+			os.Remove(tmpFile)
+
+			err := gn.tmpFile.Close()
+			gn.tmpFile = nil
+			gn.openFile = nil
+			if err != nil {
+				log.Printf("Error closing tmp file %s! %v", gn.path, err)
+			}
+		}
+	}()
+
+	if gn.isDangling {
+		// Er.. hopefully we don't care, then? Have we actually masked out all other places where
+		// we might need to be ignoring this file?
+		log.Printf("Warning - flush() on dangling file %s", gn.path)
+		return fs.OK
+	}
+
+	//log.Printf("Ready to do blob store stuff")
+
+	contentBlob, err := gn.module.volume.AddOpenBlob(gn.tmpFile)
+	if err != nil {
+		log.Printf("Couldn't add content blob for %s: %v", gn.path, err)
+		return syscall.EIO
+	}
+	defer contentBlob.Release()
+
+	gn.tmpMetadata.ContentAddr = contentBlob.GetAddress().String()
+	gn.tmpMetadata.Size = contentBlob.GetSize()
+
+	metadataBlob, err := gn.module.volume.AddMetadataBlob(gn.tmpMetadata)
+	if err != nil {
+		log.Printf("Error adding metadata for %s - %v", gn.path, err)
+		return syscall.EIO
+	}
+	defer metadataBlob.Release()
+
+	//log.Printf("Ready to make request")
+
+	req := &grits.LinkRequest{
+		Path:    gn.path,
+		NewAddr: metadataBlob.GetAddress(),
+	}
+
+	err = gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if err != nil {
 		return fs.ToErrno(err)
 	}
 
-	if !gn.isDangling {
-		cf, err := gn.module.volume.AddBlob(tmpFile)
-		if err != nil {
-			log.Printf("ab fail %v", err)
-			return syscall.EIO
-		}
+	gn.cachedFile = contentBlob
+	gn.cachedFile.Take()
+	gn.tmpFile = nil
 
-		if gn.cachedFile != nil {
-			log.Panicf("Can't happen - dirty file but CF is set")
-		}
-		gn.cachedFile = cf
+	// Fix up metadata
+	gn.cachedMetadata = gn.tmpMetadata
+	gn.tmpMetadata = nil
 
-		typedAddr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
-		err = gn.module.volume.Link(gn.path, typedAddr)
-		if err != nil {
-			return fs.ToErrno(err)
-		}
-
-		// Node is now clean, remove from dirty map
-		gn.module.removeDirtyNode(gn.path)
-	}
-
+	// Node is now clean, remove from dirty map
+	gn.module.removeDirtyNode(gn.path)
 	return fs.OK
 }
 
@@ -737,7 +820,21 @@ func (gn *gritsNode) finalize() syscall.Errno {
 
 	if gn.tmpFile != nil {
 		log.Printf("Warning! Losing edits to %s because of previous errors", gn.path)
+
+		tmpFile := gn.tmpFile.Name()
+
+		err := gn.tmpFile.Close()
+		if err != nil {
+			log.Printf("Error closing tmp file %s! %v", gn.path, err)
+		}
+
+		err = os.Remove(tmpFile)
+		if err != nil {
+			log.Printf("Error deleting %s tmp file: %v", gn.path, err)
+		}
+
 		gn.tmpFile = nil
+		gn.openFile = nil
 	}
 
 	if gn.openFile != nil {
@@ -790,6 +887,7 @@ var _ = (fs.NodeCreater)((*gritsNode)(nil))
 
 func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
 	fullPath := filepath.Join(gn.path, name)
+	//log.Printf("Create(%s)", fullPath)
 	if flags&uint32(os.O_EXCL) != 0 {
 		addr, _ := gn.module.volume.Lookup(fullPath)
 		if addr != nil {
@@ -812,6 +910,7 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 
 	errno := operations.openTmpFile(0)
 	if errno != fs.OK {
+		log.Printf("OTF fail %d", errno)
 		return nil, nil, 0, errno
 	}
 
@@ -836,6 +935,8 @@ var _ = (fs.NodeReader)((*gritsNode)(nil))
 func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
+
+	// FIXME - This definitely seems like it will malfunction on a dirtty file
 
 	errno := gn.openCachedFile()
 	if errno != fs.OK {
@@ -888,49 +989,51 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 	return uint32(n), fs.OK
 }
 
-// Misc nonsense. Setattr() needs to be in here, in order to support setting size to 0 to truncate.
+/////
+// Misc nonsense
 
 var _ = (fs.NodeSetattrer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAttrIn, out *fuse.AttrOut) syscall.Errno {
-	if in.Valid&fuse.FATTR_SIZE == 0 {
+	// Check what's being modified
+	sizeChanged := in.Valid&fuse.FATTR_SIZE != 0
+	modeChanged := in.Valid&fuse.FATTR_MODE != 0
+	timestampChanged := in.Valid&fuse.FATTR_MTIME != 0
+
+	if !sizeChanged && !modeChanged && !timestampChanged {
+		// Oh well... hopefully, whatever the user was requesting wasn't all that important.
 		return fs.OK
 	}
 
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
-	if gn.openFile == nil {
-		errno := gn.openCachedFile()
-		if errno != fs.OK {
-			return errno
+	if gn.tmpFile == nil {
+		// We weren't dirty before, but now we need to be.
+		if sizeChanged {
+			gn.openTmpFile(int64(in.Size))
+		} else {
+			if gn.cachedFile == nil {
+				log.Printf("Can't happen: nil tmpFile and cachedFile on %s", gn.path)
+				return syscall.EIO
+			}
+			gn.openTmpFile(gn.cachedFile.GetSize())
 		}
 	}
 
-	var fileSize int64
-	if gn.cachedFile != nil {
-		fileSize = gn.cachedFile.GetSize()
-	} else {
-		if gn.tmpFile == nil {
-			// Can't happen
-			log.Printf("TF CH fail")
-			return syscall.EIO
-		}
+	// At this point, we're dirty, so we can just make the changes we need.
 
-		info, err := gn.tmpFile.Stat()
-		if err != nil {
-			log.Printf("stat fail %v", err)
-			return syscall.EIO
-		}
+	// Size in metadata is ignored; the actual tmpFile size is what's authoritative. The other two,
+	// we actually need to update.
 
-		fileSize = info.Size()
+	if modeChanged {
+		gn.tmpMetadata.Mode = in.Mode
 	}
 
-	if in.Size != uint64(fileSize) {
-		errno := gn.openTmpFile(int64(in.Size))
-		if errno != fs.OK {
-			return errno
-		}
+	if timestampChanged {
+		// Er... surely there is a better way.
+		t := time.Unix(int64(in.Mtime), int64(in.Mtimensec))
+		gn.tmpMetadata.Timestamp = t.UTC().Format(time.RFC3339)
 	}
 
 	return fs.OK
@@ -1012,6 +1115,8 @@ var _ = (fs.NodeMkdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
 	//log.Printf("Mkdir() called for %s with mode %o", name, mode)
+
+	// FIXME - Empty dirs need timestamps, too
 
 	fullPath := filepath.Join(gn.path, name)
 	emptyAddr := gn.module.volume.GetEmptyDirMetadataAddr()
@@ -1154,18 +1259,19 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 
 		err := gn.module.volume.Link(fullPath, nil)
 		if grits.IsNotDir(err) || grits.IsNotExist(err) {
-			// Having an error is actually fine here, we don't care too much about the source
+			// Having an error is actually fine here; we don't care too much about the source
 			// as it may not exist yet in the merkle tree. As long as it's not some internal
 			// issue, we're fine.
 		} else if err != nil {
 			dirtyNode.mtx.Unlock()
 			gn.module.dirtyNodesMtx.Unlock()
+			log.Printf("Weird error on rename %s -> %s: %v", fullPath, fullNewPath, err)
 			return syscall.EIO
 		}
 
 		// Note! if there's already something there, in the dirty map, we may make it
-		// unreachable. That should be fine, FUSE can still find it and we'll wind up
-		// finding it again when it's flushed.
+		// unreachable. That should be fine, FUSE can still find it and so we'll wind up
+		// flushing it at some point, and then we're done with it.
 		gn.module.dirtyNodesMap[fullNewPath] = dirtyNode
 		delete(gn.module.dirtyNodesMap, fullPath)
 

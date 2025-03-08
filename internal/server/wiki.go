@@ -145,6 +145,20 @@ func (wv *WikiVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.AddOpenFile(file)
 }
 
+func (wv *WikiVolume) AddMetadataBlob(metadata *grits.GNodeMetadata) (grits.CachedFile, error) {
+	// Serialize and store the metadata
+	metadataData, err := json.Marshal(metadata)
+	if err != nil {
+		return nil, fmt.Errorf("error marshalling metadata: %v", err)
+	}
+
+	metadataCf, err := wv.ns.BlobStore.AddDataBlock(metadataData)
+	if err != nil {
+		return nil, fmt.Errorf("error writing metadata: %v", err)
+	}
+	return metadataCf, nil
+}
+
 func (wv *WikiVolume) Cleanup() error {
 	wv.ns.CleanupUnreferencedNodes()
 	return nil
