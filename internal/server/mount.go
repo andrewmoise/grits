@@ -765,20 +765,27 @@ func (gn *gritsNode) flush() syscall.Errno {
 		return fs.OK
 	}
 
+	tmpFile := gn.tmpFile
+
 	defer func() {
-		if gn.tmpFile != nil {
-			// Something went wrong. Clean up to a hopefully-okay state.
-
-			tmpFile := gn.tmpFile.Name()
-			os.Remove(tmpFile)
-
-			err := gn.tmpFile.Close()
+		err := tmpFile.Close()
 			gn.tmpFile = nil
-			gn.openFile = nil
 			if err != nil {
 				log.Printf("Error closing tmp file %s! %v", gn.path, err)
 			}
+
+		// FIXME - A lot of other places need to handle openFile being nil, in case of
+		// error from here
+		if gn.cachedFile != nil {
+			gn.openFile, err = gn.cachedFile.Reader()
+			if err != nil {
+				log.Printf("Error opening up cached file %s: %v", gn.path, err)
+			}
+		} else {
+			gn.openFile = nil
 		}
+
+		os.Remove(tmpFile.Name())
 	}()
 
 	if gn.isDangling {
