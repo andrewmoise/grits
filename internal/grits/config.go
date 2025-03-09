@@ -8,12 +8,6 @@ import (
 
 // Config represents the core server configuration.
 type Config struct {
-	// General networking configuration
-	IsRootNode  bool   `json:"IsRootNode"`
-	RootHost    string `json:"RootHost"`
-	RootPort    int    `json:"RootPort"`
-	ServerToken string `json:"ServerToken"`
-
 	// File locations
 	ServerDir string `json:"-"`
 
@@ -32,12 +26,6 @@ type Config struct {
 // NewConfig creates a new configuration instance with default values.
 func NewConfig(serverDir string) *Config {
 	return &Config{
-		IsRootNode: false,
-		RootHost:   "",
-		RootPort:   0,
-
-		ServerToken: "",
-
 		ServerDir: serverDir,
 
 		StorageSize:         100 * 1024 * 1024, // Max size of data
