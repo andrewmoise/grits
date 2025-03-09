@@ -258,6 +258,10 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 
 	for name, nodeAddr := range children {
 		childNode, err := gn.module.volume.GetFileNode(nodeAddr)
+		if grits.DebugFuse {
+			log.Printf("Loaded child node %s", name)
+			log.Printf("  metadata: %v", childNode.Metadata())
+		}
 		if err != nil {
 			log.Printf("Readdir fail %v", err)
 			return nil, syscall.EIO
@@ -314,7 +318,7 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 		// Add this entry to the results
 		d := fuse.DirEntry{
 			Name: remainingPath,
-			Mode: dirtyNode.Mode(),
+			Mode: dirtyNode.tmpMetadata.Mode,
 		}
 		r = append(r, d)
 	}
@@ -378,7 +382,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		}
 
 		out.Size = 0 // Will be determined based on the dirty file
-		out.Mode = dirtyNode.Mode()
+		out.Mode = dirtyNode.tmpMetadata.Mode
 		out.Owner.Uid = ownerUid
 		out.Owner.Gid = ownerGid
 
@@ -406,12 +410,12 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	}
 	defer node.Release()
 
+	mode := node.Metadata().Mode
 	_, isDir := node.(*grits.TreeNode)
-	var mode uint32
 	if isDir {
-		mode = fuse.S_IFDIR | 0o755
+		mode |= fuse.S_IFDIR
 	} else {
-		mode = fuse.S_IFREG | 0o644
+		mode |= fuse.S_IFREG
 	}
 
 	newInode, _, err := newGritsNode(ctx, &gn.Inode, fullPath, mode, gn.module)
@@ -478,18 +482,38 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 
 		// Use metadata for mode if available
 		metadata := node.Metadata()
+		if grits.DebugFuse {
+			log.Printf("  got metadata: %v", metadata)
+		}
+
 		if metadata != nil && metadata.Mode != 0 {
+			if grits.DebugFuse {
+				log.Printf("  mode read as %d", metadata.Mode)
+			}
 			out.Mode = metadata.Mode
 		} else {
-			// Use default mode if not in metadata
-			out.Mode = gn.Mode()
+			out.Mode = 0 // Er... hopefully this doesn't happen.
+		}
+
+		if metadata.Type == grits.GNodeTypeDirectory {
+			out.Mode |= fuse.S_IFDIR
+		} else if metadata.Type == grits.GNodeTypeFile {
+			out.Mode |= fuse.S_IFREG
+		} else {
+			log.Printf("Unrecognized type %d for %s", int(metadata.Type), gn.path)
 		}
 
 		// Set timestamps if available
 		if metadata != nil && metadata.Timestamp != "" {
+			if grits.DebugFuse {
+				log.Printf("  metadata timestamp is %s", metadata.Timestamp)
+			}
 			if modTime, err := time.Parse(time.RFC3339, metadata.Timestamp); err == nil {
 				out.Mtime = uint64(modTime.Unix())
 				out.Mtimensec = uint32(modTime.Nanosecond())
+				if grits.DebugFuse {
+					log.Printf("    parse to %d", out.Mtime)
+				}
 			}
 		}
 	} else if gn.openFile != nil {
@@ -636,6 +660,9 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 // truncLen == -1 means no truncation
 //
 // You need to have the gn mutex held when calling this
+//
+// You need to have the cached file set up when you call this, if there is one; otherwise it'll create a
+// new empty file for you to write to
 
 func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 	wasDirty := (gn.tmpFile != nil)
@@ -648,7 +675,6 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 				return fs.ToErrno(err)
 			}
 		}
-		gn.tmpMetadata.Timestamp = grits.CreateTimestamp()
 		return fs.OK
 	}
 
@@ -664,19 +690,15 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 		}
 	}()
 
-	//log.Printf("Ready to set up - %s (TL %d)", gn.path, truncLen)
+	log.Printf("Ready to set up - %s (TL %d)", gn.path, truncLen)
 
-	if truncLen != 0 {
-		// We need to have an already-open file, to set up contents (and metadata)
+	// Either copy metadata and contents from the previous file, or else make up some for a
+	// new blank file
 
-		if gn.cachedFile == nil {
-			errno := gn.openCachedFile()
-			if errno != fs.OK {
-				return errno
-			}
-		}
+	if gn.cachedFile != nil {
+		// Copy stuff from the cached file
 
-		_, err := gn.openFile.Seek(0, 0)
+		_, err = gn.openFile.Seek(0, 0)
 		if err != nil {
 			return fs.ToErrno(err)
 		}
@@ -693,33 +715,34 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 			log.Printf("TL fail %d != %d", n, truncLen)
 			return syscall.EIO
 		}
-	}
 
-	//log.Printf("Ready to check cached MD")
+		//log.Printf("Ready to check cached MD")
 
-	if gn.cachedMetadata != nil {
+		if gn.cachedMetadata == nil {
+			log.Printf("Null metadata opening tmp file for %s", gn.path)
+			return syscall.EIO
+		}
+
 		// Copy the metadata we had before.
 		tmpMetadata := *gn.cachedMetadata
 		gn.tmpMetadata = &tmpMetadata
 		gn.cachedMetadata = nil
+
+		gn.cachedFile.Release()
+		gn.cachedFile = nil
 	} else {
-		// Make up some new partial metadata
-		// FIXME - This is messy.
-		gn.tmpMetadata = &grits.GNodeMetadata{
-			Type:      grits.GNodeTypeFile,
-			Mode:      0644,
-			Timestamp: grits.CreateTimestamp(),
+		// Create all new stuff
+		tmpMetadata := grits.GNodeMetadata{
+			Type: grits.GNodeTypeFile,
+			Mode: 0644,
 		}
+		gn.tmpMetadata = &tmpMetadata
 	}
 
-	//log.Printf("Done")
+	log.Printf("Done - MD %v", gn.tmpMetadata)
 
 	gn.openFile = tmpFile
 	gn.tmpFile = tmpFile
-	if gn.cachedFile != nil {
-		gn.cachedFile.Release()
-		gn.cachedFile = nil
-	}
 
 	tmpFile = nil // Prevent cleanup, now that we know we succeeded
 
@@ -777,6 +800,10 @@ func (gn *gritsNode) flush() syscall.Errno {
 	gn.tmpMetadata.ContentAddr = contentBlob.GetAddress().String()
 	gn.tmpMetadata.Size = contentBlob.GetSize()
 
+	if grits.DebugFuse {
+		log.Printf("All set up tmpMetadata for flush: %v", gn.tmpMetadata)
+	}
+
 	metadataBlob, err := gn.module.volume.AddMetadataBlob(gn.tmpMetadata)
 	if err != nil {
 		log.Printf("Error adding metadata for %s - %v", gn.path, err)
@@ -784,7 +811,9 @@ func (gn *gritsNode) flush() syscall.Errno {
 	}
 	defer metadataBlob.Release()
 
-	//log.Printf("Ready to make request")
+	if grits.DebugFuse {
+		log.Printf("Ready to make request (metadata addr is %s", metadataBlob.GetAddress().String())
+	}
 
 	req := &grits.LinkRequest{
 		Path:    gn.path,
@@ -858,14 +887,9 @@ func (gn *gritsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 	defer gn.mtx.Unlock()
 
 	if gn.refCount == 0 {
-		var errno syscall.Errno
-		if flags&uint32(os.O_TRUNC) == 0 {
-			errno = gn.openCachedFile()
-		} else {
-			errno = gn.openTmpFile(0)
-		}
-
+		errno := gn.openCachedFile()
 		if errno != fs.OK {
+			log.Printf("Can't open file %s: %d", gn.path, errno)
 			return nil, 0, errno
 		}
 	}
@@ -915,6 +939,8 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 	}
 
 	operations.refCount++
+
+	operations.tmpMetadata.Mode = mode
 
 	//errno = gn.NotifyEntry(name)
 	//if errno != fs.OK && errno != syscall.ENOENT {
@@ -986,6 +1012,9 @@ func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, of
 		return 0, fs.ToErrno(err)
 	}
 
+	// FIXME er... maybe store this as in int internally.
+	gn.tmpMetadata.Timestamp = grits.CreateTimestamp()
+
 	return uint32(n), fs.OK
 }
 
@@ -1008,17 +1037,20 @@ func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.Set
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
-	if gn.tmpFile == nil {
-		// We weren't dirty before, but now we need to be.
-		if sizeChanged {
-			gn.openTmpFile(int64(in.Size))
-		} else {
-			if gn.cachedFile == nil {
-				log.Printf("Can't happen: nil tmpFile and cachedFile on %s", gn.path)
-				return syscall.EIO
-			}
-			gn.openTmpFile(gn.cachedFile.GetSize())
-		}
+	errno := gn.openCachedFile()
+	if errno != fs.OK {
+		log.Printf("Couldn't open cached file for Setattr on %s: %d", gn.path, errno)
+		return errno
+	}
+
+	if sizeChanged {
+		errno = gn.openTmpFile(int64(in.Size))
+	} else {
+		errno = gn.openTmpFile(-1)
+	}
+	if errno != fs.OK {
+		log.Printf("Couldn't open tmp file for %s: %d", gn.path, errno)
+		return syscall.EIO
 	}
 
 	// At this point, we're dirty, so we can just make the changes we need.
@@ -1034,6 +1066,12 @@ func (gn *gritsNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.Set
 		// Er... surely there is a better way.
 		t := time.Unix(int64(in.Mtime), int64(in.Mtimensec))
 		gn.tmpMetadata.Timestamp = t.UTC().Format(time.RFC3339)
+	}
+
+	errno = gn.flush() // Since we might not be open for write, we need to commit the change
+	if errno != fs.OK {
+		log.Printf("Problem flushing %s after Setattr() - %d", gn.path, errno)
+		return errno
 	}
 
 	return fs.OK
@@ -1186,6 +1224,8 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 var _ = (fs.NodeRmdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	// FIXME - Need to lock?
+
 	fullPath := filepath.Join(gn.path, name)
 
 	dirNode, err := gn.module.volume.LookupNode(fullPath)
@@ -1196,8 +1236,8 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	}
 	defer dirNode.Release()
 
-	emptyAddr := gn.module.volume.GetEmptyDirMetadataAddr()
-	if !dirNode.ExportedBlob().GetAddress().Equals(emptyAddr) {
+	// FIXME - What about "{ }" or something?
+	if dirNode.Metadata().Size != 2 {
 		return syscall.ENOTEMPTY // Only for compatibility With Unix expectations
 	}
 
