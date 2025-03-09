@@ -55,6 +55,42 @@ const (
 	GNodeTypeDirectory
 )
 
+// MarshalJSON converts a GNodeType to a JSON string
+func (t GNodeType) MarshalJSON() ([]byte, error) {
+	switch t {
+	case GNodeTypeFile:
+		return []byte(`"blob"`), nil
+	case GNodeTypeDirectory:
+		return []byte(`"dir"`), nil
+	default:
+		return nil, fmt.Errorf("unknown GNodeType: %d", t)
+	}
+}
+
+// UnmarshalJSON converts a JSON string to a GNodeType
+func (t *GNodeType) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		// Try as a number for backward compatibility
+		var i int
+		if err := json.Unmarshal(data, &i); err != nil {
+			return err
+		}
+		*t = GNodeType(i)
+		return nil
+	}
+
+	switch s {
+	case "blob":
+		*t = GNodeTypeFile
+	case "dir":
+		*t = GNodeTypeDirectory
+	default:
+		return fmt.Errorf("unknown GNodeType string: %s", s)
+	}
+	return nil
+}
+
 type GNodeMetadata struct {
 	Type        GNodeType `json:"type"`
 	Size        int64     `json:"size"`
