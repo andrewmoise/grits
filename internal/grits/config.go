@@ -6,9 +6,7 @@ import (
 	"path/filepath"
 )
 
-// TODO: This clearly needs to move to the server package
-
-// CoreConfig represents the core server configuration.
+// Config represents the core server configuration.
 type Config struct {
 	// General networking configuration
 	IsRootNode  bool   `json:"IsRootNode"`
@@ -17,8 +15,7 @@ type Config struct {
 	ServerToken string `json:"ServerToken"`
 
 	// File locations
-	ServerDir      string `json:"-"`
-	DirWatcherPath string `json:"DirWatcherPath"`
+	ServerDir string `json:"-"`
 
 	// Storage configuration
 	StorageSize         int64 `json:"StorageSize"`
@@ -41,8 +38,7 @@ func NewConfig(serverDir string) *Config {
 
 		ServerToken: "",
 
-		ServerDir:      serverDir,
-		DirWatcherPath: "/usr/local/bin/ogwatch",
+		ServerDir: serverDir,
 
 		StorageSize:         100 * 1024 * 1024, // Max size of data
 		StorageFreeSize:     80 * 1024 * 1024,  // Size to clean down to when overfull
