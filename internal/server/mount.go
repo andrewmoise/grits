@@ -690,7 +690,9 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 		}
 	}()
 
-	log.Printf("Ready to set up - %s (TL %d)", gn.path, truncLen)
+	if grits.DebugFuse {
+		log.Printf("Ready to set up - %s (TL %d)", gn.path, truncLen)
+	}
 
 	// Either copy metadata and contents from the previous file, or else make up some for a
 	// new blank file
@@ -739,7 +741,9 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 		gn.tmpMetadata = &tmpMetadata
 	}
 
-	log.Printf("Done - MD %v", gn.tmpMetadata)
+	if grits.DebugFuse {
+		log.Printf("Done - MD %v", gn.tmpMetadata)
+	}
 
 	gn.openFile = tmpFile
 	gn.tmpFile = tmpFile
@@ -751,7 +755,9 @@ func (gn *gritsNode) openTmpFile(truncLen int64) syscall.Errno {
 		gn.module.addDirtyNode(gn.path, gn)
 	}
 
-	//log.Printf("All done")
+	if grits.DebugFuse {
+		log.Printf("All done")
+	}
 
 	return fs.OK
 }
@@ -769,10 +775,10 @@ func (gn *gritsNode) flush() syscall.Errno {
 
 	defer func() {
 		err := tmpFile.Close()
-			gn.tmpFile = nil
-			if err != nil {
-				log.Printf("Error closing tmp file %s! %v", gn.path, err)
-			}
+		gn.tmpFile = nil
+		if err != nil {
+			log.Printf("Error closing tmp file %s! %v", gn.path, err)
+		}
 
 		// FIXME - A lot of other places need to handle openFile being nil, in case of
 		// error from here
