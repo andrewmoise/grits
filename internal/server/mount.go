@@ -394,7 +394,9 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 			}
 		}
 
-		log.Printf("  Return result %v for %s", &dirtyNode.Inode, name)
+		if grits.DebugFuse {
+			log.Printf("  Return result %v for %s", &dirtyNode.Inode, name)
+		}
 		return &dirtyNode.Inode, fs.OK
 	} else {
 		gn.module.dirtyNodesMtx.Unlock()
