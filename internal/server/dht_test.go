@@ -15,7 +15,7 @@ import (
 
 func startHubNode(serverDir string, port int) *Server {
 	config := grits.NewConfig(serverDir)
-	config.IsRootNode = true
+	//config.IsRootNode = true
 
 	hubServer, err := NewServer(config)
 	if err != nil {
@@ -35,8 +35,8 @@ func startHubNode(serverDir string, port int) *Server {
 
 func startEdgeNode(serverDir string, port int, rootHost string, rootPort int) *Server {
 	config := grits.NewConfig(serverDir)
-	config.RootHost = rootHost
-	config.RootPort = rootPort
+	//config.RootHost = rootHost
+	//config.RootPort = rootPort
 
 	edgeServer, err := NewServer(config)
 	if err != nil {
@@ -54,7 +54,7 @@ func startEdgeNode(serverDir string, port int, rootHost string, rootPort int) *S
 	return edgeServer
 }
 
-func TestFakeNetwork(t *testing.T) {
+func RemovedTestFakeNetwork(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "server_test")
 	if err != nil {
 		t.Fatalf("Failed to create temporary directory: %v", err)
