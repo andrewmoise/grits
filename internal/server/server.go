@@ -96,6 +96,8 @@ func (s *Server) Start() error {
 		}
 	}
 
+	log.Printf("Grits server started...")
+
 	s.shutdownDoneWg.Add(1)
 	go func() {
 		defer s.shutdownDoneWg.Done()

@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -444,10 +445,14 @@ func (s *HTTPModule) handleDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	//log.Printf("Checking all path mappings")
+
 	for _, mapping := range deployment.Config.PathMappings {
+		//log.Printf("  Checking mapping %s / %s", r.URL.Path, mapping.UrlPath)
 		if strings.HasPrefix(r.URL.Path, mapping.UrlPath) {
 			volume := mapping.Volume
 			volumePath := strings.TrimPrefix(r.URL.Path, mapping.UrlPath)
+			volumePath = path.Join(mapping.VolumePath, volumePath)
 
 			s.handleContentRequest(volume, volumePath, w, r)
 			return
@@ -521,7 +526,13 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 
 	var cf grits.CachedFile
 	if pathAddr.Type == grits.Tree {
-		addr, err := volume.Lookup(strings.TrimRight(path, "/") + "/index.html")
+		filePath := strings.TrimRight(path, "/")
+		filePath += "/index.html"
+		filePath = strings.TrimPrefix(filePath, "/")
+
+		//log.Printf("We look up index %s", filePath)
+
+		addr, err := volume.Lookup(filePath)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("No index: %v", err), http.StatusNotFound)
 			return
