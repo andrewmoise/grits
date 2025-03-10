@@ -55,7 +55,7 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 	log.Printf("Making volume")
 
 	wvc := &WikiVolumeConfig{
-		VolumeName: "_client",
+		VolumeName: "client",
 	}
 	wv, err := NewWikiVolume(wvc, server, true)
 	if err != nil {
@@ -72,37 +72,34 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 		return nil, err
 	}
 
-	log.Printf("Loading client/serviceworker/grits-bootstrap.js")
-
-	bootstrapCf, err := wv.AddBlob("client/serviceworker/grits-bootstrap.js")
-	if err != nil {
-		return nil, err
-	}
-	defer bootstrapCf.Release()
-
-	log.Printf("Linking")
 	err = wv.ns.Link("serviceworker", wv.GetEmptyDirAddr())
 	if err != nil {
 		return nil, err
 	}
 
-	// FIXME fix up the API pls
-	err = wv.ns.LinkBlob("serviceworker/grits-bootstrap.js", bootstrapCf.GetAddress(), bootstrapCf.GetSize())
-	if err != nil {
-		return nil, err
+	clientFiles := []string{
+		"serviceworker/grits-bootstrap.js",
+		"serviceworker/grits-serviceworker.js",
+		"GritsClient.js",
+		"client-test.html",
 	}
 
-	log.Printf("Loading client/serviceworker/grits-serviceworker.js")
+	for _, filename := range clientFiles {
+		log.Printf("Loading client/%s", filename)
 
-	swCf, err := wv.AddBlob("client/serviceworker/grits-serviceworker.js")
-	if err != nil {
-		return nil, err
-	}
-	defer swCf.Release()
-	// FIXME fix up the API pls
-	err = wv.ns.LinkBlob("serviceworker/grits-serviceworker.js", swCf.GetAddress(), swCf.GetSize())
-	if err != nil {
-		return nil, err
+		fileCf, err := wv.AddBlob(fmt.Sprintf("client/%s", filename))
+		if err != nil {
+			return nil, err
+		}
+		defer fileCf.Release()
+
+		log.Printf("Linking")
+
+		// FIXME fix up the API pls
+		err = wv.ns.LinkBlob(filename, fileCf.GetAddress(), fileCf.GetSize())
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	configBytes, err := json.Marshal(swm.Config)
