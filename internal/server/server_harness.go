@@ -39,8 +39,10 @@ func SetupTestServer(t *testing.T, initializers ...TestModuleInitializer) (*Serv
 // WithHTTPModule is an initializer for adding the HTTP module to the server.
 func WithHttpModule(port int) TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
+		readOnly := false
 		httpConfig := &HTTPModuleConfig{
 			ThisPort: port,
+			ReadOnly: &readOnly,
 		}
 		httpModule := NewHTTPModule(s, httpConfig)
 		s.AddModule(httpModule)

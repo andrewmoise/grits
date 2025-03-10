@@ -20,7 +20,8 @@ type HTTPModuleConfig struct {
 	ThisHost string `json:"ThisHost"`
 	ThisPort int    `json:"ThisPort"`
 
-	EnableTls bool `json:"EnableTLS,omitempty"`
+	EnableTls bool  `json:"EnableTLS,omitempty"`
+	ReadOnly  *bool `json:"ReadOnly,omitempty"`
 }
 
 type HTTPModule struct {
@@ -40,6 +41,12 @@ func (*HTTPModule) GetModuleName() string {
 
 // NewHTTPModule creates and initializes an HTTPModule instance based on the provided configuration.
 func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
+	// If ReadOnly wasn't specified, default to true
+	if config.ReadOnly == nil {
+		readOnly := true
+		config.ReadOnly = &readOnly
+	}
+
 	mux := http.NewServeMux()
 	HTTPServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", config.ThisPort),
@@ -308,6 +315,11 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if *s.Config.ReadOnly {
+		http.Error(w, "Volume is read-only", http.StatusForbidden)
+		return
+	}
+
 	// Create a temporary file
 	tmpFile, err := os.CreateTemp("", "blob-upload-*")
 	if err != nil {
@@ -402,6 +414,11 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if *s.Config.ReadOnly {
+		http.Error(w, "Volume is read-only", http.StatusForbidden)
 		return
 	}
 
@@ -515,10 +532,21 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	switch r.Method {
 	case http.MethodGet:
 		handleNamespaceGet(s.Server.BlobStore, volume, filePath, w, r)
+
 	case http.MethodPut:
-		handleNamespacePut(s.Server.BlobStore, volume, filePath, w, r)
+		if *s.Config.ReadOnly {
+			http.Error(w, "Volume is read-only", http.StatusForbidden)
+		} else {
+			handleNamespacePut(s.Server.BlobStore, volume, filePath, w, r)
+		}
+
 	case http.MethodDelete:
-		handleNamespaceDelete(volume, filePath, w)
+		if *s.Config.ReadOnly {
+			http.Error(w, "Volume is read-only", http.StatusForbidden)
+		} else {
+			handleNamespaceDelete(volume, filePath, w)
+		}
+
 	default:
 		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
 	}
