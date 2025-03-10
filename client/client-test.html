@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Grits Client Testing</title>
+</head>
+<body>
+  <h1>Open your console (F12) to start testing</h1>
+  
+  <script type="module">
+    // Import the ES module
+    import GritsClient from './GritsClient.js';
+    
+    // Make it available globally for console testing
+    window.GritsClient = GritsClient;
+    
+    // Dynamically determine the server URL
+    const getServerUrl = () => {
+      // Extract protocol, hostname, and port from current location
+      const { protocol, hostname, port } = window.location;
+      
+      return `${protocol}//${hostname}:${port}`;
+    };
+    
+    // Create a pre-configured instance for convenience
+    window.client = new GritsClient({
+      serverUrl: getServerUrl(),
+      volume: 'root'
+    });
+    
+    // Log a message to let you know it's ready
+    console.log('Grits client is ready for testing in the console!');
+    console.log('Connected to server:', getServerUrl());
+    console.log('Try: client.lookupPath("some/path").then(console.log)');
+  </script>
+</body>
+</html>
