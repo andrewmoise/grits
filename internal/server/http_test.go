@@ -26,11 +26,9 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Set up directory structure
-
 	linkData := []struct {
-		Volume string `json:"volume"`
-		Path   string `json:"path"`
-		Addr   string `json:"addr"`
+		Path string `json:"path"`
+		Addr string `json:"addr"`
 	}{
 		{Path: "dir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
 		{Path: "dir/subdir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
@@ -68,13 +66,10 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 		// Link the blob to two paths
 		linkData := []struct {
-			Volume string `json:"volume"`
-			Path   string `json:"path"`
-			Addr   string `json:"addr"`
+			Path string `json:"path"`
+			Addr string `json:"addr"`
 		}{
 			{Path: content, Addr: fmt.Sprintf("blob:%s-%d", addresses[i], len(content))},
-			//{Path: "dir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
-			//{Path: "dir/subdir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
 			{Path: "dir/subdir/" + content, Addr: fmt.Sprintf("blob:%s-%d", addresses[i], len(content))},
 		}
 
@@ -101,14 +96,66 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d", resp.StatusCode)
 	}
 
-	var lookupResponse [][]string
+	// Updated for new response format: [path, metadataHash, contentHash, contentSize]
+	var lookupResponse [][]interface{}
 	if err := json.NewDecoder(resp.Body).Decode(&lookupResponse); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
 
-	// Check the lookup response
-	// You may want to add specific checks here based on your expectations
-	fmt.Printf("Lookup response: %+v\n", lookupResponse)
+	// Verify response structure and content
+	if len(lookupResponse) < 3 {
+		t.Fatalf("Expected at least 3 path entries in the lookup response, got %d", len(lookupResponse))
+	}
+
+	// Check root path
+	if lookupResponse[0][0] != "" { // First entry should be root with empty path
+		t.Errorf("Expected root path to be empty string, got %v", lookupResponse[0][0])
+	}
+
+	// Check expected paths are in the response
+	expectedPaths := []string{"", "dir", "dir/subdir", "dir/subdir/one"}
+	for i, expectedPath := range expectedPaths {
+		if i >= len(lookupResponse) {
+			t.Errorf("Missing expected path in response: %s", expectedPath)
+			continue
+		}
+
+		// Check path
+		path, ok := lookupResponse[i][0].(string)
+		if !ok {
+			t.Errorf("Path at index %d is not a string: %v", i, lookupResponse[i][0])
+			continue
+		}
+		if path != expectedPath {
+			t.Errorf("Expected path %s at index %d, got %s", expectedPath, i, path)
+		}
+
+		// Verify metadata hash exists
+		if _, ok := lookupResponse[i][1].(string); !ok {
+			t.Errorf("Metadata hash at index %d is not a string: %v", i, lookupResponse[i][1])
+		}
+
+		// Verify content hash exists
+		if _, ok := lookupResponse[i][2].(string); !ok {
+			t.Errorf("Content hash at index %d is not a string: %v", i, lookupResponse[i][2])
+		}
+
+		// Verify content size is a number
+		if _, ok := lookupResponse[i][3].(float64); !ok { // JSON numbers deserialize as float64
+			t.Errorf("Content size at index %d is not a number: %v", i, lookupResponse[i][3])
+		}
+	}
+
+	// For the final path (dir/subdir/one), verify the content size matches what we expect
+	if len(lookupResponse) >= len(expectedPaths) {
+		lastIndex := len(expectedPaths) - 1
+		contentSize, ok := lookupResponse[lastIndex][3].(float64)
+		if !ok {
+			t.Errorf("Content size is not a number: %v", lookupResponse[lastIndex][3])
+		} else if int(contentSize) != len("one") {
+			t.Errorf("Expected content size %d for 'one', got %f", len("one"), contentSize)
+		}
+	}
 }
 
 func TestUploadAndDownloadBlob(t *testing.T) {

@@ -540,9 +540,14 @@ func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 	return node, nil
 }
 
-// FIXME - clean up this API a little
+// PathNodePair represents a path and its corresponding FileNode
+type PathNodePair struct {
+	Path string
+	Node FileNode
+}
 
-func (ns *NameStore) LookupFull(name string) ([][]string, error) {
+// LookupFull returns a list of path and node pairs for a given path
+func (ns *NameStore) LookupFull(name string) ([]*PathNodePair, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -551,30 +556,57 @@ func (ns *NameStore) LookupFull(name string) ([][]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(nodes) > 0 && nodes[len(nodes)-1] == nil {
+	if len(nodes) <= 0 {
+		log.Printf("Can't happen! No nodes returned on lookup of %s", name)
+		return nil, ErrNotExist
+	}
+
+	// If the last node is nil, it means the path doesn't exist
+	if nodes[len(nodes)-1] == nil {
+		log.Printf("Nonexistent final pathname for %s", name)
 		return nil, ErrNotExist
 	}
 
 	parts := strings.Split(name, "/")
 	partialPath := ""
 
-	response := make([][]string, 0, len(parts)+1) // +1 for the root
-	response = append(response, []string{"", nodes[0].AddressString()})
-	index := 1
+	// Prepare the response
+	response := make([]*PathNodePair, 0, len(nodes))
 
+	// Add the root node with empty path
+	response = append(response, &PathNodePair{
+		Path: "",
+		Node: nodes[0],
+	})
+
+	// Add each path component and its corresponding node
+	index := 1
 	for _, part := range parts {
 		if part == "" {
 			continue
 		}
 
+		if index >= len(nodes) {
+			break // Safeguard against potential out-of-bounds
+		}
+
 		partialPath = filepath.Join(partialPath, part)
 		node := nodes[index]
 		if node == nil {
-			return nil, ErrNotExist
+			break // Stop if we hit a nil node
 		}
-		// FIXME - we crash if the last node is nil
-		response = append(response, []string{partialPath, nodes[index].AddressString()})
-		index += 1
+
+		response = append(response, &PathNodePair{
+			Path: partialPath,
+			Node: node,
+		})
+
+		index++
+	}
+
+	// Take a reference to each node we're returning
+	for _, pair := range response {
+		pair.Node.Take()
 	}
 
 	return response, nil
