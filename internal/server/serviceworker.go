@@ -81,6 +81,7 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 		"serviceworker/grits-bootstrap.js",
 		"serviceworker/grits-serviceworker.js",
 		"GritsClient.js",
+		"GritsClientTests.js",
 		"client-test.html",
 	}
 

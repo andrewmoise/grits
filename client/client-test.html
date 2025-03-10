@@ -2,15 +2,76 @@
 <html>
 <head>
   <title>Grits Client Testing</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      line-height: 1.5;
+      padding: 2rem;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 {
+      color: #333;
+      border-bottom: 2px solid #eee;
+      padding-bottom: 0.5rem;
+    }
+    button {
+      background-color: #4CAF50;
+      border: none;
+      color: white;
+      padding: 10px 20px;
+      text-align: center;
+      text-decoration: none;
+      display: inline-block;
+      font-size: 16px;
+      margin: 1rem 0;
+      cursor: pointer;
+      border-radius: 4px;
+    }
+    .info {
+      background-color: #e7f3fe;
+      border-left: 6px solid #2196F3;
+      padding: 1rem;
+      margin: 1rem 0;
+    }
+    #result-container {
+      margin-top: 1rem;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background-color: #f9f9f9;
+      display: none;
+    }
+    .test-passed {
+      color: #4CAF50;
+    }
+    .test-failed {
+      color: #f44336;
+    }
+  </style>
 </head>
 <body>
-  <h1>Open your console (F12) to start testing</h1>
+  <h1>Grits Client Testing</h1>
+  
+  <div class="info">
+    <p>This page allows you to test the Grits client with your server.</p>
+    <p>Open your console (F12) to see detailed logs during testing.</p>
+  </div>
+  
+  <button id="run-tests">Run All Tests</button>
+  
+  <div id="result-container">
+    <h2>Test Results</h2>
+    <div id="test-summary"></div>
+    <div id="test-details"></div>
+  </div>
   
   <script type="module">
-    // Import the ES module
+    // Import the modules
     import GritsClient from './GritsClient.js';
+    import GritsClientTests from './GritsClientTests.js';
     
-    // Make it available globally for console testing
+    // Make them available globally for console testing
     window.GritsClient = GritsClient;
     
     // Dynamically determine the server URL
@@ -27,10 +88,64 @@
       volume: 'root'
     });
     
+    // Create the test suite
+    const tests = new GritsClientTests(window.client);
+    window.gritsTests = tests;
+    
+    // Set up the button to run tests
+    document.getElementById('run-tests').addEventListener('click', async () => {
+      const resultContainer = document.getElementById('result-container');
+      const testSummary = document.getElementById('test-summary');
+      const testDetails = document.getElementById('test-details');
+      
+      // Clear previous results
+      testSummary.innerHTML = 'Running tests...';
+      testDetails.innerHTML = '';
+      resultContainer.style.display = 'block';
+      
+      // Run the tests
+      const results = await tests.runAllTests();
+      
+      // Display the results
+      testSummary.innerHTML = `
+        <p><strong>Tests completed:</strong> 
+           <span class="test-passed">${results.passed} passed</span>, 
+           <span class="test-failed">${results.failed} failed</span>
+        </p>
+      `;
+      
+      // Show details for each test
+      let detailsHtml = '';
+      for (const test of results.tests) {
+        const statusClass = test.passed ? 'test-passed' : 'test-failed';
+        const statusIcon = test.passed ? '✅' : '❌';
+        
+        detailsHtml += `
+          <div>
+            <h3 class="${statusClass}">${statusIcon} ${test.name}</h3>
+            <p>Assertions: ${test.assertions.filter(a => a.passed).length} of ${test.assertions.length} passed</p>
+          </div>
+        `;
+        
+        // Show failed assertions
+        const failedAssertions = test.assertions.filter(a => !a.passed);
+        if (failedAssertions.length > 0) {
+          detailsHtml += '<ul>';
+          for (const assertion of failedAssertions) {
+            detailsHtml += `<li class="test-failed">${assertion.message}</li>`;
+          }
+          detailsHtml += '</ul>';
+        }
+      }
+      
+      testDetails.innerHTML = detailsHtml;
+    });
+    
     // Log a message to let you know it's ready
-    console.log('Grits client is ready for testing in the console!');
+    console.log('Grits client is ready for testing!');
     console.log('Connected to server:', getServerUrl());
     console.log('Try: client.lookupPath("some/path").then(console.log)');
+    console.log('Or run all tests with: gritsTests.runAllTests()');
   </script>
 </body>
 </html>
