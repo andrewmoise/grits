@@ -243,6 +243,11 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Strip out the size component if present (format: hash-size)
+	if dashIndex := strings.LastIndex(addrStr, "-"); dashIndex != -1 {
+		addrStr = addrStr[:dashIndex]
+	}
+
 	fileAddr, err := grits.NewBlobAddrFromString(addrStr)
 	if err != nil {
 		http.Error(w, "Invalid file address format", http.StatusBadRequest)
@@ -361,10 +366,29 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := volume.LookupFull(lookupPath)
+	pathNodePairs, err := volume.LookupFull(lookupPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
 		return
+	}
+
+	// Transform to the format expected by the client
+	response := make([][]interface{}, len(pathNodePairs))
+	for i, pair := range pathNodePairs {
+		node := pair.Node
+		metadataHash := node.MetadataBlob().GetAddress().Hash
+		contentHash := node.ExportedBlob().GetAddress().Hash
+		contentSize := node.ExportedBlob().GetSize()
+
+		response[i] = []interface{}{
+			pair.Path,
+			metadataHash,
+			contentHash,
+			contentSize,
+		}
+
+		// Release the reference we took in LookupFull
+		node.Release()
 	}
 
 	w.Header().Set("Content-Type", "application/json")

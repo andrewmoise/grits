@@ -68,24 +68,24 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
 
-	var lookupResponse [][]string
+	var lookupResponse [][]interface{}
 	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
 
-	// Extract blob address for the directory metadata and download it
+	// Extract metadata from the response
 	if len(lookupResponse) < 1 {
 		t.Fatalf("Lookup response did not include directory metadata")
 	}
 
-	// First get the directory's metadata
-	dirContentAddr, err := grits.NewTypedFileAddrFromString(lookupResponse[0][1])
-	if err != nil {
-		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
+	// First get the directory's content hash
+	rootContentHash, ok := lookupResponse[0][2].(string)
+	if !ok {
+		t.Fatalf("Content hash is not a string: %v", lookupResponse[0][2])
 	}
 
 	// Now fetch the directory content
-	dirURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, dirContentAddr.Hash)
+	dirURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, rootContentHash)
 	dirResp, err := http.Get(dirURL)
 	if err != nil {
 		t.Fatalf("Failed to fetch directory content: %v", err)
@@ -118,7 +118,7 @@ func TestFileOperations(t *testing.T) {
 		metadataResp.Body.Close()
 
 		if metadata.Type != grits.GNodeTypeFile {
-			t.Errorf("Expected file type for %s", name)
+			t.Errorf("Expected file type for %s, got %v", name, metadata.Type)
 		}
 
 		// Fetch the actual content
@@ -208,7 +208,7 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
 
-	lookupResponse = make([][]string, 0)
+	lookupResponse = make([][]interface{}, 0)
 	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
@@ -217,14 +217,14 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup response did not include directory metadata")
 	}
 
-	// Get the updated directory metadata
-	dirContentAddr, err = grits.NewTypedFileAddrFromString(lookupResponse[0][1])
-	if err != nil {
-		t.Fatalf("Error decoding address %s: %v", lookupResponse[0][1], err)
+	// Get the updated directory content hash (index 2)
+	rootContentHash, ok = lookupResponse[0][2].(string)
+	if !ok {
+		t.Fatalf("Content hash is not a string: %v", lookupResponse[0][2])
 	}
 
 	// Get the updated directory listing
-	dirURL = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, dirContentAddr.Hash)
+	dirURL = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, rootContentHash)
 	dirResp, err = http.Get(dirURL)
 	if err != nil {
 		t.Fatalf("Failed to fetch directory content: %v", err)
