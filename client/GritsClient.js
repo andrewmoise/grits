@@ -1,6 +1,9 @@
 /**
  * GritsClient - Client-side interface for interacting with the Grits file storage API
  */
+
+const debugClientTiming = false;
+
 class GritsClient {
   constructor(config) {
     // Basic configuration
@@ -113,6 +116,10 @@ class GritsClient {
  * @param {string} [options.prefix='DEBUG'] - Prefix for the log message
  */
   debugLog(path, message, options = {}) {
+    if (!debugClientTiming) {
+      return;
+    }
+
     // Default options
     const config = {
       includeDate: false,
@@ -149,16 +156,25 @@ class GritsClient {
     }
   }
 
-// Example usage:
-// debugLog('/path/to/file.js', 'Processing file');
-// debugLog('/api/users/123', 'User data received', { color: false });
-// debugLog('/volumes/data/images/photo.jpg', 'Image loaded', { prefix: 'MEDIA', includeDate: true });
+  // Example usage:
+  // debugLog('/path/to/file.js', 'Processing file');
+  // debugLog('/api/users/123', 'User data received', { color: false });
+  // debugLog('/volumes/data/images/photo.jpg', 'Image loaded', { prefix: 'MEDIA', includeDate: true });
 
   // Main path resolution function
   async _resolvePath(path) {
     this.debugLog(path, "Start lookup");
 
-    // Try fast path first
+    // Try synchronous path first
+    if (this.rootHash) {
+      const quickResult = this._synchronousCacheLookup(path);
+      if (quickResult) {
+        this.debugLog(path, "  ultra-fast path success");
+        return quickResult;
+      }
+    }
+
+    // Try "fast" path fetching from browser cache, if that doesn't work
     const fastPathResult = await this._tryFastPathLookup(path);
     if (fastPathResult) {
       this.debugLog(path, "  fast path success");
@@ -166,6 +182,8 @@ class GritsClient {
     }
     
     // Check if there's already a request in flight for this path
+    // FIXME -- Technically, we should check if any child of `path` is in there also,
+    // but that's *very* rare, probably actually not worth worrying about
     if (this.inflightLookups.has(path)) {
       this.debugLog(path, "  already in flight");
       return this.inflightLookups.get(path).promise;
@@ -185,6 +203,12 @@ class GritsClient {
       reject: rejectPromise
     });
     
+    this._fetchAndResolve(path);
+
+    return promise;
+  }
+
+  async _fetchAndResolve(path) {
     // Make the actual server request
     try {
       this.debugLog(path, "  start lookup fetch");
@@ -196,7 +220,9 @@ class GritsClient {
       });
       
       if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`);
+        // FIXME - insert an error object into this.inflightLookups and wake everyone up
+        console.error(`Server error: ${response.status}`);
+        return
       }
       
       this.debugLog(path, "  parse response");
@@ -210,39 +236,14 @@ class GritsClient {
       
       this.debugLog(path, "  retry all in flight");
 
-      // Try fast path for all in-flight requests
+      // Try fast path again, for all in-flight requests
       this._retryAllInflightLookups();
-      
-      // If we get here and our request is still in the map, resolve it
-      if (this.inflightLookups.has(path)) {
-        this.debugLog(path, "  redo fast path");
-
-        const result = await this._tryFastPathLookup(path); // FIXME -- I think this is not needed
-        if (result) {
-          this.debugLog(path, "  resolve");
-          resolvePromise(result);
-        } else {
-          this.debugLog(path, "  reject");
-          // This shouldn't happen since we just updated the cache
-          rejectPromise(new Error(`Path resolution failed after lookup: ${path}`));
-        }
-        this.debugLog(path, "  delete");
-        this.inflightLookups.delete(path);
-      }
-      
-      this.debugLog(path, "  retry fast path AGAIN"); // FIXME FIXME
-      return this._tryFastPathLookup(path);
     } catch (error) {
-      this.debugLog(path, "  error");
-      // If we get here and our request is still in the map, reject it
-      if (this.inflightLookups.has(path)) {
-        rejectPromise(error);
-        this.inflightLookups.delete(path);
-      }
+      // FIXME - insert an error object
       throw error;
     }
   }
-
+  
   // Update direntry cache with lookup results
   _updateDirentryCacheFromLookup(pathSteps) {
     for (const [stepPath, metadataHash, contentHash, contentSize] of pathSteps) {
@@ -273,12 +274,13 @@ class GritsClient {
       }
     }
   
-    // TODO: Start background fetch requests for any hashes not in browser cache
+    // TODO: Start background fetch requests for any hashes not in browser cache, so that we'll
+    // get serialized stuff we can use in the future or from other service workers in other tabs
   }
 
   // Retry fast path for all in-flight requests
   async _retryAllInflightLookups() {
-    // Make a copy since we'll be modifying the map
+    // Make a copy, since we'll be modifying the map
     const entries = Array.from(this.inflightLookups.entries());
     
     for (const [path, request] of entries) {
@@ -294,6 +296,38 @@ class GritsClient {
         // Don't reject here - let the original request handle errors
       }
     }
+  }
+
+  _synchronousCacheLookup(path) {
+    // Only attempt if we have a root hash
+    if (!this.rootHash) return null;
+    
+    const components = path.split('/').filter(c => c.length > 0);
+    let currentMetadataHash = this.rootHash;
+    let currentContentHash = null;
+    let currentContentSize = null;
+    
+    // Try to follow path using only in-memory cache
+    for (let i = 0; i < components.length; i++) {
+      const component = components[i];
+      const direntryCacheKey = `${currentMetadataHash}:${component}`;
+      
+      // If not in direntry cache, abort the fast path
+      if (!this.direntryCache.has(direntryCacheKey)) {
+        return null;
+      }
+      
+      const entry = this.direntryCache.get(direntryCacheKey);
+      currentMetadataHash = entry.metadataHash;
+      currentContentHash = entry.contentHash;
+      currentContentSize = entry.contentSize;
+    }
+    
+    return {
+      metadataHash: currentMetadataHash,
+      contentHash: currentContentHash,
+      contentSize: currentContentSize
+    };
   }
 
   async _tryFastPathLookup(path) {
@@ -364,26 +398,38 @@ class GritsClient {
   }
 
   async _getJsonFromHash(hash) {
+    const startTime = performance.now();
+    
     // Check if we have it in our cache
     if (this.jsonCache.has(hash)) {
       const entry = this.jsonCache.get(hash);
       // Update last accessed time
       entry.lastAccessed = Date.now();
+      this.debugLog("hash:" + hash.substring(0, 8), `Memory cache hit (${Math.round(performance.now() - startTime)}ms)`);
       return entry.data;
     }
     
+    this.debugLog("hash:" + hash.substring(0, 8), "Memory cache miss, trying browser cache");
+    
     // Try to get from browser cache
     try {
+      const fetchStart = performance.now();
       const response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
         method: 'GET',
         cache: 'force-cache' // Try to use browser cache
       });
       
+      const fetchTime = Math.round(performance.now() - fetchStart);
+      this.debugLog("hash:" + hash.substring(0, 8), `Fetch completed in ${fetchTime}ms`);
+      
       if (!response.ok) {
         return null;
       }
       
+      const jsonStart = performance.now();
       const data = await response.json();
+      const jsonTime = Math.round(performance.now() - jsonStart);
+      this.debugLog("hash:" + hash.substring(0, 8), `JSON parsing took ${jsonTime}ms`);
       
       // Cache it with current timestamp
       this.jsonCache.set(hash, {
