@@ -73,13 +73,30 @@ Smaller roadmap, sort of immediate big chunks:
 
 Minor punch list:
 
-* Why do intermediate directory entry blobs stay around when they should be getting freed?
-* Why does `git checkout` fail on pread() in the FUSE mount?
 * Switch to mmap instead of stream file I/O for blobs
 * Chunking of files
 * Useful file metadata (owner, file mode, timestamp), make "type" not numeric
-* Make rename() transition the metadata node, instead of constructing a new one
 * Chunked directories
+* fsync()
+* Directories show "size" as the number of files underneath them
+* Health check, do quick diagnostics to make sure things can work (via an endpoint ideally)
+* List of semi-urgent refactorings to FUSE mount module
+* Switch to YAML for configuration
+* Undo history in the volumes
+* Better organization of blobs (not all in one directory), better handling of tiny blobs
+* Debounce multiple writes into a single consolidated change to the big tree
+* Performance - e.g. `gatsby new ecommerce-demo https://github.com/gatsbyjs/gatsby-starter-shopify`
+* File permissions, defaulting to something safe (in particular read-only for the HTTP endpoints)
+* Make a command-line utility for control of the server
+* Do a rough security audit, see if there are obvious insecurities
+* HTTP3
+* Figure out something for octal modes in metadata
+* Remote mounts of a volume on a different server
+* Switch over client freshness check to whole directory, and make timestamp handling better so we don't reload always on server restart
+* Cleanup Volume API
+* Make capitalization consistent in config file
+* Unify the two GritsClient.js files, use a template or something
+* Unify path normalization in GritsClient and SW
 
 ## Obvious questions
 
