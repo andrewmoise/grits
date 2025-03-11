@@ -99,6 +99,15 @@ func (wv *WikiVolume) GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode,
 	return wv.ns.GetFileNode(metadataAddr)
 }
 
+func (wv *WikiVolume) CreateMetadata(cf grits.CachedFile) (grits.CachedFile, error) {
+	_, metadataCf, err := wv.ns.CreateMetadataBlob(cf.GetAddress(), cf.GetSize(), false, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	return metadataCf, nil
+}
+
 func (wv *WikiVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
 	node, err := wv.ns.LookupNode(path) // FIXME FIXME - Need to release after this
 	if err != nil {
@@ -118,6 +127,10 @@ func (wv *WikiVolume) LookupNode(path string) (grits.FileNode, error) {
 
 func (wv *WikiVolume) Link(path string, addr *grits.TypedFileAddr) error {
 	return wv.ns.Link(path, addr)
+}
+
+func (wv *WikiVolume) LinkByMetadata(name string, metadataAddr *grits.BlobAddr) error {
+	return wv.ns.LinkByMetadata(name, metadataAddr)
 }
 
 func (wv *WikiVolume) GetEmptyDirMetadataAddr() *grits.BlobAddr {

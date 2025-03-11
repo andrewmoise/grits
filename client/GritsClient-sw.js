@@ -1,6 +1,11 @@
 /**
- * GritsClient - Client-side interface for interacting with the Grits file storage API
+ * Service worker compatible version of GritsClient
+ * This assigns GritsClient to the global scope for service workers
  */
+
+// This file is identical to GritsClient.js except it assigns to global scope
+// instead of using export
+
 class GritsClient {
   constructor(config) {
     this.serverUrl = config.serverUrl.replace(/\/$/, '');
@@ -13,6 +18,7 @@ class GritsClient {
     this.lastSync = 0;
   }
   
+  // All methods exactly as in GritsClient.js
   clearCache() {
     this.pathCache.clear();
     this.metadataCache.clear();
@@ -48,7 +54,6 @@ class GritsClient {
     return metadata;
   }
   
-  // Other methods as in your original code...
   async getFileUrl(path) {
     const normalizedPath = this._normalizePath(path);
     const pathInfo = await this._resolvePath(normalizedPath);
@@ -193,5 +198,5 @@ class GritsClient {
   }
 }
 
-// Export as a module
-export default GritsClient;
+// Assign to global scope for ServiceWorker to access
+self.GritsClient = GritsClient;
