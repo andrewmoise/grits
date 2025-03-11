@@ -145,31 +145,37 @@ func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 
 // corsMiddleware is a middleware function that adds CORS headers to the response.
 // NOTE: Also adds service worker dir hash
+// FIXME - this needs a new name
 func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		tracker := NewPerformanceTracker(r)
+		tracker.Start()
+
+		// Basic request logging (kept from original)
 		log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
 
-		w.Header().Set("Access-Control-Allow-Origin", fmt.Sprintf("http://localhost:%d/", srv.Config.ThisPort)) // Or "*" for a public API
+		tracker.Step("Setting CORS headers")
+		w.Header().Set("Access-Control-Allow-Origin", fmt.Sprintf("http://localhost:%d/", srv.Config.ThisPort))
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		// Set cache headers based on the request path
 		if strings.HasPrefix(r.URL.Path, "/grits/v1/blob/") {
-			// Indicate that the content can be cached indefinitely
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
-			// Advise clients to revalidate every time
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Header().Set("Pragma", "no-cache") // For compatibility with HTTP/1.0
+			w.Header().Set("Pragma", "no-cache")
 			w.Header().Set("Expires", "0")
 		}
 
 		// If it's an OPTIONS request, respond with OK status and return
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
+			tracker.End()
 			return
 		}
 
+		tracker.Step("Setting service worker headers")
 		// Also do service worker cache control header
 		if srv.serviceWorkerModule != nil {
 			// Get the hash from the service worker module's volume
@@ -177,8 +183,46 @@ func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("X-Grits-Service-Worker-Hash", clientDirHash)
 		}
 
-		next(w, r)
+		// Wrap the response writer to capture when the handler finishes
+		wrappedWriter := &responseWriterWrapper{
+			ResponseWriter: w,
+			tracker:        tracker,
+		}
+
+		tracker.Step("Calling next handler")
+		next(wrappedWriter, r)
+
+		// In case the wrapper didn't capture the end (e.g., if there was no write)
+		if !wrappedWriter.ended {
+			tracker.End()
+		}
 	}
+}
+
+// responseWriterWrapper wraps http.ResponseWriter to track when the response is written
+type responseWriterWrapper struct {
+	http.ResponseWriter
+	tracker *PerformanceTracker
+	ended   bool
+}
+
+// WriteHeader captures the performance metric at the end of the request
+func (w *responseWriterWrapper) WriteHeader(statusCode int) {
+	w.ResponseWriter.WriteHeader(statusCode)
+	if !w.ended {
+		w.tracker.End()
+		w.ended = true
+	}
+}
+
+// Write captures the performance metric when the response is written
+func (w *responseWriterWrapper) Write(b []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(b)
+	if !w.ended {
+		w.tracker.End()
+		w.ended = true
+	}
+	return n, err
 }
 
 /*
@@ -241,12 +285,17 @@ func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
+	tracker := NewPerformanceTracker(r)
+	tracker.Start()
+
 	addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
 	if addrStr == "" {
 		http.Error(w, "Missing file address", http.StatusBadRequest)
+		tracker.End()
 		return
 	}
 
+	tracker.Step("Parsing blob address")
 	// Strip out the size component if present (format: hash-size)
 	if dashIndex := strings.LastIndex(addrStr, "-"); dashIndex != -1 {
 		addrStr = addrStr[:dashIndex]
@@ -255,32 +304,42 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	fileAddr, err := grits.NewBlobAddrFromString(addrStr)
 	if err != nil {
 		http.Error(w, "Invalid file address format", http.StatusBadRequest)
+		tracker.End()
 		return
 	}
 
+	tracker.Step("Reading file from blob store")
 	cachedFile, err := s.Server.BlobStore.ReadFile(fileAddr)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
+		tracker.End()
 		return
 	}
 	defer cachedFile.Release()
 
+	tracker.Step("Getting reader")
 	reader, err := cachedFile.Reader()
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		tracker.End()
 		return
 	}
 	defer reader.Close()
 
+	tracker.Step("Seeking to file start")
 	// Seek to the beginning of the file
 	if _, err := reader.Seek(0, io.SeekStart); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		tracker.End()
 		return
 	}
 
+	tracker.Step("Serving content")
 	// Serve the content directly using the reader
 	http.ServeContent(w, r, filepath.Base(fileAddr.Hash), time.Now(), reader)
 	cachedFile.Touch()
+
+	tracker.End()
 }
 
 // validateFileContents opens the file, computes its SHA-256 hash and size,
@@ -556,16 +615,23 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	}
 }
 
+// Modified handleNamespaceGet with performance tracking
 func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
+	tracker := NewPerformanceTracker(r)
+	tracker.Start()
+
 	log.Printf("Received GET request for file: %s\n", path)
 
+	tracker.Step("Looking up resource in volume")
 	// Look up the resource in the volume to get its address
 	pathAddr, err := volume.Lookup(path)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
+		tracker.End()
 		return
 	}
 
+	tracker.Step("Setting HTTP headers")
 	// Use the address hash as the ETag
 	etag := fmt.Sprintf("\"%s\"", pathAddr.String())
 	w.Header().Set("ETag", etag)
@@ -577,48 +643,61 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
 		// Resource hasn't changed, return 304 Not Modified
 		w.WriteHeader(http.StatusNotModified)
+		tracker.End()
 		return
 	}
 
 	var cf grits.CachedFile
+
+	tracker.Step("Resolving content address")
 	if pathAddr.Type == grits.Tree {
 		filePath := strings.TrimRight(path, "/")
 		filePath += "/index.html"
 		filePath = strings.TrimPrefix(filePath, "/")
 
-		//log.Printf("We look up index %s", filePath)
-
+		tracker.Step("Looking up index.html")
 		addr, err := volume.Lookup(filePath)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("No index: %v", err), http.StatusNotFound)
+			tracker.End()
 			return
 		}
 
+		tracker.Step("Reading index file from blob store")
 		cf, err = bs.ReadFile(&addr.BlobAddr)
 		if err != nil {
 			http.Error(w, "Can't open file for read", http.StatusInternalServerError)
+			tracker.End()
 			return
 		}
 	} else {
+		tracker.Step("Reading blob file")
 		cf, err = bs.ReadFile(&grits.BlobAddr{Hash: pathAddr.Hash})
 		if err != nil {
 			http.Error(w, "Cannot open blob", http.StatusInternalServerError)
+			tracker.End()
+			return
 		}
 	}
 	defer cf.Release()
 
+	tracker.Step("Opening file for reading")
 	// Open the file for reading
 	file, err := cf.Reader()
 	if err != nil {
 		log.Printf("Error opening file: %v\n", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		tracker.End()
 		return
 	}
 	defer file.Close()
 
+	tracker.Step("Serving file content")
 	// Serve the content
 	log.Printf("Serving file %s\n", cf.GetAddress().String())
-	http.ServeContent(w, r, filepath.Base(path) /* FIXME */, time.Now(), file)
+	http.ServeContent(w, r, filepath.Base(path), time.Now(), file)
+
+	tracker.End()
 }
 
 func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {

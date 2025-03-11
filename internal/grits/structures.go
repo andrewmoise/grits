@@ -200,6 +200,7 @@ var DebugNameStore = false          // Debug NameStore main operations
 var DebugFileCache = false          // Debug NameStore file cache
 var DebugLinks = false              // Debug calls to Link()
 var DebugFuse = false               // Debug FUSE mounting
+var DebugHttpPerformance = false    // Debug HTTP module performance
 
 func PrintStack() {
 	// Get stack trace info
