@@ -8,7 +8,7 @@ let pathConfig = null;
 let gritsClients = new Map();
 
 // Import GritsClient
-importScripts('/grits/v1/client/GritsClient-sw.js');
+importScripts('/grits/v1/content/client/GritsClient-sw.js');
 
 // Initialize GritsClient for a specific volume
 function initializeGritsClient(volume) {
@@ -61,6 +61,17 @@ function initializeAllClients() {
     
     return true;
 }
+
+// Destroy clients
+function cleanupClients() {
+    console.log('[Grits] Cleaning up Grits clients');
+    for (const [volume, client] of gritsClients.entries()) {
+      if (client && typeof client.destroy === 'function') {
+        console.log(`[Grits] Destroying client for volume: ${volume}`);
+        client.destroy();
+      }
+    }
+  }
 
 // Get the appropriate client for a volume
 function getClientForVolume(volume) {
@@ -274,6 +285,7 @@ self.addEventListener('fetch', event => {
             const newDirHash = response.headers.get('X-Grits-Service-Worker-Hash');
             if (newDirHash && swDirHash !== newDirHash) {
                 console.log(`[Grits] Configuration has changed (old: ${swDirHash}, new: ${newDirHash}), updating`);
+                cleanupClients();
                 await fetchConfig();
                 // Reset all clients
                 gritsClients.forEach(client => {
@@ -318,3 +330,8 @@ async function fetchConfig() {
         throw error;
     }
 }
+
+self.addEventListener('unload', () => {
+    console.log('[Grits] Service worker unloading, cleaning up clients');
+    cleanupClients();
+});
