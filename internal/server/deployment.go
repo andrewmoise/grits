@@ -2,17 +2,10 @@ package server
 
 // DeploymentConfig represents the configuration for a deployment module.
 type DeploymentConfig struct {
-	HostName     string              `json:"HostName"`
-	PathMappings []PathConfiguration `json:"Paths"`
-}
-
-// VolumeConfiguration represents the configuration for a volume within a deployment.
-type PathConfiguration struct {
+	HostName   string `json:"hostName"`
 	UrlPath    string `json:"urlPath"`
 	Volume     string `json:"volume"`
 	VolumePath string `json:"volumePath"`
-	//IsReadOnly bool   `json:"isReadOnly"`
-	//IndexFile  string `json:"indexFile"`
 }
 
 // DeploymentModule represents a deployment module.

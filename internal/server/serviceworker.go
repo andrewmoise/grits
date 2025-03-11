@@ -20,14 +20,39 @@ location /grits/ {
     proxy_pass http://localhost:1787/grits/;
 }
 
+You should also probably do the same for paths that are mapped in the service worker config,
+otherwise things may get confusing if the service worker is ever not working.
+
 Here's what's needed in your pages:
 
 <script src="/grits-bootstrap.js" async></script>
 */
 
-// ServiceWorkerModuleConfig holds the configuration for the service worker module.
 type ServiceWorkerModuleConfig struct {
-	PathMappings []PathMapping `json:"Paths"`
+	// No options
+}
+
+// Update the method to collect deployment configurations
+func (swm *ServiceWorkerModule) addDeploymentModule(module Module) {
+	deployment, ok := module.(*DeploymentModule)
+	if !ok {
+		return
+	}
+
+	// Convert DeploymentConfig to internal PathMapping
+	mapping := PathMapping{
+		URLPath:    deployment.Config.UrlPath,
+		Volume:     deployment.Config.Volume,
+		VolumePath: deployment.Config.VolumePath,
+	}
+
+	// Add to internal path mappings
+	swm.pathMappings = append(swm.pathMappings, &mapping)
+
+	log.Printf("About to update service worker config")
+
+	// Update the service worker configuration JSON
+	swm.updateServiceWorkerConfig()
 }
 
 // PathMapping defines a mapping from a URL path to a volume and path in storage.
@@ -43,6 +68,7 @@ type ServiceWorkerModule struct {
 	Server *Server
 
 	clientVolume Volume
+	pathMappings []*PathMapping
 }
 
 // NewServiceWorkerModule initializes a new instance of the service worker module.
@@ -81,6 +107,7 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 		"serviceworker/grits-bootstrap.js",
 		"serviceworker/grits-serviceworker.js",
 		"GritsClient.js",
+		"GritsClient-sw.js",
 		"GritsClientTests.js",
 		"client-test.html",
 	}
@@ -103,26 +130,43 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 		}
 	}
 
-	configBytes, err := json.Marshal(swm.Config)
-	if err != nil {
-		return nil, err
-	}
-	configCf, err := server.BlobStore.AddDataBlock(configBytes)
-	if err != nil {
-		return nil, err
-	}
-	defer configCf.Release()
-	err = wv.ns.LinkBlob("serviceworker/grits-serviceworker-config.json", configCf.GetAddress(), configCf.GetSize())
-	if err != nil {
-		return nil, err
-	}
-
 	swm.clientVolume = wv
 
 	server.AddModule(wv)
 	server.AddVolume(wv)
 
+	server.AddModuleHook(swm.addDeploymentModule)
+
+	swm.updateServiceWorkerConfig()
+
 	return swm, nil
+}
+
+func (swm *ServiceWorkerModule) updateServiceWorkerConfig() error {
+	configBytes, err := json.Marshal(swm.pathMappings)
+	if err != nil {
+		return err
+	}
+
+	configCf, err := swm.Server.BlobStore.AddDataBlock(configBytes)
+	if err != nil {
+		return err
+	}
+	defer configCf.Release()
+
+	configMetadata, err := swm.clientVolume.CreateMetadata(configCf)
+	if err != nil {
+		return err
+	}
+
+	err = swm.clientVolume.LinkByMetadata("serviceworker/grits-serviceworker-config.json", configMetadata.GetAddress())
+	if err != nil {
+		return err
+	}
+
+	log.Printf("New service worker config all linked up")
+
+	return nil
 }
 
 func (swm *ServiceWorkerModule) getClientDirHash() string {
@@ -196,6 +240,8 @@ func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Req
 }
 
 func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Serve config")
+
 	// Get the hash from query parameter
 	requestedHash := r.URL.Query().Get("dirHash")
 	if requestedHash == "" {
@@ -203,17 +249,25 @@ func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Validate hash against current config hash
-	currentDir, err := swm.clientVolume.Lookup("serviceworker")
-	if err != nil {
-		http.Error(w, "Config file not found", http.StatusInternalServerError)
-		return
-	}
+	log.Printf("  got hash")
 
-	if currentDir.Hash != requestedHash {
-		http.Error(w, "Hash mismatch - config has been updated", http.StatusBadRequest)
-		return
-	}
+	// Eh, whatever... this is maybe worth worrying about in the long run
+
+	// Validate hash against current config hash
+	//currentDir, err := swm.clientVolume.Lookup("serviceworker")
+	//if err != nil {
+	//	http.Error(w, "Config file not found", http.StatusInternalServerError)
+	//	return
+	//}
+
+	//log.Printf("  validated")
+
+	//if currentDir.Hash != requestedHash {
+	//	http.Error(w, "Hash mismatch - config has been updated", http.StatusBadRequest)
+	//	return
+	//}
+
+	//log.Printf("  matched")
 
 	// Serve the config file
 	w.Header().Set("Content-Type", "application/json")
@@ -230,6 +284,8 @@ func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "Can't read config", http.StatusInternalServerError)
 		return
 	}
+
+	log.Printf("  ready to copy")
 
 	_, err = io.Copy(w, configReader)
 	if err != nil {

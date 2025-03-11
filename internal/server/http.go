@@ -31,7 +31,7 @@ type HTTPModule struct {
 	HTTPServer *http.Server
 	Mux        *http.ServeMux
 
-	deployments         map[string]*DeploymentModule
+	deployments         []*DeploymentModule
 	serviceWorkerModule *ServiceWorkerModule
 }
 
@@ -62,7 +62,7 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 		HTTPServer: HTTPServer,
 		Mux:        mux,
 
-		deployments: make(map[string]*DeploymentModule),
+		deployments: make([]*DeploymentModule, 0),
 	}
 
 	// Set up routes within the constructor or an initialization method
@@ -114,14 +114,11 @@ func (hm *HTTPModule) Stop() error {
 
 func (hm *HTTPModule) addDeploymentModule(module Module) {
 	deployment, ok := module.(*DeploymentModule)
-	if ok {
-		hostname := deployment.Config.HostName
-		if _, exists := hm.deployments[hostname]; exists {
-			log.Fatalf("Deployment for %s is defined twice", hostname)
-		}
-
-		hm.deployments[hostname] = deployment
+	if !ok {
+		return
 	}
+
+	hm.deployments = append(hm.deployments, deployment)
 }
 
 func (hm *HTTPModule) addServiceWorkerModule(module Module) {
@@ -480,27 +477,34 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPModule) handleDeployment(w http.ResponseWriter, r *http.Request) {
 	// Extract hostname from the request
 	hostname := r.Host
-	deployment, exists := s.deployments[hostname]
-	if !exists {
-		http.Error(w, fmt.Sprintf("Host deployment %s not found", hostname), http.StatusNotFound)
+
+	// Find all matching deployments for this hostname
+	var matchingDeployments []*DeploymentModule
+	for _, deployment := range s.deployments {
+		log.Printf("Compare %s %s", deployment.Config.HostName, hostname)
+		if deployment.Config.HostName == hostname {
+			matchingDeployments = append(matchingDeployments, deployment)
+		}
+	}
+
+	if len(matchingDeployments) == 0 {
+		http.Error(w, fmt.Sprintf("Deployment for %s on %s not found", r.URL.Path, hostname), http.StatusNotFound)
 		return
 	}
 
-	//log.Printf("Checking all path mappings")
-
-	for _, mapping := range deployment.Config.PathMappings {
-		//log.Printf("  Checking mapping %s / %s", r.URL.Path, mapping.UrlPath)
-		if strings.HasPrefix(r.URL.Path, mapping.UrlPath) {
-			volume := mapping.Volume
-			volumePath := strings.TrimPrefix(r.URL.Path, mapping.UrlPath)
-			volumePath = path.Join(mapping.VolumePath, volumePath)
+	// Try to find a deployment that matches the request path
+	for _, deployment := range matchingDeployments {
+		if strings.HasPrefix(r.URL.Path, deployment.Config.UrlPath) {
+			volume := deployment.Config.Volume
+			volumePath := strings.TrimPrefix(r.URL.Path, deployment.Config.UrlPath)
+			volumePath = path.Join(deployment.Config.VolumePath, volumePath)
 
 			s.handleContentRequest(volume, volumePath, w, r)
 			return
 		}
 	}
 
-	http.Error(w, fmt.Sprintf("Path %s not found in deployment", r.URL.Path), http.StatusNotFound)
+	http.Error(w, fmt.Sprintf("Path %s not found in any deployment for %s", r.URL.Path, hostname), http.StatusNotFound)
 }
 
 func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {

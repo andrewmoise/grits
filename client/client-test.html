@@ -106,11 +106,13 @@
       // Run the tests
       const results = await tests.runAllTests();
       
+      const failClass = (results.failed > 0 ? "test-failed" : "test-passed");
+
       // Display the results
       testSummary.innerHTML = `
         <p><strong>Tests completed:</strong> 
            <span class="test-passed">${results.passed} passed</span>, 
-           <span class="test-failed">${results.failed} failed</span>
+           <span class="${failClass}">${results.failed} failed</span>
         </p>
       `;
       
@@ -147,5 +149,35 @@
     console.log('Try: client.lookupPath("some/path").then(console.log)');
     console.log('Or run all tests with: gritsTests.runAllTests()');
   </script>
+
+  <!-- HTML for the button -->
+  <button id="load-service-worker" class="btn btn-primary">Load Service Worker</button>
+
+  <!-- JavaScript to handle the button click -->
+  <script>
+    document.getElementById('load-service-worker').addEventListener('click', function() {
+      // Create a script element
+      const script = document.createElement('script');
+      script.src = '/grits-bootstrap.js';
+      script.async = true;
+      
+      // Append it to the document
+      document.body.appendChild(script);
+      
+      this.textContent = 'Service Worker Loading...';
+      this.disabled = true;
+      
+      script.onload = function() {
+        document.getElementById('load-service-worker').textContent = 'Service Worker Loaded';
+      };
+      
+      script.onerror = function() {
+        const button = document.getElementById('load-service-worker');
+        button.textContent = 'Failed to Load';
+        button.disabled = false;
+      };
+    });
+  </script>
+
 </body>
 </html>

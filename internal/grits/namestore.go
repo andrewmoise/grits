@@ -821,6 +821,21 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 }
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
+	if addr == nil {
+		return ns.LinkByMetadata(name, nil)
+	}
+
+	metadataBlob, err := ns.typeToMetadata(addr)
+	if err != nil {
+		return err
+	}
+	defer metadataBlob.Release()
+
+	return ns.LinkByMetadata(name, metadataBlob.GetAddress())
+}
+
+// FIXME - This is the one we should actually be using, for everything
+func (ns *NameStore) LinkByMetadata(name string, metadataAddr *BlobAddr) error {
 	name = strings.TrimRight(name, "/")
 	if name != "" && name[0] == '/' {
 		return fmt.Errorf("name must be relative")
@@ -832,16 +847,6 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
-
-	var metadataAddr *BlobAddr
-	if addr != nil {
-		metadataBlob, err := ns.typeToMetadata(addr)
-		if err != nil {
-			return err
-		}
-		metadataAddr = metadataBlob.GetAddress()
-		defer metadataBlob.Release()
-	}
 
 	newRoot, err := ns.recursiveLink("", name, metadataAddr, ns.root)
 	if err != nil {
@@ -1181,6 +1186,13 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 // Helper function to create a timestamp in ISO 8601 format in UTC
 func CreateTimestamp() string {
 	return time.Now().UTC().Format(time.RFC3339)
+}
+
+func (ns *NameStore) CreateMetadataBlob(contentAddr *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
+
+	return ns.createMetadataBlob(contentAddr, size, isDir, mode)
 }
 
 // Create a metadata node with proper mode and timestamps

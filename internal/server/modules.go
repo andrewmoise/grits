@@ -15,7 +15,7 @@ type Module interface {
 	GetModuleName() string
 }
 
-// Special for storage modules:
+// More details for storage modules:
 type Volume interface {
 	GetVolumeName() string
 	Start() error
@@ -28,7 +28,11 @@ type Volume interface {
 	LookupFull(name string) ([]*grits.PathNodePair, error)
 	GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode, error)
 
+	// FIXME - This whole API needs a bunch of cleanup
+	CreateMetadata(grits.CachedFile) (grits.CachedFile, error)
+
 	Link(path string, addr *grits.TypedFileAddr) error
+	LinkByMetadata(path string, metadataAddr *grits.BlobAddr) error
 	MultiLink([]*grits.LinkRequest) error
 
 	ReadFile(*grits.TypedFileAddr) (grits.CachedFile, error)
