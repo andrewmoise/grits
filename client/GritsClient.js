@@ -193,5 +193,12 @@ class GritsClient {
   }
 }
 
-// Export as a module
+// This is fairly silly, but we need two versions of this file for main client code and for the
+// service worker, apparently. The handler will comment and uncomment this stuff so that we can
+// have both as separate files GritsClient.js and GritsClient-sw.js:
+
+// %MODULE%
 export default GritsClient;
+
+// %SERVICEWORKER%
+//self.GritsClient = GritsClient;

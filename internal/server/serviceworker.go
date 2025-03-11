@@ -71,14 +71,127 @@ type ServiceWorkerModule struct {
 	pathMappings []*PathMapping
 }
 
-// NewServiceWorkerModule initializes a new instance of the service worker module.
+func (swm *ServiceWorkerModule) loadClientFiles(wv *WikiVolume) error {
+	// Define the template file to load first
+	templatePath := "client/GritsClient.js"
+
+	log.Printf("Loading template file: %s", templatePath)
+	templateCf, err := wv.AddBlob(templatePath)
+	if err != nil {
+		return fmt.Errorf("failed to load template file: %v", err)
+	}
+	defer templateCf.Release()
+
+	// Read the template content
+	templateData, err := templateCf.Read(0, templateCf.GetSize())
+	if err != nil {
+		return fmt.Errorf("failed to read template data: %v", err)
+	}
+	templateStr := string(templateData)
+
+	// Process template for both versions
+	moduleVersion, swVersion := processTemplate(templateStr)
+
+	// List of files to generate
+	fileContents := map[string]string{
+		"GritsClient.js":    moduleVersion,
+		"GritsClient-sw.js": swVersion,
+	}
+
+	// List of static files to load directly
+	staticFiles := []string{
+		"serviceworker/grits-bootstrap.js",
+		"serviceworker/grits-serviceworker.js",
+		"GritsClientTests.js",
+		"client-test.html",
+	}
+
+	// Handle template-generated files
+	for filename, content := range fileContents {
+		// Create a blob from the processed content
+		contentBytes := []byte(content)
+		contentCf, err := swm.Server.BlobStore.AddDataBlock(contentBytes)
+		if err != nil {
+			return fmt.Errorf("failed to create blob for %s: %v", filename, err)
+		}
+		defer contentCf.Release()
+
+		// Create metadata and link the file
+		contentMetadata, err := wv.CreateMetadata(contentCf)
+		if err != nil {
+			return fmt.Errorf("failed to create metadata for %s: %v", filename, err)
+		}
+
+		log.Printf("Linking generated file: %s", filename)
+		err = wv.LinkByMetadata(filename, contentMetadata.GetAddress())
+		if err != nil {
+			return fmt.Errorf("failed to link %s: %v", filename, err)
+		}
+	}
+
+	// Load static files
+	for _, filename := range staticFiles {
+		log.Printf("Loading static file: client/%s", filename)
+
+		fileCf, err := wv.AddBlob(fmt.Sprintf("client/%s", filename))
+		if err != nil {
+			return fmt.Errorf("failed to load %s: %v", filename, err)
+		}
+		defer fileCf.Release()
+
+		log.Printf("Linking static file: %s", filename)
+		err = wv.ns.LinkBlob(filename, fileCf.GetAddress(), fileCf.GetSize())
+		if err != nil {
+			return fmt.Errorf("failed to link %s: %v", filename, err)
+		}
+	}
+
+	return nil
+}
+
+// Process the template to generate both versions
+func processTemplate(templateStr string) (moduleVersion, swVersion string) {
+	// Find marker positions
+	moduleStart := strings.Index(templateStr, "// %MODULE%")
+	serviceWorkerStart := strings.Index(templateStr, "// %SERVICEWORKER%")
+
+	// Base content is everything up to the first marker
+	baseContent := templateStr
+	if moduleStart != -1 {
+		baseContent = templateStr[:moduleStart]
+	}
+
+	// Extract module section
+	moduleSection := ""
+	if moduleStart != -1 && serviceWorkerStart != -1 {
+		moduleSection = templateStr[moduleStart:serviceWorkerStart]
+	} else if moduleStart != -1 {
+		moduleSection = templateStr[moduleStart:]
+	}
+
+	// Extract service worker section
+	swSection := ""
+	if serviceWorkerStart != -1 {
+		swSection = templateStr[serviceWorkerStart:]
+		// Remove the comment marker from the self.GritsClient line
+		swSection = strings.Replace(swSection, "//self.GritsClient", "self.GritsClient", 1)
+	}
+
+	// Create the two versions
+	moduleVersion = baseContent + moduleSection
+	swVersion = baseContent + swSection
+
+	return moduleVersion, swVersion
+}
+
+// Replace the client files initialization in NewServiceWorkerModule
 func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (*ServiceWorkerModule, error) {
 	swm := &ServiceWorkerModule{
 		Config: config,
 		Server: server,
 	}
 
-	log.Printf("Making volume")
+	log.Printf("Creating client volume")
 
 	wvc := &WikiVolumeConfig{
 		VolumeName: "client",
@@ -88,6 +201,7 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 		return nil, err
 	}
 
+	// Initialize the directory structure
 	err = wv.Link("", wv.GetEmptyDirAddr())
 	if err != nil {
 		return nil, err
@@ -103,31 +217,10 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 		return nil, err
 	}
 
-	clientFiles := []string{
-		"serviceworker/grits-bootstrap.js",
-		"serviceworker/grits-serviceworker.js",
-		"GritsClient.js",
-		"GritsClient-sw.js",
-		"GritsClientTests.js",
-		"client-test.html",
-	}
-
-	for _, filename := range clientFiles {
-		log.Printf("Loading client/%s", filename)
-
-		fileCf, err := wv.AddBlob(fmt.Sprintf("client/%s", filename))
-		if err != nil {
-			return nil, err
-		}
-		defer fileCf.Release()
-
-		log.Printf("Linking")
-
-		// FIXME fix up the API pls
-		err = wv.ns.LinkBlob(filename, fileCf.GetAddress(), fileCf.GetSize())
-		if err != nil {
-			return nil, err
-		}
+	// Load and process client files - replace the old clientFiles loop
+	err = swm.loadClientFiles(wv)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load client files: %v", err)
 	}
 
 	swm.clientVolume = wv
