@@ -623,25 +623,83 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	}
 }
 
-// Modified handleNamespaceGet with performance tracking
 func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	tracker := NewPerformanceTracker(r)
 	tracker.Start()
+	defer tracker.End()
 
 	log.Printf("Received GET request for file: %s\n", path)
 
 	tracker.Step("Looking up resource in volume")
 	// Look up the resource in the volume to get its address
-	pathAddr, err := volume.Lookup(path)
+
+	pathNodes, isPartial, err := volume.LookupFull(path)
 	if err != nil {
-		http.Error(w, "File not found", http.StatusNotFound)
-		tracker.End()
+		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return
 	}
+	if isPartial {
+		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	if len(pathNodes) <= 0 {
+		http.Error(w, "No nodes returned", http.StatusInternalServerError)
+		return
+	}
+	defer func() {
+		for _, node := range pathNodes {
+			node.Node.Release()
+		}
+	}()
 
-	tracker.Step("Setting HTTP headers")
+	tracker.Step("Checking index.html")
+	node := pathNodes[len(pathNodes)-1].Node
+	if _, ok := node.(*grits.TreeNode); ok {
+		// We have a directory, try index.html instead
+		// FIXME more flexible
+		indexPath := strings.TrimRight(path, "/") + "/index.html"
+		indexNode, err := volume.LookupNode(indexPath)
+		if err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+
+		path = indexPath
+		node = indexNode
+		pathNodes = append(pathNodes, &grits.PathNodePair{Path: indexPath, Node: indexNode})
+	}
+
+	tracker.Step("Building path metadata")
+	pathMetadata := make([]map[string]string, 0, len(pathNodes))
+	for _, pathNode := range pathNodes {
+		// Extract just the component name from the full path
+		pathComponent := ""
+		if pathNode.Path != "" { // Skip this logic for root
+			pathParts := strings.Split(pathNode.Path, "/")
+			if len(pathParts) > 0 {
+				pathComponent = pathParts[len(pathParts)-1]
+			}
+		}
+
+		// Create an entry with component and hash
+		pathMetadata = append(pathMetadata, map[string]string{
+			"component": pathComponent,
+			"path":      pathNode.Path, // Also include full path for debugging
+			"hash":      pathNode.Node.MetadataBlob().GetAddress().Hash,
+		})
+	}
+
+	// Encode the entire array as JSON and set in a single header
+	jsonData, err := json.Marshal(pathMetadata)
+	if err != nil {
+		// Handle error appropriately
+		log.Printf("Failed to encode path metadata: %v", err)
+	} else {
+		w.Header().Set("X-Path-Metadata-JSON", string(jsonData))
+	}
+
 	// Use the address hash as the ETag
-	etag := fmt.Sprintf("\"%s\"", pathAddr.String())
+	etag := fmt.Sprintf("\"%s\"", node.MetadataBlob().GetAddress().Hash)
 	w.Header().Set("ETag", etag)
 
 	// Tell browsers to revalidate every time
@@ -655,57 +713,19 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 		return
 	}
 
-	var cf grits.CachedFile
-
-	tracker.Step("Resolving content address")
-	if pathAddr.Type == grits.Tree {
-		filePath := strings.TrimRight(path, "/")
-		filePath += "/index.html"
-		filePath = strings.TrimPrefix(filePath, "/")
-
-		tracker.Step("Looking up index.html")
-		addr, err := volume.Lookup(filePath)
+	reader, err := node.ExportedBlob().Reader()
 		if err != nil {
-			http.Error(w, fmt.Sprintf("No index: %v", err), http.StatusNotFound)
-			tracker.End()
+		http.Error(w, fmt.Sprintf("Can't read blob for %s: %v", path, err), http.StatusInternalServerError)
 			return
 		}
-
-		tracker.Step("Reading index file from blob store")
-		cf, err = bs.ReadFile(&addr.BlobAddr)
+	defer func() {
+		err := reader.Close()
 		if err != nil {
-			http.Error(w, "Can't open file for read", http.StatusInternalServerError)
-			tracker.End()
-			return
+			log.Printf("Error closing reader for %s: %v", path, err)
 		}
-	} else {
-		tracker.Step("Reading blob file")
-		cf, err = bs.ReadFile(&grits.BlobAddr{Hash: pathAddr.Hash})
-		if err != nil {
-			http.Error(w, "Cannot open blob", http.StatusInternalServerError)
-			tracker.End()
-			return
-		}
-	}
-	defer cf.Release()
+	}()
 
-	tracker.Step("Opening file for reading")
-	// Open the file for reading
-	file, err := cf.Reader()
-	if err != nil {
-		log.Printf("Error opening file: %v\n", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		tracker.End()
-		return
-	}
-	defer file.Close()
-
-	tracker.Step("Serving file content")
-	// Serve the content
-	log.Printf("Serving file %s\n", cf.GetAddress().String())
-	http.ServeContent(w, r, filepath.Base(path), time.Now(), file)
-
-	tracker.End()
+	http.ServeContent(w, r, filepath.Base(path), time.Now(), reader)
 }
 
 func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
