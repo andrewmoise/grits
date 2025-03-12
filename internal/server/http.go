@@ -434,7 +434,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pathNodePairs, err := volume.LookupFull(lookupPath)
+	pathNodePairs, partialResult, err := volume.LookupFull(lookupPath)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
 		return
@@ -460,6 +460,14 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	if !partialResult {
+		// Set 200 OK status, if we found the whole path
+		w.WriteHeader(http.StatusOK)
+	} else {
+		// Set 207 Multi-Status to indicate partial success
+		w.WriteHeader(http.StatusMultiStatus)
+	}
+
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}

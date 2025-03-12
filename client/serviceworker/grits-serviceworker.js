@@ -99,11 +99,38 @@ function normalizePath(path) {
     return path;
   }
 
+  let isUpdatePending = false;
+
 // Check if a request should be handled through the merkle tree
 function shouldHandleWithGrits(url) {
     if (!pathConfig) {
         console.debug('[Grits] No path config available');
         return false;
+    }
+        
+    // If we're in update mode, don't handle any requests
+    if (isUpdatePending) {
+        return false;
+    }
+
+    // Check if any client needs update
+    for (const [volume, client] of gritsClients.entries()) {
+        if (client.getServiceWorkerHash() && client.getServiceWorkerHash() !== swDirHash) {
+            console.log(`[Grits] Service worker update needed, current: ${swDirHash}, new: ${client.getServiceWorkerHash()}`);
+            
+            isUpdatePending = true;
+
+            // Trigger update but don't interfere with this request
+            setTimeout(() => {
+                cleanupClients();
+                self.registration.update().catch(err => {
+                    console.error('[Grits] Failed to update service worker:', err);
+                });
+            }, 0);
+            
+            // During update transition, don't handle any requests
+            return false;
+        }
     }
     
     // Convert URL to path and normalize it
@@ -202,9 +229,9 @@ async function fetchFromGrits(mapping, request) {
             headers: { 'Content-Type': contentType }
         });
     } catch (error) {
-        console.error(`[Grits] Error fetching from Grits: ${error.message}`);
-        return new Response(`Failed to fetch resource: ${error.message}`, {
-            status: 500,
+        console.error(`[Grits] Error fetching from Grits: ${error.status || ""} ${error.message}`);
+        return new Response(`Failed to fetch resource: ${error.status || ""} ${error.message}`, {
+            status: error.status || 500,
             headers: { 'Content-Type': 'text/plain' }
         });
     }
@@ -246,6 +273,7 @@ self.addEventListener('message', event => {
     }
 });
   
+
 self.addEventListener('fetch', event => {
     const url = event.request.url;
     console.debug(`[Grits] Fetch event for: ${url}`);
@@ -275,34 +303,9 @@ self.addEventListener('fetch', event => {
     if (gritsMapping) {
         console.log(`[Grits] Intercepting request: ${url}`);
         event.respondWith(fetchFromGrits(gritsMapping, event.request));
+
         return;
     }
-    
-    // For all other requests, proceed with normal fetch but check for hash changes
-    event.respondWith(
-        fetch(event.request).then(async response => {
-            // Check if config hash has changed
-            const newDirHash = response.headers.get('X-Grits-Service-Worker-Hash');
-            if (newDirHash && swDirHash !== newDirHash) {
-                console.log(`[Grits] Configuration has changed (old: ${swDirHash}, new: ${newDirHash}), updating`);
-                cleanupClients();
-                await fetchConfig();
-                // Reset all clients
-                gritsClients.forEach(client => {
-                    client.resetRoot();
-                });
-                // Update the service worker
-                self.registration.update().catch(err => {
-                    console.error('[Grits] Failed to update service worker:', err);
-                });
-            }
-            
-            return response;
-        }).catch(error => {
-            console.error(`[Grits] Fetch error for ${url}:`, error);
-            return fetch(event.request); // Fallback to network
-        })
-    );
 });
 
 // Fetch the configuration from blob address

@@ -503,15 +503,15 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	nodes, err := ns.resolvePath(name)
+	nodes, failureParts, err := ns.resolvePath(name)
 	if err != nil {
 		return nil, err
 	}
-
-	node := nodes[len(nodes)-1]
-	if node == nil {
+	if failureParts != 0 {
 		return nil, ErrNotExist
 	}
+
+	node := nodes[len(nodes)-1]
 
 	cf := node.ExportedBlob()
 	cf.Take()
@@ -526,15 +526,15 @@ func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	nodes, err := ns.resolvePath(path)
+	nodes, failureParts, err := ns.resolvePath(path)
 	if err != nil {
 		return nil, err
 	}
-
-	node := nodes[len(nodes)-1]
-	if node == nil {
+	if failureParts != 0 {
 		return nil, ErrNotExist
 	}
+
+	node := nodes[len(nodes)-1]
 
 	node.Take()
 	return node, nil
@@ -547,24 +547,21 @@ type PathNodePair struct {
 }
 
 // LookupFull returns a list of path and node pairs for a given path
-func (ns *NameStore) LookupFull(name string) ([]*PathNodePair, error) {
+
+// Second part of the return value indicates whether we got a partial failure
+
+func (ns *NameStore) LookupFull(name string) ([]*PathNodePair, bool, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
 	name = strings.TrimRight(name, "/")
-	nodes, err := ns.resolvePath(name)
+	nodes, failureParts, err := ns.resolvePath(name)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(nodes) <= 0 {
 		log.Printf("Can't happen! No nodes returned on lookup of %s", name)
-		return nil, ErrNotExist
-	}
-
-	// If the last node is nil, it means the path doesn't exist
-	if nodes[len(nodes)-1] == nil {
-		log.Printf("Nonexistent final pathname for %s", name)
-		return nil, ErrNotExist
+		return nil, false, ErrNotExist
 	}
 
 	parts := strings.Split(name, "/")
@@ -592,9 +589,6 @@ func (ns *NameStore) LookupFull(name string) ([]*PathNodePair, error) {
 
 		partialPath = filepath.Join(partialPath, part)
 		node := nodes[index]
-		if node == nil {
-			break // Stop if we hit a nil node
-		}
 
 		response = append(response, &PathNodePair{
 			Path: partialPath,
@@ -609,7 +603,7 @@ func (ns *NameStore) LookupFull(name string) ([]*PathNodePair, error) {
 		pair.Node.Take()
 	}
 
-	return response, nil
+	return response, failureParts != 0, nil
 }
 
 // FIXME - Clean up this API a lot.
@@ -631,61 +625,63 @@ func (ns *NameStore) GetFileNode(metadataAddr *BlobAddr) (FileNode, error) {
 
 // Core lookup helper function.
 
-func (ns *NameStore) resolvePath(path string) ([]FileNode, error) {
+// Result is (all FileNodes along path, number of unresolved entries at end, error)
+
+// We can fail early, but still return the partial results. In that case the second part of the
+// return value will be nonzero.
+
+func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 	if DebugNameStore {
 		log.Printf("We resolve path %s (root %v)\n", path, ns.root)
 	}
 
 	path = strings.TrimRight(path, "/")
 	if path != "" && path[0] == '/' {
-		return nil, fmt.Errorf("paths must be relative")
+		return nil, -1, fmt.Errorf("paths must be relative")
 	}
 
 	parts := strings.Split(path, "/")
 	node := ns.root
 
+	if node == nil {
+		return nil, -1, fmt.Errorf("looking up in nil root")
+	}
+
 	response := make([]FileNode, 0, len(parts)+1) // +1 for the root
 	response = append(response, node)
 
-	for n, part := range parts {
+	expectedResponseLen := len(parts) + 1
+
+	for _, part := range parts {
 		//log.Printf("  part %s\n", part)
 
 		if part == "" {
+			expectedResponseLen -= 1 // Highly unlikely that this is relevant...
 			continue
-		}
-
-		if node == nil {
-			return nil, ErrNotExist
 		}
 
 		// Only TreeNodes have children to traverse
 		treeNode, isTreeNode := node.(*TreeNode)
 		if !isTreeNode {
-			return nil, ErrNotDir
+			return nil, -1, ErrNotDir
 		}
 
 		childAddr, exists := treeNode.ChildrenMap[part]
 		if !exists {
-			if n == len(parts)-1 {
-				// Special case, last part nil is permissible
-				response = append(response, nil)
-				break
-			} else {
-				// All other times, it's an error
-				return nil, ErrNotExist
-			}
+			// Oop. Early return.
+			return response, expectedResponseLen - len(response), nil
 		}
 
 		childNode, err := ns.loadFileNode(childAddr, true)
 		if err != nil {
-			return nil, err
+			return nil, -1, err
 		}
 
 		node = childNode // Move to the next node in the path
 		response = append(response, node)
 	}
 
-	return response, nil
+	return response, 0, nil
 }
 
 /////
@@ -726,11 +722,23 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 			continue
 		}
 
-		nodes, err := ns.resolvePath(req.Path)
+		var node FileNode
+		nodes, failureParts, err := ns.resolvePath(req.Path)
 		if err != nil {
 			return err
+		} else if failureParts > 1 {
+			// We failed before we got to the dir we're trying to link into
+			return ErrNotExist
+		} else if failureParts == 1 {
+			// We found the parent, but not the requested file, so create it
+			node = nil
+		} else if failureParts == 0 {
+			// We found a previous value, so replace it
+			node = nodes[len(nodes)-1]
+		} else {
+			// Can't happen
+			log.Panicf("Weird failure on lookup of %s: %d, %v", req.Path, failureParts, err)
 		}
-		node := nodes[len(nodes)-1]
 
 		if req.Assert&AssertPrevValueMatches != 0 {
 			if DebugLinks {
