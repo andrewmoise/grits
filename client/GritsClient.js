@@ -321,8 +321,7 @@ class GritsClient {
         // Try to fetch from cache only
         const cacheResponse = await fetch(`${this.serverUrl}/grits/v1/blob/${currentContentHash}`, {
           method: 'HEAD', // HEAD is more efficient since we only need to check existence
-          cache: 'only-if-cached',
-          mode: 'same-origin'
+          cache: 'force-cache'
         });
         
         // If not in cache, return null
@@ -368,8 +367,7 @@ class GritsClient {
         try {
           response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
             method: 'GET',
-            cache: 'only-if-cached',
-            mode: 'same-origin'
+            cache: 'force-cache'
           });
           
           const fetchTime = Math.round(performance.now() - fetchStart);
