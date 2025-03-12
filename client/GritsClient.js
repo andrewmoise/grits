@@ -124,7 +124,7 @@ class GritsClient {
     
     // Check if we have a cached content hash for ETag
     let etag = null;
-    const cachedValue = this._tryFastPathLookup(path);
+    const cachedValue = await this._tryFastPathLookup(path);
     if (cachedValue) {
       etag = `"${cachedValue.contentHash}"`;
       this.debugLog(path, `Using cached ETag: ${etag}`);
