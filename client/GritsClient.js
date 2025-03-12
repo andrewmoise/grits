@@ -24,6 +24,9 @@ class GritsClient {
     
     // Setup periodic cleanup
     this.cleanupInterval = setInterval(() => this._cleanupCaches(), 5 * 60 * 1000);
+
+    // Store service worker hash, for detection and reload when needed
+    this.serviceWorkerHash = undefined;
   }
 
   destroy() {
@@ -208,39 +211,85 @@ class GritsClient {
     return promise;
   }
 
+  getServiceWorkerHash() {
+    return this.serviceWorkerHash
+  }
+
   async _fetchAndResolve(path) {
-    // Make the actual server request
     try {
-      this.debugLog(path, "  start lookup fetch");
+        this.debugLog(path, "  start lookup fetch");
+        const response = await fetch(`${this.serverUrl}/grits/v1/lookup/${this.volume}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(path)
+        });
+        
+        const newClientHash = response.headers.get('X-Grits-Service-Worker-Hash');
+        if (newClientHash) {
+          this.serviceWorkerHash = newClientHash
+        }
 
-      const response = await fetch(`${this.serverUrl}/grits/v1/lookup/${this.volume}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(path)
-      });
-      
-      if (!response.ok) {
-        // FIXME - insert an error object into this.inflightLookups and wake everyone up
-        console.error(`Server error: ${response.status}`);
-        return
-      }
-      
-      this.debugLog(path, "  parse response");
+        if (response.status === 200) {
+            // Full path found - process normally
+            const pathSteps = await response.json();
+            this._updateDirentryCacheFromLookup(pathSteps);
+            this._retryAllInflightLookups();
+        } else if (response.status === 207) {
+            // Partial path found - the precise path we requested doesn't actually exist.
+            const pathSteps = await response.json();
+            this._updateDirentryCacheFromLookup(pathSteps);
+            
+            // FIXME - we should really cache some negative responses for *all* intermediate paths
 
-      const pathSteps = await response.json();
-      
-      this.debugLog(path, "  update direntry");
+            // FIXME - this doesn't cache the negative result until we start to
+            // prefetch any directory content blobs we don't have; we won't actually be able to
+            // find this result again, and we'll have to do another fetch and fail the next time
+            // someone requests this path.
 
-      // Update direntry cache with all the info we got back
-      this._updateDirentryCacheFromLookup(pathSteps);
-      
-      this.debugLog(path, "  retry all in flight");
+            // Extract the last valid path step to determine where the path broke
+            const lastValidStep = pathSteps[pathSteps.length - 1];
+            const lastValidPath = lastValidStep[0]; // Path string
+            
+            // Note! We could do a version of this, at this point, with a negative result cached.
+            // The only reason we're not is (a) it's not necessary since once we start getting blobs,
+            // we'll be able to quickly return failure anyway (b) it's a little fiddly to sync
+            // up the split-up original path with the result steps from pathSteps.
 
-      // Try fast path again, for all in-flight requests
-      this._retryAllInflightLookups();
+            //this.direntryCache.set(direntryCacheKey, {
+            //  status: 207
+            //});
+
+            // Create a 404 error for the original path
+            const error = new Error(`Path not found: ${path}`);
+            error.status = 404;
+            error.partialPath = lastValidPath;
+            
+            // Reject the original request
+            if (this.inflightLookups.has(path)) {
+                this.inflightLookups.get(path).reject(error);
+                this.inflightLookups.delete(path);
+            }
+            
+            // We could try to resolve any others that might also be satisfied, but again, that
+            // won't actually accomplish anything until we start grabbing the actual blobs in question
+            //this._retryAllInflightLookups();
+        } else {
+            // Some other error occurred
+            const error = new Error(`Server error: ${response.status}`);
+            error.status = response.status;
+            
+            // Reject the original request
+            if (this.inflightLookups.has(path)) {
+                this.inflightLookups.get(path).reject(error);
+                this.inflightLookups.delete(path);
+            }
+        }
     } catch (error) {
-      // FIXME - insert an error object
-      throw error;
+        // Network error or other exception
+        if (this.inflightLookups.has(path)) {
+            this.inflightLookups.get(path).reject(error);
+            this.inflightLookups.delete(path);
+        }
     }
   }
   
