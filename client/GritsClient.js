@@ -43,6 +43,8 @@ class GritsClient {
   }
   
   async fetchFile(path) {
+    this.debugLog(path, "fetchFile()");
+
     const normalizedPath = this._normalizePath(path);
     
     // Check root hash age to determine strategy
@@ -53,17 +55,23 @@ class GritsClient {
     
     if (!this.rootHash || rootAge > this.hardTimeout) {
       // Hard timeout exceeded - block and fetch fresh content
-      this.debugLog(path, `Hard fetch needed (hash: ${this.rootHash}, age: ${rootAge}ms)`);
+      this.debugLog(path, `  hard fetch (hash: ${this.rootHash}, age: ${rootAge}ms)`);
       result = await this._hardFetchContent(normalizedPath);
+      this.debugLog(path, `  done`);
     } else {
       // We can fetch stuff quick, if we have it in cache
+      this.debugLog(path, "  try fast path");
       const pathInfo = await this._tryFastPathLookup(normalizedPath);
       if (pathInfo && pathInfo.contentHash) {
+        this.debugLog(path, "  succeed (metadata at least)");
         result = await this._fetchBlob(pathInfo.contentHash);
       } else {
+        this.debugLog(path, "  fail");
         result = await this._hardFetchContent(normalizedPath);
       }
     }
+
+    this.debugLog(path, "  all done");
 
     return result;
   }
@@ -120,14 +128,16 @@ class GritsClient {
 
   // New method for hard fetching content
   async _hardFetchContent(path) {
-    this.debugLog(path, `Hard fetching ${path} via /grits/v1/content`);
+    //(path, `Hard fetching ${path} via /grits/v1/content`);
     
     // Check if we have a cached content hash for ETag
     let etag = null;
     const cachedValue = await this._tryFastPathLookup(path);
     if (cachedValue) {
+      //this.debugLog(path, `Full data: ${JSON.stringify(cachedValue, null, 2)}`);
+
       etag = `"${cachedValue.contentHash}"`;
-      this.debugLog(path, `Using cached ETag: ${etag}`);
+      //this.debugLog(path, `Using cached ETag: ${etag}`);
     }
     
     // Prepare headers
@@ -171,24 +181,24 @@ class GritsClient {
     // Get the JSON metadata
     const metadataJson = response.headers.get('X-Path-Metadata-JSON');
     if (!metadataJson) {
-      this.debugLog("headers", "No X-Path-Metadata-JSON header found");
+      //this.debugLog("headers", "No X-Path-Metadata-JSON header found");
       return Promise.resolve();
     }
     
     try {
       // Parse the JSON data
       const pathMetadata = JSON.parse(metadataJson);
-      this.debugLog("headers", `Parsed ${pathMetadata.length} path metadata entries`);
+      //this.debugLog("headers", `Parsed ${pathMetadata.length} path metadata entries`);
       
       // Process each entry
       for (const entry of pathMetadata) {
         const { component, path, hash } = entry;
         
-        this.debugLog(path, `Processing metadata entry: component=${component}, hash=${hash}`);
+        //this.debugLog(path, `Processing metadata entry: component=${component}, hash=${hash}`);
         
         // Set root hash if this is the root entry (empty path)
         if (path === "") {
-          this.debugLog("rootHash", `Updating root hash: ${hash}`);
+          //this.debugLog("rootHash", `Updating root hash: ${hash}`);
           this.rootHash = hash;
           this.rootHashTimestamp = Date.now();
         }
@@ -198,12 +208,12 @@ class GritsClient {
           const prefetchPromise = (async () => {
             try {
               // First fetch the metadata
-              this.debugLog(`Prefetching ${path} metadata: ${hash}`);
+              //this.debugLog("prefetch", `Prefetching ${path} metadata: ${hash}`);
               const metadata = await this._getJsonFromHash(hash, true);
               
               // Then fetch the content if it's available
               if (metadata && metadata.type == 'dir' && metadata.content_addr) {
-                this.debugLog(`Prefetching ${path} content: ${metadata.content_addr}`);
+                //this.debugLog("prefetch", `Prefetching ${path} content: ${metadata.content_addr}`);
                 await this._getJsonFromHash(metadata.content_addr, true);
               }
             } catch (error) {
@@ -270,9 +280,9 @@ class GritsClient {
     for (let i = 0; i < components.length; i++) {
       const component = components[i];
       
-      this.debugLog(path, `fast path component: ${component}`);
+      //this.debugLog(path, `fast path component: ${component}`);
 
-      this.debugLog(component, "parent metadata");
+      //this.debugLog(component, "parent metadata");
 
       // First, get the parent metadata
       const metadata = await this._getJsonFromHash(currentMetadataHash, false);
@@ -280,7 +290,7 @@ class GritsClient {
         return null; // Not a directory, can't continue
       }
       
-      this.debugLog(component, "dir listing");
+      //this.debugLog(component, "dir listing");
 
       // Get the directory listing
       const directoryListing = await this._getJsonFromHash(metadata.content_addr, false);
@@ -288,7 +298,7 @@ class GritsClient {
         return null; // Component not found in directory
       }
       
-      this.debugLog(component, "child metadata");
+      //this.debugLog(component, "child metadata");
 
       // Get child's metadata
       const childMetadataHash = directoryListing[component];
@@ -297,7 +307,7 @@ class GritsClient {
         return null;
       }
       
-      this.debugLog(component, "continue");
+      //this.debugLog(component, "continue");
 
       // Continue with this child as the new current node
       currentMetadataHash = childMetadataHash;
@@ -315,6 +325,8 @@ class GritsClient {
         }
       }
     }
+    
+    this.debugLog(path, `Complete fast path lookup! hash is ${currentContentHash}`);
     
     if (currentContentHash) {
       try {
@@ -352,11 +364,12 @@ class GritsClient {
       const entry = this.jsonCache.get(hash);
       // Update last accessed time
       entry.lastAccessed = Date.now();
-      this.debugLog("hash:" + hash.substring(0, 8), `Memory cache hit (${Math.round(performance.now() - startTime)}ms)`);
+      //this.debugLog("hash:" + hash.substring(0, 8), `Memory cache hit (${Math.round(performance.now() - startTime)}ms)`);
+      //this.debugLog("hash:" + hash.substring(0, 8), `data.content_hash is: ${entry.data.content_hash}`);
       return entry.data;
     }
     
-    this.debugLog("hash:" + hash.substring(0, 8), `Memory cache miss, trying browser cache - ${forceFetch}`);
+    //this.debugLog("hash:" + hash.substring(0, 8), `Memory cache miss, trying browser cache - ${forceFetch}`);
     
     try {
       let response;
@@ -371,7 +384,7 @@ class GritsClient {
           });
           
           const fetchTime = Math.round(performance.now() - fetchStart);
-          this.debugLog("hash:" + hash.substring(0, 8), `Cache fetch completed in ${fetchTime}ms, status ${response.status}`);
+          //this.debugLog("hash:" + hash.substring(0, 8), `Cache fetch completed in ${fetchTime}ms, status ${response.status}`);
           
           // Cache miss should be handled by returning null
           if (response.status !== 200) {
@@ -379,8 +392,8 @@ class GritsClient {
           }
         } catch (cacheError) {
           // Add more robust logging to see what's happening
-          console.error("Cache-only fetch failed with error:", cacheError);
-          this.debugLog("hash:" + hash.substring(0, 8), `Browser cache miss: ${cacheError.message}`);
+          //console.error("Cache-only fetch failed with error:", cacheError);
+          //this.debugLog("hash:" + hash.substring(0, 8), `Browser cache miss: ${cacheError.message}`);
           return null;
         }
       } 
@@ -394,7 +407,7 @@ class GritsClient {
         });
         
         const fetchTime = Math.round(performance.now() - fetchStart);
-        this.debugLog("hash:" + hash.substring(0, 8), `Network fetch completed in ${fetchTime}ms, status ${response.status}`);
+        //this.debugLog("hash:" + hash.substring(0, 8), `Network fetch completed in ${fetchTime}ms, status ${response.status}`);
         
         if (!response.ok) {
           throw new Error(`Server returned ${response.status} for ${url}`);
@@ -442,7 +455,7 @@ class GritsClient {
   async _fetchBlob(hash) {
     // Check if there's already a fetch in progress for this hash
     if (this.inflightFetches.has(hash)) {
-      this.debugLog(`hash:${hash.substring(0, 8)}`, "Using in-flight fetch");
+      //this.debugLog(`hash:${hash.substring(0, 8)}`, "Using in-flight fetch");
       
       // Clone the response from the in-flight fetch
       const inFlightResponse = await this.inflightFetches.get(hash);
