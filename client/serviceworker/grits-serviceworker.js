@@ -181,67 +181,7 @@ async function fetchFromGrits(mapping, request) {
             console.log(`[Grits] Mapped URL ${request.url} to volume path ${mapping.path} in volume ${mapping.volume}`);
         }
 
-        // Look up metadata to determine content type
-        let metadata = await client.lookupPath(mapping.path);
-        if (debugServiceworker) {
-            console.debug(`[Grits] Metadata for ${mapping.path}:`, metadata);
-        }
-
-        let resolvedPath = mapping.path;
-
-        if (metadata.type !== 'blob') {
-            // Maybe an index? FIXME, make better + add other options
-            resolvedPath += "/index.html";
-            metadata = await client.lookupPath(resolvedPath);
-        }
-
-        if (metadata.type !== 'blob') {
-            console.warn(`[Grits] Requested resource is not a blob: ${resolvedPath} (type: ${metadata.type})`);
-            return new Response(`Resource is not a file: ${resolvedPath}`, {
-                status: 404,
-                headers: { 'Content-Type': 'text/plain' }
-            });
-        }
-        
-        // Fetch the actual content
-        const blob = await client.fetchFile(resolvedPath);
-        if (debugServiceworker) {
-            console.debug(`[Grits] Successfully fetched blob for ${resolvedPath}, size: ${blob.size} bytes`);
-        }
-
-        // Determine content type based on file extension or metadata
-        let contentType = 'application/octet-stream'; // Default
-        
-        // Try to infer from path extension (FIXME)
-        const fileExtension = resolvedPath.split('.').pop().toLowerCase();
-        if (fileExtension) {
-            const mimeTypes = {
-                'html': 'text/html',
-                'css': 'text/css',
-                'js': 'application/javascript',
-                'json': 'application/json',
-                'png': 'image/png',
-                'jpg': 'image/jpeg',
-                'jpeg': 'image/jpeg',
-                'gif': 'image/gif',
-                'svg': 'image/svg+xml',
-                'txt': 'text/plain'
-            };
-            
-            if (mimeTypes[fileExtension]) {
-                contentType = mimeTypes[fileExtension];
-            }
-        }
-        
-        client.debugLog(resolvedPath, "about to build response");
-
-        const response = new Response(blob, {
-            status: 200,
-            headers: { 'Content-Type': contentType }
-        });
-
-        client.debugLog(resolvedPath, "built response object");
-
+        let response = client.fetchFile(mapping.path);
         return response;
     } catch (error) {
         console.error(`[Grits] Error fetching from Grits: ${error.status || ""} ${error.message}`);

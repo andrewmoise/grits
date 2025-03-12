@@ -12,21 +12,25 @@ class GritsClient {
 
     // In-flight request management
     this.inflightLookups = new Map(); // Path → {promise, resolve, reject}
+    this.inflightFetches = new Map(); // Hash → promise
 
     // Caching structures
     this.rootHash = null;
-    this.direntryCache = new Map(); // Key: `${parentHash}:${component}`, Value: {metadataHash, contentHash, size}
+    this.rootHashTimestamp = 0; // When we last received the root hash
     this.jsonCache = new Map(); // Key: hash, Value: {data: Object, lastAccessed: timestamp}
     
     // Cache settings
     this.cacheMaxAge = 5 * 60 * 1000; // 5 minutes for less-used items
-    this.direntryCacheMaxSize = 5000; // Limit entries to prevent unbounded growth
+    this.softTimeout = config.softTimeout || 30 * 1000; // 30 seconds default
+    this.hardTimeout = config.hardTimeout || 5 * 60 * 1000; // 5 minutes default
     
     // Setup periodic cleanup
     this.cleanupInterval = setInterval(() => this._cleanupCaches(), 5 * 60 * 1000);
 
     // Store service worker hash, for detection and reload when needed
     this.serviceWorkerHash = undefined;
+
+    this.debugLog("constructor", `Initialized with soft timeout: ${this.softTimeout}ms, hard timeout: ${this.hardTimeout}ms`);
   }
 
   destroy() {
@@ -34,92 +38,45 @@ class GritsClient {
   }
   
   resetRoot() {
-    this.rootHash = null;
-    // We don't need to clear direntry cache - invalid entries will be replaced naturally
+    this.rootHashTimestamp = 0;
+    this.debugLog("resetRoot", "Root hash timestamp reset to 0");
   }
   
   async fetchFile(path) {
     const normalizedPath = this._normalizePath(path);
-    const pathInfo = await this._resolvePath(normalizedPath);
     
-    if (!pathInfo || !pathInfo.contentHash) {
-      throw new Error(`File not found: ${path}`);
-    }
+    // Check root hash age to determine strategy
+    const now = Date.now();
+    const rootAge = now - this.rootHashTimestamp;
     
-    return this._fetchBlob(pathInfo.contentHash);
-  }
-  
-  async lookupPath(path) {
-    const normalizedPath = this._normalizePath(path);
-    const pathInfo = await this._resolvePath(normalizedPath);
+    let result;
     
-    if (!pathInfo || !pathInfo.metadataHash) {
-      throw new Error(`Path not found: ${path}`);
-    }
-    
-    // Use the unified JSON fetching method
-    return this._getJsonFromHash(pathInfo.metadataHash, true);
-  }
-  
-  async getFileUrl(path) {
-    const normalizedPath = this._normalizePath(path);
-    const pathInfo = await this._resolvePath(normalizedPath);
-    
-    if (!pathInfo || !pathInfo.contentHash) {
-      throw new Error(`File not found: ${path}`);
-    }
-    
-    return `${this.serverUrl}/grits/v1/blob/${pathInfo.contentHash}`;
-  }
-  
-  async listDirectory(path) {
-    throw Error("Disabled");
-
-    const normalizedPath = this._normalizePath(path);
-    const pathInfo = await this._resolvePath(normalizedPath);
-    
-    if (!pathInfo || !pathInfo.metadataHash) {
-      throw new Error(`Directory not found: ${path}`);
-    }
-    
-    // Get directory metadata
-    const metadata = await this._getJsonFromHash(pathInfo.metadataHash);
-    
-    if (metadata.type !== "dir") {
-      throw new Error(`Not a directory: ${path}`);
-    }
-    
-    // Get directory content listing
-    const contentHash = metadata.content_addr;
-    const directoryContent = await this._getJsonFromHash(contentHash);
-    
-    // Build the entries list
-    const entries = [];
-    for (const [name, childMetadataHash] of Object.entries(directoryContent)) {
-      try {
-        const childMetadata = await this._getJsonFromHash(childMetadataHash);
-        entries.push({
-          name,
-          type: childMetadata.type,
-          size: childMetadata.size || 0
-        });
-      } catch (err) {
-        console.warn(`Failed to fetch metadata for ${name}: ${err}`);
+    if (!this.rootHash || rootAge > this.hardTimeout) {
+      // Hard timeout exceeded - block and fetch fresh content
+      this.debugLog(path, `Hard fetch needed (hash: ${this.rootHash}, age: ${rootAge}ms)`);
+      result = await this._hardFetchContent(normalizedPath);
+    } else {
+      // We can fetch stuff quick, if we have it in cache
+      const pathInfo = await this._tryFastPathLookup(normalizedPath);
+      if (pathInfo && pathInfo.contentHash) {
+        result = await this._fetchBlob(pathInfo.contentHash);
+      } else {
+        result = await this._hardFetchContent(normalizedPath);
       }
     }
-    
-    return entries;
+
+    return result;
   }
   
-/**
- * Debug logger function that prints timestamps with path information
- * @param {string} path - The full path to log (last component will be removed)
- * @param {string} message - The debug message to display
- * @param {Object} [options] - Optional configuration
- * @param {boolean} [options.includeDate=false] - Include date in timestamp
- * @param {boolean} [options.color=true] - Use colored console output
- * @param {string} [options.prefix='DEBUG'] - Prefix for the log message
- */
+  /**
+   * Debug logger function that prints timestamps with path information
+   * @param {string} path - The full path to log (last component will be removed)
+   * @param {string} message - The debug message to display
+   * @param {Object} [options] - Optional configuration
+   * @param {boolean} [options.includeDate=false] - Include date in timestamp
+   * @param {boolean} [options.color=true] - Use colored console output
+   * @param {string} [options.prefix='DEBUG'] - Prefix for the log message
+   */
   debugLog(path, message, options = {}) {
     if (!debugClientTiming) {
       return;
@@ -161,172 +118,116 @@ class GritsClient {
     }
   }
 
-  // Example usage:
-  // debugLog('/path/to/file.js', 'Processing file');
-  // debugLog('/api/users/123', 'User data received', { color: false });
-  // debugLog('/volumes/data/images/photo.jpg', 'Image loaded', { prefix: 'MEDIA', includeDate: true });
-
-  // Main path resolution function
-  async _resolvePath(path) {
-    this.debugLog(path, "Start lookup");
-
-    // Try synchronous path first
-    if (this.rootHash) {
-      const quickResult = this._synchronousCacheLookup(path);
-      if (quickResult) {
-        this.debugLog(path, "  ultra-fast path success");
-        return quickResult;
+  // New method for hard fetching content
+  async _hardFetchContent(path) {
+    this.debugLog(path, `Hard fetching ${path} via /grits/v1/content`);
+    
+    // Check if we have a cached content hash for ETag
+    let etag = null;
+    const cachedValue = this._tryFastPathLookup(path);
+    if (cachedValue) {
+      etag = `"${cachedValue.contentHash}"`;
+      this.debugLog(path, `Using cached ETag: ${etag}`);
+    }
+    
+    // Prepare headers
+    const headers = {};
+    if (etag) {
+      headers['If-None-Match'] = etag;
+    }
+    
+    // Make the request
+    const method = 'GET';
+    const url = `${this.serverUrl}/grits/v1/content/${this.volume}/${path}`;
+    
+    try {
+      let response = await fetch(url, { method, headers });
+      
+      // Update service worker hash if available
+      const newClientHash = response.headers.get('X-Grits-Service-Worker-Hash');
+      if (newClientHash) {
+        this.serviceWorkerHash = newClientHash;
       }
-    }
 
-    // Try "fast" path fetching from browser cache, if that doesn't work
-    const fastPathResult = await this._tryFastPathLookup(path);
-    if (fastPathResult) {
-      this.debugLog(path, "  fast path success");
-      return fastPathResult;
-    }
-    
-    // Check if there's already a request in flight for this path
-    // FIXME -- Technically, we should check if any child of `path` is in there also,
-    // but that's *very* rare, probably actually not worth worrying about
-    if (this.inflightLookups.has(path)) {
-      this.debugLog(path, "  already in flight");
-      return this.inflightLookups.get(path).promise;
-    }
-    
-    // Create a new promise for this request
-    let resolvePromise, rejectPromise;
-    const promise = new Promise((resolve, reject) => {
-      resolvePromise = resolve;
-      rejectPromise = reject;
-    });
-    
-    // Add to in-flight requests
-    this.inflightLookups.set(path, {
-      promise,
-      resolve: resolvePromise,
-      reject: rejectPromise
-    });
-    
-    this._fetchAndResolve(path);
+      this._prefetchMetadata(response);
 
-    return promise;
+      // 304 Not Modified - we use our cached version of the contents
+      if (response.status === 304) {
+        response = await this._fetchBlob(cachedValue.contentHash);
+      }
+        
+      return response;
+    } catch (error) {
+      console.error(`Error during hard fetch for ${path}:`, error);
+      throw error;
+    }
+  }
+  
+  // Prefetch metadata hashes that we don't have
+  async _prefetchMetadata(response) {
+    // Create an array of promises
+    const prefetchPromises = [];
+    
+    // Get the JSON metadata
+    const metadataJson = response.headers.get('X-Path-Metadata-JSON');
+    if (!metadataJson) {
+      this.debugLog("headers", "No X-Path-Metadata-JSON header found");
+      return Promise.resolve();
+    }
+    
+    try {
+      // Parse the JSON data
+      const pathMetadata = JSON.parse(metadataJson);
+      this.debugLog("headers", `Parsed ${pathMetadata.length} path metadata entries`);
+      
+      // Process each entry
+      for (const entry of pathMetadata) {
+        const { component, path, hash } = entry;
+        
+        this.debugLog(path, `Processing metadata entry: component=${component}, hash=${hash}`);
+        
+        // Set root hash if this is the root entry (empty path)
+        if (path === "") {
+          this.debugLog("rootHash", `Updating root hash: ${hash}`);
+          this.rootHash = hash;
+          this.rootHashTimestamp = Date.now();
+        }
+        
+        if (hash) {
+          // Create a promise for prefetching this metadata
+          const prefetchPromise = (async () => {
+            try {
+              // First fetch the metadata
+              this.debugLog(`Prefetching ${path} metadata: ${hash}`);
+              const metadata = await this._getJsonFromHash(hash, true);
+              
+              // Then fetch the content if it's available
+              if (metadata && metadata.type == 'dir' && metadata.content_addr) {
+                this.debugLog(`Prefetching ${path} content: ${metadata.content_addr}`);
+                await this._getJsonFromHash(metadata.content_addr, true);
+              }
+            } catch (error) {
+              console.error(`Couldn't prefetch ${path}: ${error.message}`);
+            }
+          })();
+          
+          prefetchPromises.push(prefetchPromise);
+        }
+      }
+      
+    } catch (error) {
+      console.error(`Error parsing path metadata JSON: ${error.message}`);
+      return Promise.resolve();
+    }
+    
+    // Return a promise that resolves when all prefetches complete (or fail)
+    return Promise.all(prefetchPromises).catch(error => {
+      console.error(`Problem with batch prefetching: ${error}`);
+    });
   }
 
   getServiceWorkerHash() {
-    return this.serviceWorkerHash
-  }
-
-  async _fetchAndResolve(path) {
-    try {
-        this.debugLog(path, "  start lookup fetch");
-        const response = await fetch(`${this.serverUrl}/grits/v1/lookup/${this.volume}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(path)
-        });
-        
-        const newClientHash = response.headers.get('X-Grits-Service-Worker-Hash');
-        if (newClientHash) {
-          this.serviceWorkerHash = newClientHash
-        }
-
-        if (response.status === 200) {
-            // Full path found - process normally
-            const pathSteps = await response.json();
-            this._updateDirentryCacheFromLookup(pathSteps);
-            this._retryAllInflightLookups();
-        } else if (response.status === 207) {
-            // Partial path found - the precise path we requested doesn't actually exist.
-            const pathSteps = await response.json();
-            this._updateDirentryCacheFromLookup(pathSteps);
-            
-            // FIXME - we should really cache some negative responses for *all* intermediate paths
-
-            // FIXME - this doesn't cache the negative result until we start to
-            // prefetch any directory content blobs we don't have; we won't actually be able to
-            // find this result again, and we'll have to do another fetch and fail the next time
-            // someone requests this path.
-
-            // Extract the last valid path step to determine where the path broke
-            const lastValidStep = pathSteps[pathSteps.length - 1];
-            const lastValidPath = lastValidStep[0]; // Path string
-            
-            // Note! We could do a version of this, at this point, with a negative result cached.
-            // The only reason we're not is (a) it's not necessary since once we start getting blobs,
-            // we'll be able to quickly return failure anyway (b) it's a little fiddly to sync
-            // up the split-up original path with the result steps from pathSteps.
-
-            //this.direntryCache.set(direntryCacheKey, {
-            //  status: 207
-            //});
-
-            // Create a 404 error for the original path
-            const error = new Error(`Path not found: ${path}`);
-            error.status = 404;
-            error.partialPath = lastValidPath;
-            
-            // Reject the original request
-            if (this.inflightLookups.has(path)) {
-                this.inflightLookups.get(path).reject(error);
-                this.inflightLookups.delete(path);
-            }
-            
-            // We could try to resolve any others that might also be satisfied, but again, that
-            // won't actually accomplish anything until we start grabbing the actual blobs in question
-            //this._retryAllInflightLookups();
-        } else {
-            // Some other error occurred
-            const error = new Error(`Server error: ${response.status}`);
-            error.status = response.status;
-            
-            // Reject the original request
-            if (this.inflightLookups.has(path)) {
-                this.inflightLookups.get(path).reject(error);
-                this.inflightLookups.delete(path);
-            }
-        }
-    } catch (error) {
-        // Network error or other exception
-        if (this.inflightLookups.has(path)) {
-            this.inflightLookups.get(path).reject(error);
-            this.inflightLookups.delete(path);
-        }
-    }
-  }
-  
-  // Update direntry cache with lookup results
-  _updateDirentryCacheFromLookup(pathSteps) {
-    for (const [stepPath, metadataHash, contentHash, contentSize] of pathSteps) {
-      // If it's the root, update rootHash
-      if (stepPath === '') {
-        this.rootHash = metadataHash;
-        continue;
-      }
-      
-      // For each step, we need to compute the parent path and the component name
-      const lastSlashIndex = stepPath.lastIndexOf('/');
-      const parentPath = lastSlashIndex > 0 ? stepPath.substring(0, lastSlashIndex) : '';
-      const component = stepPath.substring(lastSlashIndex + 1);
-      
-      // For the direntry cache, we need the parent's metadata hash
-      // We can find it by looking at the previous entries in pathSteps
-      for (const [candidatePath, candidateMetadataHash] of pathSteps) {
-        if (candidatePath === parentPath) {
-          // Found the parent's metadata hash
-          const direntryCacheKey = `${candidateMetadataHash}:${component}`;
-          this.direntryCache.set(direntryCacheKey, {
-            metadataHash,
-            contentHash,
-            contentSize
-          });
-          break;
-        }
-      }
-    }
-  
-    // TODO: Start background fetch requests for any hashes not in browser cache, so that we'll
-    // get serialized stuff we can use in the future or from other service workers in other tabs
+    return this.serviceWorkerHash;
   }
 
   // Retry fast path for all in-flight requests
@@ -335,6 +236,9 @@ class GritsClient {
     const entries = Array.from(this.inflightLookups.entries());
     
     for (const [path, request] of entries) {
+      // Skip background refresh markers
+      if (path.startsWith('bg:')) continue;
+      
       try {
         const result = await this._tryFastPathLookup(path);
         if (result) {
@@ -349,38 +253,6 @@ class GritsClient {
     }
   }
 
-  _synchronousCacheLookup(path) {
-    // Only attempt if we have a root hash
-    if (!this.rootHash) return null;
-    
-    const components = path.split('/').filter(c => c.length > 0);
-    let currentMetadataHash = this.rootHash;
-    let currentContentHash = null;
-    let currentContentSize = null;
-    
-    // Try to follow path using only in-memory cache
-    for (let i = 0; i < components.length; i++) {
-      const component = components[i];
-      const direntryCacheKey = `${currentMetadataHash}:${component}`;
-      
-      // If not in direntry cache, abort the fast path
-      if (!this.direntryCache.has(direntryCacheKey)) {
-        return null;
-      }
-      
-      const entry = this.direntryCache.get(direntryCacheKey);
-      currentMetadataHash = entry.metadataHash;
-      currentContentHash = entry.contentHash;
-      currentContentSize = entry.contentSize;
-    }
-    
-    return {
-      metadataHash: currentMetadataHash,
-      contentHash: currentContentHash,
-      contentSize: currentContentSize
-    };
-  }
-
   async _tryFastPathLookup(path) {
     // Can't do anything without a root hash
     if (!this.rootHash) {
@@ -392,25 +264,15 @@ class GritsClient {
     let currentContentHash = null;
     let currentContentSize = null;
     
+    let triedIndexHtml = false;
+
     // Start with the root, then follow each path component
     for (let i = 0; i < components.length; i++) {
       const component = components[i];
-      const direntryCacheKey = `${currentMetadataHash}:${component}`;
       
       this.debugLog(path, `fast path component: ${component}`);
 
-      // Try the direntry cache first
-      if (this.direntryCache.has(direntryCacheKey)) {
-        const entry = this.direntryCache.get(direntryCacheKey);
-        currentMetadataHash = entry.metadataHash;
-        currentContentHash = entry.contentHash;
-        currentContentSize = entry.contentSize;
-        continue;
-      }
-      
-      // Not in direntry cache - try to resolve it by checking metadata and directory contents
-      
-      this.debugLog(component, "parent metadata")
+      this.debugLog(component, "parent metadata");
 
       // First, get the parent metadata
       const metadata = await this._getJsonFromHash(currentMetadataHash, false);
@@ -418,7 +280,7 @@ class GritsClient {
         return null; // Not a directory, can't continue
       }
       
-      this.debugLog(component, "dir listing")
+      this.debugLog(component, "dir listing");
 
       // Get the directory listing
       const directoryListing = await this._getJsonFromHash(metadata.content_addr, false);
@@ -426,7 +288,7 @@ class GritsClient {
         return null; // Component not found in directory
       }
       
-      this.debugLog(component, "child metadata")
+      this.debugLog(component, "child metadata");
 
       // Get child's metadata
       const childMetadataHash = directoryListing[component];
@@ -435,23 +297,46 @@ class GritsClient {
         return null;
       }
       
-      this.debugLog(component, "update direntry cache")
-
-      // Update the direntry cache
-      this.direntryCache.set(direntryCacheKey, {
-        metadataHash: childMetadataHash,
-        contentHash: childMetadata.content_addr,
-        contentSize: childMetadata.size || 0
-      });
-      
       this.debugLog(component, "continue");
 
       // Continue with this child as the new current node
       currentMetadataHash = childMetadataHash;
       currentContentHash = childMetadata.content_addr;
       currentContentSize = childMetadata.size || 0;
+
+      // Okay, this is a little weird... we check if we're about to return a bare directory, and if
+      // so, we back up and do one more step with index.html and some hackery.
+      if (i == components.length-1 && !triedIndexHtml) {
+        triedIndexHtml = true;
+        const currentMetadata = await this._getJsonFromHash(currentMetadataHash);
+        if (currentMetadata.type != 'file') {
+          components[i] = 'index.html';
+          i--;
+        }
+      }
     }
     
+    if (currentContentHash) {
+      try {
+        // Try to fetch from cache only
+        const cacheResponse = await fetch(`${this.serverUrl}/grits/v1/blob/${currentContentHash}`, {
+          method: 'HEAD', // HEAD is more efficient since we only need to check existence
+          cache: 'only-if-cached',
+          mode: 'same-origin'
+        });
+        
+        // If not in cache, return null
+        if (cacheResponse.status !== 200) {
+          this.debugLog(path, `Content hash ${currentContentHash} not in browser cache, fallback to hard fetch`);
+          return null;
+        }
+      } catch (error) {
+        // Any error means it's not in cache
+        this.debugLog(path, `Error checking cache for ${currentContentHash}: ${error.message}`);
+        return null;
+      }
+    }
+
     // If we got here, we resolved the entire path
     return {
       metadataHash: currentMetadataHash,
@@ -472,7 +357,7 @@ class GritsClient {
       return entry.data;
     }
     
-    this.debugLog("hash:" + hash.substring(0, 8), `Memory cache miss, trying browwwwwwwser cache - ${forceFetch}`);
+    this.debugLog("hash:" + hash.substring(0, 8), `Memory cache miss, trying browser cache - ${forceFetch}`);
     
     try {
       let response;
@@ -498,16 +383,14 @@ class GritsClient {
           // Add more robust logging to see what's happening
           console.error("Cache-only fetch failed with error:", cacheError);
           this.debugLog("hash:" + hash.substring(0, 8), `Browser cache miss: ${cacheError.message}`);
-          
-          if (!forceFetch) {
-            return null;
-          }
+          return null;
         }
       } 
       
       // Only do network request if we're forcing or we didn't return from cache miss above
       if (forceFetch) {
-        response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
+        const url = `${this.serverUrl}/grits/v1/blob/${hash}`;
+        response = await fetch(url, {
           method: 'GET',
           cache: 'default' // Use standard browser caching behavior
         });
@@ -516,7 +399,7 @@ class GritsClient {
         this.debugLog("hash:" + hash.substring(0, 8), `Network fetch completed in ${fetchTime}ms, status ${response.status}`);
         
         if (!response.ok) {
-          throw new Error(`Server returned ${response.status} for ${hash}`);
+          throw new Error(`Server returned ${response.status} for ${url}`);
         }
       }
       
@@ -534,14 +417,8 @@ class GritsClient {
       
       return data;
     } catch (error) {
-      if (forceFetch) {
-        // Propagate the error when forced fetching
-        throw error;
-      } else {
-        // Log and return null otherwise
-        console.error(`Failed to get JSON for ${hash}:`, error);
-        return null;
-      }
+      console.error(`Failed to get JSON for ${hash}:`, error);
+      return null;
     }
   }
 
@@ -556,29 +433,43 @@ class GritsClient {
       }
     }
     
-    // Limit direntry cache size to prevent unbounded growth
-    if (this.direntryCache.size > this.direntryCacheMaxSize) {
-      console.log(`Pruning direntry cache (size: ${this.direntryCache.size})`);
-      // Simple approach: delete oldest half
-      // In a real implementation, you might want a more sophisticated LRU approach
-      const entries = Array.from(this.direntryCache.entries());
-      const toDelete = entries.slice(0, Math.floor(entries.length / 2));
-      for (const [key] of toDelete) {
-        this.direntryCache.delete(key);
+    // Clean content hash cache
+    for (const [path, entry] of this.contentHashCache.entries()) {
+      if (entry.timestamp < expiredTime) {
+        this.contentHashCache.delete(path);
       }
     }
   }
   
   async _fetchBlob(hash) {
-    const response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`);
-    
-    if (!response.ok) {
-      throw new Error(`Failed to fetch blob ${hash}: ${response.status}`);
+    // Check if there's already a fetch in progress for this hash
+    if (this.inflightFetches.has(hash)) {
+      this.debugLog(`hash:${hash.substring(0, 8)}`, "Using in-flight fetch");
+      
+      // Clone the response from the in-flight fetch
+      const inFlightResponse = await this.inflightFetches.get(hash);
+      return inFlightResponse.clone(); // Important: clone the response so it can be consumed multiple times
     }
     
-    return response.blob();
+    // Start a new fetch
+    const fetchPromise = fetch(`${this.serverUrl}/grits/v1/blob/${hash}`).then(response => {
+      // Store a cloned response that we'll return
+      const clonedResponse = response.clone();
+      
+      // Remove from in-flight after a short delay to allow for near-simultaneous requests
+      setTimeout(() => {
+        this.inflightFetches.delete(hash);
+      }, 100);
+      
+      return clonedResponse;
+    });
+    
+    // Store the promise
+    this.inflightFetches.set(hash, fetchPromise);
+    
+    return await fetchPromise;
   }
-  
+
   _normalizePath(path) {
     return path.replace(/^\/+|\/+$/g, '');
   }
