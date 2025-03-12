@@ -2,7 +2,7 @@
  * GritsClient - Client-side interface for interacting with the Grits file storage API
  */
 
-const debugClientTiming = false;
+const debugClientTiming = true;
 
 class GritsClient {
   constructor(config) {
@@ -58,7 +58,7 @@ class GritsClient {
     }
     
     // Use the unified JSON fetching method
-    return this._getJsonFromHash(pathInfo.metadataHash);
+    return this._getJsonFromHash(pathInfo.metadataHash, true);
   }
   
   async getFileUrl(path) {
@@ -73,6 +73,8 @@ class GritsClient {
   }
   
   async listDirectory(path) {
+    throw Error("Disabled");
+
     const normalizedPath = this._normalizePath(path);
     const pathInfo = await this._resolvePath(normalizedPath);
     
@@ -395,6 +397,8 @@ class GritsClient {
       const component = components[i];
       const direntryCacheKey = `${currentMetadataHash}:${component}`;
       
+      this.debugLog(path, `fast path component: ${component}`);
+
       // Try the direntry cache first
       if (this.direntryCache.has(direntryCacheKey)) {
         const entry = this.direntryCache.get(direntryCacheKey);
@@ -406,25 +410,33 @@ class GritsClient {
       
       // Not in direntry cache - try to resolve it by checking metadata and directory contents
       
+      this.debugLog(component, "parent metadata")
+
       // First, get the parent metadata
-      const metadata = await this._getJsonFromHash(currentMetadataHash);
+      const metadata = await this._getJsonFromHash(currentMetadataHash, false);
       if (!metadata || metadata.type !== 'dir') {
         return null; // Not a directory, can't continue
       }
       
+      this.debugLog(component, "dir listing")
+
       // Get the directory listing
-      const directoryListing = await this._getJsonFromHash(metadata.content_addr);
+      const directoryListing = await this._getJsonFromHash(metadata.content_addr, false);
       if (!directoryListing || !directoryListing[component]) {
         return null; // Component not found in directory
       }
       
+      this.debugLog(component, "child metadata")
+
       // Get child's metadata
       const childMetadataHash = directoryListing[component];
-      const childMetadata = await this._getJsonFromHash(childMetadataHash);
+      const childMetadata = await this._getJsonFromHash(childMetadataHash, false);
       if (!childMetadata) {
         return null;
       }
       
+      this.debugLog(component, "update direntry cache")
+
       // Update the direntry cache
       this.direntryCache.set(direntryCacheKey, {
         metadataHash: childMetadataHash,
@@ -432,6 +444,8 @@ class GritsClient {
         contentSize: childMetadata.size || 0
       });
       
+      this.debugLog(component, "continue");
+
       // Continue with this child as the new current node
       currentMetadataHash = childMetadataHash;
       currentContentHash = childMetadata.content_addr;
@@ -446,10 +460,10 @@ class GritsClient {
     };
   }
 
-  async _getJsonFromHash(hash) {
+  async _getJsonFromHash(hash, forceFetch = false) {
     const startTime = performance.now();
     
-    // Check if we have it in our cache
+    // Check if we have it in our memory cache
     if (this.jsonCache.has(hash)) {
       const entry = this.jsonCache.get(hash);
       // Update last accessed time
@@ -458,23 +472,55 @@ class GritsClient {
       return entry.data;
     }
     
-    this.debugLog("hash:" + hash.substring(0, 8), "Memory cache miss, trying browser cache");
+    this.debugLog("hash:" + hash.substring(0, 8), `Memory cache miss, trying browwwwwwwser cache - ${forceFetch}`);
     
-    // Try to get from browser cache
     try {
+      let response;
       const fetchStart = performance.now();
-      const response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
-        method: 'GET',
-        cache: 'force-cache' // Try to use browser cache
-      });
       
-      const fetchTime = Math.round(performance.now() - fetchStart);
-      this.debugLog("hash:" + hash.substring(0, 8), `Fetch completed in ${fetchTime}ms`);
+      if (!forceFetch) {
+        // Only check browser cache, don't go to network
+        try {
+          response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
+            method: 'GET',
+            cache: 'only-if-cached',
+            mode: 'same-origin'
+          });
+          
+          const fetchTime = Math.round(performance.now() - fetchStart);
+          this.debugLog("hash:" + hash.substring(0, 8), `Cache fetch completed in ${fetchTime}ms, status ${response.status}`);
+          
+          // Cache miss should be handled by returning null
+          if (response.status !== 200) {
+            return null;
+          }
+        } catch (cacheError) {
+          // Add more robust logging to see what's happening
+          console.error("Cache-only fetch failed with error:", cacheError);
+          this.debugLog("hash:" + hash.substring(0, 8), `Browser cache miss: ${cacheError.message}`);
+          
+          if (!forceFetch) {
+            return null;
+          }
+        }
+      } 
       
-      if (!response.ok) {
-        return null;
+      // Only do network request if we're forcing or we didn't return from cache miss above
+      if (forceFetch) {
+        response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
+          method: 'GET',
+          cache: 'default' // Use standard browser caching behavior
+        });
+        
+        const fetchTime = Math.round(performance.now() - fetchStart);
+        this.debugLog("hash:" + hash.substring(0, 8), `Network fetch completed in ${fetchTime}ms, status ${response.status}`);
+        
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status} for ${hash}`);
+        }
       }
       
+      // If we're here, we have a valid response (either from cache or network)
       const jsonStart = performance.now();
       const data = await response.json();
       const jsonTime = Math.round(performance.now() - jsonStart);
@@ -488,8 +534,14 @@ class GritsClient {
       
       return data;
     } catch (error) {
-      console.error(`Failed to get JSON for ${hash}:`, error);
-      return null;
+      if (forceFetch) {
+        // Propagate the error when forced fetching
+        throw error;
+      } else {
+        // Log and return null otherwise
+        console.error(`Failed to get JSON for ${hash}:`, error);
+        return null;
+      }
     }
   }
 

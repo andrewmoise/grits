@@ -233,11 +233,16 @@ async function fetchFromGrits(mapping, request) {
             }
         }
         
-        // Return the blob with appropriate headers
-        return new Response(blob, {
+        client.debugLog(resolvedPath, "about to build response");
+
+        const response = new Response(blob, {
             status: 200,
             headers: { 'Content-Type': contentType }
         });
+
+        client.debugLog(resolvedPath, "built response object");
+
+        return response;
     } catch (error) {
         console.error(`[Grits] Error fetching from Grits: ${error.status || ""} ${error.message}`);
         return new Response(`Failed to fetch resource: ${error.status || ""} ${error.message}`, {
