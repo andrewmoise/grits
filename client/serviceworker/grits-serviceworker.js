@@ -4,6 +4,8 @@ const swDirHash = "{{SW_DIR_HASH}}";
 const swScriptHash = "{{SW_SCRIPT_HASH}}";
 let pathConfig = null;
 
+const debugServiceworker = false;
+
 // Map of clients by volume
 let gritsClients = new Map();
 
@@ -21,8 +23,10 @@ function initializeGritsClient(volume) {
     const serverUrl = self.location.origin;
     
     // Creating new client instance for the specific volume
-    console.log(`[Grits] Initializing GritsClient for volume '${volume}' with server:`, serverUrl);
-    
+    if (debugServiceworker) {
+        console.log(`[Grits] Initializing GritsClient for volume '${volume}' with server:`, serverUrl);
+    }
+
     const client = new GritsClient({
         serverUrl: serverUrl,
         volume: volume
@@ -48,7 +52,7 @@ function initializeAllClients() {
     }
     
     console.log(`[Grits] Initializing clients for ${volumes.size} volumes:`, Array.from(volumes));
-    
+
     // Initialize a client for each volume
     volumes.forEach(volume => {
         initializeGritsClient(volume);
@@ -173,12 +177,16 @@ async function fetchFromGrits(mapping, request) {
         
         // Get the requested path from the URL
         
-        console.log(`[Grits] Mapped URL ${request.url} to volume path ${mapping.path} in volume ${mapping.volume}`);
+        if (debugServiceworker) {
+            console.log(`[Grits] Mapped URL ${request.url} to volume path ${mapping.path} in volume ${mapping.volume}`);
+        }
 
         // Look up metadata to determine content type
         let metadata = await client.lookupPath(mapping.path);
-        console.debug(`[Grits] Metadata for ${mapping.path}:`, metadata);
-        
+        if (debugServiceworker) {
+            console.debug(`[Grits] Metadata for ${mapping.path}:`, metadata);
+        }
+
         let resolvedPath = mapping.path;
 
         if (metadata.type !== 'blob') {
@@ -197,8 +205,10 @@ async function fetchFromGrits(mapping, request) {
         
         // Fetch the actual content
         const blob = await client.fetchFile(resolvedPath);
-        console.debug(`[Grits] Successfully fetched blob for ${resolvedPath}, size: ${blob.size} bytes`);
-        
+        if (debugServiceworker) {
+            console.debug(`[Grits] Successfully fetched blob for ${resolvedPath}, size: ${blob.size} bytes`);
+        }
+
         // Determine content type based on file extension or metadata
         let contentType = 'application/octet-stream'; // Default
         
@@ -265,7 +275,9 @@ self.addEventListener('activate', event => {
 // Navigation events should trigger a resetRoot to ensure fresh data
 self.addEventListener('message', event => {
     if (event.data && event.data.type === 'NAVIGATE') {
-        console.log('[Grits] Navigation detected, resetting roots');
+        if (debugServiceworker) {
+            console.log('[Grits] Navigation detected, resetting roots');
+        }
         // Reset all clients
         gritsClients.forEach(client => {
             client.resetRoot();
@@ -276,24 +288,32 @@ self.addEventListener('message', event => {
 
 self.addEventListener('fetch', event => {
     const url = event.request.url;
-    console.debug(`[Grits] Fetch event for: ${url}`);
-    
+    if (debugServiceworker) {
+        console.debug(`[Grits] Fetch event for: ${url}`);
+    }
+
     // Only handle GET requests
     if (event.request.method !== 'GET') {
-        console.debug(`[Grits] Ignoring non-GET request: ${event.request.method}`);
+        if (debugServiceworker) {
+            console.debug(`[Grits] Ignoring non-GET request: ${event.request.method}`);
+        }
         return;
     }
     
     // Check if this is a navigation request
     if (event.request.mode === 'navigate') {
-        console.log('[Grits] Navigation request detected, will reset root on completion');
+        if (debugServiceworker) {
+            console.log('[Grits] Navigation request detected, will reset root on completion');
+        }
         // After navigation completes, we'll want to reset the root
         // We can't do it immediately as the page isn't loaded yet
     }
     
     // Skip handling our own API requests to avoid loops
     if (url.includes('/grits/v1/') || url.includes('/grits-')) {
-        console.debug('[Grits] Ignoring Grits API request');
+        if (debugServiceworker) {
+            console.debug('[Grits] Ignoring Grits API request');
+        }
         return;
     }
 
@@ -301,7 +321,9 @@ self.addEventListener('fetch', event => {
     const gritsMapping = shouldHandleWithGrits(url);
     
     if (gritsMapping) {
-        console.log(`[Grits] Intercepting request: ${url}`);
+        if (debugServiceworker) {
+            console.log(`[Grits] Intercepting request: ${url}`);
+        }
         event.respondWith(fetchFromGrits(gritsMapping, event.request));
 
         return;
