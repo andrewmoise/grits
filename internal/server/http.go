@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"grits/internal/grits"
@@ -49,8 +50,16 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 
 	mux := http.NewServeMux()
 	HTTPServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", config.ThisPort),
-		Handler: mux,
+		Addr:              fmt.Sprintf(":%d", config.ThisPort),
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	// Only set TLS config if TLS is enabled
+	if config.EnableTls {
+		HTTPServer.TLSConfig = &tls.Config{
+			NextProtos: []string{"h2", "http/1.1"}, // Support HTTP/2 and fallback to HTTP/1.1
+		}
 	}
 
 	log.Printf("HTTP listening on %s\n", HTTPServer.Addr)
@@ -714,10 +723,10 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 	}
 
 	reader, err := node.ExportedBlob().Reader()
-		if err != nil {
+	if err != nil {
 		http.Error(w, fmt.Sprintf("Can't read blob for %s: %v", path, err), http.StatusInternalServerError)
-			return
-		}
+		return
+	}
 	defer func() {
 		err := reader.Close()
 		if err != nil {
