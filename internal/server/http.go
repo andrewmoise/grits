@@ -160,7 +160,7 @@ func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		tracker := NewPerformanceTracker(r)
 		tracker.Start()
 
-		// Basic request logging (kept from original)
+		// Basic request logging
 		log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
 
 		tracker.Step("Setting CORS headers")
@@ -610,7 +610,7 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	log.Printf("Method is %s\n", r.Method)
 
 	switch r.Method {
-	case http.MethodGet:
+	case http.MethodGet, http.MethodHead:
 		handleNamespaceGet(s.Server.BlobStore, volume, filePath, w, r)
 
 	case http.MethodPut:
@@ -632,12 +632,12 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	}
 }
 
-func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	tracker := NewPerformanceTracker(r)
 	tracker.Start()
 	defer tracker.End()
 
-	log.Printf("Received GET request for file: %s\n", path)
+	log.Printf("Received %s request for file: %s\n", r.Method, path)
 
 	tracker.Step("Looking up resource in volume")
 	// Look up the resource in the volume to get its address
@@ -679,7 +679,7 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 	}
 
 	tracker.Step("Building path metadata")
-	pathMetadata := make([]map[string]string, 0, len(pathNodes))
+	pathMetadata := make([]map[string]any, 0, len(pathNodes))
 	for _, pathNode := range pathNodes {
 		// Extract just the component name from the full path
 		pathComponent := ""
@@ -690,11 +690,11 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 			}
 		}
 
-		// Create an entry with component and hash
-		pathMetadata = append(pathMetadata, map[string]string{
-			"component": pathComponent,
-			"path":      pathNode.Path, // Also include full path for debugging
-			"hash":      pathNode.Node.MetadataBlob().GetAddress().Hash,
+		pathMetadata = append(pathMetadata, map[string]any{
+			"path":          pathComponent,
+			"metadata_hash": pathNode.Node.MetadataBlob().GetAddress().Hash,
+			"content_hash":  pathNode.Node.ExportedBlob().GetAddress().Hash,
+			"content_size":  pathNode.Node.ExportedBlob().GetSize(),
 		})
 	}
 
@@ -719,6 +719,13 @@ func handleNamespaceGet(bs grits.BlobStore, volume Volume, path string, w http.R
 		// Resource hasn't changed, return 304 Not Modified
 		w.WriteHeader(http.StatusNotModified)
 		tracker.End()
+		return
+	}
+
+	if r.Method == http.MethodHead {
+		// For HEAD requests, we've already set all needed headers
+		// No need to read the actual content
+		w.WriteHeader(http.StatusOK)
 		return
 	}
 
