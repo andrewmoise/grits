@@ -2,7 +2,7 @@
  * GritsClient - Client-side interface for interacting with the Grits file storage API
  */
 
-const debugClientTiming = false;
+const debugClientTiming = true;
 
 let cacheFetchActive = 0;
 let cacheDiagnosticsTimer = null;
@@ -278,6 +278,11 @@ class GritsClient {
   }
 
   async _tryFastPathLookup(path) {
+    const startTime = performance.now();
+    let memoryHits = 0;
+    let browserCacheHits = 0;
+    let networkHits = 0;
+    
     // Can't do anything without a root hash
     if (!this.rootHash) {
       this.debugLog(path, "null root");
@@ -290,57 +295,60 @@ class GritsClient {
     let currentContentSize = null;
     
     let triedIndexHtml = false;
-
+  
     this.debugLog(path, "Finding fast path");
+    
+    // Helper function to track fetch sources
+    const trackJsonSource = (source) => {
+      if (source === 'memory') memoryHits++;
+      else if (source === 'browserCache') browserCacheHits++;
+      else if (source === 'network') networkHits++;
+    };
     
     // Start with the root, then follow each path component
     for (let i = 0; i < components.length; i++) {
       const component = components[i];
       
-      //this.debugLog(path, `fast path component: ${component}`);
-
-      //this.debugLog(component, "parent metadata");
-
       // First, get the parent metadata
-      const metadata = await this._getJsonFromHash(currentMetadataHash, false);
+      const [metadata, metaSource] = await this._getJsonFromHashInstrumented(currentMetadataHash, false);
+      trackJsonSource(metaSource);
+      
       if (!metadata || metadata.type !== 'dir') {
         this.debugLog(path, `  fail: ${component}: parent not a dir`);
         return null; // Not a directory, can't continue
       }
       
-      //this.debugLog(component, "dir listing");
-
       // Get the directory listing
-      const directoryListing = await this._getJsonFromHash(metadata.content_addr, false);
+      const [directoryListing, dirSource] = await this._getJsonFromHashInstrumented(metadata.content_addr, false);
+      trackJsonSource(dirSource);
+      
       if (!directoryListing || !directoryListing[component]) {
         this.debugLog(path, `  fail: ${component}: not found in dir`);
         return null; // Component not found in directory
       }
       
-      //this.debugLog(component, "child metadata");
-
       // Get child's metadata
       const childMetadataHash = directoryListing[component];
-      const childMetadata = await this._getJsonFromHash(childMetadataHash, false);
+      const [childMetadata, childSource] = await this._getJsonFromHashInstrumented(childMetadataHash, false);
+      trackJsonSource(childSource);
+      
       if (!childMetadata) {
         this.debugLog(path, `  fail: ${component}: no JSON for metadata`);
         return null;
       }
       
-      //this.debugLog(component, "continue");
-
       // Continue with this child as the new current node
       currentMetadataHash = childMetadataHash;
       currentContentHash = childMetadata.content_addr;
       currentContentSize = childMetadata.size || 0;
-
-      //this.debugLog(component, `content hash: ${currentContentHash}`);
-
+  
       // Okay, this is a little weird... we check if we're about to return a bare directory, and if
       // so, we back up and do one more step with index.html and some hackery.
       if (i == components.length-1 && !triedIndexHtml) {
         triedIndexHtml = true;
-        const currentMetadata = await this._getJsonFromHash(currentMetadataHash);
+        const [currentMetadata, indexHtmlSource] = await this._getJsonFromHashInstrumented(currentMetadataHash);
+        trackJsonSource(indexHtmlSource);
+        
         this.debugLog(path, `  double-check for index.html: ${JSON.stringify(currentMetadata, null, 2)}`)
         if (currentMetadata.type != 'blob') {
           this.debugLog(path, '    found!');
@@ -350,9 +358,13 @@ class GritsClient {
       }
     }
     
+    const lookupTime = performance.now() - startTime;
     this.debugLog(path, `Complete fast path lookup! hash is ${currentContentHash}`);
-
+    
+    // Final content check
+    let cacheCheckTime = 0;
     if (currentContentHash) {
+      const cacheCheckStart = performance.now();
       try {
         // Try to fetch from cache only
         const cacheResponse = await fetch(`${this.serverUrl}/grits/v1/blob/${currentContentHash}`, {
@@ -363,21 +375,134 @@ class GritsClient {
         // If not in cache, return null
         if (cacheResponse.status !== 200) {
           this.debugLog(path, `Content hash ${currentContentHash} not in browser cache, fallback to hard fetch`);
+          cacheCheckTime = performance.now() - cacheCheckStart;
+          
+          // Performance report for failed lookup
+          this.debugLog(path, 
+            `PERFORMANCE: ${lookupTime.toFixed(2)}ms total, ${components.length} components, ` +
+            `${memoryHits} memory hits, ${browserCacheHits} browser cache hits, ${networkHits} network hits, ` +
+            `cache check: ${cacheCheckTime.toFixed(2)}ms (FAILED)`
+          );
+          
           return null;
         }
       } catch (error) {
         // Any error means it's not in cache
         this.debugLog(path, `Error checking cache for ${currentContentHash}: ${error.message}`);
+        cacheCheckTime = performance.now() - cacheCheckStart;
+        
+        // Performance report for failed lookup
+        this.debugLog(path, 
+          `PERFORMANCE: ${lookupTime.toFixed(2)}ms total, ${components.length} components, ` +
+          `${memoryHits} memory hits, ${browserCacheHits} browser cache hits, ${networkHits} network hits, ` +
+          `cache check: ${cacheCheckTime.toFixed(2)}ms (ERROR)`
+        );
+        
         return null;
       }
+      cacheCheckTime = performance.now() - cacheCheckStart;
     }
-
+  
+    // Performance report for successful lookup
+    this.debugLog(path, 
+      `PERFORMANCE: ${lookupTime.toFixed(2)}ms total, ${components.length} components, ` +
+      `${memoryHits} memory hits, ${browserCacheHits} browser cache hits, ${networkHits} network hits, ` +
+      `cache check: ${cacheCheckTime.toFixed(2)}ms`
+    );
+  
     // If we got here, we resolved the entire path
     return {
       metadataHash: currentMetadataHash,
       contentHash: currentContentHash,
       contentSize: currentContentSize
     };
+  }
+
+  async _getJsonFromHashInstrumented(hash, forceFetch = false) {
+    const startTime = performance.now();
+    
+    // Check if we have it in our memory cache
+    if (this.jsonCache.has(hash)) {
+      const entry = this.jsonCache.get(hash);
+      // Update last accessed time
+      entry.lastAccessed = Date.now();
+      this.debugLog("hash:" + hash.substring(0, 8), `Memory cache hit (${Math.round(performance.now() - startTime)}ms)`);
+      return [entry.data, 'memory'];
+    }
+    
+    this.debugLog("hash:" + hash.substring(0, 8), `Memory cache miss, trying browser cache - ${forceFetch}`);
+    
+    try {
+      let response;
+      const fetchStart = performance.now();
+      
+      if (!forceFetch) {
+        // Only check browser cache, don't go to network
+        try {
+          this.debugLog("hash:" + hash.substring(0, 8), 'Browser cache fetch');
+  
+          response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
+            method: 'GET',
+            cache: 'force-cache'
+          });
+          
+          this.debugLog("hash:" + hash.substring(0, 8), 'cache fetch done');
+  
+          const fetchTime = Math.round(performance.now() - fetchStart);
+          this.debugLog("hash:" + hash.substring(0, 8), `Cache fetch completed in ${fetchTime}ms, status ${response.status}`);
+          
+          // Cache miss should be handled by returning null
+          if (response.status !== 200) {
+            return [null, null];
+          }
+        } catch (cacheError) {
+          this.debugLog("hash:" + hash.substring(0, 8), `Browser cache miss: ${cacheError.message}`);
+          return [null, null];
+        }
+      } 
+      
+      // Only do network request if we're forcing or we didn't return from cache miss above
+      if (forceFetch) {
+        this.debugLog("hash:" + hash.substring(0, 8), 'network fetch');
+  
+        const url = `${this.serverUrl}/grits/v1/blob/${hash}`;
+        response = await fetch(url, {
+          method: 'GET',
+          cache: 'default' // Use standard browser caching behavior
+        });
+        
+        this.debugLog("hash:" + hash.substring(0, 8), 'network fetch done');
+  
+        const fetchTime = Math.round(performance.now() - fetchStart);
+        this.debugLog("hash:" + hash.substring(0, 8), `Network fetch completed in ${fetchTime}ms, status ${response.status}`);
+        
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status} for ${url}`);
+        }
+      }
+      
+      // If we're here, we have a valid response (either from cache or network)
+      const jsonStart = performance.now();
+      this.debugLog("hash:" + hash.substring(0, 8), 'JSON parse');
+      const data = await response.json();
+      this.debugLog("hash:" + hash.substring(0, 8), 'JSON parse done');
+      const jsonTime = Math.round(performance.now() - jsonStart);
+      this.debugLog("hash:" + hash.substring(0, 8), `JSON parsing took ${jsonTime}ms`);
+  
+      // Cache it with current timestamp
+      this.jsonCache.set(hash, {
+        data,
+        lastAccessed: Date.now()
+      });
+      
+      // Determine the source (browser cache or network)
+      const source = forceFetch ? 'network' : 'browserCache';
+      
+      return [data, source];
+    } catch (error) {
+      console.error(`Failed to get JSON for ${hash}:`, error);
+      return [null, null];
+    }
   }
 
   async _getJsonFromHash(hash, forceFetch = false) {
@@ -402,7 +527,7 @@ class GritsClient {
       if (!forceFetch) {
         // Only check browser cache, don't go to network
         try {
-          //this.debugLog("hash:" + hash.substring(0, 8), 'Browser cache fetch');
+          this.debugLog("hash:" + hash.substring(0, 8), 'Browser cache fetch');
           //cacheFetchActive++;
 
           response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
@@ -411,7 +536,7 @@ class GritsClient {
           });
           
           //cacheFetchActive--;
-          //this.debugLog("hash:" + hash.substring(0, 8), 'fetch done');
+          this.debugLog("hash:" + hash.substring(0, 8), 'cache fetch done');
 
           const fetchTime = Math.round(performance.now() - fetchStart);
           //this.debugLog("hash:" + hash.substring(0, 8), `Cache fetch completed in ${fetchTime}ms, status ${response.status}`);
@@ -430,12 +555,16 @@ class GritsClient {
       
       // Only do network request if we're forcing or we didn't return from cache miss above
       if (forceFetch) {
+        this.debugLog("hash:" + hash.substring(0, 8), 'network fetch');
+
         const url = `${this.serverUrl}/grits/v1/blob/${hash}`;
         response = await fetch(url, {
           method: 'GET',
           cache: 'default' // Use standard browser caching behavior
         });
         
+        this.debugLog("hash:" + hash.substring(0, 8), 'network fetch done');
+
         const fetchTime = Math.round(performance.now() - fetchStart);
         //this.debugLog("hash:" + hash.substring(0, 8), `Network fetch completed in ${fetchTime}ms, status ${response.status}`);
         
