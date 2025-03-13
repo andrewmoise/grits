@@ -93,10 +93,10 @@ Minor punch list:
 * Figure out something for octal modes in metadata
 * Remote mounts of a volume on a different server
 * Switch over client freshness check to whole directory, and make timestamp handling better so we don't reload always on server restart
-* Cleanup Volume API
+* Clean up Volume API
 * Make capitalization consistent in config file
-* Unify the two GritsClient.js files, use a template or something
 * Unify path normalization in GritsClient and SW
+* Do hash verifications in client (configurable)
 
 ## Obvious questions
 
