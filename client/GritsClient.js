@@ -2,7 +2,19 @@
  * GritsClient - Client-side interface for interacting with the Grits file storage API
  */
 
-const debugClientTiming = true;
+const debugClientTiming = false;
+
+let cacheFetchActive = 0;
+let cacheDiagnosticsTimer = null;
+
+if (debugClientTiming) {
+  // Setup cache diagnostics timer
+  cacheDiagnosticsTimer = setInterval(() => {
+    if (cacheFetchActive > 0) {
+      console.log(`⚠️ Cache fetch active for ${cacheFetchActive} requests`);
+    }
+  }, 20);
+}
 
 class GritsClient {
   constructor(config) {
@@ -64,7 +76,8 @@ class GritsClient {
       const pathInfo = await this._tryFastPathLookup(normalizedPath);
       if (pathInfo && pathInfo.contentHash) {
         this.debugLog(path, "  succeed (metadata at least)");
-        result = await this._fetchBlob(pathInfo.contentHash);
+        result = await this._fetchBlob(path, pathInfo.contentHash);
+        // Already wrapped
       } else {
         this.debugLog(path, "  fail");
         result = await this._hardFetchContent(normalizedPath);
@@ -163,10 +176,11 @@ class GritsClient {
 
       // 304 Not Modified - we use our cached version of the contents
       if (response.status === 304) {
-        response = await this._fetchBlob(cachedValue.contentHash);
+        response = await this._fetchBlob(path, cachedValue.contentHash);
+        return response; // Already wrapped
       }
         
-      return response;
+      return response; // No need to wrap... right?
     } catch (error) {
       console.error(`Error during hard fetch for ${path}:`, error);
       throw error;
@@ -266,6 +280,7 @@ class GritsClient {
   async _tryFastPathLookup(path) {
     // Can't do anything without a root hash
     if (!this.rootHash) {
+      this.debugLog(path, "null root");
       return null;
     }
     
@@ -276,6 +291,8 @@ class GritsClient {
     
     let triedIndexHtml = false;
 
+    this.debugLog(path, "Finding fast path");
+    
     // Start with the root, then follow each path component
     for (let i = 0; i < components.length; i++) {
       const component = components[i];
@@ -287,6 +304,7 @@ class GritsClient {
       // First, get the parent metadata
       const metadata = await this._getJsonFromHash(currentMetadataHash, false);
       if (!metadata || metadata.type !== 'dir') {
+        this.debugLog(path, `  fail: ${component}: parent not a dir`);
         return null; // Not a directory, can't continue
       }
       
@@ -295,6 +313,7 @@ class GritsClient {
       // Get the directory listing
       const directoryListing = await this._getJsonFromHash(metadata.content_addr, false);
       if (!directoryListing || !directoryListing[component]) {
+        this.debugLog(path, `  fail: ${component}: not found in dir`);
         return null; // Component not found in directory
       }
       
@@ -304,6 +323,7 @@ class GritsClient {
       const childMetadataHash = directoryListing[component];
       const childMetadata = await this._getJsonFromHash(childMetadataHash, false);
       if (!childMetadata) {
+        this.debugLog(path, `  fail: ${component}: no JSON for metadata`);
         return null;
       }
       
@@ -314,12 +334,16 @@ class GritsClient {
       currentContentHash = childMetadata.content_addr;
       currentContentSize = childMetadata.size || 0;
 
+      //this.debugLog(component, `content hash: ${currentContentHash}`);
+
       // Okay, this is a little weird... we check if we're about to return a bare directory, and if
       // so, we back up and do one more step with index.html and some hackery.
       if (i == components.length-1 && !triedIndexHtml) {
         triedIndexHtml = true;
         const currentMetadata = await this._getJsonFromHash(currentMetadataHash);
-        if (currentMetadata.type != 'file') {
+        this.debugLog(path, `  double-check for index.html: ${JSON.stringify(currentMetadata, null, 2)}`)
+        if (currentMetadata.type != 'blob') {
+          this.debugLog(path, '    found!');
           components[i] = 'index.html';
           i--;
         }
@@ -327,7 +351,7 @@ class GritsClient {
     }
     
     this.debugLog(path, `Complete fast path lookup! hash is ${currentContentHash}`);
-    
+
     if (currentContentHash) {
       try {
         // Try to fetch from cache only
@@ -378,11 +402,17 @@ class GritsClient {
       if (!forceFetch) {
         // Only check browser cache, don't go to network
         try {
+          //this.debugLog("hash:" + hash.substring(0, 8), 'Browser cache fetch');
+          //cacheFetchActive++;
+
           response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`, {
             method: 'GET',
             cache: 'force-cache'
           });
           
+          //cacheFetchActive--;
+          //this.debugLog("hash:" + hash.substring(0, 8), 'fetch done');
+
           const fetchTime = Math.round(performance.now() - fetchStart);
           //this.debugLog("hash:" + hash.substring(0, 8), `Cache fetch completed in ${fetchTime}ms, status ${response.status}`);
           
@@ -416,10 +446,14 @@ class GritsClient {
       
       // If we're here, we have a valid response (either from cache or network)
       const jsonStart = performance.now();
+      //this.debugLog("hash:" + hash.substring(0, 8), 'JSON parse');
       const data = await response.json();
+      //this.debugLog("hash:" + hash.substring(0, 8), 'JSON parse done');
       const jsonTime = Math.round(performance.now() - jsonStart);
-      this.debugLog("hash:" + hash.substring(0, 8), `JSON parsing took ${jsonTime}ms`);
-      
+      //this.debugLog("hash:" + hash.substring(0, 8), `JSON parsing took ${jsonTime}ms`);
+      // Dump the entire data object with nice formatting
+      //this.debugLog("hash:" + hash.substring(0, 8), `Full data: ${JSON.stringify(data, null, 2)}`);
+
       // Cache it with current timestamp
       this.jsonCache.set(hash, {
         data,
@@ -443,23 +477,18 @@ class GritsClient {
         this.jsonCache.delete(hash);
       }
     }
-    
-    // Clean content hash cache
-    for (const [path, entry] of this.contentHashCache.entries()) {
-      if (entry.timestamp < expiredTime) {
-        this.contentHashCache.delete(path);
-      }
-    }
   }
   
-  async _fetchBlob(hash) {
+  async _fetchBlob(path, hash) {
     // Check if there's already a fetch in progress for this hash
     if (this.inflightFetches.has(hash)) {
       //this.debugLog(`hash:${hash.substring(0, 8)}`, "Using in-flight fetch");
       
       // Clone the response from the in-flight fetch
       const inFlightResponse = await this.inflightFetches.get(hash);
-      return inFlightResponse.clone(); // Important: clone the response so it can be consumed multiple times
+      let response = inFlightResponse.clone(); // Important: clone the response so it can be consumed multiple times
+      response = this._wrappedResponse(response, path);
+      return response;
     }
     
     // Start a new fetch
@@ -472,13 +501,64 @@ class GritsClient {
         this.inflightFetches.delete(hash);
       }, 100);
       
-      return clonedResponse;
+      return this._wrappedResponse(clonedResponse, path);
     });
     
     // Store the promise
     this.inflightFetches.set(hash, fetchPromise);
     
     return await fetchPromise;
+  }
+
+  _wrappedResponse(response, path, contentSize = null) {
+    // Create a fresh set of headers with only what we want to expose
+    const headers = new Headers();
+    
+    // Set content type based on file extension
+    const contentType = this._guessContentType(path);
+    if (contentType) {
+      headers.set('Content-Type', contentType);
+    }
+    
+    // Set cache control headers
+    headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    headers.set('Pragma', 'no-cache');
+    headers.set('Expires', '0');
+    
+    // Add Content-Length if we know the size
+    // TODO
+    if (contentSize !== null) {
+      headers.set('Content-Length', String(contentSize));
+    }
+    
+    // Create a new response with our curated headers but original body
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: headers
+    });
+  }
+
+  // Helper to guess content type from hash or path
+  _guessContentType(path) {
+    // Common MIME types map
+    const mimeTypes = {
+      'html': 'text/html',
+      'css': 'text/css',
+      'js': 'application/javascript',
+      'json': 'application/json',
+      'png': 'image/png',
+      'jpg': 'image/jpeg',
+      'jpeg': 'image/jpeg',
+      'svg': 'image/svg+xml',
+      'woff': 'font/woff',
+      'woff2': 'font/woff2',
+      'ttf': 'font/ttf',
+      'eot': 'application/vnd.ms-fontobject'
+    };
+    
+    const ext = path.split('.').pop().toLowerCase();
+    return ext && mimeTypes[ext] ? mimeTypes[ext] : null;
   }
 
   _normalizePath(path) {

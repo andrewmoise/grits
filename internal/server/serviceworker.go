@@ -32,7 +32,6 @@ type ServiceWorkerModuleConfig struct {
 	// No options
 }
 
-// Update the method to collect deployment configurations
 func (swm *ServiceWorkerModule) addDeploymentModule(module Module) {
 	deployment, ok := module.(*DeploymentModule)
 	if !ok {
@@ -41,6 +40,7 @@ func (swm *ServiceWorkerModule) addDeploymentModule(module Module) {
 
 	// Convert DeploymentConfig to internal PathMapping
 	mapping := PathMapping{
+		HostName:   deployment.Config.HostName,
 		URLPath:    deployment.Config.UrlPath,
 		Volume:     deployment.Config.Volume,
 		VolumePath: deployment.Config.VolumePath,
@@ -57,6 +57,7 @@ func (swm *ServiceWorkerModule) addDeploymentModule(module Module) {
 
 // PathMapping defines a mapping from a URL path to a volume and path in storage.
 type PathMapping struct {
+	HostName   string `json:"hostName"`
 	URLPath    string `json:"urlPrefix"`
 	Volume     string `json:"volume"`
 	VolumePath string `json:"path"`

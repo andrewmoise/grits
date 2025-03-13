@@ -48,6 +48,7 @@ function initializeAllClients() {
     // Get unique set of volumes from path config
     const volumes = new Set();
     for (const mapping of pathConfig) {
+        console.log(`[Grits] Path config: ${JSON.stringify(mapping, null, 2)}`);
         volumes.add(mapping.volume);
     }
     
@@ -140,11 +141,17 @@ function shouldHandleWithGrits(url) {
     // Convert URL to path and normalize it
     const parsedUrl = new URL(url);
     const path = normalizePath(parsedUrl.pathname);
+    const hostname = parsedUrl.host;
     
-    console.debug(`[Grits] Checking if path should be handled: ${path}`);
+    console.debug(`[Grits] Checking if path should be handled: ${path} on host: ${hostname}`);
     
-    // Now both the path and mapping.urlPrefix are normalized
+    // Now check both hostname and path
     for (const mapping of pathConfig) {
+        // Skip if hostname doesn't match (if hostname is specified in the mapping)
+        if (mapping.hostName !== hostname) {
+            continue;
+        }
+        
         if (path.startsWith(mapping.urlPrefix)) {
             // Calculate the relative path within the volume
             const relativePath = path.slice(mapping.urlPrefix.length);
@@ -161,7 +168,7 @@ function shouldHandleWithGrits(url) {
         }
     }
     
-    console.debug(`[Grits] No mapping found for: ${path}`);
+    console.debug(`[Grits] No mapping found for: ${path} on host: ${hostname}`);
     return false;
 }
 
@@ -278,7 +285,7 @@ self.addEventListener('fetch', event => {
 // Fetch the configuration from blob address
 async function fetchConfig() {
     try {
-        const response = await fetch(`/grits-serviceworker-config.json?dirHash=${swDirHash}`);
+        const response = await fetch(`/grits/v1/content/client/serviceworker/grits-serviceworker-config.json`);
         if (!response.ok) {
             throw new Error(`Config fetch failed: ${response.status}`);
         }
@@ -288,8 +295,9 @@ async function fetchConfig() {
         
         // Apply normalization to each mapping
         pathConfig = rawConfig.map(mapping => ({
-            volume: mapping.volume,
+            hostName: mapping.hostName,
             urlPrefix: normalizePath(mapping.urlPrefix),
+            volume: mapping.volume,
             path: normalizePath(mapping.path)
         }));
         
