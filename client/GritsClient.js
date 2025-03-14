@@ -3,8 +3,13 @@
  */
 
 const debugClientTiming = true;
+const debugPerformanceStats = true;
 
 class GritsClient {
+
+  /////
+  // Top level
+
   constructor(config) {
     // Basic configuration
     this.serverUrl = config.serverUrl.replace(/\/$/, '');
@@ -30,14 +35,41 @@ class GritsClient {
     // Setup periodic cleanup
     this.cleanupInterval = setInterval(() => this._cleanupCaches(), 5 * 60 * 1000);
 
+    // Setup stats interval
+    this.stats = {
+      totalRequests: 0,
+      contentLookups: 0,      // Used grits/v1/content
+      blobCacheHits: 0,       // Found in blob cache
+      blobCacheMisses: 0,     // Had to fetch from network
+      prefetchSuccesses: 0,   // Successfully prefetched items
+      timings: {              // Track timing in ms
+        contentLookups: [],   // Times for content lookups
+        blobCacheHits: [],    // Times for cache hits
+        blobCacheMisses: []   // Times for cache misses
+      }
+    };
+  
+      // Reset stats periodically and log them
+      if (debugPerformanceStats) {
+        this.statsInterval = setInterval(() => this._logStats(), 10000);
+      }
+
     // Store service worker hash, for detection and reload when needed
     this.serviceWorkerHash = undefined;
+
+    // Initialize blob cache
+    this._initializeBlobCache().catch(err => {
+      console.error("Error during blob cache initialization:", err);
+    });
 
     this.debugLog("constructor", `Initialized with soft timeout: ${this.softTimeout}ms, hard timeout: ${this.hardTimeout}ms`);
   }
 
   destroy() {
     clearInterval(this.cleanupInterval);
+    if (this.statsInterval) {
+      clearInterval(this.statsInterval);
+    }
   }
   
   resetRoot() {
@@ -45,8 +77,14 @@ class GritsClient {
     this.debugLog("resetRoot", "Root hash timestamp reset to 0");
   }
   
+  /////
+  // Fetching and merkle tree lookup logic
+
   async fetchFile(path) {
     this.debugLog(path, `fetchFile(${path})`);
+
+    const startTime = performance.now();
+    this.stats.totalRequests++;
 
     const normalizedPath = this._normalizePath(path);
     
@@ -61,11 +99,14 @@ class GritsClient {
     const pathInfo = await this._tryFastPathLookup(normalizedPath);
     if (pathInfo && pathInfo.contentHash) {
       this.debugLog(path, "  succeed (metadata at least)");
-      const response = await fetch(`${this.serverUrl}/grits/v1/blob/${pathInfo.contentHash}`);
-      result = this._wrappedResponse(path, response);
+      // Use our caching blob fetcher instead of direct fetch
+      const response = await this._fetchBlobWithCache(pathInfo.contentHash, startTime);
+      result = this._wrappedResponse(path, response, pathInfo.contentSize);
     } else {
-      this.debugLog(path, "  fail");
-      result = await this._hardFetchContent(normalizedPath);
+      // Content lookup path
+      this.stats.contentLookups++;
+      result = await this._hardFetchContent(normalizedPath, startTime);
+      this.stats.timings.contentLookups.push(performance.now() - startTime);
     }
 
     this.debugLog(path, "  all done");
@@ -181,7 +222,7 @@ class GritsClient {
     };
   }
 
-  async _hardFetchContent(path) {
+  async _hardFetchContent(path, startTime) {
     this.debugLog(path, "Hard fetching via HEAD request to /grits/v1/content");
     
     const normalizedPath = this._normalizePath(path);
@@ -237,7 +278,7 @@ class GritsClient {
       const contentHash = lastEntry.content_hash; // Ugh - content_hash, from lookup endpoint
       this.debugLog(path, `  content hash is ${contentHash}`);
 
-      const contentResponse = await fetch(`${this.serverUrl}/grits/v1/blob/${contentHash}`);
+      const contentResponse = await this._fetchBlobWithCache(contentHash, startTime);
 
       return this._wrappedResponse(path, contentResponse);
 
@@ -246,6 +287,9 @@ class GritsClient {
       throw error;
     }
   }
+
+  /////
+  // Prefetching for various JSON bits
 
   // TODO - have a max size for the queue, and just throw stuff away if it has too many entries
   // already
@@ -277,11 +321,15 @@ class GritsClient {
       try {
         this.debugLog("prefetch", `Fetching hash ${hash}`);
 
+        const startTime = performance.now();
+        
+        let jsonData;
         // Check again if it's already in cache (might have been added since queuing)
         if (!this.jsonCache.has(hash)) {
           this.debugLog("prefetch:" + hash.substring(0, 8), "fetch");
 
-          let response = await fetch(`${this.serverUrl}/grits/v1/blob/${hash}`);
+          const response = await this._fetchBlobWithCache(hash, null);
+          
           this.debugLog("prefetch:" + hash.substring(0, 8), `response: ${response.status}`);
 
           if (!response.ok) {
@@ -289,40 +337,43 @@ class GritsClient {
             continue;
           }
 
-          let jsonData = await response.json();
+          jsonData = await response.json();
           this.jsonCache.set(hash, {
             data: jsonData,
             lastAccessed: Date.now()
           });
+          this.stats.prefetchSuccesses++;
           this.debugLog("prefetch:" + hash.substring(0, 8), `inserted ${JSON.stringify(jsonData, null, 2)} at ${hash}`);
+        } else {
+          jsonData = this.jsonCache.get(hash).data;
+        }
 
-          this.debugLog("prefetch:" + hash.substring(0, 8), "metadata done");
+        this.debugLog("prefetch:" + hash.substring(0, 8), "metadata done");
 
-          if (jsonData.type == 'dir') {
-            // Do it all over again for the content
+        if (jsonData.type == 'dir' && !this.jsonCache.has(jsonData.content_addr)) {
+          // Do it all over again for the content
 
-            const contentHash = jsonData.content_addr; // Ugh - content_addr, from blob storage
+          const contentHash = jsonData.content_addr; // Ugh - content_addr, from blob storage
 
-            this.debugLog("prefetch:" + contentHash.substring(0, 8), "content fetch");
+          this.debugLog("prefetch:" + contentHash.substring(0, 8), "content fetch");
 
-            response = await fetch(`${this.serverUrl}/grits/v1/blob/${contentHash}`);
-            this.debugLog("prefetch:" + contentHash.substring(0, 8), `response: ${response.status}`);
-  
-            if (!response.ok) {
-              this.debugLog("prefetch:" + contentHash.substring(0, 8), `fail`);
-              continue;
-            }
-  
-            jsonData = await response.json();
-            this.jsonCache.set(contentHash, {
-              data: jsonData,
-              lastAccessed: Date.now()
-            });
-  
-            this.debugLog("prefetch:" + hash.substring(0, 8), `inserted ${JSON.stringify(jsonData, null, 2)} at ${contentHash}`);
+          const response = await this._fetchBlobWithCache(contentHash, null);
+          this.debugLog("prefetch:" + contentHash.substring(0, 8), `response: ${response.status}`);
 
-            this.debugLog("prefetch:" + hash.substring(0, 8), "content done");
+          if (!response.ok) {
+            this.debugLog("prefetch:" + contentHash.substring(0, 8), `fail`);
+            continue;
           }
+
+          jsonData = await response.json();
+          this.jsonCache.set(contentHash, {
+            data: jsonData,
+            lastAccessed: Date.now()
+          });
+          this.stats.prefetchSuccesses++;
+          this.debugLog("prefetch:" + hash.substring(0, 8), `inserted ${JSON.stringify(jsonData, null, 2)} at ${contentHash}`);
+
+          this.debugLog("prefetch:" + hash.substring(0, 8), "content done");
         }
       } catch (error) {
         console.error(`Error prefetching ${hash}: ${error.message}`);
@@ -336,10 +387,6 @@ class GritsClient {
     }
     
     this._isProcessingQueue = false;
-  }
-
-  getServiceWorkerHash() {
-    return this.serviceWorkerHash;
   }
 
   async _getJsonFromHashInstrumented(hash, forceFetch = false) {
@@ -361,11 +408,7 @@ class GritsClient {
 
     this.debugLog("hash:" + hash.substring(0, 8), 'network fetch');
 
-    const url = `${this.serverUrl}/grits/v1/blob/${hash}`;
-    const response = await fetch(url, {
-      method: 'GET',
-      cache: 'default' // Use standard browser caching behavior
-    });
+    const response = await this._fetchBlobWithCache(hash, startTime);
     
     this.debugLog("hash:" + hash.substring(0, 8), 'network fetch done');
 
@@ -393,6 +436,104 @@ class GritsClient {
     // Really means cache or network
     const source = 'network';      
     return [data, source];
+  }
+
+  /////
+  // Blob cache
+
+  async _initializeBlobCache() {
+    try {
+      // Open a dedicated cache for blobs
+      this.blobCache = await caches.open(`grits-blobs-${this.volume}`);
+      this.debugLog("cache", "Blob cache initialized");
+    } catch (error) {
+      console.error("Failed to initialize blob cache:", error);
+      // Fallback - we'll use network requests directly
+      this.blobCache = null;
+    }
+  }
+
+  async _fetchBlobWithCache(hash, startTime) {
+    const url = `${this.serverUrl}/grits/v1/blob/${hash}`;
+    
+    // Check if caching is available
+    if (this.blobCache) {
+      // Try to get from cache first
+      const cachedResponse = await this.blobCache.match(url);
+      if (cachedResponse) {
+        if (startTime) {
+          this.stats.blobCacheHits++;
+          this.stats.timings.blobCacheHits.push(performance.now() - startTime);
+        }
+        this.debugLog("cache:" + hash.substring(0, 8), "Blob cache hit");
+        return cachedResponse;
+      }
+    }
+    
+    // If not in cache or caching unavailable, fetch from network
+    this.debugLog("cache:" + hash.substring(0, 8), "Blob cache miss, fetching from network");
+    const response = await fetch(url);
+    if (startTime) {
+      this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
+      this.stats.blobCacheMisses++;
+    }
+            
+    // Store a clone in the cache for future use (if caching is available)
+    if (this.blobCache && response.ok) {
+      // We need to clone the response because it can only be consumed once
+      const clonedResponse = response.clone();
+      this.blobCache.put(url, clonedResponse).catch(err => {
+        console.error(`Failed to cache blob ${hash}:`, err);
+      });
+    }
+    
+    return response;
+  }
+
+  /////
+  // Performance tracking
+
+  _logStats() {
+    // Calculate averages
+    const calcAvg = arr => arr.length ? 
+      (arr.reduce((sum, val) => sum + val, 0) / arr.length).toFixed(2) : 
+      'N/A';
+    
+    const contentAvg = calcAvg(this.stats.timings.contentLookups);
+    const hitAvg = calcAvg(this.stats.timings.blobCacheHits);
+    const missAvg = calcAvg(this.stats.timings.blobCacheMisses);
+    
+    // Log stats
+    console.log(
+      `%c[GRITS STATS]%c Last 10s: ` + 
+      `Requests: ${this.stats.totalRequests} | ` +
+      `Content lookups: ${this.stats.contentLookups} (avg ${contentAvg}ms) | ` + 
+      `Blob cache hits: ${this.stats.blobCacheHits} (avg ${hitAvg}ms) | ` +
+      `Blob cache misses: ${this.stats.blobCacheMisses} (avg ${missAvg}ms) | ` +
+      `Prefetch successes: ${this.stats.prefetchSuccesses}`,
+      'color: #22c55e; font-weight: bold', 'color: inherit'
+    );
+    
+    // Reset stats for next interval
+    this.stats = {
+      totalRequests: 0,
+      contentLookups: 0,
+      blobCacheHits: 0,
+      blobCacheMisses: 0,
+      prefetchSuccesses: 0,
+      timings: {
+        contentLookups: [],
+        blobCacheHits: [],
+        blobCacheMisses: []
+      }
+    };
+  }
+
+  /////
+  // Misc
+
+  getServiceWorkerHash() {
+    return this.serviceWorkerHash;
   }
 
   _cleanupCaches() {
