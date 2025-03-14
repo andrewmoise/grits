@@ -58,7 +58,6 @@ The big roadmap, more or less, is:
 * First cut of various core pieces and rough testing (done)
 * [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree) basic storage fundamentals (done)
 * FUSE mounting (semi-done, needs work)
-* Reuse some of IPFS instead, refactor, fix and polish (done)
 * Service worker (WIP)
 * Remote mounting (todo)
 * DHT and node-to-node communication (todo)
@@ -66,10 +65,11 @@ The big roadmap, more or less, is:
 * Performance (todo)
 * Production polish and what's needed for real server operation (todo)
 
-Smaller roadmap, sort of immediate big chunks:
-* Make the service worker work
-* Make remote mounts work
-* Make deployments work
+Currently in progress are:
+
+* DHT and node-to-node communication
+* Fixing some FUSE issues
+* Some better efficiencies in the service worker
 
 Minor punch list:
 
