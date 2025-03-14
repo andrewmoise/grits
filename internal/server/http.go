@@ -338,7 +338,7 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 
 	// Set content type based on extension if provided
 	if extension != "" {
-		contentType := s.getContentTypeFromExtension(extension)
+		contentType := getContentTypeFromExtension(extension)
 		if contentType != "" {
 			w.Header().Set("Content-Type", contentType)
 		}
@@ -364,7 +364,7 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 }
 
 // Helper to get content type from extension
-func (s *HTTPModule) getContentTypeFromExtension(ext string) string {
+func getContentTypeFromExtension(ext string) string {
 	// Map of common extensions to MIME types
 	mimeTypes := map[string]string{
 		"html":  "text/html",
@@ -753,6 +753,15 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 		w.WriteHeader(http.StatusNotModified)
 		tracker.End()
 		return
+	}
+
+	// Check if there's an extension
+	if lastDotIndex := strings.LastIndex(path, "."); lastDotIndex != -1 {
+		extension := path[lastDotIndex+1:]
+		contentType := getContentTypeFromExtension(extension)
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
 	}
 
 	if r.Method == http.MethodHead {
