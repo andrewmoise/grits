@@ -168,12 +168,11 @@ class GritsClient {
       }
       
       // Get the directory listing
-      // Ugh - content_addr, from blob storage
-      const [directoryListing, dirSource] = await this._getJsonFromHashInstrumented(metadata.content_addr, false);
+      const [directoryListing, dirSource] = await this._getJsonFromHashInstrumented(metadata.contentHash, false);
       trackJsonSource(dirSource);
       
       if (!directoryListing || !directoryListing[component]) {
-        this.debugLog(path, `  fail: ${component}: not found in ${metadata.content_addr}`);
+        this.debugLog(path, `  fail: ${component}: not found in ${metadata.contentHash}`);
         this.debugLog(path, `    ${JSON.stringify(directoryListing)}`);
         return null; // Component not found in directory
       }
@@ -189,9 +188,8 @@ class GritsClient {
       }
       
       // Continue with this child as the new current node
-      // Ugh - content_addr, from blob storage
       currentMetadataHash = childMetadataHash;
-      currentContentHash = childMetadata.content_addr;
+      currentContentHash = childMetadata.contentHash;
       currentContentSize = childMetadata.size || 0;
   
       // Okay, this is a little weird... we check if we're about to return a bare directory, and if
@@ -269,8 +267,8 @@ class GritsClient {
         // With the new format, the root entry still needs to be identified
         // but the property names have changed
         if (entry.path === "") {
-          this.debugLog("rootHash", `Updating root hash: ${entry.metadata_hash}`);
-          this.rootHash = entry.metadata_hash;
+          this.debugLog("rootHash", `Updating root hash: ${entry.metadataHash}`);
+          this.rootHash = entry.metadataHash;
           this.rootHashTimestamp = Date.now();
         }
       }
@@ -283,9 +281,9 @@ class GritsClient {
       const lastDotIndex = path.lastIndexOf('.');
       const extension = (lastDotIndex > 0) ? path.substring(lastDotIndex + 1) : null;
       
-      // Get the content hash from the last entry's content_hash property
+      // Get the content hash from the last entry's contentHash property
       const lastEntry = pathMetadata[pathMetadata.length-1];
-      const contentHash = lastEntry.content_hash;
+      const contentHash = lastEntry.contentHash;
       this.debugLog(path, `  content hash is ${contentHash}`);
 
       // Pass the extension to _fetchBlobWithCache
@@ -306,7 +304,7 @@ class GritsClient {
   _startMetadataPrefetch(pathMetadata) {
     // Add metadata entries to prefetch queue
     for (const entry of pathMetadata) {
-      const hash = entry.metadata_hash;
+      const hash = entry.metadataHash;
       if (!this._inFlightPrefetches.has(hash)) {
         // Note - we don't check for jsonCache() just in case by some weird chance, the metadata
         // is somehow in jsonCache but not the contents of the dir. If we skip it in that case,
@@ -360,10 +358,10 @@ class GritsClient {
 
         this.debugLog("prefetch:" + hash.substring(0, 8), "metadata done");
 
-        if (jsonData.type == 'dir' && !this.jsonCache.has(jsonData.content_addr)) {
+        if (jsonData.type == 'dir' && !this.jsonCache.has(jsonData.contentHash)) {
           // Do it all over again for the content
 
-          const contentHash = jsonData.content_addr; // Ugh - content_addr, from blob storage
+          const contentHash = jsonData.contentHash;
 
           this.debugLog("prefetch:" + contentHash.substring(0, 8), "content fetch");
 

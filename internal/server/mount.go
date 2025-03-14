@@ -812,7 +812,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 	}
 	defer contentBlob.Release()
 
-	gn.tmpMetadata.ContentAddr = contentBlob.GetAddress().String()
+	gn.tmpMetadata.ContentHash = contentBlob.GetAddress().String()
 	gn.tmpMetadata.Size = contentBlob.GetSize()
 
 	if grits.DebugFuse {

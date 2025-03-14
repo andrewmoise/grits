@@ -12,15 +12,15 @@ type Config struct {
 	ServerDir string `json:"-"`
 
 	// Storage configuration
-	StorageSize         int64 `json:"StorageSize"`
-	StorageFreeSize     int64 `json:"StorageFreeSize"`
-	NamespaceSavePeriod int   `json:"NamespaceSavePeriod"`
-	HardLinkBlobs       bool  `json:"HardLinkBlobs"`
-	ValidateBlobs       bool  `json:"ValidateBlobs"`
-	DelayedEviction     bool  `json:"DelayedEviction"`
+	StorageSize         int64 `json:"storageSize"`
+	StorageFreeSize     int64 `json:"storageFreeSize"`
+	NamespaceSavePeriod int   `json:"namespaceSavePeriod"`
+	HardLinkBlobs       bool  `json:"hardLinkBlobs"`
+	ValidateBlobs       bool  `json:"validateBlobs"`
+	DelayedEviction     bool  `json:"delayedEviction"`
 
 	// Modules and configs for same
-	Modules []json.RawMessage `json:"Modules"`
+	Modules []json.RawMessage `json:"modules"`
 }
 
 // NewConfig creates a new configuration instance with default values.

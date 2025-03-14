@@ -122,7 +122,7 @@ func TestFileOperations(t *testing.T) {
 		}
 
 		// Fetch the actual content
-		contentURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadata.ContentAddr)
+		contentURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadata.ContentHash)
 		contentResp, err := http.Get(contentURL)
 		if err != nil {
 			t.Fatalf("Failed to fetch content for %s: %v", name, err)
@@ -262,7 +262,7 @@ func TestFileOperations(t *testing.T) {
 		metadataResp.Body.Close()
 
 		// Fetch content
-		contentURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadata.ContentAddr)
+		contentURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadata.ContentHash)
 		contentResp, err := http.Get(contentURL)
 		if err != nil {
 			t.Fatalf("Failed to fetch content for %s: %v", name, err)
