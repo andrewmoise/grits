@@ -756,13 +756,13 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 	}
 
 	// Check if there's an extension
-	if lastDotIndex := strings.LastIndex(path, "."); lastDotIndex != -1 {
-		extension := path[lastDotIndex+1:]
-		contentType := getContentTypeFromExtension(extension)
-		if contentType != "" {
-			w.Header().Set("Content-Type", contentType)
-		}
-	}
+	//if lastDotIndex := strings.LastIndex(path, "."); lastDotIndex != -1 {
+	//	extension := path[lastDotIndex+1:]
+	//	contentType := getContentTypeFromExtension(extension)
+	//	if contentType != "" {
+	//		w.Header().Set("Content-Type", contentType)
+	//	}
+	//}
 
 	if r.Method == http.MethodHead {
 		// For HEAD requests, we've already set all needed headers
