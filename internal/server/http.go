@@ -297,14 +297,24 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	tracker := NewPerformanceTracker(r)
 	tracker.Start()
 
-	addrStr := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
-	if addrStr == "" {
+	// Extract the path part after /grits/v1/blob/
+	fullPath := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
+	if fullPath == "" {
 		http.Error(w, "Missing file address", http.StatusBadRequest)
 		tracker.End()
 		return
 	}
 
-	tracker.Step("Parsing blob address")
+	// Split the path to separate hash and extension
+	addrStr := fullPath
+	var extension string
+
+	// Check if there's an extension
+	if lastDotIndex := strings.LastIndex(fullPath, "."); lastDotIndex != -1 {
+		addrStr = fullPath[:lastDotIndex]
+		extension = fullPath[lastDotIndex+1:]
+	}
+
 	// Strip out the size component if present (format: hash-size)
 	if dashIndex := strings.LastIndex(addrStr, "-"); dashIndex != -1 {
 		addrStr = addrStr[:dashIndex]
@@ -317,7 +327,7 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tracker.Step("Reading file from blob store")
+	// Read the file from blob store
 	cachedFile, err := s.Server.BlobStore.ReadFile(fileAddr)
 	if err != nil {
 		http.Error(w, "File not found", http.StatusNotFound)
@@ -326,7 +336,18 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cachedFile.Release()
 
-	tracker.Step("Getting reader")
+	// Set content type based on extension if provided
+	if extension != "" {
+		contentType := s.getContentTypeFromExtension(extension)
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+	}
+
+	// Set content length
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", cachedFile.GetSize()))
+
+	// Get reader and serve
 	reader, err := cachedFile.Reader()
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -335,20 +356,32 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	tracker.Step("Seeking to file start")
-	// Seek to the beginning of the file
-	if _, err := reader.Seek(0, io.SeekStart); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		tracker.End()
-		return
-	}
-
-	tracker.Step("Serving content")
-	// Serve the content directly using the reader
+	// Serve the content
 	http.ServeContent(w, r, filepath.Base(fileAddr.Hash), time.Now(), reader)
 	cachedFile.Touch()
 
 	tracker.End()
+}
+
+// Helper to get content type from extension
+func (s *HTTPModule) getContentTypeFromExtension(ext string) string {
+	// Map of common extensions to MIME types
+	mimeTypes := map[string]string{
+		"html":  "text/html",
+		"css":   "text/css",
+		"js":    "application/javascript",
+		"json":  "application/json",
+		"png":   "image/png",
+		"jpg":   "image/jpeg",
+		"jpeg":  "image/jpeg",
+		"svg":   "image/svg+xml",
+		"woff":  "font/woff",
+		"woff2": "font/woff2",
+		"ttf":   "font/ttf",
+		"eot":   "application/vnd.ms-fontobject",
+	}
+
+	return mimeTypes[strings.ToLower(ext)]
 }
 
 // validateFileContents opens the file, computes its SHA-256 hash and size,

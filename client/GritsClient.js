@@ -98,15 +98,21 @@ class GritsClient {
     this.debugLog(path, "  try fast path");
     const pathInfo = await this._tryFastPathLookup(normalizedPath);
     if (pathInfo && pathInfo.contentHash) {
-      this.debugLog(path, "  succeed (metadata at least)");
-      // Use our caching blob fetcher instead of direct fetch
-      const response = await this._fetchBlobWithCache(pathInfo.contentHash, startTime);
-      result = this._wrappedResponse(path, response, pathInfo.contentSize);
+        this.debugLog(path, "  succeed (metadata at least)");
+        // Extract extension from path
+        const lastDotIndex = path.lastIndexOf('.');
+        const extension = (lastDotIndex > 0) ? path.substring(lastDotIndex + 1) : null;
+
+        // Find the blob (hopefully it's in the cache, but if not is fine)
+        const response = await this._fetchBlobWithCache(pathInfo.contentHash, startTime, extension);
+        
+        // Return response directly without wrapping
+        result = response;
     } else {
-      // Content lookup path
-      this.stats.contentLookups++;
-      result = await this._hardFetchContent(normalizedPath, startTime);
-      this.stats.timings.contentLookups.push(performance.now() - startTime);
+        // Content lookup path
+        this.stats.contentLookups++;
+        result = await this._hardFetchContent(normalizedPath, startTime);
+        this.stats.timings.contentLookups.push(performance.now() - startTime);
     }
 
     this.debugLog(path, "  all done");
@@ -273,15 +279,19 @@ class GritsClient {
       this.debugLog(path, `Starting prefetch: ${JSON.stringify(pathMetadata, null, 2)}`);
       this._startMetadataPrefetch(pathMetadata);
 
+      // Extract extension from path
+      const lastDotIndex = path.lastIndexOf('.');
+      const extension = (lastDotIndex > 0) ? path.substring(lastDotIndex + 1) : null;
+      
       // Get the content hash from the last entry's content_hash property
       const lastEntry = pathMetadata[pathMetadata.length-1];
-      const contentHash = lastEntry.content_hash; // Ugh - content_hash, from lookup endpoint
+      const contentHash = lastEntry.content_hash;
       this.debugLog(path, `  content hash is ${contentHash}`);
 
-      const contentResponse = await this._fetchBlobWithCache(contentHash, startTime);
-
-      return this._wrappedResponse(path, contentResponse);
-
+      // Pass the extension to _fetchBlobWithCache
+      const contentResponse = await this._fetchBlobWithCache(contentHash, startTime, extension);
+      
+      return contentResponse;
     } catch (error) {
       console.error(`Error during metadata fetch for ${path}:`, error);
       throw error;
@@ -453,38 +463,42 @@ class GritsClient {
     }
   }
 
-  async _fetchBlobWithCache(hash, startTime) {
-    const url = `${this.serverUrl}/grits/v1/blob/${hash}`;
+  async _fetchBlobWithCache(hash, startTime = null, extension = null) {
+    // Construct URL with extension if provided
+    let url = `${this.serverUrl}/grits/v1/blob/${hash}`;
+    if (extension) {
+        url += `.${extension}`;
+    }
     
     // Check if caching is available
     if (this.blobCache) {
-      // Try to get from cache first
-      const cachedResponse = await this.blobCache.match(url);
-      if (cachedResponse) {
-        if (startTime) {
-          this.stats.blobCacheHits++;
-          this.stats.timings.blobCacheHits.push(performance.now() - startTime);
+        // Try to get from cache first
+        const cachedResponse = await this.blobCache.match(url);
+        if (cachedResponse) {
+            if (startTime) {
+                this.stats.blobCacheHits++;
+                this.stats.timings.blobCacheHits.push(performance.now() - startTime);
+            }
+            this.debugLog("cache:" + hash.substring(0, 8), "Blob cache hit");
+            return cachedResponse;
         }
-        this.debugLog("cache:" + hash.substring(0, 8), "Blob cache hit");
-        return cachedResponse;
-      }
     }
     
     // If not in cache or caching unavailable, fetch from network
     this.debugLog("cache:" + hash.substring(0, 8), "Blob cache miss, fetching from network");
     const response = await fetch(url);
     if (startTime) {
-      this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
-      this.stats.blobCacheMisses++;
+        this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
+        this.stats.blobCacheMisses++;
     }
             
     // Store a clone in the cache for future use (if caching is available)
     if (this.blobCache && response.ok) {
-      // We need to clone the response because it can only be consumed once
-      const clonedResponse = response.clone();
-      this.blobCache.put(url, clonedResponse).catch(err => {
-        console.error(`Failed to cache blob ${hash}:`, err);
-      });
+        // We need to clone the response because it can only be consumed once
+        const clonedResponse = response.clone();
+        this.blobCache.put(url, clonedResponse).catch(err => {
+            console.error(`Failed to cache blob ${hash}:`, err);
+        });
     }
     
     return response;
@@ -547,62 +561,10 @@ class GritsClient {
       }
     }
   }
-  
-  _wrappedResponse(path, response, contentSize = null) {
-    // Create a fresh set of headers with only what we want to expose
-    const headers = new Headers();
-    
-    // Set content type based on file extension
-    const contentType = this._guessContentType(path);
-    if (contentType) {
-      headers.set('Content-Type', contentType);
-    }
-    
-    // Set cache control headers
-    headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    headers.set('Pragma', 'no-cache');
-    headers.set('Expires', '0');
-    
-    // Add Content-Length if we know the size
-    // TODO
-    if (contentSize !== null) {
-      headers.set('Content-Length', String(contentSize));
-    }
-    
-    // Create a new response with our curated headers but original body
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: headers
-    });
-  }
-
-  // Helper to guess content type from hash or path
-  _guessContentType(path) {
-    // Common MIME types map
-    const mimeTypes = {
-      'html': 'text/html',
-      'css': 'text/css',
-      'js': 'application/javascript',
-      'json': 'application/json',
-      'png': 'image/png',
-      'jpg': 'image/jpeg',
-      'jpeg': 'image/jpeg',
-      'svg': 'image/svg+xml',
-      'woff': 'font/woff',
-      'woff2': 'font/woff2',
-      'ttf': 'font/ttf',
-      'eot': 'application/vnd.ms-fontobject'
-    };
-    
-    const ext = path.split('.').pop().toLowerCase();
-    return ext && mimeTypes[ext] ? mimeTypes[ext] : null;
-  }
 
   _normalizePath(path) {
     return path.replace(/^\/+|\/+$/g, '');
   }
-
 
   /**
    * Debug logger function that prints timestamps with path information
