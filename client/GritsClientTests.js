@@ -70,10 +70,10 @@ class GritsClientTests {
       rootMetadata
     );
     
-    // Check if content_addr exists
+    // Check if contentHash exists
     this._assert(
-      'Root should have content address',
-      !!rootMetadata.content_addr,
+      'Root should have content hash',
+      !!rootMetadata.contentHash,
       rootMetadata
     );
   }

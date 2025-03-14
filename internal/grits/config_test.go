@@ -17,11 +17,11 @@ func TestCoreConfig_LoadFromFile(t *testing.T) {
 	// JSON content for the core configuration test
 	jsonContent := `
 {
-    "StorageSize": 154857600,
-    "StorageFreeSize": 53886080,
-    "NamespaceSavePeriod": 30,
-    "HardLinkBlobs": false,
-    "ValidateBlobs": true
+    "storageSize": 154857600,
+    "storageFreeSize": 53886080,
+    "namespaceSavePeriod": 30,
+    "hardLinkBlobs": false,
+    "validateBlobs": true
 }
     `
 

@@ -419,12 +419,12 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 // Helper to find a FileNode by its content blob address
-func (ns *NameStore) lookupNodeByContent(contentAddr string) FileNode {
+func (ns *NameStore) lookupNodeByContent(contentHash string) FileNode {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
 	for _, node := range ns.fileCache {
-		if node != nil && node.ExportedBlob().GetAddress().String() == contentAddr {
+		if node != nil && node.ExportedBlob().GetAddress().String() == contentHash {
 			return node
 		}
 	}

@@ -94,7 +94,7 @@ func (t *GNodeType) UnmarshalJSON(data []byte) error {
 type GNodeMetadata struct {
 	Type        GNodeType `json:"type"`
 	Size        int64     `json:"size"`
-	ContentAddr string    `json:"content_addr"`
+	ContentHash string    `json:"contentHash"`
 	Mode        uint32    `json:"mode,omitempty"`      // File mode (permissions)
 	Timestamp   string    `json:"timestamp,omitempty"` // Last modification time (UTC ISO format)
 }
@@ -1058,13 +1058,13 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 		metadata = GNodeMetadata{
 			Type:        GNodeTypeFile,
 			Size:        addr.Size,
-			ContentAddr: addr.BlobAddr.String(),
+			ContentHash: addr.BlobAddr.String(),
 		}
 	} else {
 		metadata = GNodeMetadata{
 			Type:        GNodeTypeDirectory,
 			Size:        addr.Size,
-			ContentAddr: addr.BlobAddr.String(),
+			ContentHash: addr.BlobAddr.String(),
 		}
 	}
 
@@ -1115,14 +1115,14 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 	}
 
 	// Load the content blob
-	contentAddr := NewBlobAddr(metadata.ContentAddr)
-	contentCf, err := ns.BlobStore.ReadFile(contentAddr)
+	contentHash := NewBlobAddr(metadata.ContentHash)
+	contentCf, err := ns.BlobStore.ReadFile(contentHash)
 	if err != nil {
 		metadataCf.Release()
 		return nil, fmt.Errorf("error reading content: %v", err)
 	}
 
-	//log.Printf("We got it. The content addr is %s\n", contentAddr.String())
+	//log.Printf("We got it. The content addr is %s\n", contentHash.String())
 
 	if metadata.Type == GNodeTypeFile {
 		bn := &BlobNode{
@@ -1170,7 +1170,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 			return nil, fmt.Errorf("error reading directory data: %v", err)
 		}
 
-		//log.Printf("We check contents of %s: %s\n", contentAddr.String(), string(dirData))
+		//log.Printf("We check contents of %s: %s\n", contentHash.String(), string(dirData))
 
 		dirMap := make(map[string]string)
 		if err := json.Unmarshal(dirData, &dirMap); err != nil {
@@ -1196,15 +1196,15 @@ func CreateTimestamp() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
 
-func (ns *NameStore) CreateMetadataBlob(contentAddr *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
+func (ns *NameStore) CreateMetadataBlob(contentHash *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	return ns.createMetadataBlob(contentAddr, size, isDir, mode)
+	return ns.createMetadataBlob(contentHash, size, isDir, mode)
 }
 
 // Create a metadata node with proper mode and timestamps
-func (ns *NameStore) createMetadataBlob(contentAddr *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
+func (ns *NameStore) createMetadataBlob(contentHash *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
 	// If mode is 0, set default modes
 	if mode == 0 {
 		if isDir {
@@ -1221,7 +1221,7 @@ func (ns *NameStore) createMetadataBlob(contentAddr *BlobAddr, size int64, isDir
 		metadata = GNodeMetadata{
 			Type:        GNodeTypeDirectory,
 			Size:        size,
-			ContentAddr: contentAddr.String(),
+			ContentHash: contentHash.String(),
 			Mode:        mode,
 			Timestamp:   timestamp,
 		}
@@ -1229,7 +1229,7 @@ func (ns *NameStore) createMetadataBlob(contentAddr *BlobAddr, size int64, isDir
 		metadata = GNodeMetadata{
 			Type:        GNodeTypeFile,
 			Size:        size,
-			ContentAddr: contentAddr.String(),
+			ContentHash: contentHash.String(),
 			Mode:        mode,
 			Timestamp:   timestamp,
 		}

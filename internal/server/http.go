@@ -18,11 +18,11 @@ import (
 )
 
 type HTTPModuleConfig struct {
-	ThisHost string `json:"ThisHost"`
-	ThisPort int    `json:"ThisPort"`
+	ThisHost string `json:"thisHost"`
+	ThisPort int    `json:"thisPort"`
 
-	EnableTls bool  `json:"EnableTLS,omitempty"`
-	ReadOnly  *bool `json:"ReadOnly,omitempty"`
+	EnableTls bool  `json:"enableTLS,omitempty"`
+	ReadOnly  *bool `json:"readOnly,omitempty"`
 }
 
 type HTTPModule struct {
@@ -724,10 +724,10 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 		}
 
 		pathMetadata = append(pathMetadata, map[string]any{
-			"path":          pathComponent,
-			"metadata_hash": pathNode.Node.MetadataBlob().GetAddress().Hash,
-			"content_hash":  pathNode.Node.ExportedBlob().GetAddress().Hash,
-			"content_size":  pathNode.Node.ExportedBlob().GetSize(),
+			"path":         pathComponent,
+			"metadataHash": pathNode.Node.MetadataBlob().GetAddress().Hash,
+			"contentHash":  pathNode.Node.ExportedBlob().GetAddress().Hash,
+			"contentSize":  pathNode.Node.ExportedBlob().GetSize(),
 		})
 	}
 
