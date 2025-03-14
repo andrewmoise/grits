@@ -7,11 +7,9 @@ require (
 	github.com/mr-tron/base58 v1.2.0
 	github.com/multiformats/go-multihash v0.2.3
 	github.com/quic-go/quic-go v0.42.0
-	github.com/tebeka/selenium v0.9.9
 )
 
 require (
-	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-task/slim-sprig v0.0.0-20230315185526-52ccab3ef572 // indirect
 	github.com/google/pprof v0.0.0-20240207164012-fb44976bdcd5 // indirect
