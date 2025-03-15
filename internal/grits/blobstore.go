@@ -68,7 +68,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 
 			blobAddr, err := NewBlobAddrFromString(relativePath)
 			if err != nil {
-				log.Printf("File %s seems not to be a blob %s != %s. Skipping...\n", path, relativePath, blobAddr.String())
+				log.Printf("File %s seems not to be a blob. Skipping...\n", path)
 				return nil
 			}
 
