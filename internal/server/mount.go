@@ -178,13 +178,6 @@ func (mm *MountModule) removeDirtyNode(path string) {
 	}
 }
 
-// Check if a path exists in the dirty nodes map
-func (mm *MountModule) getDirtyNode(path string) *gritsNode {
-	mm.dirtyNodesMtx.RLock()
-	defer mm.dirtyNodesMtx.RUnlock()
-	return mm.dirtyNodesMap[path]
-}
-
 /////
 // Inode management
 
