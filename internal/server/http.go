@@ -564,7 +564,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Perform link
-		fmt.Printf("Perform link: %s to %s\n", linkData.Path, addr.String())
+		log.Printf("Perform link: %s to %s\n", linkData.Path, addr.String())
 		if err := volume.Link(linkData.Path, addr); err != nil {
 			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 			return
