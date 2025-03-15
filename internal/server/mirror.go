@@ -1,8 +1,11 @@
 package server
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"grits/internal/grits"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -22,11 +25,11 @@ import (
 // Endpoints
 //
 // Served by origin module:
-// grits/v1/origin/register - For mirrors to register themselves
-// grits/v1/origin/heartbeat - For mirrors to maintain their active status
-// grits/v1/origin/list - For clients to get the list of available mirrors
+// grits/v1/origin/register-mirror - For mirrors to maintain their active status
+// grits/v1/origin/unregister-mirror - If a mirror knows it's going offline
+// grits/v1/origin/list-mirrors - For clients to get the list of available mirrors
 //
-// grits/v1/origin/telemetry - (future) For clients to submit connection stats from mirrors
+// grits/v1/origin/submit-telemetry - (future) For clients to submit connection stats from mirrors
 
 // Served by tracker module:
 //
@@ -35,13 +38,14 @@ import (
 
 // MirrorModuleConfig defines configuration for mirror functionality
 type MirrorModuleConfig struct {
-	RemoteHost   string `json:"remoteHost"`
-	RemoteVolume string `json:"remoteVolume"`
-	MaxStorageMB int    `json:"maxStorageMB,omitempty"`
-	Protocol     string `json:"protocol,omitempty"` // Protocol to use (http/https)
+	RemoteHost    string `json:"remoteHost"`
+	RemoteVolume  string `json:"remoteVolume"`
+	MaxStorageMB  int    `json:"maxStorageMB,omitempty"`
+	Protocol      string `json:"protocol,omitempty"` // Protocol to use (http/https)
+	LocalHostname string `json:"localHostname"`      // Hostname of this mirror server
 }
 
-// MirrorModule implements mirror functionality for a swarm
+// MirrorModule implements mirror functionality for a remote volume
 type MirrorModule struct {
 	Config *MirrorModuleConfig
 	Server *Server
@@ -52,9 +56,8 @@ type MirrorModule struct {
 	// For periodic heartbeat
 	heartbeatTicker *time.Ticker
 	stopCh          chan struct{}
-
-	// HTTP mux for handling requests
-	mux *http.ServeMux
+	stoppedCh       chan struct{} // Signal when goroutine has stopped
+	running         bool          // Track running state
 }
 
 // NewMirrorModule creates a new MirrorModule instance
@@ -74,12 +77,11 @@ func NewMirrorModule(server *Server, config *MirrorModuleConfig) (*MirrorModule,
 		maxSizeBytes = 1 * 1024 * 1024 * 1024
 	}
 
-	// Create the mirror module
 	mm := &MirrorModule{
-		Config: config,
-		Server: server,
-		stopCh: make(chan struct{}),
-		mux:    http.NewServeMux(),
+		Config:    config,
+		Server:    server,
+		stopCh:    make(chan struct{}),
+		stoppedCh: make(chan struct{}),
 	}
 
 	// Create a blob cache with a fetch function that retrieves from the upstream
@@ -88,6 +90,13 @@ func NewMirrorModule(server *Server, config *MirrorModuleConfig) (*MirrorModule,
 		maxSizeBytes,
 		mm.fetchBlobFromUpstream, // Function to fetch blobs from upstream
 	)
+
+	// Web requests are handled via the http module. Mirror requests are normal blob requests,
+	// so they can still be cached the same as any other request for that same blob
+	// from whatever source. The HTTP module blob handler sees a special header, though, finds
+	// us in its list of mirrors, than asks our blob cache directly for the blob. If our
+	// blob cache doesn't have it, it dispatches to fetchBlobFromUpstream() down below, which
+	// actually makes the request.
 
 	return mm, nil
 }
@@ -105,13 +114,25 @@ func (mm *MirrorModule) Start() error {
 
 // Stop halts the mirror module operations
 func (mm *MirrorModule) Stop() error {
+	if !mm.running {
+		return nil // Already stopped
+	}
+
 	log.Printf("Stopping MirrorModule")
 
 	if mm.heartbeatTicker != nil {
 		mm.heartbeatTicker.Stop()
 	}
 
+	// Send stop signal to goroutine
 	close(mm.stopCh)
+
+	// Wait for confirmation that the goroutine has exited
+	<-mm.stoppedCh
+
+	mm.running = false
+	log.Printf("Mirror module stopped")
+
 	return nil
 }
 
@@ -121,6 +142,8 @@ func (mm *MirrorModule) GetModuleName() string {
 
 // heartbeatLoop sends periodic heartbeats to the upstream server
 func (mm *MirrorModule) heartbeatLoop() {
+	defer close(mm.stoppedCh) // Signal that the goroutine has stopped
+
 	for {
 		select {
 		case <-mm.heartbeatTicker.C:
@@ -129,14 +152,66 @@ func (mm *MirrorModule) heartbeatLoop() {
 				log.Printf("Error sending heartbeat: %v", err)
 			}
 		case <-mm.stopCh:
-			return
+			return // Exit when stop signal received
 		}
 	}
 }
 
 // sendHeartbeat sends a heartbeat to the upstream server
+// sendHeartbeat registers with the origin server
 func (mm *MirrorModule) sendHeartbeat() error {
-	// TODO: Implement heartbeat logic
+	// Construct the registration URL
+	registrationURL := fmt.Sprintf("%s://%s/grits/v1/origin/register-mirror",
+		mm.Config.Protocol, mm.Config.RemoteHost)
+
+	// Create request payload with our hostname
+	payload := struct {
+		Hostname string `json:"hostname"`
+	}{
+		Hostname: mm.Config.LocalHostname,
+	}
+
+	// Convert payload to JSON
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal registration payload: %v", err)
+	}
+
+	// Send the registration request
+	resp, err := http.Post(registrationURL, "application/json", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return fmt.Errorf("failed to send registration to origin: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("origin server rejected registration: status=%d, body=%s",
+			resp.StatusCode, string(bodyBytes))
+	}
+
+	// Parse response to get the heartbeat interval
+	var response struct {
+		HeartbeatIntervalSecs int `json:"heartbeatIntervalSecs"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		// If we can't parse the response, use a default interval
+		log.Printf("Warning: couldn't parse heartbeat interval from response: %v", err)
+		return nil // Still consider registration successful
+	}
+
+	// If we got a valid interval, update our timer to 90% of the server's interval
+	if response.HeartbeatIntervalSecs > 0 {
+		newInterval := time.Duration(response.HeartbeatIntervalSecs) * time.Second * 9 / 10
+		if mm.heartbeatTicker != nil {
+			mm.heartbeatTicker.Reset(newInterval)
+		}
+		log.Printf("Updated heartbeat interval to %v (90%% of server's %ds)",
+			newInterval, response.HeartbeatIntervalSecs)
+	}
+
 	return nil
 }
 
