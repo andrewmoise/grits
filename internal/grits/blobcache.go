@@ -57,11 +57,18 @@ func NewBlobCache(blobStore *LocalBlobStore, maxSize int64, fetchFunc FetchBlobF
 
 // Get retrieves a blob from the cache, fetching it if necessary
 func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
+	if DebugBlobCache {
+		log.Printf("Blob cache get request for %s", addr.Hash)
+	}
+
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
 	// First check if it's in the cache
 	if entry, exists := c.cachedBlobs[addr.Hash]; exists {
+		if DebugBlobCache {
+			log.Printf("Found in cache")
+		}
 		entry.file.Take()
 		entry.lastAccessed = time.Now()
 		return entry.file, nil
@@ -69,6 +76,10 @@ func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
 
 	// If not, check if it's already in the blob store
 	if cachedFile, err := c.blobStore.ReadFile(addr); err == nil {
+		if DebugBlobCache {
+			log.Printf("Found in local blob store")
+		}
+
 		entry := &CacheEntry{
 			file:         cachedFile,
 			lastAccessed: time.Now(),
@@ -80,6 +91,10 @@ func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
 
 	// If not, check if we're already fetching it (FIXME -- this is better at the blob store layer, I guess)
 	if req, fetching := c.inFlight[addr.Hash]; fetching {
+		if DebugBlobCache {
+			log.Printf("Request already in flight")
+		}
+
 		// Wait until the in-flight request completes
 		req.cond.Wait()
 		if req.err != nil {
@@ -98,6 +113,9 @@ func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
 
 	// Temporarily unlock while fetching
 	c.mutex.Unlock()
+	if DebugBlobCache {
+		log.Printf("Not found, fetching")
+	}
 	file, err := c.fetchAndCache(addr)
 	c.mutex.Lock()
 
