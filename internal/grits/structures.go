@@ -177,6 +177,7 @@ var DebugFileCache = false          // Debug NameStore file cache
 var DebugLinks = false              // Debug calls to Link()
 var DebugFuse = false               // Debug FUSE mounting
 var DebugHttpPerformance = false    // Debug HTTP module performance
+var DebugBlobCache = false          // Debug pass-through LRU blob cache
 
 func PrintStack() {
 	// Get stack trace info
