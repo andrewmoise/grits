@@ -1464,14 +1464,14 @@ func (ns *NameStore) PrintBlobStorageDebugging() error {
 	// Map to track which blobs we've seen
 	seenBlobs := make(map[string]bool)
 
-	fmt.Println("=== Reference Count Debugging ===")
-	fmt.Println("Root node:", ns.GetRoot())
+	log.Println("=== Reference Count Debugging ===")
+	log.Println("Root node:", ns.GetRoot())
 
 	// Start recursive walk from root
 	ns.debugRefCountsWalk("", ns.root, seenBlobs)
 
 	// Now check for orphaned blobs
-	fmt.Println("\n=== Orphaned Blobs ===")
+	log.Println("\n=== Orphaned Blobs ===")
 
 	// Get all blobs from BlobStore
 	if localBS, ok := ns.BlobStore.(*LocalBlobStore); ok {
@@ -1491,34 +1491,34 @@ func (ns *NameStore) PrintBlobStorageDebugging() error {
 				}
 
 				if true || VerboseDebugBlobStorage {
-					fmt.Printf("Orphaned blob: %s\n", hash)
-					fmt.Printf("  Size: %d bytes\n", file.Size)
-					fmt.Printf("  RefCount: %d\n", file.RefCount)
-					fmt.Printf("  Path: %s\n", file.Path)
+					log.Printf("Orphaned blob: %s\n", hash)
+					log.Printf("  Size: %d bytes\n", file.Size)
+					log.Printf("  RefCount: %d\n", file.RefCount)
+					log.Printf("  Path: %s\n", file.Path)
 
 					// For small blobs, print content for debugging
 					if file.Size <= 200 {
 						data, err := file.Read(0, file.Size)
 						if err != nil {
-							fmt.Printf("  Contents: <error reading: %v>\n", err)
+							log.Printf("  Contents: <error reading: %v>\n", err)
 						} else {
-							fmt.Printf("  Contents: %s\n", string(data))
+							log.Printf("  Contents: %s\n", string(data))
 						}
 					}
-					fmt.Println()
+					log.Println()
 				}
 			}
 		}
 
 		if orphanCount >= maxOrphans {
-			fmt.Printf("  (%d orphans not shown)", orphanCount-maxOrphans+1)
+			log.Printf("  (%d orphans not shown)", orphanCount-maxOrphans+1)
 		}
-		fmt.Printf("Total orphaned blobs: %d (%.2f MB)\n", orphanCount, float64(totalSize)/1024/1024)
+		log.Printf("Total orphaned blobs: %d (%.2f MB)\n", orphanCount, float64(totalSize)/1024/1024)
 	} else {
-		fmt.Println("BlobStore is not a LocalBlobStore, cannot check for orphaned blobs")
+		log.Println("BlobStore is not a LocalBlobStore, cannot check for orphaned blobs")
 	}
 
-	fmt.Println("=== End Reference Count Debugging ===")
+	log.Println("=== End Reference Count Debugging ===")
 
 	return nil
 }
@@ -1585,7 +1585,7 @@ func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs ma
 			childAddr := children[childName]
 			childNode, err := ns.loadFileNode(childAddr, false)
 			if err != nil {
-				fmt.Printf("  ERROR loading child %s: %v\n", childName, err)
+				log.Printf("  ERROR loading child %s: %v\n", childName, err)
 				continue
 			}
 
@@ -1605,23 +1605,23 @@ func (ns *NameStore) DebugDumpNamespace() {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
-	fmt.Println("=== NAMESPACE DUMP ===")
-	fmt.Printf("Root node: %s (%p)\n\n", ns.GetRoot(), ns.root)
+	log.Println("=== NAMESPACE DUMP ===")
+	log.Printf("Root node: %s (%p)\n\n", ns.GetRoot(), ns.root)
 
 	if ns.root == nil {
-		fmt.Println("Root is nil, nothing to dump")
+		log.Println("Root is nil, nothing to dump")
 		return
 	}
 
 	// Start recursive DFS from the root
 	ns.debugDumpNode("", ns.root)
 
-	fmt.Println("=== END NAMESPACE DUMP ===")
+	log.Println("=== END NAMESPACE DUMP ===")
 }
 
 func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 	if node == nil {
-		fmt.Printf("%s: <nil>\n", path)
+		log.Printf("%s: <nil>\n", path)
 		return
 	}
 
@@ -1630,9 +1630,9 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 	metadataBlob := node.MetadataBlob()
 
 	// Print node details
-	fmt.Printf("%s\n", path)
-	fmt.Printf("  Memory address: %p\n", node)
-	fmt.Printf("  Node type: %T\n", node)
+	log.Printf("%s\n", path)
+	log.Printf("  Memory address: %p\n", node)
+	log.Printf("  Node type: %T\n", node)
 
 	// Print reference counts
 	nodeRefCount := node.RefCount()
@@ -1641,15 +1641,15 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 		rootPinRefCount = ns.rootPin.refCount[metadataHash]
 	}
 
-	fmt.Printf("  Reference count: %d (object) / %d (rootPin)\n", nodeRefCount, rootPinRefCount)
+	log.Printf("  Reference count: %d (object) / %d (rootPin)\n", nodeRefCount, rootPinRefCount)
 
 	// Print blob hashes
-	fmt.Printf("  Content blob hash: %s\n", contentBlob.GetAddress().String())
-	fmt.Printf("  Metadata blob hash: %s\n", metadataBlob.GetAddress().String())
+	log.Printf("  Content blob hash: %s\n", contentBlob.GetAddress().String())
+	log.Printf("  Metadata blob hash: %s\n", metadataBlob.GetAddress().String())
 
 	// For TreeNodes, print child count
 	if children := node.Children(); children != nil {
-		fmt.Printf("  Child count: %d\n", len(children))
+		log.Printf("  Child count: %d\n", len(children))
 
 		// Sort children names for consistent output
 		names := make([]string, 0, len(children))
@@ -1660,9 +1660,9 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 
 		// Print child names
 		if len(names) > 0 {
-			fmt.Println("  Children:")
+			log.Println("  Children:")
 			for _, childName := range names {
-				fmt.Printf("  - %s\n", childName)
+				log.Printf("  - %s\n", childName)
 			}
 		}
 
@@ -1671,7 +1671,7 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 			childAddr := children[childName]
 			childNode, err := ns.loadFileNode(childAddr, false)
 			if err != nil {
-				fmt.Printf("  ERROR loading child %s: %v\n", childName, err)
+				log.Printf("  ERROR loading child %s: %v\n", childName, err)
 				continue
 			}
 
@@ -1689,12 +1689,12 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 		if contentBlob.GetSize() <= 200 {
 			data, err := contentBlob.Read(0, contentBlob.GetSize())
 			if err != nil {
-				fmt.Printf("  Content preview: <error reading: %v>\n", err)
+				log.Printf("  Content preview: <error reading: %v>\n", err)
 			} else {
-				fmt.Printf("  Content preview: %s\n", string(data))
+				log.Printf("  Content preview: %s\n", string(data))
 			}
 		} else {
-			fmt.Printf("  Content too large to preview (%d bytes)\n", contentBlob.GetSize())
+			log.Printf("  Content too large to preview (%d bytes)\n", contentBlob.GetSize())
 		}
 	}
 }

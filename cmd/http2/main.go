@@ -55,6 +55,6 @@ func main() {
 
 	<-signals
 
-	fmt.Println("Shutting down server...")
+	log.Println("Shutting down server...")
 	srv.Stop()
 }
