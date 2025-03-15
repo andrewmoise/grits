@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -34,6 +33,7 @@ type HTTPModule struct {
 
 	deployments         []*DeploymentModule
 	serviceWorkerModule *ServiceWorkerModule
+	mirrors             map[string]*MirrorModule // key is "volume@hostname"
 }
 
 func (*HTTPModule) GetModuleName() string {
@@ -72,6 +72,7 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 		Mux:        mux,
 
 		deployments: make([]*DeploymentModule, 0),
+		mirrors:     make(map[string]*MirrorModule, 0),
 	}
 
 	// Set up routes within the constructor or an initialization method
@@ -79,6 +80,7 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 
 	server.AddModuleHook(httpModule.addDeploymentModule)
 	server.AddModuleHook(httpModule.addServiceWorkerModule)
+	server.AddModuleHook(httpModule.addMirrorModule)
 
 	return httpModule
 }
@@ -150,6 +152,16 @@ func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 	hm.Mux.HandleFunc("/grits-bootstrap.js", hm.corsMiddleware(swModule.serveTemplate))
 	hm.Mux.HandleFunc("/grits-serviceworker.js", hm.corsMiddleware(swModule.serveTemplate))
 	hm.Mux.HandleFunc("/grits-serviceworker-config.json", hm.corsMiddleware(swModule.serveConfig))
+}
+
+func (hm *HTTPModule) addMirrorModule(module Module) {
+	mirror, ok := module.(*MirrorModule)
+	if !ok {
+		return
+	}
+
+	key := fmt.Sprintf("%s@%s", mirror.Config.RemoteVolume, mirror.Config.RemoteHost)
+	hm.mirrors[key] = mirror
 }
 
 // corsMiddleware is a middleware function that adds CORS headers to the response.
@@ -296,12 +308,12 @@ func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	tracker := NewPerformanceTracker(r)
 	tracker.Start()
+	defer tracker.End()
 
 	// Extract the path part after /grits/v1/blob/
 	fullPath := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
 	if fullPath == "" {
 		http.Error(w, "Missing file address", http.StatusBadRequest)
-		tracker.End()
 		return
 	}
 
@@ -323,16 +335,32 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	fileAddr, err := grits.NewBlobAddrFromString(addrStr)
 	if err != nil {
 		http.Error(w, "Invalid file address format", http.StatusBadRequest)
-		tracker.End()
 		return
 	}
 
-	// Read the file from blob store
-	cachedFile, err := s.Server.BlobStore.ReadFile(fileAddr)
-	if err != nil {
-		http.Error(w, "File not found", http.StatusNotFound)
-		tracker.End()
-		return
+	var cachedFile grits.CachedFile
+
+	mirrorSpec := r.Header.Get("X-Grits-Mirror-Origin")
+	if mirrorSpec != "" {
+		// We're loading from a mirror via blob cache
+		mirror, exists := s.mirrors[mirrorSpec]
+		if !exists {
+			http.Error(w, fmt.Sprintf("Can't find %s mirror", mirrorSpec), http.StatusInternalServerError)
+			return
+		}
+
+		cachedFile, err = mirror.blobCache.Get(fileAddr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Can't find %s in mirror of %s", fileAddr, mirrorSpec), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// No mirror, just get it from the local store
+		cachedFile, err = s.Server.BlobStore.ReadFile(fileAddr)
+		if err != nil {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
 	}
 	defer cachedFile.Release()
 
@@ -351,7 +379,6 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	reader, err := cachedFile.Reader()
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		tracker.End()
 		return
 	}
 	defer reader.Close()
@@ -359,8 +386,6 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	// Serve the content
 	http.ServeContent(w, r, filepath.Base(fileAddr.Hash), time.Now(), reader)
 	cachedFile.Touch()
-
-	tracker.End()
 }
 
 // Helper to get content type from extension

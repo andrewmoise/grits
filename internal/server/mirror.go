@@ -1,119 +1,178 @@
 package server
 
 import (
+	"fmt"
+	"grits/internal/grits"
 	"log"
 	"net/http"
 	"time"
 )
 
-// MirrorModuleConfig defines configuration for the mirror
+// Overall module design:
+//
+// For now:
+// origin - Can replicate content to mirrors
+// mirror - Can serve content from origins
+
+// Future:
+// tracker - Can accept connections from peers and set them up as first-class citizens
+// peer - Can identify this server to a tracker, and take part in the network without preexisting DNS
+// host - We can separate a bunch of the http endpoints aside from blob/ into a separate optional module
+
+// Endpoints
+//
+// Served by origin module:
+// grits/v1/origin/register - For mirrors to register themselves
+// grits/v1/origin/heartbeat - For mirrors to maintain their active status
+// grits/v1/origin/list - For clients to get the list of available mirrors
+//
+// grits/v1/origin/telemetry - (future) For clients to submit connection stats from mirrors
+
+// Served by tracker module:
+//
+// grits/v1/peer/register - For peers to authenticate to
+// grits/v1/peer/heartbeat
+
+// MirrorModuleConfig defines configuration for mirror functionality
 type MirrorModuleConfig struct {
-	// HubEndpoint is the URL of the hub to connect to
-	HubEndpoint string `json:"hubEndpoint"`
-
-	// Volume is the name of the volume to mirror
-	Volume string `json:"volume"`
-
-	// MirrorID is the unique identifier for this mirror
-	MirrorID string `json:"mirrorID"`
-
-	// MaxCacheSize is maximum storage space in bytes
-	MaxCacheSize int64 `json:"maxCacheSize"`
-
-	// Port to serve content on (if 0, a port will be chosen)
-	ServingPort int `json:"servingPort"`
+	RemoteHost   string `json:"remoteHost"`
+	RemoteVolume string `json:"remoteVolume"`
+	MaxStorageMB int    `json:"maxStorageMB,omitempty"`
+	Protocol     string `json:"protocol,omitempty"` // Protocol to use (http/https)
 }
 
-// MirrorModule serves as a content mirror
+// MirrorModule implements mirror functionality for a swarm
 type MirrorModule struct {
 	Config *MirrorModuleConfig
 	Server *Server
 
-	hubClient       *http.Client
-	heartbeatTicker *time.Ticker
+	// Blob cache for mirrored content
+	blobCache *grits.BlobCache
 
-	// Track if we're registered with the hub
-	isRegistered bool
+	// For periodic heartbeat
+	heartbeatTicker *time.Ticker
+	stopCh          chan struct{}
+
+	// HTTP mux for handling requests
+	mux *http.ServeMux
 }
 
-func (*MirrorModule) GetModuleName() string {
+// NewMirrorModule creates a new MirrorModule instance
+func NewMirrorModule(server *Server, config *MirrorModuleConfig) (*MirrorModule, error) {
+	if config.RemoteHost == "" {
+		return nil, fmt.Errorf("RemoteHost is required")
+	}
+
+	if config.Protocol == "" {
+		config.Protocol = "https" // Default to https
+	}
+
+	// Convert MB to bytes for the cache size
+	maxSizeBytes := int64(config.MaxStorageMB) * 1024 * 1024
+	if maxSizeBytes <= 0 {
+		// Default to 1GB if not specified
+		maxSizeBytes = 1 * 1024 * 1024 * 1024
+	}
+
+	// Create the mirror module
+	mm := &MirrorModule{
+		Config: config,
+		Server: server,
+		stopCh: make(chan struct{}),
+		mux:    http.NewServeMux(),
+	}
+
+	// Create a blob cache with a fetch function that retrieves from the upstream
+	mm.blobCache = grits.NewBlobCache(
+		server.BlobStore.(*grits.LocalBlobStore), // Local blob store for storage
+		maxSizeBytes,
+		mm.fetchBlobFromUpstream, // Function to fetch blobs from upstream
+	)
+
+	return mm, nil
+}
+
+// Start initializes and starts the mirror module
+func (mm *MirrorModule) Start() error {
+	log.Printf("Starting MirrorModule with upstream %s", mm.Config.RemoteHost)
+
+	// Start heartbeat to upstream if needed
+	mm.heartbeatTicker = time.NewTicker(60 * time.Second)
+	go mm.heartbeatLoop()
+
+	return nil
+}
+
+// Stop halts the mirror module operations
+func (mm *MirrorModule) Stop() error {
+	log.Printf("Stopping MirrorModule")
+
+	if mm.heartbeatTicker != nil {
+		mm.heartbeatTicker.Stop()
+	}
+
+	close(mm.stopCh)
+	return nil
+}
+
+func (mm *MirrorModule) GetModuleName() string {
 	return "mirror"
 }
 
-// NewMirrorModule creates a new mirror module
-func NewMirrorModule(server *Server, config *MirrorModuleConfig) *MirrorModule {
-	// Set defaults if not specified
-	if config.MaxCacheSize <= 0 {
-		config.MaxCacheSize = 1 * 1024 * 1024 * 1024 // 1GB default
-	}
-
-	mirror := &MirrorModule{
-		Config:    config,
-		Server:    server,
-		hubClient: &http.Client{Timeout: 10 * time.Second},
-	}
-
-	return mirror
-}
-
-// Start begins mirror operations
-func (m *MirrorModule) Start() error {
-	log.Printf("Starting mirror module")
-
-	// If no port specified, choose one
-	if m.Config.ServingPort == 0 {
-		// For now, just log - would need actual port selection logic
-		log.Printf("Need to select a port for mirror")
-	}
-
-	// Start heartbeat ticker (every 30 seconds)
-	m.heartbeatTicker = time.NewTicker(30 * time.Second)
-	go m.heartbeatLoop()
-
-	return nil
-}
-
-// Stop shuts down the mirror
-func (m *MirrorModule) Stop() error {
-	log.Printf("Stopping mirror module")
-
-	if m.heartbeatTicker != nil {
-		m.heartbeatTicker.Stop()
-	}
-
-	return nil
-}
-
-// heartbeatLoop periodically sends heartbeats to the hub
-func (m *MirrorModule) heartbeatLoop() {
-	// First try to register
-	if !m.isRegistered {
-		if err := m.registerWithHub(); err != nil {
-			log.Printf("Failed to register with hub: %v", err)
-		} else {
-			m.isRegistered = true
-		}
-	}
-
-	// Then start heartbeat loop
-	for range m.heartbeatTicker.C {
-		if err := m.sendHeartbeat(); err != nil {
-			log.Printf("Failed to send heartbeat: %v", err)
-			m.isRegistered = false
+// heartbeatLoop sends periodic heartbeats to the upstream server
+func (mm *MirrorModule) heartbeatLoop() {
+	for {
+		select {
+		case <-mm.heartbeatTicker.C:
+			err := mm.sendHeartbeat()
+			if err != nil {
+				log.Printf("Error sending heartbeat: %v", err)
+			}
+		case <-mm.stopCh:
+			return
 		}
 	}
 }
 
-// registerWithHub registers this mirror with the hub
-func (m *MirrorModule) registerWithHub() error {
-	// Stub - would implement actual registration logic
-	log.Printf("Would register with hub at %s", m.Config.HubEndpoint)
+// sendHeartbeat sends a heartbeat to the upstream server
+func (mm *MirrorModule) sendHeartbeat() error {
+	// TODO: Implement heartbeat logic
 	return nil
 }
 
-// sendHeartbeat sends a heartbeat to the hub
-func (m *MirrorModule) sendHeartbeat() error {
-	// Stub - would implement actual heartbeat logic
-	log.Printf("Would send heartbeat to hub")
-	return nil
+// fetchBlobFromUpstream retrieves a blob from the upstream server
+func (mm *MirrorModule) fetchBlobFromUpstream(addr *grits.BlobAddr) (grits.CachedFile, error) {
+	log.Printf("Fetching blob %s from upstream %s", addr.Hash, mm.Config.RemoteHost)
+
+	upstreamURL := fmt.Sprintf("%s://%s/grits/v1/blob/%s",
+		mm.Config.Protocol,
+		mm.Config.RemoteHost,
+		addr.String())
+
+	resp, err := http.Get(upstreamURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch from upstream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Check for successful response
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
+	}
+
+	// Add the blob to our local blob store
+	cachedFile, err := mm.Server.BlobStore.AddReader(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store downloaded blob: %v", err)
+	}
+
+	// Verify the hash matches what we expected
+	if cachedFile.GetAddress().Hash != addr.Hash {
+		cachedFile.Release() // Release our reference before returning error
+		return nil, fmt.Errorf("hash mismatch: expected %s, got %s",
+			addr.Hash, cachedFile.GetAddress().Hash)
+	}
+
+	log.Printf("Successfully mirrored blob %s from upstream", addr.Hash)
+	return cachedFile, nil
 }
