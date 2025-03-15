@@ -123,6 +123,18 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 
 			s.AddModule(NewHTTPModule(s, &httpConfig))
 
+		case "mirror":
+			var mirrorConfig MirrorModuleConfig
+			if err := json.Unmarshal(rawConfig, &mirrorConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal Mirror module config: %v", err)
+			}
+
+			mirrorModule, err := NewMirrorModule(s, &mirrorConfig)
+			if err != nil {
+				return fmt.Errorf("failed to create Mirror module: %v", err)
+			}
+			s.AddModule(mirrorModule)
+
 		case "mount":
 			var mountConfig MountModuleConfig
 			if err := json.Unmarshal(rawConfig, &mountConfig); err != nil {
@@ -130,6 +142,18 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 			}
 
 			s.AddModule(NewMountModule(s, &mountConfig))
+
+		case "origin":
+			var originConfig OriginModuleConfig
+			if err := json.Unmarshal(rawConfig, &originConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal Origin module config: %v", err)
+			}
+
+			originModule, err := NewOriginModule(s, &originConfig)
+			if err != nil {
+				return fmt.Errorf("failed to create Origin module: %v", err)
+			}
+			s.AddModule(originModule)
 
 		// Configured pins are not enabled for a bit longer
 
