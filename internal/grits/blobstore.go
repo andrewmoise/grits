@@ -1,6 +1,7 @@
 package grits
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +11,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/mr-tron/base58"
+	"github.com/multiformats/go-multihash"
 )
 
 /////
@@ -129,88 +133,109 @@ func (bs *LocalBlobStore) AddLocalFile(srcPath string) (CachedFile, error) {
 	}
 	defer file.Close()
 
-	return bs.AddOpenFile(file)
+	return bs.AddReader(file)
 }
 
-// AddOpenFile takes an already-opened file, computes its SHA-256 hash and size,
-// and adds it to the blob store if necessary.
-func (bs *LocalBlobStore) AddOpenFile(file *os.File) (CachedFile, error) {
+// AddReader adds a blob to the store from an io.Reader
+func (bs *LocalBlobStore) AddReader(reader io.Reader) (CachedFile, error) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	// Reset file pointer to ensure accurate size reading
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return nil, fmt.Errorf("failed to seek file: %v", err)
+	// Create the temp directory if it doesn't exist
+	tmpDir := bs.config.ServerPath("var/tmp")
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
 
-	blobHash, err := ComputeHashFromReader(file)
+	// Create a temporary file
+	tempFile, err := os.CreateTemp(tmpDir, "incoming-blob-*")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+
+	// Calculate hash while copying to temp file
+	hash, size, err := CopyAndHash(reader, tempFile)
+	if err != nil {
+		tempFile.Close()
+		os.Remove(tempPath)
+		return nil, fmt.Errorf("failed to copy and hash data: %w", err)
 	}
 
-	blobAddr := NewBlobAddr(blobHash)
+	// Close the temp file as we're done writing
+	tempFile.Close()
 
+	// Create the blob address
+	blobAddr := NewBlobAddr(hash)
+
+	// Check if we already have this blob
 	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
+		// We already have this blob, increment ref count and clean up temp file
+		os.Remove(tempPath)
 		cachedFile.RefCount++
-		cachedFile.LastTouched = time.Now() // Update the last touched time
+		cachedFile.LastTouched = time.Now()
 		return cachedFile, nil
 	}
 
-	// If the blob doesn't exist in the store, copy it.
+	// We don't have this blob, move temp file to final location
 	destPath := filepath.Join(bs.storageDir, blobAddr.String())
 
-	isHardLink := false
-
-	if bs.config.HardLinkBlobs {
-		// Attempt to create a hard link
-		originalFilePath, err := filepath.Abs(file.Name())
-		if err != nil {
-			return nil, fmt.Errorf("failed to get absolute path for original file: %v", err)
-		}
-
-		if err := os.Link(originalFilePath, destPath); err != nil {
-			log.Printf("Failed to create hard link for %s: %v", file.Name(), err)
-		} else {
-			isHardLink = true
-		}
+	// Ensure the directory exists
+	destDir := filepath.Dir(destPath)
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		os.Remove(tempPath)
+		return nil, fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	if !isHardLink {
-		// Seek back to the beginning of the file.
-		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			return nil, fmt.Errorf("failed to seek file: %v", err)
-		}
-
-		destFile, err := os.Create(destPath)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create blob file: %v", err)
-		}
-		defer destFile.Close()
-
-		if _, err = io.Copy(destFile, file); err != nil {
-			return nil, fmt.Errorf("failed to copy file to blob store: %v", err)
-		}
+	// Move the file to its final location
+	if err := os.Rename(tempPath, destPath); err != nil {
+		os.Remove(tempPath)
+		return nil, fmt.Errorf("failed to move temp file to final location: %w", err)
 	}
 
-	fileInfo, err := file.Stat()
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat file: %v", err)
-	}
-	size := fileInfo.Size()
-
+	// Create a new CachedFile
 	cachedFile := &LocalCachedFile{
 		Path:        destPath,
 		RefCount:    1,
 		Address:     blobAddr,
 		Size:        size,
 		LastTouched: time.Now(),
-		IsHardLink:  isHardLink,
+		IsHardLink:  false,
 		blobStore:   bs,
 	}
 
+	// Add to the files map
 	bs.files[blobAddr.Hash] = cachedFile
 
 	return cachedFile, nil
+}
+
+func ComputeHash(data []byte) string {
+	mh, err := multihash.Sum(data, multihash.SHA2_256, -1)
+	if err != nil {
+		panic(err) // or handle error gracefully
+	}
+	return base58.Encode(mh)
+}
+
+// CopyAndHash reads from the source and writes to the destination, while calculating the hash
+func CopyAndHash(src io.Reader, dst io.Writer) (string, int64, error) {
+	h := sha256.New()
+	mw := io.MultiWriter(h, dst)
+
+	size, err := io.Copy(mw, src)
+	if err != nil {
+		return "", 0, err
+	}
+
+	// Convert to multihash and Base58 encode
+	mh, err := multihash.Sum(h.Sum(nil), multihash.SHA2_256, -1)
+	if err != nil {
+		return "", 0, fmt.Errorf("error encoding multihash: %v", err)
+	}
+	hash := base58.Encode(mh)
+
+	return hash, size, nil
 }
 
 func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
