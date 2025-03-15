@@ -384,29 +384,6 @@ func getContentTypeFromExtension(ext string) string {
 	return mimeTypes[strings.ToLower(ext)]
 }
 
-// validateFileContents opens the file, computes its SHA-256 hash and size,
-// and compares them with the expected values.
-func validateFileContents(filePath string, expectedAddr *grits.BlobAddr) (bool, error) {
-	file, err := os.Open(filePath)
-	if err != nil {
-		return false, err
-	}
-	defer file.Close()
-
-	hasher := sha256.New()
-	_, err = io.Copy(hasher, file)
-	if err != nil {
-		return false, err
-	}
-
-	computedHash := fmt.Sprintf("%x", hasher.Sum(nil))
-	if computedHash != expectedAddr.Hash {
-		return false, fmt.Errorf("hash or size mismatch")
-	}
-
-	return true, nil
-}
-
 func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
