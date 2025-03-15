@@ -155,7 +155,7 @@ func (wv *WikiVolume) AddBlob(path string) (grits.CachedFile, error) {
 }
 
 func (wv *WikiVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
-	return wv.ns.BlobStore.AddOpenFile(file)
+	return wv.ns.BlobStore.AddReader(file)
 }
 
 func (wv *WikiVolume) AddMetadataBlob(metadata *grits.GNodeMetadata) (grits.CachedFile, error) {

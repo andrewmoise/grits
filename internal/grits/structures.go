@@ -1,7 +1,6 @@
 package grits
 
 import (
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
@@ -10,9 +9,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-
-	"github.com/mr-tron/base58"
-	"github.com/multiformats/go-multihash"
 )
 
 ////////////////////////
@@ -44,26 +40,6 @@ func (ba *BlobAddr) String() string {
 // Equals checks if two BlobAddr instances are equal.
 func (ba *BlobAddr) Equals(other *BlobAddr) bool {
 	return ba.Hash == other.Hash
-}
-
-func ComputeHash(data []byte) string {
-	mh, err := multihash.Sum(data, multihash.SHA2_256, -1)
-	if err != nil {
-		panic(err) // or handle error gracefully
-	}
-	return base58.Encode(mh)
-}
-
-func ComputeHashFromReader(r io.Reader) (string, error) {
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, r); err != nil {
-		return "", fmt.Errorf("error computing hash: %v", err)
-	}
-	mh, err := multihash.Sum(hasher.Sum(nil), multihash.SHA2_256, -1)
-	if err != nil {
-		return "", fmt.Errorf("error encoding multihash: %v", err)
-	}
-	return base58.Encode(mh), nil
 }
 
 // computeBlobAddr computes the SHA-256 hash, size, and file extension for an existing file,
@@ -170,7 +146,7 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 type BlobStore interface {
 	ReadFile(blobAddr *BlobAddr) (CachedFile, error)
 	AddLocalFile(srcPath string) (CachedFile, error)
-	AddOpenFile(file *os.File) (CachedFile, error)
+	AddReader(file io.Reader) (CachedFile, error)
 	AddDataBlock(data []byte) (CachedFile, error)
 	DumpStats()
 }

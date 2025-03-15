@@ -805,6 +805,12 @@ func (gn *gritsNode) flush() syscall.Errno {
 
 	//log.Printf("Ready to do blob store stuff")
 
+	_, err := gn.tmpFile.Seek(0, io.SeekStart)
+	if err != nil {
+		log.Printf("Can't seek on %s: %v", gn.path, err)
+		return syscall.EIO
+	}
+
 	contentBlob, err := gn.module.volume.AddOpenBlob(gn.tmpFile)
 	if err != nil {
 		log.Printf("Couldn't add content blob for %s: %v", gn.path, err)

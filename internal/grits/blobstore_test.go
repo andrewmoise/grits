@@ -148,7 +148,7 @@ func TestBlobStore_ReadBack_AddOpenFile(t *testing.T) {
 	defer file.Close()
 
 	// Add the file to the blob store
-	addedFileInterface, err := bs.AddOpenFile(file)
+	addedFileInterface, err := bs.AddReader(file)
 	if err != nil {
 		t.Fatalf("AddOpenFile failed: %v", err)
 	}
