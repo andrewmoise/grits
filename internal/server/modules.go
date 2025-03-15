@@ -51,8 +51,8 @@ type Volume interface {
 
 // ModuleConfig represents a generic module configuration.
 type ModuleConfig struct {
-	Type   string          `json:"Type"`
-	Config json.RawMessage `json:"Config"`
+	Type   string          `json:"type"`
+	Config json.RawMessage `json:"config"`
 }
 
 func (s *Server) GetModules(name string) []Module {
