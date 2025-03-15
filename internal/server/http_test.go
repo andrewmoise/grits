@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"testing"
@@ -192,23 +193,27 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 	uploadResp, err := http.Post(url+"/grits/v1/upload", "text/plain", bytes.NewBufferString(testBlobContent))
 	if err != nil {
 		t.Fatalf("Failed to upload blob: %v", err)
-	} else if uploadResp.StatusCode != http.StatusOK {
-		uploadBody, err := io.ReadAll(uploadResp.Body)
-		if err == nil {
-			uploadBody = []byte("")
-		}
-		t.Fatalf("Failed to upload blob: code %d %s", uploadResp.StatusCode, uploadBody)
 	}
 	defer uploadResp.Body.Close()
 
+	// Read the response body
+	uploadBody, _ := io.ReadAll(uploadResp.Body)
+	t.Logf("Upload response: %s", string(uploadBody))
+
+	if uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("Failed to upload blob: code %d, body: %s", uploadResp.StatusCode, string(uploadBody))
+	}
+
+	// Decode the JSON string
 	var blobAddress string
-	if err := json.NewDecoder(uploadResp.Body).Decode(&blobAddress); err != nil {
+	if err := json.Unmarshal(uploadBody, &blobAddress); err != nil {
 		t.Fatalf("Failed to decode upload response: %v", err)
 	}
 
 	// Test download using the received blob address
 	downloadURL := url + "/grits/v1/blob/" + blobAddress
 	downloadResp, err := http.Get(downloadURL)
+	log.Printf("Download %s", downloadURL)
 	if err != nil || downloadResp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to download blob: %v; HTTP status code: %d", err, downloadResp.StatusCode)
 	}
