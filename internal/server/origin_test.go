@@ -6,16 +6,17 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
 
-// WithOriginModule is an initializer for adding an Origin module to a test server
-func WithOriginModule(allowedMirrors []string, inactiveTimeoutSecs int) TestModuleInitializer {
+// WithOriginModule is an initializer for adding an Origin module with allowed mirrors
+func WithOriginModule(allowedMirrors []string) TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
 		config := &OriginModuleConfig{
 			AllowedMirrors:      allowedMirrors,
-			InactiveTimeoutSecs: inactiveTimeoutSecs,
+			InactiveTimeoutSecs: 1,
 		}
 
 		originModule, err := NewOriginModule(s, config)
@@ -29,10 +30,11 @@ func WithOriginModule(allowedMirrors []string, inactiveTimeoutSecs int) TestModu
 func TestOriginModule(t *testing.T) {
 	// Create an origin server
 	originPort := 2387
-	allowedMirrors := []string{"test-mirror-1.example.com", "test-mirror-2.example.com"}
+	// Update allowed mirrors to include protocol and port
+	allowedMirrors := []string{"http://test-mirror-1.example.com:80", "http://test-mirror-2.example.com:80"}
 	originServer, originCleanup := SetupTestServer(t,
 		WithHttpModule(originPort),
-		WithOriginModule(allowedMirrors, 1)) // 5 second timeout for faster testing
+		WithOriginModule(allowedMirrors))
 	defer originCleanup()
 
 	originServer.Start()
@@ -42,14 +44,15 @@ func TestOriginModule(t *testing.T) {
 
 	originURL := "localhost:2387"
 
-	// Test 1: Register a mirror
+	// Test 1: Register a mirror - update with protocol and port
 	registrationPayload := struct {
 		Hostname string `json:"hostname"`
 	}{
-		Hostname: "test-mirror-1.example.com",
+		Hostname: "http://test-mirror-1.example.com:80",
 	}
 
 	payloadBytes, _ := json.Marshal(registrationPayload)
+
 	registerResp, err := http.Post(
 		fmt.Sprintf("http://%s/grits/v1/origin/register-mirror", originURL),
 		"application/json",
@@ -95,18 +98,22 @@ func TestOriginModule(t *testing.T) {
 		t.Fatalf("Failed to list mirrors, status=%d", listResp.StatusCode)
 	}
 
-	var mirrors []*MirrorInfo
-	if err := json.NewDecoder(listResp.Body).Decode(&mirrors); err != nil {
+	var mirrorResponses []struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(listResp.Body).Decode(&mirrorResponses); err != nil {
 		t.Fatalf("Failed to decode mirrors list: %v", err)
 	}
 
-	if len(mirrors) != 1 {
-		t.Fatalf("Expected 1 active mirror, got %d", len(mirrors))
+	if len(mirrorResponses) != 1 {
+		t.Fatalf("Expected 1 active mirror, got %d", len(mirrorResponses))
 	}
 
-	if mirrors[0].Hostname != "test-mirror-1.example.com" {
-		t.Errorf("Expected mirror hostname 'test-mirror-1.example.com', got '%s'",
-			mirrors[0].Hostname)
+	// Extract hostname from URL for comparison
+	mirrorURL := mirrorResponses[0].URL
+	// Check if URL contains the expected hostname
+	if !strings.Contains(mirrorURL, "test-mirror-1.example.com") {
+		t.Errorf("Expected mirror URL to contain 'test-mirror-1.example.com', got '%s'", mirrorURL)
 	}
 
 	// Test 3: Verify mirror activity checking
@@ -136,7 +143,7 @@ func TestOriginModule(t *testing.T) {
 	badRegistrationPayload := struct {
 		Hostname string `json:"hostname"`
 	}{
-		Hostname: "unauthorized-mirror.example.com",
+		Hostname: "http://unauthorized-mirror.example.com:80",
 	}
 
 	badPayloadBytes, _ := json.Marshal(badRegistrationPayload)

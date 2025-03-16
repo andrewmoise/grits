@@ -82,16 +82,26 @@ class MirrorManager {
       }
 
       const mirrorList = await response.json();
+    
+    // Log the first mirror for debugging
+    if (mirrorList.length > 0) {
+      this.debugLog(`Mirror sample: ${JSON.stringify(mirrorList[0])}`);
+    }
       
       // Update the mirrors list
-      this.mirrors = mirrorList.map(mirror => ({
-        id: mirror.id, 
-        url: mirror.url.replace(/\/$/, ''), // Remove trailing slash if present
-        publicKey: mirror.publicKey,
-        volumes: mirror.volumes || [this.volume] // Default to current volume if not specified
-      }));
+    this.mirrors = mirrorList.map(mirror => {
+      // The mirror.url is now the complete URL string
+      const url = mirror.url?.replace(/\/$/, '') || null; // Remove trailing slash if present
+      
+      return {
+        id: url, // Use the URL as the ID for simplicity
+        url: url,
+        volumes: Array.isArray(mirror.volumes) ? mirror.volumes : [this.volume]
+      };
+    }).filter(mirror => mirror.url); // Filter out any mirrors with invalid URLs
 
-      this.debugLog(`Updated mirror list, found ${this.mirrors.length} mirrors`);
+    //this.debugLog(`Updated mirror list, found ${this.mirrors.length} mirrors`);
+    console.log(`Raw mirror list: ${JSON.stringify(mirrorList)}`);
       
       // Initialize performance metrics for any new mirrors
       for (const mirror of this.mirrors) {

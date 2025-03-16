@@ -20,7 +20,7 @@ import (
 // Future:
 // tracker - Can accept connections from peers and set them up as first-class citizens
 // peer - Can identify this server to a tracker, and take part in the network without preexisting DNS
-// host - We can separate a bunch of the http endpoints aside from blob/ into a separate optional module
+// host - Separate place for a bunch of "content source" http endponts (e.g. lookup) so we can run http without them
 
 // Endpoints
 //
@@ -230,6 +230,8 @@ func (mm *MirrorModule) fetchBlobFromUpstream(addr *grits.BlobAddr) (grits.Cache
 		mm.Config.RemoteHost,
 		addr.String())
 
+	log.Printf("Fetch: %s", upstreamURL)
+
 	resp, err := http.Get(upstreamURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch from upstream: %v", err)
@@ -238,11 +240,36 @@ func (mm *MirrorModule) fetchBlobFromUpstream(addr *grits.BlobAddr) (grits.Cache
 
 	// Check for successful response
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("Error on %s: %d", upstreamURL, resp.StatusCode)
+
 		return nil, fmt.Errorf("upstream returned status %d", resp.StatusCode)
 	}
 
+	// Use the buffered content for processing
+	contentLength := resp.Header.Get("Content-Length")
+	log.Printf("Content-Length from origin: %s bytes", contentLength)
+
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	// Log the content length and first part of the response
+	log.Printf("Received %d bytes from upstream", len(bodyBytes))
+	if len(bodyBytes) < 100 {
+		log.Printf("Response body: %s", string(bodyBytes))
+	} else {
+		log.Printf("Response first 100 bytes: %x", bodyBytes[:100])
+	}
+
+	// Create a new reader from the bytes for your existing code
+	bodyReader := bytes.NewReader(bodyBytes)
+
+	// Replace resp.Body with bodyReader in your AddReader call
+	cachedFile, err := mm.Server.BlobStore.AddReader(bodyReader)
+
 	// Add the blob to our local blob store
-	cachedFile, err := mm.Server.BlobStore.AddReader(resp.Body)
+	//cachedFile, err := mm.Server.BlobStore.AddReader(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store downloaded blob: %v", err)
 	}
