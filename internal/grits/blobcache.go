@@ -134,9 +134,16 @@ func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
 
 // fetchAndCache fetches a blob and adds it to the cache
 func (c *BlobCache) fetchAndCache(addr *BlobAddr) (CachedFile, error) {
+	if DebugBlobCache {
+		log.Printf("Fetching and caching %s", addr.Hash)
+	}
+
 	// Fetch the blob
 	file, err := c.fetchBlob(addr)
 	if err != nil {
+		if DebugBlobCache {
+			log.Printf("  failed to fetch!")
+		}
 		return nil, fmt.Errorf("failed to fetch blob %s: %w", addr.Hash, err)
 	}
 
@@ -163,6 +170,10 @@ func (c *BlobCache) fetchAndCache(addr *BlobAddr) (CachedFile, error) {
 		}
 	}
 	c.mutex.Unlock()
+
+	if DebugBlobCache {
+		log.Printf("  all done, success")
+	}
 
 	return file, nil
 }
