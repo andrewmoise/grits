@@ -249,6 +249,9 @@ func (mm *MirrorModule) fetchBlobFromUpstream(addr *grits.BlobAddr) (grits.Cache
 
 	// Verify the hash matches what we expected
 	if cachedFile.GetAddress().Hash != addr.Hash {
+		log.Printf("  hash mismatch!")
+		log.Printf("    %s", cachedFile.GetAddress().Hash)
+		log.Printf("    %s", addr.Hash)
 		cachedFile.Release() // Release our reference before returning error
 		return nil, fmt.Errorf("hash mismatch: expected %s, got %s",
 			addr.Hash, cachedFile.GetAddress().Hash)
