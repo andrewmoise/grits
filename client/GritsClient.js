@@ -550,17 +550,24 @@ _logStats() {
   // Now log mirror stats
   const mirrorStats = this.mirrorManager.getMirrorStats();
   if (mirrorStats.length > 0) {
-    console.log('%c[MIRROR STATS]%c', 
-      'color: #3b82f6; font-weight: bold', 'color: inherit');
-    
+    let loggedAny = false;
     // Log one line per mirror
     for (const stat of mirrorStats) {
+      if (stat.bytesFetched > 0) {
+        if (!loggedAny) {
+          console.log(`%c[MIRROR STATS]%c (${mirrorStats.length} mirrors)`, 
+            'color: #3b82f6; font-weight: bold', 'color: inherit');
+          loggedAny = true;
+        }
+            
       const host = new URL(stat.url).hostname;
       console.log(
         `  ${host}: Latency ${stat.latency} | Bandwidth ${stat.bandwidth} | ` +
         `Reliability ${stat.reliability} | Requests ${stat.requests} | ` +
         `Data ${stat.bytesFetched}`
       );
+        loggedAny = true;
+      }
     }
   }
   
