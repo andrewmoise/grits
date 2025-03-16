@@ -21,18 +21,30 @@ import (
 
 type LocalBlobStore struct {
 	config     *Config
-	files      map[string]*LocalCachedFile // All files in the store
-	mtx        sync.RWMutex                // Mutex for thread-safe access
+	files      map[string]*LocalCachedFile
+	mtx        sync.RWMutex
 	storageDir string
+	lock       *FileLock
 }
 
 // Ensure that LocalBlobStore implements BlobStore
 var _ BlobStore = &LocalBlobStore{}
 
 func NewLocalBlobStore(config *Config) *LocalBlobStore {
+	// Create lock path
+	lockPath := config.ServerPath("var/lock/blobstore.lock")
+
+	// Try to acquire the lock
+	lock, err := AcquireLock(lockPath)
+	if err != nil {
+		log.Printf("Failed to acquire lock: %v\n", err)
+		return nil
+	}
+
 	bs := &LocalBlobStore{
 		config: config,
 		files:  make(map[string]*LocalCachedFile),
+		lock:   lock,
 	}
 
 	bs.storageDir = config.ServerPath("var/blobs")
@@ -43,13 +55,24 @@ func NewLocalBlobStore(config *Config) *LocalBlobStore {
 	}
 
 	// Initialize the LocalBlobStore by scanning the existing files in the storage path
-	err := bs.scanAndLoadExistingFiles()
+	err = bs.scanAndLoadExistingFiles()
 	if err != nil {
 		log.Printf("Can't read existing LocalBlobStore files: %v\n", err)
 		return nil
 	}
 
 	return bs
+}
+
+// Close releases the lock and performs any necessary cleanup
+func (bs *LocalBlobStore) Close() error {
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	if bs.lock != nil {
+		return bs.lock.Release()
+	}
+	return nil
 }
 
 func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
@@ -570,4 +593,67 @@ func (bs *LocalBlobStore) DumpStats() {
 		log.Printf("  ---")
 	}
 	log.Printf("=== End BlobStore Stats ===")
+}
+
+/////
+// Prevent concurrent access
+
+// File-based lock implementation
+type FileLock struct {
+	file *os.File
+	path string
+}
+
+// AcquireLock attempts to acquire a lock file
+func AcquireLock(lockPath string) (*FileLock, error) {
+	// Ensure directory exists
+	lockDir := filepath.Dir(lockPath)
+	if err := os.MkdirAll(lockDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create lock directory: %w", err)
+	}
+
+	// Open file with O_EXCL to ensure we create it or fail
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, fmt.Errorf("cannot open lock file: %w", err)
+	}
+
+	// Use syscall to place an exclusive lock
+	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err != nil {
+		file.Close()
+		return nil, fmt.Errorf("cannot acquire lock, another process may be running: %w", err)
+	}
+
+	// Write PID to the file for diagnostics
+	pid := os.Getpid()
+	if _, err := fmt.Fprintf(file, "%d\n", pid); err != nil {
+		syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+		file.Close()
+		return nil, fmt.Errorf("cannot write PID to lock file: %w", err)
+	}
+
+	return &FileLock{file: file, path: lockPath}, nil
+}
+
+// Release unlocks and removes the lock file
+func (l *FileLock) Release() error {
+	if l.file == nil {
+		return nil
+	}
+
+	// First unlock the file
+	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
+	if err != nil {
+		l.file.Close()
+		return fmt.Errorf("failed to unlock file: %w", err)
+	}
+
+	// Then close it
+	if err := l.file.Close(); err != nil {
+		return fmt.Errorf("failed to close lock file: %w", err)
+	}
+
+	l.file = nil
+	return nil
 }

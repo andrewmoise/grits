@@ -149,6 +149,7 @@ type BlobStore interface {
 	AddReader(file io.Reader) (CachedFile, error)
 	AddDataBlock(data []byte) (CachedFile, error)
 	DumpStats()
+	Close() error
 }
 
 // CachedFile defines the interface for interacting with a cached file.
