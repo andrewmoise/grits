@@ -439,7 +439,18 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	defer cachedFile.Release()
+
+	// Instead of immediately releasing the reference, hold it and set up
+	// a delayed release after 5 minutes
+	go func(file grits.CachedFile) {
+		time.Sleep(5 * time.Minute)
+		// Then release it, allowing GC to potentially clean it up if no other references exist
+		file.Release()
+		log.Printf("Released temporary reference to %s", file.GetAddress().Hash)
+	}(cachedFile)
+
+	// Log that we're holding a temporary reference
+	log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress().Hash)
 
 	// Respond with the address of the new blob
 	addrStr := cachedFile.GetAddress().String()
