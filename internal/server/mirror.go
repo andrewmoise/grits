@@ -39,7 +39,6 @@ import (
 // MirrorModuleConfig defines configuration for mirror functionality
 type MirrorModuleConfig struct {
 	RemoteHost    string `json:"remoteHost"`
-	RemoteVolume  string `json:"remoteVolume"`
 	MaxStorageMB  int    `json:"maxStorageMB,omitempty"`
 	Protocol      string `json:"protocol,omitempty"` // Protocol to use (http/https)
 	LocalHostname string `json:"localHostname"`      // Hostname of this mirror server
@@ -106,7 +105,7 @@ func (mm *MirrorModule) Start() error {
 	log.Printf("Starting MirrorModule with upstream %s", mm.Config.RemoteHost)
 
 	// Start heartbeat to upstream if needed
-	mm.heartbeatTicker = time.NewTicker(60 * time.Second)
+	mm.heartbeatTicker = time.NewTicker(300 * time.Second)
 	go mm.heartbeatLoop()
 
 	return nil
@@ -144,10 +143,15 @@ func (mm *MirrorModule) GetModuleName() string {
 func (mm *MirrorModule) heartbeatLoop() {
 	defer close(mm.stoppedCh) // Signal that the goroutine has stopped
 
+	err := mm.sendHeartbeat()
+	if err != nil {
+		log.Printf("Error sending mirror heartbeat: %v", err)
+	}
+
 	for {
 		select {
 		case <-mm.heartbeatTicker.C:
-			err := mm.sendHeartbeat()
+			err = mm.sendHeartbeat()
 			if err != nil {
 				log.Printf("Error sending heartbeat: %v", err)
 			}
@@ -163,6 +167,8 @@ func (mm *MirrorModule) sendHeartbeat() error {
 	// Construct the registration URL
 	registrationURL := fmt.Sprintf("%s://%s/grits/v1/origin/register-mirror",
 		mm.Config.Protocol, mm.Config.RemoteHost)
+
+	log.Printf("Register mirror %s via %s", mm.Config.LocalHostname, registrationURL)
 
 	// Create request payload with our hostname
 	payload := struct {

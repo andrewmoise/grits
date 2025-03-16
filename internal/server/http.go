@@ -33,7 +33,7 @@ type HTTPModule struct {
 
 	deployments         []*DeploymentModule
 	serviceWorkerModule *ServiceWorkerModule
-	mirrors             map[string]*MirrorModule // key is "volume@hostname"
+	activeMirrorModule  *MirrorModule
 }
 
 func (*HTTPModule) GetModuleName() string {
@@ -72,7 +72,6 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 		Mux:        mux,
 
 		deployments: make([]*DeploymentModule, 0),
-		mirrors:     make(map[string]*MirrorModule, 0),
 	}
 
 	// Set up routes within the constructor or an initialization method
@@ -160,8 +159,11 @@ func (hm *HTTPModule) addMirrorModule(module Module) {
 		return
 	}
 
-	key := fmt.Sprintf("%s@%s", mirror.Config.RemoteVolume, mirror.Config.RemoteHost)
-	hm.mirrors[key] = mirror
+	if hm.activeMirrorModule != nil {
+		log.Fatalf("Only one mirror module at a time is currently supported.")
+	}
+
+	hm.activeMirrorModule = mirror
 }
 
 // corsMiddleware is a middleware function that adds CORS headers to the response.
@@ -340,18 +342,12 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 
 	var cachedFile grits.CachedFile
 
-	mirrorSpec := r.Header.Get("X-Grits-Mirror-Origin")
-	if mirrorSpec != "" {
-		// We're loading from a mirror via blob cache
-		mirror, exists := s.mirrors[mirrorSpec]
-		if !exists {
-			http.Error(w, fmt.Sprintf("Can't find %s mirror", mirrorSpec), http.StatusInternalServerError)
-			return
-		}
-
-		cachedFile, err = mirror.blobCache.Get(fileAddr)
+	if s.activeMirrorModule != nil {
+		// This is fine whether the blob is local or remote; it'll muck up the mirror stats
+		// a bit in some cases if it's local, but it's basically fine.
+		cachedFile, err = s.activeMirrorModule.blobCache.Get(fileAddr)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Can't find %s in mirror of %s", fileAddr, mirrorSpec), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("Can't find %s in mirror", fileAddr), http.StatusInternalServerError)
 			return
 		}
 	} else {
