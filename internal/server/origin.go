@@ -228,9 +228,9 @@ func (om *OriginModule) Start() error {
 	// Register handlers with the first HTTP module found
 	httpModule := httpModules[0].(*HTTPModule)
 
-	httpModule.Mux.HandleFunc("/grits/v1/origin/register-mirror", httpModule.corsMiddleware(om.RegisterMirrorHandler))
-	httpModule.Mux.HandleFunc("/grits/v1/origin/unregister-mirror", httpModule.corsMiddleware(om.UnregisterMirrorHandler))
-	httpModule.Mux.HandleFunc("/grits/v1/origin/list-mirrors", httpModule.corsMiddleware(om.ListMirrorsHandler))
+	httpModule.Mux.HandleFunc("/grits/v1/origin/register-mirror", httpModule.requestMiddleware(om.RegisterMirrorHandler))
+	httpModule.Mux.HandleFunc("/grits/v1/origin/unregister-mirror", httpModule.requestMiddleware(om.UnregisterMirrorHandler))
+	httpModule.Mux.HandleFunc("/grits/v1/origin/list-mirrors", httpModule.requestMiddleware(om.ListMirrorsHandler))
 
 	// Start the background mirror activity checker
 	om.running = true

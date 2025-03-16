@@ -148,9 +148,9 @@ func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 	hm.serviceWorkerModule = swModule
 
 	// Add routes
-	hm.Mux.HandleFunc("/grits-bootstrap.js", hm.corsMiddleware(swModule.serveTemplate))
-	hm.Mux.HandleFunc("/grits-serviceworker.js", hm.corsMiddleware(swModule.serveTemplate))
-	hm.Mux.HandleFunc("/grits-serviceworker-config.json", hm.corsMiddleware(swModule.serveConfig))
+	hm.Mux.HandleFunc("/grits-bootstrap.js", hm.requestMiddleware(swModule.serveTemplate))
+	hm.Mux.HandleFunc("/grits-serviceworker.js", hm.requestMiddleware(swModule.serveTemplate))
+	hm.Mux.HandleFunc("/grits-serviceworker-config.json", hm.requestMiddleware(swModule.serveConfig))
 }
 
 func (hm *HTTPModule) addMirrorModule(module Module) {
@@ -166,10 +166,8 @@ func (hm *HTTPModule) addMirrorModule(module Module) {
 	hm.activeMirrorModule = mirror
 }
 
-// corsMiddleware is a middleware function that adds CORS headers to the response.
-// NOTE: Also adds service worker dir hash
-// FIXME - this needs a new name
-func (srv *HTTPModule) corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+// requestMiddleware is a middleware function that adds various headers to the response.
+func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tracker := NewPerformanceTracker(r)
 		tracker.Start()
@@ -272,26 +270,26 @@ GET to /grits/v1/content/{volume}/{path} just serves file data (mainly for debug
 
 func (s *HTTPModule) setupRoutes() {
 	// Deployment routes:
-	s.Mux.HandleFunc("/", s.corsMiddleware(s.handleDeployment))
+	s.Mux.HandleFunc("/", s.requestMiddleware(s.handleDeployment))
 
 	// Content routes:
-	s.Mux.HandleFunc("/grits/v1/blob/", s.corsMiddleware(s.handleBlob))
-	s.Mux.HandleFunc("/grits/v1/upload", s.corsMiddleware(s.handleBlobUpload))
+	s.Mux.HandleFunc("/grits/v1/blob/", s.requestMiddleware(s.handleBlob))
+	s.Mux.HandleFunc("/grits/v1/upload", s.requestMiddleware(s.handleBlobUpload))
 
-	s.Mux.HandleFunc("/grits/v1/lookup/", s.corsMiddleware(s.handleLookup))
-	s.Mux.HandleFunc("/grits/v1/link/", s.corsMiddleware(s.handleLink))
+	s.Mux.HandleFunc("/grits/v1/lookup/", s.requestMiddleware(s.handleLookup))
+	s.Mux.HandleFunc("/grits/v1/link/", s.requestMiddleware(s.handleLink))
 
-	s.Mux.HandleFunc("/grits/v1/content/", s.corsMiddleware(s.handleContent))
+	s.Mux.HandleFunc("/grits/v1/content/", s.requestMiddleware(s.handleContent))
 
 	// Client tooling routes:
 
 	// Special handling for serving the Service Worker JS from the root
-	s.Mux.HandleFunc("/grits/v1/service-worker.js", s.corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	s.Mux.HandleFunc("/grits/v1/service-worker.js", s.requestMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, s.Server.Config.ServerPath("client/service-worker.js"))
 	}))
 
 	// Handling client files with CORS enabled
-	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", s.corsMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
+	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", s.requestMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
 
 	s.HTTPServer.Handler = s.Mux
 }
