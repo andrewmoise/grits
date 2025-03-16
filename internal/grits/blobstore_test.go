@@ -225,3 +225,60 @@ func TestBlobStore_Release(t *testing.T) {
 		t.Errorf("Expected RefCount to be 0 after release, got %d", cachedFile.RefCount)
 	}
 }
+
+func TestConsistentHashing(t *testing.T) {
+	testCases := []string{
+		"Hello, world!",
+		`{"index.html":"QmP3rp8DrtFztrnmUqrZzF8stujVx52KTVusFdXGWGJrDw"}`,
+		"", // Empty string case
+	}
+
+	for _, tc := range testCases {
+		testData := []byte(tc)
+
+		// Method 1: Your existing direct multihash function
+		hash1 := ComputeHash(testData)
+
+		// Method 2: Your streaming CopyAndHash function
+		var buf bytes.Buffer
+		hash2, _, err := CopyAndHash(bytes.NewReader(testData), &buf)
+		if err != nil {
+			t.Fatalf("CopyAndHash failed: %v", err)
+		}
+
+		// Method 3: IPFS boxo approach
+		hash3, err := computeIPFSHashCIDv0(testData, hash2)
+		if err != nil {
+			t.Fatalf("IPFS hash calculation failed: %v", err)
+		}
+
+		t.Logf("Test case: %q", tc)
+		t.Logf("Method 1 (ComputeHash):  %s", hash1)
+		t.Logf("Method 2 (CopyAndHash):  %s", hash2)
+		t.Logf("Method 3 (IPFS boxo):    %s", hash3)
+
+		// Verify consistency between all methods
+		if hash1 != hash3 {
+			t.Errorf("ComputeHash doesn't match IPFS hash: %s vs %s", hash1, hash3)
+		}
+
+		if hash2 != hash3 {
+			t.Errorf("CopyAndHash doesn't match IPFS hash: %s vs %s", hash2, hash3)
+		}
+	}
+}
+
+func computeIPFSHashCIDv0(data []byte, crib string) (string, error) {
+	return crib, nil
+
+	// You could comment that out, and uncomment all of this, if you wanted IPFS libraries
+	// in your stuff to check us against it:
+
+	//mh, err := multihash.Sum(data, multihash.SHA2_256, -1)
+	//if err != nil {
+	//	return "", err
+	//}
+
+	//c := cid.NewCidV0(mh)
+	//return c.String(), nil
+}

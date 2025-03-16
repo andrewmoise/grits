@@ -243,20 +243,27 @@ func ComputeHash(data []byte) string {
 
 // CopyAndHash reads from the source and writes to the destination, while calculating the hash
 func CopyAndHash(src io.Reader, dst io.Writer) (string, int64, error) {
-	h := sha256.New()
-	mw := io.MultiWriter(h, dst)
+	// Create the hasher for SHA-256 (which multihash will use)
+	hasher := sha256.New()
 
+	// Use MultiWriter to simultaneously write to both the destination and hasher
+	mw := io.MultiWriter(hasher, dst)
+
+	// Copy data, writing to both hasher and destination
 	size, err := io.Copy(mw, src)
 	if err != nil {
 		return "", 0, err
 	}
 
-	// Convert to multihash and Base58 encode
-	mh, err := multihash.Sum(h.Sum(nil), multihash.SHA2_256, -1)
-	if err != nil {
-		return "", 0, fmt.Errorf("error encoding multihash: %v", err)
-	}
-	hash := base58.Encode(mh)
+	// Get the SHA-256 digest
+	digest := hasher.Sum(nil)
+
+	// Create the multihash encoding with the right prefix
+	prefix := []byte{18, 32} // 18 = SHA-256, 32 = length in bytes
+	mhash := append(prefix, digest...)
+
+	// Base58 encode the multihash
+	hash := base58.Encode(mhash)
 
 	return hash, size, nil
 }
