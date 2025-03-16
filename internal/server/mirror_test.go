@@ -7,15 +7,17 @@ import (
 	"io"
 	"net/http"
 	"testing"
+	"time"
 )
 
 // WithMirrorModule is an initializer for adding a Mirror module that points to another server
-func WithMirrorModule(remoteHost string, maxStorageMB int) TestModuleInitializer {
+func WithMirrorModule(remoteHost string, maxStorageMB int, port int) TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
 		config := &MirrorModuleConfig{
-			RemoteHost:   remoteHost,
-			MaxStorageMB: maxStorageMB,
-			Protocol:     "http",
+			RemoteHost:    remoteHost,
+			MaxStorageMB:  maxStorageMB,
+			Protocol:      "http",
+			LocalHostname: "localhost:" + fmt.Sprintf("%d", port), // Add proper local hostname
 		}
 
 		mirrorModule, err := NewMirrorModule(s, config)
@@ -31,17 +33,19 @@ func TestMirrorModule(t *testing.T) {
 	originPort := 2387
 	originServer, originCleanup := SetupTestServer(t,
 		WithHttpModule(originPort),
-		WithWikiVolume("source"))
+		WithWikiVolume("source"),
+		WithOriginModule([]string{"localhost:2388"})) // Add allowed mirrors
 	defer originCleanup()
 
 	originServer.Start()
 	defer originServer.Stop()
+	time.Sleep(500 * time.Millisecond)
 
-	originURL := "localhost:2387" // Removed "http://" prefix as you suggested
+	originHost := "localhost:2387"
 
 	// Add some content to the origin server
 	testContent := "This is test content to be mirrored"
-	uploadResp, err := http.Post("http://"+originURL+"/grits/v1/upload", "text/plain",
+	uploadResp, err := http.Post("http://"+originHost+"/grits/v1/upload", "text/plain",
 		bytes.NewBufferString(testContent))
 	if err != nil {
 		t.Fatalf("Failed to upload content to origin server: %v", err)
@@ -64,7 +68,7 @@ func TestMirrorModule(t *testing.T) {
 
 	// Double-check that the fetch works okay from the actual origin server
 
-	req, _ := http.NewRequest("GET", "http://"+originURL+"/grits/v1/blob/"+blobAddress, nil)
+	req, _ := http.NewRequest("GET", "http://"+originHost+"/grits/v1/blob/"+blobAddress, nil)
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -93,16 +97,16 @@ func TestMirrorModule(t *testing.T) {
 	mirrorPort := 2388
 	mirrorServer, mirrorCleanup := SetupTestServer(t,
 		WithHttpModule(mirrorPort),
-		WithMirrorModule(originURL, 10)) // 10MB cache
+		WithMirrorModule(originHost, 10, mirrorPort)) // 10MB cache
 	defer mirrorCleanup()
 
 	mirrorServer.Start()
 	defer mirrorServer.Stop()
+	time.Sleep(500 * time.Millisecond)
 
 	// Now fetch the content via the mirror using the correct mirror specifier format
 	req, _ = http.NewRequest("GET", "http://localhost:"+
 		fmt.Sprintf("%d", mirrorPort)+"/grits/v1/blob/"+blobAddress, nil)
-	req.Header.Set("X-Grits-Mirror-Origin", "source@"+originURL) // Format: volume@host:port
 
 	client = &http.Client{}
 	resp, err = client.Do(req)

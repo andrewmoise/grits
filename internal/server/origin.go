@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -59,34 +60,131 @@ func (om *OriginModule) GetModuleName() string {
 	return "origin"
 }
 
-// IsMirrorAllowed checks if a mirror hostname is in the allowed list
+// Modified ListMirrorsHandler to use fully qualified URLs
+func (om *OriginModule) ListMirrorsHandler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("List mirrors handler")
+
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	activeMirrors := om.GetActiveMirrors()
+
+	// Define a client-facing mirror format
+	type MirrorResponse struct {
+		URL string `json:"url"` // Complete URL with protocol, hostname, and port
+	}
+
+	// Build the response in the client-friendly format
+	clientMirrors := make([]MirrorResponse, 0, len(activeMirrors))
+
+	for _, mirror := range activeMirrors {
+		// Ensure hostname is a fully qualified URL
+		url := mirror.Hostname
+
+		// Add protocol if missing
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			url = "https://" + url
+		}
+
+		// Ensure there's a port
+		if !strings.Contains(url[8:], ":") { // Skip protocol part when checking for port
+			log.Printf("Warning: Mirror %s has no port specified", url)
+			// Don't add this mirror to the response as it's incomplete
+			continue
+		}
+
+		clientMirror := MirrorResponse{
+			URL: url,
+		}
+
+		clientMirrors = append(clientMirrors, clientMirror)
+		log.Printf("Added mirror to response: %s", url)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(clientMirrors)
+}
+
+// Modified RegisterMirror to expect and validate fully qualified URLs
+func (om *OriginModule) RegisterMirror(hostname string) error {
+	om.mirrorsMutex.Lock()
+	defer om.mirrorsMutex.Unlock()
+
+	// Normalize the hostname if needed
+	normalizedHostname := hostname
+
+	// Add protocol if missing
+	if !strings.HasPrefix(normalizedHostname, "http://") && !strings.HasPrefix(normalizedHostname, "https://") {
+		normalizedHostname = "https://" + normalizedHostname
+	}
+
+	// Verify it's a complete URL with protocol and port
+	isValidURL := strings.HasPrefix(normalizedHostname, "http") &&
+		strings.Contains(normalizedHostname[8:], ":") // Contains port
+
+	if !isValidURL {
+		return fmt.Errorf("mirror URL %s is not a valid fully qualified URL with protocol and port", hostname)
+	}
+
+	if !om.IsMirrorAllowed(normalizedHostname) {
+		return fmt.Errorf("mirror %s not in allowed list", normalizedHostname)
+	}
+
+	// Add or update mirror with normalized hostname
+	om.mirrors[normalizedHostname] = &MirrorInfo{
+		Hostname:         normalizedHostname,
+		LastRegistration: time.Now(),
+		IsActive:         true,
+	}
+
+	log.Printf("Mirror registered: %s", normalizedHostname)
+	return nil
+}
+
+// Modified IsMirrorAllowed to handle fully qualified URLs
 func (om *OriginModule) IsMirrorAllowed(hostname string) bool {
+	// If the AllowedMirrors list is empty, don't allow any
+	if len(om.Config.AllowedMirrors) == 0 {
+		return false
+	}
+
+	// If the first allowed mirror doesn't start with http, assume the allowlist
+	// contains simple hostnames and we need to be more flexible in matching
+	if !strings.HasPrefix(om.Config.AllowedMirrors[0], "http") {
+		// Extract the hostname part from the URL for comparison
+		hostnameOnly := hostname
+
+		// Remove protocol
+		if strings.HasPrefix(hostnameOnly, "http://") {
+			hostnameOnly = hostnameOnly[7:]
+		} else if strings.HasPrefix(hostnameOnly, "https://") {
+			hostnameOnly = hostnameOnly[8:]
+		}
+
+		// Remove port
+		if colonIndex := strings.Index(hostnameOnly, ":"); colonIndex != -1 {
+			hostnameOnly = hostnameOnly[:colonIndex]
+		}
+
+		// Now check if this simple hostname is in the allowed list
+		for _, allowed := range om.Config.AllowedMirrors {
+			if allowed == hostnameOnly {
+				return true
+			}
+		}
+		return false
+	}
+
+	// If the allowed list contains full URLs, do exact matching
 	for _, allowed := range om.Config.AllowedMirrors {
 		if allowed == hostname {
 			return true
 		}
 	}
+
 	return false
-}
-
-// RegisterMirror adds a new mirror or updates an existing one
-func (om *OriginModule) RegisterMirror(hostname string) error {
-	om.mirrorsMutex.Lock()
-	defer om.mirrorsMutex.Unlock()
-
-	if !om.IsMirrorAllowed(hostname) {
-		return fmt.Errorf("mirror %s not in allowed list", hostname)
-	}
-
-	// Add or update mirror
-	om.mirrors[hostname] = &MirrorInfo{
-		Hostname:         hostname,
-		LastRegistration: time.Now(),
-		IsActive:         true,
-	}
-
-	log.Printf("Mirror registered: %s", hostname)
-	return nil
 }
 
 // UnregisterMirror removes a mirror
@@ -202,19 +300,6 @@ func (om *OriginModule) UnregisterMirrorHandler(w http.ResponseWriter, r *http.R
 
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Mirror unregistered successfully")
-}
-
-// ListMirrorsHandler handles /grits/v1/origin/list-mirrors
-func (om *OriginModule) ListMirrorsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	activeMirrors := om.GetActiveMirrors()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(activeMirrors)
 }
 
 func (om *OriginModule) Start() error {
