@@ -514,16 +514,18 @@ class GritsClient {
     const missAvg = calcAvg(this.stats.timings.blobCacheMisses);
     
     // Log stats
-    console.log(
-      `%c[GRITS STATS]%c Last 10s: ` + 
-      `Requests: ${this.stats.totalRequests} | ` +
-      `Content lookups: ${this.stats.contentLookups} (avg ${contentAvg}ms) | ` + 
-      `Blob cache hits: ${this.stats.blobCacheHits} (avg ${hitAvg}ms) | ` +
-      `Blob cache misses: ${this.stats.blobCacheMisses} (avg ${missAvg}ms) | ` +
-      `Prefetch successes: ${this.stats.prefetchSuccesses}`,
-      'color: #22c55e; font-weight: bold', 'color: inherit'
-    );
-    
+    if (this.stats.totalRequests > 0) {
+      console.log(
+        `%c[GRITS STATS]%c Last 10s: ` + 
+        `Requests: ${this.stats.totalRequests} | ` +
+        `Content lookups: ${this.stats.contentLookups} (avg ${contentAvg}ms) | ` + 
+        `Blob cache hits: ${this.stats.blobCacheHits} (avg ${hitAvg}ms) | ` +
+        `Blob cache misses: ${this.stats.blobCacheMisses} (avg ${missAvg}ms) | ` +
+        `Prefetch successes: ${this.stats.prefetchSuccesses}`,
+        'color: #22c55e; font-weight: bold', 'color: inherit'
+      );
+    }
+      
     // Reset stats for next interval
     this.stats = {
       totalRequests: 0,
