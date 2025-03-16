@@ -144,8 +144,10 @@ function shouldHandleWithGrits(url) {
     const path = normalizePath(parsedUrl.pathname);
     const hostname = parsedUrl.host;
     
-    console.debug(`[Grits] Checking if path should be handled: ${path} on host: ${hostname}`);
-    
+    if (debugServiceworker) {
+        console.debug(`[Grits] Checking if path should be handled: ${path} on host: ${hostname}`);
+    }
+
     // Now check both hostname and path
     for (const mapping of pathConfig) {
         // Skip if hostname doesn't match (if hostname is specified in the mapping)
@@ -160,7 +162,9 @@ function shouldHandleWithGrits(url) {
             // Combine with the volume path
             const fullPath = `${mapping.path}${relativePath}`;
                 
-            console.debug(`[Grits] Path match found: ${path} → ${mapping.volume}:${fullPath}`);
+            if (debugServiceworker) {
+                console.debug(`[Grits] Path match found: ${path} → ${mapping.volume}:${fullPath}`);
+            }
             
             return {
                 volume: mapping.volume,
@@ -169,7 +173,9 @@ function shouldHandleWithGrits(url) {
         }
     }
     
-    console.debug(`[Grits] No mapping found for: ${path} on host: ${hostname}`);
+    if (debugServiceworker) {
+        console.debug(`[Grits] No mapping found for: ${path} on host: ${hostname}`);
+    }
     return false;
 }
 
