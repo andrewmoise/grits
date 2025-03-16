@@ -96,7 +96,7 @@ class GritsClient {
     
     // We can fetch stuff quick, if we have it in cache
     this.debugLog(path, "  try fast path");
-    const pathInfo = await this._tryFastPathLookup(normalizedPath);
+    const pathInfo = await this._tryFastFetch(normalizedPath);
     if (pathInfo && pathInfo.contentHash) {
         this.debugLog(path, "  succeed (metadata at least)");
         // Extract extension from path
@@ -111,7 +111,7 @@ class GritsClient {
     } else {
         // Content lookup path
         this.stats.contentLookups++;
-        result = await this._hardFetchContent(normalizedPath, startTime);
+        result = await this._slowFetch(normalizedPath, startTime);
         this.stats.timings.contentLookups.push(performance.now() - startTime);
     }
 
@@ -120,7 +120,7 @@ class GritsClient {
     return result;
   }
   
-  async _tryFastPathLookup(path) {
+  async _tryFastFetch(path) {
     const startTime = performance.now();
     let memoryHits = 0;
     let browserCacheHits = 0;
@@ -159,7 +159,7 @@ class GritsClient {
       const component = components[i];
       
       // First, get the parent metadata
-      const [metadata, metaSource] = await this._getJsonFromHashInstrumented(currentMetadataHash, false);
+      const [metadata, metaSource] = await this._fetchAndUnmarshal(currentMetadataHash, false);
       trackJsonSource(metaSource);
       
       if (!metadata || metadata.type !== 'dir') {
@@ -168,7 +168,7 @@ class GritsClient {
       }
       
       // Get the directory listing
-      const [directoryListing, dirSource] = await this._getJsonFromHashInstrumented(metadata.contentHash, false);
+      const [directoryListing, dirSource] = await this._fetchAndUnmarshal(metadata.contentHash, false);
       trackJsonSource(dirSource);
       
       if (!directoryListing || !directoryListing[component]) {
@@ -179,7 +179,7 @@ class GritsClient {
       
       // Get child's metadata
       const childMetadataHash = directoryListing[component];
-      const [childMetadata, childSource] = await this._getJsonFromHashInstrumented(childMetadataHash, false);
+      const [childMetadata, childSource] = await this._fetchAndUnmarshal(childMetadataHash, false);
       trackJsonSource(childSource);
       
       if (!childMetadata) {
@@ -196,7 +196,7 @@ class GritsClient {
       // so, we back up and do one more step with index.html and some hackery.
       if (i == components.length-1 && !triedIndexHtml) {
         triedIndexHtml = true;
-        const [currentMetadata, indexHtmlSource] = await this._getJsonFromHashInstrumented(currentMetadataHash);
+        const [currentMetadata, indexHtmlSource] = await this._fetchAndUnmarshal(currentMetadataHash);
         trackJsonSource(indexHtmlSource);
         
         this.debugLog(path, `  double-check for index.html: ${JSON.stringify(currentMetadata, null, 2)}`)
@@ -226,7 +226,7 @@ class GritsClient {
     };
   }
 
-  async _hardFetchContent(path, startTime) {
+  async _slowFetch(path, startTime) {
     this.debugLog(path, "Hard fetching via HEAD request to /grits/v1/content");
     
     const normalizedPath = this._normalizePath(path);
@@ -318,11 +318,11 @@ class GritsClient {
     
     if (!this._isProcessingQueue) {
       this._isProcessingQueue = true;    
-      this._processNextInQueue();
+      this._processNextInPrefetchQueue();
     }
   }
 
-  async _processNextInQueue() {
+  async _processNextInPrefetchQueue() {
     while (this._prefetchQueue.length > 0) {
       const hash = this._prefetchQueue.shift();
       
@@ -397,7 +397,7 @@ class GritsClient {
     this._isProcessingQueue = false;
   }
 
-  async _getJsonFromHashInstrumented(hash, forceFetch = false) {
+  async _fetchAndUnmarshal(hash, forceFetch = false) {
     const startTime = performance.now();
     
     // Check if we have it in our memory cache
@@ -441,9 +441,7 @@ class GritsClient {
       lastAccessed: Date.now()
     });
     
-    // Really means cache or network
-    const source = 'network';      
-    return [data, source];
+    return [data, 'network'];
   }
 
   /////
@@ -617,7 +615,7 @@ class GritsClient {
 
 // This is fairly silly, but we need two versions of this file for main client code and for the
 // service worker, apparently. The handler will comment and uncomment this stuff so that we can
-// have both as separate files GritsClient.js and GritsClient-sw.js:
+// have both, as separate files GritsClient.js and GritsClient-sw.js:
 
 // %MODULE%
 export default GritsClient;
