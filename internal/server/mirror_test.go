@@ -10,11 +10,10 @@ import (
 )
 
 // WithMirrorModule is an initializer for adding a Mirror module that points to another server
-func WithMirrorModule(remoteHost string, remoteVolume string, maxStorageMB int) TestModuleInitializer {
+func WithMirrorModule(remoteHost string, maxStorageMB int) TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
 		config := &MirrorModuleConfig{
 			RemoteHost:   remoteHost,
-			RemoteVolume: remoteVolume,
 			MaxStorageMB: maxStorageMB,
 			Protocol:     "http",
 		}
@@ -94,7 +93,7 @@ func TestMirrorModule(t *testing.T) {
 	mirrorPort := 2388
 	mirrorServer, mirrorCleanup := SetupTestServer(t,
 		WithHttpModule(mirrorPort),
-		WithMirrorModule(originURL, "source", 10)) // 10MB cache
+		WithMirrorModule(originURL, 10)) // 10MB cache
 	defer mirrorCleanup()
 
 	mirrorServer.Start()
