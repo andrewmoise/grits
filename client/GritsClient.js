@@ -96,6 +96,18 @@ class GritsClient {
   /////
   // Fetching and merkle tree lookup logic
 
+  extractExtension(path) {
+    // Extract extension from path
+    const pathParts = path.split('/');
+    const filename = pathParts[pathParts.length - 1]; // Get just the filename
+
+    // Only look for extension in the filename part
+    const lastDotIndex = filename.lastIndexOf('.');
+    const extension = (lastDotIndex > 0) ? filename.substring(lastDotIndex + 1) : null;
+
+    return extension;
+  }
+
   async fetchFile(path) {
     this.debugLog(path, `fetchFile(${path})`);
 
@@ -115,9 +127,8 @@ class GritsClient {
     const pathInfo = await this._tryFastFetch(normalizedPath);
     if (pathInfo && pathInfo.contentHash) {
         this.debugLog(path, "  succeed (metadata at least)");
-        // Extract extension from path
-        const lastDotIndex = path.lastIndexOf('.');
-        const extension = (lastDotIndex > 0) ? path.substring(lastDotIndex + 1) : null;
+
+        const extension = this.extractExtension(path);
 
         // Find the blob (hopefully it's in the cache, but if not is fine)
         const response = await this._innerFetch(pathInfo.contentHash, startTime, extension);
@@ -287,8 +298,7 @@ class GritsClient {
       this._startMetadataPrefetch(pathMetadata);
 
       // Extract extension from path
-      const lastDotIndex = path.lastIndexOf('.');
-      const extension = (lastDotIndex > 0) ? path.substring(lastDotIndex + 1) : null;
+      const extension = this.extractExtension(path);
       
       // Get the content hash from the last entry's contentHash property
       const lastEntry = pathMetadata[pathMetadata.length-1];
