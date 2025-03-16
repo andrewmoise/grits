@@ -36,3 +36,4 @@ Minor punch list:
 * Terminal "control panel" showing pertinent information and letting you issue commands
 * Make validation of blobs / reference counts when you load, instead of leaking references and thus blobs
 * We could communicate client config information (e.g. the list of mirrors) via the volume storage itself
+* Fix infinite loop of trying to fetch when the server goes down
