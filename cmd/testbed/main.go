@@ -147,13 +147,38 @@ func setupOriginServer(baseDir string) (*TestServer, error) {
 		"inactiveTimeoutSecs": INACTIVE_TIMEOUT,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal Origin module config: %v", err)
+		return nil, fmt.Errorf("failed to marshal origin module config: %v", err)
+	}
+
+	volumeModuleConfig, err := json.Marshal(map[string]interface{}{
+		"type":       "wiki",
+		"volumeName": "source",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal volume config: %v", err)
+	}
+
+	mountDir := filepath.Join(baseDir, "mount")
+	err = os.MkdirAll(mountDir, 0755)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't make mount dir: %v", err)
+	}
+
+	mountModuleConfig, err := json.Marshal(map[string]interface{}{
+		"type":       "mount",
+		"mountPoint": mountDir,
+		"volume":     "source",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal mount module config: %v", err)
 	}
 
 	// Add modules to config
 	config.Modules = []json.RawMessage{
 		httpModuleConfig,
 		originModuleConfig,
+		volumeModuleConfig,
+		mountModuleConfig,
 	}
 
 	// Create the server instance
