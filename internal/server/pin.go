@@ -7,8 +7,8 @@ import (
 
 // PinConfig represents the configuration for a pin module
 type PinConfig struct {
-	Volume string `json:"Volume"`
-	Path   string `json:"Path"`
+	Volume string `json:"volume"`
+	Path   string `json:"path"`
 }
 
 // PinModule keeps FileNodes in memory by maintaining references to them
