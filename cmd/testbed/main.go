@@ -19,10 +19,9 @@ import (
 )
 
 const (
-	BASE_PORT        = 8080
 	NUM_MIRRORS      = 5
-	ORIGIN_PORT      = BASE_PORT
 	INACTIVE_TIMEOUT = 300 // seconds
+	MIRROR_BASE_PORT = 1800
 )
 
 // TestServer contains a server instance and its cleanup function
@@ -32,7 +31,7 @@ type TestServer struct {
 }
 
 func main() {
-	baseDir := "./var/tmp/testbed" // Note, this gets blown away once we're done
+	baseDir := "./var/tmp/testbed" // Note, testbed gets blown away once we're done
 	defer os.RemoveAll("var/tmp/testbed")
 
 	// Ensure the base directory exists
@@ -50,7 +49,7 @@ func main() {
 	var wg sync.WaitGroup
 
 	// Setup origin server
-	originServer, err := setupOriginServer(baseDir)
+	originServer, originPort, originHost, enableTls, err := setupOriginServer()
 	if err != nil {
 		log.Fatalf("Failed to setup origin server: %v", err)
 	}
@@ -70,7 +69,7 @@ func main() {
 
 	// Setup and start mirror servers
 	for i := 0; i < NUM_MIRRORS; i++ {
-		mirrorServer, err := setupMirrorServer(baseDir, i)
+		mirrorServer, err := setupMirrorServer(baseDir, originPort, originHost, enableTls, i)
 		if err != nil {
 			log.Fatalf("Failed to setup mirror server %d: %v", i, err)
 		}
@@ -89,7 +88,7 @@ func main() {
 	log.Println("All servers started. Testing functionality...")
 
 	// Perform test operations to verify system is working
-	if err := testOriginMirrorSystem(ORIGIN_PORT, NUM_MIRRORS); err != nil {
+	if err := testOriginMirrorSystem(originPort, originHost, enableTls, NUM_MIRRORS); err != nil {
 		log.Printf("WARNING: Test failed: %v", err)
 	} else {
 		log.Println("All tests passed successfully!")
@@ -114,31 +113,20 @@ func main() {
 }
 
 // setupOriginServer creates and configures the origin server
-func setupOriginServer(baseDir string) (*TestServer, error) {
-	serverDir := filepath.Join(baseDir, "origin")
-	err := os.MkdirAll(filepath.Join(serverDir, "var"), 0755)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create origin server directory: %v", err)
+func setupOriginServer() (*TestServer, int, string, bool, error) {
+	// Load the existing configuration
+	config := grits.NewConfig(".")
+	if err := config.LoadFromFile("grits.cfg"); err != nil {
+		return nil, -1, "", false, fmt.Errorf("failed to load configuration: %v", err)
 	}
+	config.ServerDir = "." // Ensure server directory is set
 
-	// Create config for origin server
-	config := grits.NewConfig(serverDir)
-	config.ServerDir = serverDir
+	// Create additional module configurations
 
-	// Set up allowed mirror hostnames
+	// 1. Origin module with mirror settings
 	allowedMirrors := make([]string, NUM_MIRRORS)
 	for i := 0; i < NUM_MIRRORS; i++ {
 		allowedMirrors[i] = fmt.Sprintf("mirror-%d.local", i)
-	}
-
-	// Create module configuration as json.RawMessage objects
-	httpModuleConfig, err := json.Marshal(map[string]interface{}{
-		"type":     "http",
-		"thisPort": ORIGIN_PORT,
-		"readOnly": false,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal HTTP module config: %v", err)
 	}
 
 	originModuleConfig, err := json.Marshal(map[string]interface{}{
@@ -147,47 +135,69 @@ func setupOriginServer(baseDir string) (*TestServer, error) {
 		"inactiveTimeoutSecs": INACTIVE_TIMEOUT,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal origin module config: %v", err)
+		return nil, -1, "", false, fmt.Errorf("failed to marshal origin module config: %v", err)
 	}
 
-	volumeModuleConfig, err := json.Marshal(map[string]interface{}{
-		"type":       "wiki",
-		"volumeName": "source",
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal volume config: %v", err)
-	}
-
-	mountDir := filepath.Join(baseDir, "mount")
+	// 2. Mount module
+	mountDir := "mount"
 	err = os.MkdirAll(mountDir, 0755)
 	if err != nil {
-		return nil, fmt.Errorf("couldn't make mount dir: %v", err)
+		return nil, -1, "", false, fmt.Errorf("couldn't make mount dir: %v", err)
 	}
 
 	mountModuleConfig, err := json.Marshal(map[string]interface{}{
 		"type":       "mount",
 		"mountPoint": mountDir,
-		"volume":     "source",
+		"volume":     "root", // Using "root" as you did in your second example
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal mount module config: %v", err)
+		return nil, -1, "", false, fmt.Errorf("failed to marshal mount module config: %v", err)
 	}
 
-	// Add modules to config
-	config.Modules = []json.RawMessage{
-		httpModuleConfig,
-		originModuleConfig,
-		volumeModuleConfig,
-		mountModuleConfig,
-	}
+	// Save existing modules and append the new ones
+	existingModules := config.Modules
+	config.Modules = append(existingModules, originModuleConfig, mountModuleConfig)
 
-	// Create the server instance
+	// Create the server with the augmented config
 	srv, err := server.NewServer(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create origin server: %v", err)
+		return nil, -1, "", false, fmt.Errorf("failed to create origin server: %v", err)
 	}
 
-	log.Printf("Origin server configured at http://localhost:%d", ORIGIN_PORT)
+	// For testing, we need to know the HTTP configuration
+	var originPort int
+	var originHost string
+	var enableTls bool
+
+	for _, moduleRaw := range existingModules {
+		var moduleMap map[string]interface{}
+		if err := json.Unmarshal(moduleRaw, &moduleMap); err != nil {
+			continue // Skip modules that can't be unmarshaled
+		}
+
+		if moduleType, ok := moduleMap["type"].(string); ok && moduleType == "http" {
+			// Extract port
+			if port, ok := moduleMap["thisPort"].(float64); ok {
+				originPort = int(port)
+			}
+
+			// Extract host
+			if host, ok := moduleMap["thisHost"].(string); ok {
+				originHost = host
+			} else {
+				originHost = "localhost" // Default if not specified
+			}
+
+			// Extract TLS setting
+			if tls, ok := moduleMap["enableTls"].(bool); ok {
+				enableTls = tls
+			}
+
+			break // Found the HTTP module, no need to continue
+		}
+	}
+
+	log.Printf("Origin server configured at localhost:%d", originPort)
 
 	// Return the server and a cleanup function
 	cleanup := func() {
@@ -195,33 +205,42 @@ func setupOriginServer(baseDir string) (*TestServer, error) {
 		// Additional cleanup if needed
 	}
 
-	return &TestServer{Server: srv, Cleanup: cleanup}, nil
+	return &TestServer{Server: srv, Cleanup: cleanup}, originPort, originHost, enableTls, nil
 }
 
 // setupMirrorServer creates and configures a mirror server
 // testOriginMirrorSystem verifies that:
 // 1. Mirrors register with the origin
 // 2. Content uploaded to origin can be fetched from mirrors
-func testOriginMirrorSystem(originPort int, numMirrors int) error {
+func testOriginMirrorSystem(originPort int, originHost string, enableTls bool, numMirrors int) error {
 	// Step 1: Check that mirrors have registered with the origin
 	log.Println("Testing mirror registration...")
 
 	// Allow some time for all mirrors to register
 	time.Sleep(2 * time.Second)
 
+	// Determine protocol based on TLS setting
+	scheme := "http"
+	if enableTls {
+		scheme = "https"
+	}
+
 	// Get active mirrors from origin server
-	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/grits/v1/origin/list-mirrors", originPort))
+	log.Printf("Request list mirrors")
+	resp, err := http.Get(fmt.Sprintf("%s://%s:%d/grits/v1/origin/list-mirrors",
+		scheme, originHost, originPort))
 	if err != nil {
 		return fmt.Errorf("failed to get mirror list: %v", err)
 	}
 	defer resp.Body.Close()
+	log.Printf("Done with request list mirrors")
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("list-mirrors returned non-OK status: %d", resp.StatusCode)
 	}
 
 	var mirrors []*server.MirrorInfo
-	if err := json.NewDecoder(resp.Body).Decode(&mirrors); err != nil {
+	if err = json.NewDecoder(resp.Body).Decode(&mirrors); err != nil {
 		return fmt.Errorf("failed to decode mirror list: %v", err)
 	}
 
@@ -238,7 +257,7 @@ func testOriginMirrorSystem(originPort int, numMirrors int) error {
 
 	// Upload to origin server
 	uploadResp, err := http.Post(
-		fmt.Sprintf("http://localhost:%d/grits/v1/upload", originPort),
+		fmt.Sprintf("%s://%s:%d/grits/v1/upload", scheme, originHost, originPort),
 		"application/octet-stream",
 		bytes.NewBuffer(testContent),
 	)
@@ -248,12 +267,22 @@ func testOriginMirrorSystem(originPort int, numMirrors int) error {
 	defer uploadResp.Body.Close()
 
 	if uploadResp.StatusCode != http.StatusOK {
-		return fmt.Errorf("upload returned non-OK status: %d", uploadResp.StatusCode)
+		// Read the response body to include in the error message
+		respBody, readErr := io.ReadAll(uploadResp.Body)
+		if readErr != nil {
+			// If we can't read the body, still report the status code
+			return fmt.Errorf("upload returned non-OK status: %d (could not read response body: %v)",
+				uploadResp.StatusCode, readErr)
+		}
+
+		// Include both status code and response body in the error
+		return fmt.Errorf("upload returned non-OK status: %d, body: %s",
+			uploadResp.StatusCode, string(respBody))
 	}
 
 	// Get the blob address
 	var blobAddr string
-	if err := json.NewDecoder(uploadResp.Body).Decode(&blobAddr); err != nil {
+	if err = json.NewDecoder(uploadResp.Body).Decode(&blobAddr); err != nil {
 		return fmt.Errorf("failed to decode blob address: %v", err)
 	}
 
@@ -261,7 +290,7 @@ func testOriginMirrorSystem(originPort int, numMirrors int) error {
 
 	// Fetch from each mirror to verify replication
 	for i := 0; i < numMirrors; i++ {
-		mirrorPort := originPort + i + 1
+		mirrorPort := MIRROR_BASE_PORT + i
 
 		// Give the mirror some time to fetch content from origin
 		// In a real test, we might need to implement retry logic with backoff
@@ -273,7 +302,17 @@ func testOriginMirrorSystem(originPort int, numMirrors int) error {
 			return fmt.Errorf("failed to fetch from mirror %d: %v", i, err)
 		}
 		if mirrorResp.StatusCode != http.StatusOK {
-			return fmt.Errorf("list-mirrors returned non-OK status: %d", mirrorResp.StatusCode)
+			// Read the response body to include in the error message
+			respBody, readErr := io.ReadAll(mirrorResp.Body)
+			if readErr != nil {
+				// If we can't read the body, still report the status code
+				return fmt.Errorf("blob fetch returned non-OK status: %d (could not read response body: %v)",
+					mirrorResp.StatusCode, readErr)
+			}
+
+			// Include both status code and response body in the error
+			return fmt.Errorf("blob fetch returned non-OK status: %d, body: %s",
+				mirrorResp.StatusCode, string(respBody))
 		}
 
 		// Read content from mirror
@@ -296,7 +335,7 @@ func testOriginMirrorSystem(originPort int, numMirrors int) error {
 	return nil
 }
 
-func setupMirrorServer(baseDir string, index int) (*TestServer, error) {
+func setupMirrorServer(baseDir string, originPort int, originHost string, enableTls bool, index int) (*TestServer, error) {
 	// Create directory for this mirror
 	serverDir := filepath.Join(baseDir, fmt.Sprintf("mirror-%d", index))
 	err := os.MkdirAll(filepath.Join(serverDir, "var"), 0755)
@@ -308,8 +347,8 @@ func setupMirrorServer(baseDir string, index int) (*TestServer, error) {
 	config := grits.NewConfig(serverDir)
 	config.ServerDir = serverDir
 
-	// Mirror port is base port + index + 1 (to avoid conflict with origin)
-	mirrorPort := BASE_PORT + index + 1
+	// Mirror port is base port + index
+	mirrorPort := MIRROR_BASE_PORT + index
 
 	// Create module configuration as json.RawMessage objects
 	httpModuleConfig, err := json.Marshal(map[string]interface{}{
@@ -320,12 +359,18 @@ func setupMirrorServer(baseDir string, index int) (*TestServer, error) {
 		return nil, fmt.Errorf("failed to marshal HTTP module config: %v", err)
 	}
 
+	// Determine protocol based on TLS setting
+	protocol := "http"
+	if enableTls {
+		protocol = "https"
+	}
+
 	mirrorModuleConfig, err := json.Marshal(map[string]interface{}{
 		"type":          "mirror",
-		"remoteHost":    fmt.Sprintf("localhost:%d", ORIGIN_PORT),
+		"remoteHost":    fmt.Sprintf("%s:%d", originHost, originPort),
 		"remoteVolume":  "",  // Default volume
 		"maxStorageMB":  100, // 100MB cache
-		"protocol":      "http",
+		"protocol":      protocol,
 		"localHostname": fmt.Sprintf("mirror-%d.local", index),
 	})
 	if err != nil {

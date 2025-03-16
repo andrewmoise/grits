@@ -104,6 +104,7 @@ func (swm *ServiceWorkerModule) loadClientFiles(wv *WikiVolume) error {
 		"serviceworker/grits-bootstrap.js",
 		"serviceworker/grits-serviceworker.js",
 		"GritsClientTests.js",
+		"MirrorManager-sw.js",
 		"client-test.html",
 	}
 

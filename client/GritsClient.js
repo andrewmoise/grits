@@ -5,6 +5,8 @@
 const debugClientTiming = true;
 const debugPerformanceStats = true;
 
+const CLEANUP_INTERVAL = 5 * 60 * 1000; // ms
+
 class GritsClient {
 
   /////
@@ -14,7 +16,7 @@ class GritsClient {
     // Basic configuration
     this.serverUrl = config.serverUrl.replace(/\/$/, '');
     this.volume = config.volume;
-
+  
     // Cache settings
     this.cacheMaxAge = 5 * 60 * 1000; // 5 minutes for less-used items
     this.softTimeout = config.softTimeout || 30 * 1000; // 30 seconds default
@@ -25,6 +27,20 @@ class GritsClient {
     this.rootHashTimestamp = 0; // When we last received the root hash
     this.jsonCache = new Map(); // Key: hash, Value: {data: Object, lastAccessed: timestamp}
     
+    // Initialize mirror manager
+    this.mirrorManager = new MirrorManager({
+      serverUrl: this.serverUrl,
+      volume: this.volume,
+      debug: debugClientTiming,
+      refreshInterval: config.mirrorRefreshInterval,
+      mirrorStatsInterval: config.mirrorStatsInterval
+    });
+      
+    // Start the mirror manager
+    this.mirrorManager.initialize().catch(err => {
+      console.error("Error initializing mirror manager:", err);
+    });
+      
     // TODO: In-flight lookups for early returns
 
     // Prefetch data
@@ -33,7 +49,7 @@ class GritsClient {
     this._isProcessingQueue = false;
 
     // Setup periodic cleanup
-    this.cleanupInterval = setInterval(() => this._cleanupCaches(), 5 * 60 * 1000);
+    this.cleanupInterval = setInterval(() => this._cleanupCaches(), CLEANUP_INTERVAL);
 
     // Setup stats interval
     this.stats = {
@@ -49,10 +65,10 @@ class GritsClient {
       }
     };
   
-      // Reset stats periodically and log them
-      if (debugPerformanceStats) {
-        this.statsInterval = setInterval(() => this._logStats(), 10000);
-      }
+    // Reset stats periodically and log them
+    if (debugPerformanceStats) {
+      this.statsInterval = setInterval(() => this._logStats(), 10000);
+    }
 
     // Store service worker hash, for detection and reload when needed
     this.serviceWorkerHash = undefined;
@@ -104,7 +120,7 @@ class GritsClient {
         const extension = (lastDotIndex > 0) ? path.substring(lastDotIndex + 1) : null;
 
         // Find the blob (hopefully it's in the cache, but if not is fine)
-        const response = await this._fetchBlobWithCache(pathInfo.contentHash, startTime, extension);
+        const response = await this._innerFetch(pathInfo.contentHash, startTime, extension);
         
         // Return response directly without wrapping
         result = response;
@@ -211,13 +227,6 @@ class GritsClient {
     const lookupTime = performance.now() - startTime;
     this.debugLog(path, `Complete fast path lookup! hash is ${currentContentHash}`);
   
-    // Performance report for successful lookup
-    //this.debugLog(path, 
-    //  `PERFORMANCE: ${lookupTime.toFixed(2)}ms total, ${components.length} components, ` +
-    //  `${memoryHits} memory hits, ${browserCacheHits} browser cache hits, ${networkHits} network hits, ` +
-    //  `cache check: ${cacheCheckTime.toFixed(2)}ms`
-    //);
-  
     // If we got here, we resolved the entire path
     return {
       metadataHash: currentMetadataHash,
@@ -286,8 +295,8 @@ class GritsClient {
       const contentHash = lastEntry.contentHash;
       this.debugLog(path, `  content hash is ${contentHash}`);
 
-      // Pass the extension to _fetchBlobWithCache
-      const contentResponse = await this._fetchBlobWithCache(contentHash, startTime, extension);
+      // Pass the extension to _innerFetch
+      const contentResponse = await this._innerFetch(contentHash, startTime, extension);
       
       return contentResponse;
     } catch (error) {
@@ -336,7 +345,7 @@ class GritsClient {
         if (!this.jsonCache.has(hash)) {
           this.debugLog("prefetch:" + hash.substring(0, 8), "fetch");
 
-          const response = await this._fetchBlobWithCache(hash, null);
+          const response = await this._innerFetch(hash, null);
           
           this.debugLog("prefetch:" + hash.substring(0, 8), `response: ${response.status}`);
 
@@ -365,7 +374,7 @@ class GritsClient {
 
           this.debugLog("prefetch:" + contentHash.substring(0, 8), "content fetch");
 
-          const response = await this._fetchBlobWithCache(contentHash, null);
+          const response = await this._innerFetch(contentHash, null);
           this.debugLog("prefetch:" + contentHash.substring(0, 8), `response: ${response.status}`);
 
           if (!response.ok) {
@@ -416,7 +425,7 @@ class GritsClient {
 
     this.debugLog("hash:" + hash.substring(0, 8), 'network fetch');
 
-    const response = await this._fetchBlobWithCache(hash, startTime);
+    const response = await this._innerFetch(hash, startTime);
     
     this.debugLog("hash:" + hash.substring(0, 8), 'network fetch done');
 
@@ -459,7 +468,7 @@ class GritsClient {
     }
   }
 
-  async _fetchBlobWithCache(hash, startTime = null, extension = null) {
+  async _innerFetch(hash, startTime = null, extension = null) {
     // Construct URL with extension if provided
     let url = `${this.serverUrl}/grits/v1/blob/${hash}`;
     if (extension) {
@@ -469,7 +478,7 @@ class GritsClient {
     // Check if caching is available
     if (this.blobCache) {
         // Try to get from cache first
-        const cachedResponse = await this.blobCache.match(url);
+        const cachedResponse = await this.blobCache.match(hash);
         if (cachedResponse) {
             if (startTime) {
                 this.stats.blobCacheHits++;
@@ -481,8 +490,10 @@ class GritsClient {
     }
     
     // If not in cache or caching unavailable, fetch from network
+    // We use mirror manager unconditionally; it'll fall back to the origin server if needed.
     this.debugLog("cache:" + hash.substring(0, 8), "Blob cache miss, fetching from network");
-    const response = await fetch(url);
+    const response = await this.mirrorManager.fetchBlob(hash, extension);
+  
     if (startTime) {
         this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
         this.stats.blobCacheMisses++;
@@ -492,7 +503,7 @@ class GritsClient {
     if (this.blobCache && response.ok) {
         // We need to clone the response because it can only be consumed once
         const clonedResponse = response.clone();
-        this.blobCache.put(url, clonedResponse).catch(err => {
+        this.blobCache.put(hash, clonedResponse).catch(err => {
             console.error(`Failed to cache blob ${hash}:`, err);
         });
     }
@@ -503,43 +514,64 @@ class GritsClient {
   /////
   // Performance tracking
 
-  _logStats() {
-    // Calculate averages
-    const calcAvg = arr => arr.length ? 
-      (arr.reduce((sum, val) => sum + val, 0) / arr.length).toFixed(2) : 
-      'N/A';
+_logStats() {
+  // Calculate averages for regular stats
+  const calcAvg = arr => arr.length ? 
+    (arr.reduce((sum, val) => sum + val, 0) / arr.length).toFixed(2) : 
+    'N/A';
+  
+  const contentAvg = (this.stats.timings.contentLookups.length ? ` (avg ${calcAvg(this.stats.timings.contentLookups)}ms)` : '');
+  const hitAvg = (this.stats.timings.blobCacheHits.length ? ` (avg ${calcAvg(this.stats.timings.blobCacheHits)}ms)` : '');
+  const missAvg = (this.stats.timings.blobCacheMisses.length ? ` (avg ${calcAvg(this.stats.timings.blobCacheMisses)}ms)` : '');
+  
+  // Log regular stats
+  if (this.stats.totalRequests > 0) {
+    console.log(
+      `%c[GRITS STATS]%c Last 10s: ` + 
+      `Requests: ${this.stats.totalRequests} | ` +
+      `Content lookups: ${this.stats.contentLookups}${contentAvg} | ` + 
+      `Blob cache hits: ${this.stats.blobCacheHits}${hitAvg} | ` +
+      `Blob cache misses: ${this.stats.blobCacheMisses}${missAvg} | ` +
+      `Prefetch successes: ${this.stats.prefetchSuccesses}`,
+      'color: #22c55e; font-weight: bold', 'color: inherit'
+    );
+  }
+  
+  // Now log mirror stats
+  const mirrorStats = this.mirrorManager.getMirrorStats();
+  if (mirrorStats.length > 0) {
+    console.log('%c[MIRROR STATS]%c', 
+      'color: #3b82f6; font-weight: bold', 'color: inherit');
     
-    const contentAvg = calcAvg(this.stats.timings.contentLookups);
-    const hitAvg = calcAvg(this.stats.timings.blobCacheHits);
-    const missAvg = calcAvg(this.stats.timings.blobCacheMisses);
-    
-    // Log stats
-    if (this.stats.totalRequests > 0) {
+    // Log one line per mirror
+    for (const stat of mirrorStats) {
+      const host = new URL(stat.url).hostname;
       console.log(
-        `%c[GRITS STATS]%c Last 10s: ` + 
-        `Requests: ${this.stats.totalRequests} | ` +
-        `Content lookups: ${this.stats.contentLookups} (avg ${contentAvg}ms) | ` + 
-        `Blob cache hits: ${this.stats.blobCacheHits} (avg ${hitAvg}ms) | ` +
-        `Blob cache misses: ${this.stats.blobCacheMisses} (avg ${missAvg}ms) | ` +
-        `Prefetch successes: ${this.stats.prefetchSuccesses}`,
-        'color: #22c55e; font-weight: bold', 'color: inherit'
+        `  ${host}: Latency ${stat.latency} | Bandwidth ${stat.bandwidth} | ` +
+        `Reliability ${stat.reliability} | Requests ${stat.requests} | ` +
+        `Data ${stat.bytesFetched}`
       );
     }
-      
-    // Reset stats for next interval
-    this.stats = {
-      totalRequests: 0,
-      contentLookups: 0,
-      blobCacheHits: 0,
-      blobCacheMisses: 0,
-      prefetchSuccesses: 0,
-      timings: {
-        contentLookups: [],
-        blobCacheHits: [],
-        blobCacheMisses: []
-      }
-    };
   }
+  
+  // Reset stats for next interval
+  this.stats = {
+    // Reset regular stats
+    totalRequests: 0,
+    contentLookups: 0,
+    blobCacheHits: 0,
+    blobCacheMisses: 0,
+    prefetchSuccesses: 0,
+    timings: {
+      contentLookups: [],
+      blobCacheHits: [],
+      blobCacheMisses: []
+    }
+  };
+  
+  // Reset mirror stats
+  this.mirrorManager.resetStats();
+}
 
   /////
   // Misc
