@@ -113,6 +113,12 @@ func (s *Server) Start() error {
 				log.Printf("Error stopping %s module: %v", module.GetModuleName(), err)
 			}
 		}
+
+		log.Printf("Shutting down blob store.")
+		err := s.BlobStore.Close()
+		if err != nil {
+			log.Printf("Error closing blob store: %v", err)
+		}
 	}()
 
 	return nil
