@@ -20,7 +20,7 @@ type WikiVolume struct {
 }
 
 type WikiVolumeConfig struct {
-	VolumeName string `json:"VolumeName"`
+	VolumeName string `json:"volumeName"`
 }
 
 func NewWikiVolume(config *WikiVolumeConfig, server *Server, readOnly bool) (*WikiVolume, error) {
