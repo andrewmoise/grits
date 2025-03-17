@@ -121,13 +121,50 @@ func setupOriginServer() (*TestServer, int, string, bool, error) {
 	}
 	config.ServerDir = "." // Ensure server directory is set
 
+	// For testing, we need to know the HTTP configuration
+	var originPort int
+	var originHost string
+	var enableTls bool
+
+	for _, moduleRaw := range config.Modules {
+		var moduleMap map[string]interface{}
+		if err := json.Unmarshal(moduleRaw, &moduleMap); err != nil {
+			continue // Skip modules that can't be unmarshaled
+		}
+
+		if moduleType, ok := moduleMap["type"].(string); ok && moduleType == "http" {
+			// Extract port
+			if port, ok := moduleMap["thisPort"].(float64); ok {
+				originPort = int(port)
+			}
+
+			// Extract host
+			if host, ok := moduleMap["thisHost"].(string); ok {
+				originHost = host
+			} else {
+				originHost = "localhost" // Default if not specified
+			}
+
+			// Extract TLS setting
+			if tls, ok := moduleMap["enableTls"].(bool); ok {
+				enableTls = tls
+			}
+
+			break // Found the HTTP module, no need to continue
+		}
+	}
+
 	// Create additional module configurations
 
-	// 1. Origin module with mirror settings
+	// 1. Origin module with mirror settings - using fully qualified URLs
 	allowedMirrors := make([]string, NUM_MIRRORS)
 	for i := 0; i < NUM_MIRRORS; i++ {
-		allowedMirrors[i] = fmt.Sprintf("mirror-%d.local", i)
+		// Use http:// protocol, localhost, and the expected mirror port
+		allowedMirrors[i] = fmt.Sprintf("http://%s:%d", originHost, MIRROR_BASE_PORT+i)
 	}
+
+	// Log the allowed mirrors for debugging
+	log.Printf("Configuring origin with allowed mirrors: %v", allowedMirrors)
 
 	originModuleConfig, err := json.Marshal(map[string]interface{}{
 		"type":                "origin",
@@ -163,41 +200,6 @@ func setupOriginServer() (*TestServer, int, string, bool, error) {
 	if err != nil {
 		return nil, -1, "", false, fmt.Errorf("failed to create origin server: %v", err)
 	}
-
-	// For testing, we need to know the HTTP configuration
-	var originPort int
-	var originHost string
-	var enableTls bool
-
-	for _, moduleRaw := range existingModules {
-		var moduleMap map[string]interface{}
-		if err := json.Unmarshal(moduleRaw, &moduleMap); err != nil {
-			continue // Skip modules that can't be unmarshaled
-		}
-
-		if moduleType, ok := moduleMap["type"].(string); ok && moduleType == "http" {
-			// Extract port
-			if port, ok := moduleMap["thisPort"].(float64); ok {
-				originPort = int(port)
-			}
-
-			// Extract host
-			if host, ok := moduleMap["thisHost"].(string); ok {
-				originHost = host
-			} else {
-				originHost = "localhost" // Default if not specified
-			}
-
-			// Extract TLS setting
-			if tls, ok := moduleMap["enableTls"].(bool); ok {
-				enableTls = tls
-			}
-
-			break // Found the HTTP module, no need to continue
-		}
-	}
-
-	log.Printf("Origin server configured at localhost:%d", originPort)
 
 	// Return the server and a cleanup function
 	cleanup := func() {
@@ -365,13 +367,16 @@ func setupMirrorServer(baseDir string, originPort int, originHost string, enable
 		protocol = "https"
 	}
 
+	// Use the fully qualified URL format for localHostname
+	localHostname := fmt.Sprintf("http://%s:%d", originHost, mirrorPort)
+
 	mirrorModuleConfig, err := json.Marshal(map[string]interface{}{
 		"type":          "mirror",
 		"remoteHost":    fmt.Sprintf("%s:%d", originHost, originPort),
 		"remoteVolume":  "",  // Default volume
 		"maxStorageMB":  100, // 100MB cache
 		"protocol":      protocol,
-		"localHostname": fmt.Sprintf("mirror-%d.local", index),
+		"localHostname": localHostname,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal Mirror module config: %v", err)
@@ -389,7 +394,7 @@ func setupMirrorServer(baseDir string, originPort int, originHost string, enable
 		return nil, fmt.Errorf("failed to create mirror server: %v", err)
 	}
 
-	log.Printf("Mirror server %d configured at http://localhost:%d", index, mirrorPort)
+	log.Printf("Mirror server %d configured at http://%s:%d", index, originHost, mirrorPort)
 
 	// Return the server and a cleanup function
 	cleanup := func() {
