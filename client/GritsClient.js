@@ -479,12 +479,6 @@ class GritsClient {
   }
 
   async _innerFetch(hash, startTime = null, extension = null) {
-    // Construct URL with extension if provided
-    let url = `${this.serverUrl}/grits/v1/blob/${hash}`;
-    if (extension) {
-        url += `.${extension}`;
-    }
-    
     // Check if caching is available
     if (this.blobCache) {
         // Try to get from cache first
@@ -502,7 +496,29 @@ class GritsClient {
     // If not in cache or caching unavailable, fetch from network
     // We use mirror manager unconditionally; it'll fall back to the origin server if needed.
     this.debugLog("cache:" + hash.substring(0, 8), "Blob cache miss, fetching from network");
-    const response = await this.mirrorManager.fetchBlob(hash, extension);
+
+    let response;
+    if (true) {
+      // Option 1:
+      const rightBeforeTime = performance.now();
+      response = await this.mirrorManager.fetchBlob(hash, extension);
+      const afterFetchTime = performance.now();
+      
+      // Calculate and log the timing information
+      const totalElapsed = startTime ? (afterFetchTime - startTime).toFixed(2) : 'N/A';
+      const fetchElapsed = (afterFetchTime - rightBeforeTime).toFixed(2);
+      
+      console.log(`Fetch timing for ${hash.substring(0, 8)}: 
+        - Total elapsed: ${totalElapsed} ms
+        - Mirror fetch elapsed: ${fetchElapsed} ms`);    
+    } else {
+      // Option 2:
+      let url = `${this.serverUrl}/grits/v1/blob/${hash}`;
+      if (extension) {
+          url += `.${extension}`;
+      }
+      response = await fetch(url);
+    }
   
     if (startTime) {
         this.stats.timings.blobCacheMisses.push(performance.now() - startTime);

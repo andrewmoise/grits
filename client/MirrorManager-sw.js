@@ -268,8 +268,9 @@ class MirrorManager {
       // Start timing
       const startTime = performance.now();
       
-      // Fetch with timeout
-      const response = await this.fetchWithTimeout(url, 10000);
+      console.log(`About to execute fetch for ${url}`);
+      const response = await fetch(url);
+      console.log(`Fetch completed with status: ${response.status}, ok: ${response.ok}`);
       
       // Record TTFB
       const ttfb = performance.now() - startTime;
@@ -299,26 +300,6 @@ class MirrorManager {
       return await fetch(url);
     } finally {
       this.activeRequests--;
-    }
-  }
-
-  /**
-   * Fetch with a timeout
-   * @param {string} url - The URL to fetch
-   * @param {number} timeout - Timeout in milliseconds
-   * @returns {Promise<Response>} The fetch response
-   */
-  async fetchWithTimeout(url, timeout) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeout);
-    
-    try {
-      const response = await fetch(url, { signal: controller.signal });
-      clearTimeout(timeoutId);
-      return response;
-    } catch (error) {
-      clearTimeout(timeoutId);
-      throw error;
     }
   }
 
