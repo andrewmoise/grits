@@ -1,4 +1,8 @@
-var/
-grits.cfg
-vendor/
-test-content
+/content/
+/testbed/
+/var/
+/vendor/
+
+/grits.cfg
+/acme-challenge-helper
+/grits
