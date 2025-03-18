@@ -36,3 +36,7 @@ func (dm *DeploymentModule) Stop() error {
 func (dm *DeploymentModule) GetModuleName() string {
 	return "deployment"
 }
+
+func (dm *DeploymentModule) GetConfig() interface{} {
+	return dm.Config
+}

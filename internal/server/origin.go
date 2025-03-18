@@ -60,6 +60,10 @@ func (om *OriginModule) GetModuleName() string {
 	return "origin"
 }
 
+func (m *OriginModule) GetConfig() interface{} {
+	return m.Config
+}
+
 // Modified ListMirrorsHandler to use fully qualified URLs
 func (om *OriginModule) ListMirrorsHandler(w http.ResponseWriter, r *http.Request) {
 	log.Printf("List mirrors handler")

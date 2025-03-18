@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"grits/internal/grits"
 	"log"
@@ -137,4 +138,30 @@ func (s *Server) Shutdown() {
 	s.shutdownOnce.Do(func() {
 		close(s.shutdownChan) // Safely close channel
 	})
+}
+
+func (s *Server) SerializeConfig() (*grits.Config, error) {
+	newConfig := *s.Config
+
+	newConfig.Modules = []json.RawMessage{}
+	for _, module := range s.Modules {
+		rawConfig, err := SerializeModuleConfig(module, module.GetConfig())
+		if err != nil {
+			return nil, fmt.Errorf("failed to serialize %s module: %v",
+				module.GetModuleName(), err)
+		}
+		newConfig.Modules = append(newConfig.Modules, rawConfig)
+	}
+
+	return &newConfig, nil
+}
+
+// SaveConfigToFile serializes the current configuration and writes it to the specified file
+func (s *Server) SaveConfigToFile(filePath string) error {
+	config, err := s.SerializeConfig()
+	if err != nil {
+		return fmt.Errorf("failed to serialize configuration: %v", err)
+	}
+
+	return config.SaveToFile(filePath)
 }

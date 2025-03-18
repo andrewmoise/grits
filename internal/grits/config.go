@@ -56,3 +56,24 @@ func (c *Config) LoadFromFile(filename string) error {
 
 	return nil
 }
+
+// SaveToFile writes the config to the specified file in JSON format
+func (c *Config) SaveToFile(filename string) error {
+	// Create or truncate the file
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Create an encoder with pretty-printing for readability
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+
+	// Write the JSON to the file
+	if err := encoder.Encode(c); err != nil {
+		return err
+	}
+
+	return nil
+}

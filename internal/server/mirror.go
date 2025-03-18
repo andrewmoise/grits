@@ -139,6 +139,10 @@ func (mm *MirrorModule) GetModuleName() string {
 	return "mirror"
 }
 
+func (m *MirrorModule) GetConfig() interface{} {
+	return m.Config
+}
+
 // heartbeatLoop sends periodic heartbeats to the upstream server
 func (mm *MirrorModule) heartbeatLoop() {
 	defer close(mm.stoppedCh) // Signal that the goroutine has stopped

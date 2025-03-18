@@ -51,6 +51,10 @@ func (*MountModule) GetModuleName() string {
 	return "mount"
 }
 
+func (m *MountModule) GetConfig() interface{} {
+	return m.config
+}
+
 func (mm *MountModule) Start() error {
 	mntDir := mm.config.MountPoint
 	os.Mkdir(mntDir, 0755)
