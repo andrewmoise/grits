@@ -156,6 +156,18 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 			}
 			s.AddModule(originModule)
 
+		case "peer":
+			var peerConfig PeerModuleConfig
+			if err := json.Unmarshal(rawConfig, &peerConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal Peer module config: %v", err)
+			}
+
+			peerModule, err := NewPeerModule(s, &peerConfig)
+			if err != nil {
+				return fmt.Errorf("failed to create Peer module: %v", err)
+			}
+			s.AddModule(peerModule)
+
 		// Configured pins are not enabled for a bit longer
 
 		//case "pin":
@@ -177,6 +189,19 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 				return fmt.Errorf("failed to instantiate service worker module: %v", err)
 			}
 			s.AddModule(swModule)
+
+		// Add to the switch statement in LoadModules
+		case "tracker":
+			var trackerConfig TrackerModuleConfig
+			if err := json.Unmarshal(rawConfig, &trackerConfig); err != nil {
+				return fmt.Errorf("failed to unmarshal Tracker module config: %v", err)
+			}
+
+			trackerModule, err := NewTrackerModule(s, &trackerConfig)
+			if err != nil {
+				return fmt.Errorf("failed to create Tracker module: %v", err)
+			}
+			s.AddModule(trackerModule)
 
 		case "wiki":
 			var wikiConfig WikiVolumeConfig
