@@ -59,3 +59,7 @@ func (pm *PinModule) Stop() error {
 func (pm *PinModule) GetModuleName() string {
 	return "pin"
 }
+
+func (pm *PinModule) GetConfig() interface{} {
+	return pm.Config
+}

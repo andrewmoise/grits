@@ -399,3 +399,7 @@ func (swm *ServiceWorkerModule) Stop() error {
 func (swm *ServiceWorkerModule) GetModuleName() string {
 	return "serviceworker"
 }
+
+func (swm *ServiceWorkerModule) GetConfig() interface{} {
+	return swm.Config
+}

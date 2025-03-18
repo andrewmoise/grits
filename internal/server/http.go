@@ -40,6 +40,10 @@ func (*HTTPModule) GetModuleName() string {
 	return "http"
 }
 
+func (m *HTTPModule) GetConfig() interface{} {
+	return m.Config
+}
+
 // NewHTTPModule creates and initializes an HTTPModule instance based on the provided configuration.
 func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 	// If ReadOnly wasn't specified, default to true

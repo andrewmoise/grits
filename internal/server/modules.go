@@ -13,6 +13,7 @@ type Module interface {
 	Start() error
 	Stop() error
 	GetModuleName() string
+	GetConfig() interface{}
 }
 
 // More details for storage modules:
@@ -194,4 +195,25 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+// SerializeModuleConfig converts any module's configuration into JSON
+// with its type field set properly
+func SerializeModuleConfig(module Module, config interface{}) (json.RawMessage, error) {
+	// Convert config to a map
+	configBytes, err := json.Marshal(config)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal config: %v", err)
+	}
+
+	var configMap map[string]interface{}
+	if err := json.Unmarshal(configBytes, &configMap); err != nil {
+		return nil, fmt.Errorf("failed to convert config to map: %v", err)
+	}
+
+	// Set the type from the module's name
+	configMap["type"] = module.GetModuleName()
+
+	// Marshal back to JSON
+	return json.Marshal(configMap)
 }
