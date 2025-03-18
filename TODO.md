@@ -37,3 +37,7 @@ Minor punch list:
 * Make validation of blobs / reference counts when you load, instead of leaking references and thus blobs
 * We could communicate client config information (e.g. the list of mirrors) via the volume storage itself
 * Fix infinite loop of trying to fetch when the server goes down
+* Fix duplication of size limits and cleanup between BlobStore and BlobCache
+* Make templating of the JS exports cleaner
+* Mandate some limits on what characters are allowed in things (volumes, peerNames, etc)
+* Need to worry about key expiration for the certbot keys
