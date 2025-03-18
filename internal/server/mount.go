@@ -36,6 +36,8 @@ type MountModule struct {
 
 	dirtyNodesMtx sync.RWMutex
 	dirtyNodesMap map[string]*gritsNode
+
+	mountPointExisted bool
 }
 
 func NewMountModule(server *Server, config *MountModuleConfig) *MountModule {
@@ -57,7 +59,17 @@ func (m *MountModule) GetConfig() interface{} {
 
 func (mm *MountModule) Start() error {
 	mntDir := mm.config.MountPoint
-	os.Mkdir(mntDir, 0755)
+	if _, err := os.Stat(mntDir); os.IsNotExist(err) {
+		// Mount point doesn't exist
+		os.Mkdir(mntDir, 0755)
+		mm.mountPointExisted = false
+	} else if err == nil {
+		// Mount point does exist
+		mm.mountPointExisted = true
+	} else {
+		// Error
+		return fmt.Errorf("error trying to check %s: %v", mntDir, err)
+	}
 
 	var exists bool
 	mm.volume, exists = mm.gritsServer.Volumes[mm.config.Volume]
@@ -101,7 +113,7 @@ func (mm *MountModule) Stop() error {
 	err := mm.fsServer.Unmount()
 	if err != nil {
 		log.Printf("==========")
-		log.Printf("FAILED to unmount: %v", err)
+		log.Printf("FAILED to unmount %s: %v", mm.config.MountPoint, err)
 		log.Printf("Please close open files, and unmount by hand.")
 		log.Printf("==========")
 	} else {
@@ -110,6 +122,14 @@ func (mm *MountModule) Stop() error {
 
 	// Wait until unmount completes
 	mm.fsServer.Wait()
+
+	if !mm.mountPointExisted {
+		err := os.Remove(mm.config.MountPoint)
+		if err != nil {
+			return fmt.Errorf("couldn't remove %s: %v", mm.config.MountPoint, err)
+		}
+	}
+
 	return nil
 }
 
