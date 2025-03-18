@@ -22,6 +22,16 @@ type HTTPModuleConfig struct {
 
 	EnableTls bool  `json:"enableTLS,omitempty"`
 	ReadOnly  *bool `json:"readOnly,omitempty"`
+
+	// For TLS certificates, two options:
+
+	// 1. Auto config:
+	AutoCertificate bool   `json:"autoCertificate,omitempty"` // Whether to automatically get certs
+	CertbotEmail    string `json:"certbotEmail,omitempty"`    // Your email for the certbot request
+
+	// 2. Manual config:
+	CertPath string `json:"certPath,omitempty"` // Path to fullchain.pem
+	KeyPath  string `json:"keyPath,omitempty"`  // Path to privkey.pem
 }
 
 type HTTPModule struct {
@@ -88,26 +98,43 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 	return httpModule
 }
 
-// Start begins serving HTTP requests.
 func (hm *HTTPModule) Start() error {
-	// Starting the HTTP server in a goroutine
-	go func() {
 		var err error
-		if hm.Config.EnableTls {
-			// Paths to cert and key files
-			certPath := hm.Server.Config.ServerPath("certs/fullchain.pem")
-			keyPath := hm.Server.Config.ServerPath("certs/privkey.pem")
+	var certPath, keyPath string
 
-			log.Printf("Starting HTTPS server on %s\n", hm.HTTPServer.Addr)
+		if hm.Config.EnableTls {
+		if hm.Config.AutoCertificate {
+			// Ensure TLS certificates
+			certbotConfig := CertbotConfig{
+				Domain:   hm.Config.ThisHost,
+				Email:    hm.Config.CertbotEmail,
+				CertsDir: hm.Server.Config.ServerPath("var/certbot"),
+			}
+
+			certPath, keyPath, err = EnsureTLSCertificates(&certbotConfig, hm.Config.AutoCertificate)
+			if err != nil {
+				log.Fatalf("TLS certificate error: %v", err)
+			}
+		} else {
+			certPath = hm.Config.CertPath
+			keyPath = hm.Config.KeyPath
+		}
+	}
+
+	go func() {
+		if hm.Config.EnableTls {
 			err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
 		} else {
-			log.Printf("Starting HTTP server on %s\n", hm.HTTPServer.Addr)
 			err = hm.HTTPServer.ListenAndServe()
 		}
+
+		// FIXME - better handling
 		if err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
+	time.Sleep(250 * time.Millisecond)
+
 	log.Printf("HTTP module started on %s (TLS enabled: %t)\n", hm.HTTPServer.Addr, hm.Config.EnableTls)
 	return nil
 }
