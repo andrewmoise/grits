@@ -80,14 +80,22 @@ func (s *Server) BlobMaintenance() error {
 }
 
 func (s *Server) Start() error {
-	s.AddPeriodicTask(5*time.Second, s.ReportJobs)
-
-	s.AddPeriodicTask(15*time.Second, s.BlobMaintenance)
-
 	// Load modules from config
 	if err := s.LoadModules(s.Config.Modules); err != nil {
 		return fmt.Errorf("failed to load modules: %v", err)
 	}
+
+	startupSuccess := false
+	defer func() {
+		if !startupSuccess {
+			for _, module := range s.Modules {
+				err := module.Stop()
+				if err != nil {
+					log.Printf("Couldn't shut down module %s: %v", module.GetModuleName(), err)
+				}
+			}
+		}
+	}()
 
 	// Start modules
 	for _, module := range s.Modules {
@@ -96,6 +104,12 @@ func (s *Server) Start() error {
 			return fmt.Errorf("failed to start %s module: %v", module.GetModuleName(), err)
 		}
 	}
+
+	startupSuccess = true
+
+	s.AddPeriodicTask(5*time.Second, s.ReportJobs)
+
+	s.AddPeriodicTask(15*time.Second, s.BlobMaintenance)
 
 	log.Printf("Grits server started...")
 
