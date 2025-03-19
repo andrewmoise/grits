@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"grits/internal/grits"
-	"grits/internal/server"
+	"grits/internal/gritsd"
 )
 
 func main() {
@@ -40,7 +40,7 @@ func main() {
 		panic(fmt.Sprintf("Failed to create server directory: %v", err))
 	}
 
-	srv, err := server.NewServer(config)
+	srv, err := gritsd.NewServer(config)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to initialize server: %v", err))
 	}

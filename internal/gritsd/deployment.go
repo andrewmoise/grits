@@ -1,4 +1,4 @@
-package server
+package gritsd
 
 // DeploymentConfig represents the configuration for a deployment module.
 type DeploymentConfig struct {

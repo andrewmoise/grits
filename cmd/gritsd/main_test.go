@@ -11,13 +11,13 @@ import (
 	"time"
 
 	"grits/internal/grits"
-	"grits/internal/server"
+	"grits/internal/gritsd"
 )
 
 func TestFileOperations(t *testing.T) {
 	// Setup
 	baseURL := "http://localhost:2187"
-	s, cleanup := server.SetupTestServer(t, server.WithHttpModule(2187), server.WithWikiVolume("root"))
+	s, cleanup := gritsd.SetupTestServer(t, gritsd.WithHttpModule(2187), gritsd.WithWikiVolume("root"))
 	defer cleanup()
 
 	s.Start()
