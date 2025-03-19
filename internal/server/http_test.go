@@ -180,7 +180,10 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 	}
 	url := "http://" + httpConfig.ThisHost + ":" + fmt.Sprintf("%d", httpConfig.ThisPort)
 
-	httpModule := NewHTTPModule(srv, httpConfig)
+	httpModule, err := NewHTTPModule(srv, httpConfig)
+	if err != nil {
+		t.Fatalf("can't create http module: %v", err)
+	}
 	srv.AddModule(httpModule)
 
 	srv.Start()

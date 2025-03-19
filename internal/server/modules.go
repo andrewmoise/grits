@@ -122,7 +122,11 @@ func (s *Server) LoadModules(rawModuleConfigs []json.RawMessage) error {
 				return fmt.Errorf("failed to unmarshal HTTP module config: %v", err)
 			}
 
-			s.AddModule(NewHTTPModule(s, &httpConfig))
+			httpModule, err := NewHTTPModule(s, &httpConfig)
+			if err != nil {
+				return fmt.Errorf("can't create http module: %v", err)
+			}
+			s.AddModule(httpModule)
 
 		case "mirror":
 			var mirrorConfig MirrorModuleConfig
