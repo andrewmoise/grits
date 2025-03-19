@@ -13,9 +13,8 @@ import (
 
 // PeerModuleConfig defines configuration for peer functionality
 type PeerModuleConfig struct {
-	TrackerHost string `json:"trackerHost"`           // Host of the tracker to connect to
-	TrackerPort int    `json:"trackerPort,omitempty"` // Port the tracker is listening on (optional)
-	PeerName    string `json:"peerName"`              // Name this peer identifies as
+	TrackerUrl string `json:"trackerUrl"` // Host of the tracker to connect to
+	PeerName   string `json:"peerName"`   // Name this peer identifies as
 }
 
 type PeerModule struct {
@@ -36,17 +35,12 @@ type PeerModule struct {
 }
 
 func NewPeerModule(server *Server, config *PeerModuleConfig) (*PeerModule, error) {
-	if config.TrackerHost == "" {
-		return nil, fmt.Errorf("TrackerHost is required")
+	if config.TrackerUrl == "" {
+		return nil, fmt.Errorf("TrackerUrl is required")
 	}
 
 	if config.PeerName == "" {
 		return nil, fmt.Errorf("PeerName is required")
-	}
-
-	// Default to standard HTTPS port if not specified
-	if config.TrackerPort <= 0 {
-		config.TrackerPort = 443 // Default HTTPS port
 	}
 
 	pm := &PeerModule{
@@ -64,7 +58,7 @@ func NewPeerModule(server *Server, config *PeerModuleConfig) (*PeerModule, error
 
 func (pm *PeerModule) Start() error {
 	log.Printf("Starting PeerModule with name %s connecting to tracker %s",
-		pm.Config.PeerName, pm.Config.TrackerHost)
+		pm.Config.PeerName, pm.Config.TrackerUrl)
 
 	// First, ensure we have self-signed certificates in the new location
 	err := GenerateSelfCert(pm.Server.Config)
@@ -116,10 +110,6 @@ func (pm *PeerModule) registerWithTracker() error {
 		return nil
 	}
 
-	// Determine if this is initial registration or heartbeat
-	// We consider it initial registration if we don't have a registered FQDN yet
-	isInitialRegistration := !pm.registered
-
 	// Prepare request payload
 	payload := struct {
 		PeerName string `json:"peerName"`
@@ -135,9 +125,9 @@ func (pm *PeerModule) registerWithTracker() error {
 		return fmt.Errorf("failed to marshal payload: %v", err)
 	}
 
-	// Create the request
-	url := fmt.Sprintf("https://%s:%d/grits/v1/tracker/register-peer",
-		pm.Config.TrackerHost, pm.Config.TrackerPort)
+	// Create the request URL
+	url := fmt.Sprintf("%s/grits/v1/tracker/register-peer",
+		pm.Config.TrackerUrl)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
@@ -145,32 +135,29 @@ func (pm *PeerModule) registerWithTracker() error {
 
 	req.Header.Set("Content-Type", "application/json")
 
+	// Create HTTP client based on registration status
 	var client *http.Client
 
-	// For initial registration, use standard HTTPS without client certificate
-	if isInitialRegistration {
-		client = &http.Client{}
-	} else {
-		// For heartbeats, use client certificate
-		// Load the self-signed certificate for client authentication
-		// Use the new path structure for certificates
-		certPath, keyPath := GetCertificateFiles(pm.Server.Config, SelfSignedCert, pm.Config.PeerName)
+	// Use client certificate for authentication
+	err = GenerateSelfCert(pm.Server.Config)
+	if err != nil {
+		return fmt.Errorf("couldn't generate self certificates: %v", err)
+	}
 
-		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-		if err != nil {
-			return fmt.Errorf("failed to load client certificate: %v", err)
-		}
+	certPath, keyPath := GetCertificateFiles(pm.Server.Config, SelfSignedCert, "current")
+	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		return fmt.Errorf("failed to load client certificate: %v", err)
+	}
 
-		// Configure TLS with client certificate
-		tlsConfig := &tls.Config{
-			Certificates: []tls.Certificate{cert},
-		}
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
 
-		client = &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: tlsConfig,
-			},
-		}
+	client = &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+		},
 	}
 
 	// Send the request
