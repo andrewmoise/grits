@@ -33,8 +33,7 @@ import (
 
 // Served by tracker module:
 //
-// grits/v1/tracker/register-peer - For peers to authenticate to
-// grits/v1/tracker/peer-heartbeat - For peers to authenticate to
+// grits/v1/tracker/register-peer - For peers to maintain their active status
 
 // MirrorModuleConfig defines configuration for mirror functionality
 // FIXME - switch this to remoteUrl instead of remoteHost

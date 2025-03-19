@@ -100,12 +100,11 @@ func WithTrackerModule(subdomain string, heartbeatIntervalSec int) TestModuleIni
 
 // WithPeerModule is an initializer for adding a peer module to the server.
 // It sets up a peer that will register with the specified tracker.
-func WithPeerModule(trackerHost string, trackerPort int, peerName string, port int) TestModuleInitializer {
+func WithPeerModule(trackerUrl string, peerName string, port int) TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
 		peerConfig := &PeerModuleConfig{
-			TrackerHost: trackerHost,
-			TrackerPort: trackerPort,
-			PeerName:    peerName,
+			TrackerUrl: trackerUrl,
+			PeerName:   peerName,
 		}
 
 		peerModule, err := NewPeerModule(s, peerConfig)
