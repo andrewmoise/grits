@@ -12,44 +12,63 @@ And, even the initial cut has some significant advantages in addition to lowered
 
 ## Current Status
 
-It's still very much in progress. It doesn't work yet, just under construction. At present, I'm actually refactoring the whole thing to make use of [IPFS](https://ipfs.tech/) libraries instead of reinventing everything, but you can see some of the very limited functionality right now by doing:
+It's still very much in progress. It doesn't work yet, just under construction.
+
+General guide:
+
+* Basics of persistent file storage and basic web serving - Done, but at a first cut level.
+* FUSE - Very much unreliable. It will work for basic stuff, but it's not safe enough to trust your persistent storage to.
+* Node-to-node communication - In progress
+* Client and service worker pieces - In progress
+
+## How to Build
+
+First, install Go. At present, at least version 1.22.12 is needed.
+
+Install prerequisites:
 
 ```
-sudo apt install golang fuse3 # (or equivalent - NOTE! Go >= 2.21 is needed)
+sudo apt install fuse3 # (or equivalent)
+```
 
-git clone https://github.com/andrewmoise/grits.git
-cd grits
+Get the source. `cd` to the directory you checked out.
+
+Check that everything is okay:
+
+```
 go test ./...
+```
 
+Build necessary binaries:
+
+```
+go build -o bin/gritsd cmd/gritsd/main.go
+
+go build -o bin/acme-challenge-helper cmd/acme-challenge-helper/main.go
+sudo chown root bin/acme-challenge-helper
+sudo chmod u+s bin/acme-challenge-helper
+
+go build -o bin/dns-port-helper cmd/dns-port-helper/main.go
+sudo chown root bin/dns-port-helper
+sudo chmod u+s bin/dns-port-helper
+```
+
+Configure:
+
+```
 cp sample.cfg grits.cfg
-nano grits.cfg # Check SSL and hostname settings
-
-# If you're using SSL and real domain names, then:
-#mkdir certs
-#sudo cp /etc/letsencrypt/live/$SERVER/privkey.pem certs/
-#sudo cp /etc/letsencrypt/live/$SERVER/fullchain.pem certs/
-# Change certs/* ownership to yourself, set mode to 0600
-
-go run cmd/http2/main.go
+nano grits.cfg # Or whatever editor
 ```
 
-Then, from a separate console:
+Run:
 
 ```
-echo hello > /tmp/grits-test/test
-curl https://localhost:1787/test
+bin/gritsd
 ```
 
-You can make any type of changes to /tmp/grits-test that you want, and they'll be synced to the merkle tree, and exposed via the web root. Not much other than that works. There's also an API at /grits/v1/ that can do various operations, suitable for use from a serviceworker or another node in a swarm, but it doesn't do all that much other than that, right now.
+At that point, ./content will be a FUSE mount of the content store. You can test it out by putting some stuff in ./content/public, and whatever you put there should be immediately reflected in the web server. 
 
-Don't do heavy write loads (npm compiles or etc). It'll rewrite tons of copies of the merkle tree and your storage will fill up. Fixing that is right in progress, at the moment.
-
-The theory is that at some point soon, it'll be possible for it to be magically synced to other servers, and served to web clients with intelligent caching. You can just put your media directory instead of /tmp/x, and that'll let you e.g.:
-
-1. Run a node at home that keeps all the media backed up, so the central server doesn't have to have rarely-accessed stuff stored locally, so your server storage costs aren't too high
-2. Have some of your users run helper nodes that can serve up media data to your users, so your server bandwidth costs aren't too high
-
-There are also bits and pieces of the web API, the service worker, things like that, but at present it's in the middle of some refactoring, so it doesn't fully work.
+When you're done, hit Ctrl-C, the server should shut down cleanly. If it hangs because it can't unmount your FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
 
 ## Roadmap
 
