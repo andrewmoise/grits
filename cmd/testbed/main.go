@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"grits/internal/grits"
-	"grits/internal/server"
+	"grits/internal/gritsd"
 )
 
 const (
@@ -37,7 +37,7 @@ func main() {
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
 	// Create a list to track all our servers
-	var allServers []*server.Server
+	var allServers []*gritsd.Server
 
 	// Setup origin server
 	originServer, originPort, originHost, enableTls, err := setupOriginServer()
@@ -91,7 +91,7 @@ func main() {
 }
 
 // setupOriginServer creates and configures the origin server
-func setupOriginServer() (*server.Server, int, string, bool, error) {
+func setupOriginServer() (*gritsd.Server, int, string, bool, error) {
 	// Load the existing configuration
 	config := grits.NewConfig(".")
 	if err := config.LoadFromFile("grits.cfg"); err != nil {
@@ -160,7 +160,7 @@ func setupOriginServer() (*server.Server, int, string, bool, error) {
 	config.Modules = append(existingModules, originModuleConfig)
 
 	// Create the server with the augmented config
-	srv, err := server.NewServer(config)
+	srv, err := gritsd.NewServer(config)
 	if err != nil {
 		return nil, -1, "", false, fmt.Errorf("failed to create origin server: %v", err)
 	}
@@ -199,7 +199,7 @@ func testOriginMirrorSystem(originPort int, originHost string, enableTls bool, n
 		return fmt.Errorf("list-mirrors returned non-OK status: %d", resp.StatusCode)
 	}
 
-	var mirrors []*server.MirrorInfo
+	var mirrors []*gritsd.MirrorInfo
 	if err = json.NewDecoder(resp.Body).Decode(&mirrors); err != nil {
 		return fmt.Errorf("failed to decode mirror list: %v", err)
 	}
@@ -331,7 +331,7 @@ func testOriginMirrorSystem(originPort int, originHost string, enableTls bool, n
 	return nil
 }
 
-func setupMirrorServer(baseDir string, originPort int, originHost string, enableTls bool, index int) (*server.Server, error) {
+func setupMirrorServer(baseDir string, originPort int, originHost string, enableTls bool, index int) (*gritsd.Server, error) {
 	// Create directory for this mirror
 	serverDir := filepath.Join(baseDir, fmt.Sprintf("mirror-%d", index))
 	err := os.MkdirAll(filepath.Join(serverDir, "var"), 0755)
@@ -401,7 +401,7 @@ func setupMirrorServer(baseDir string, originPort int, originHost string, enable
 	}
 
 	// Create the server instance
-	srv, err := server.NewServer(newConfig)
+	srv, err := gritsd.NewServer(newConfig)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create mirror server: %v", err)
 	}
