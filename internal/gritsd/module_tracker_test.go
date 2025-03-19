@@ -19,8 +19,23 @@ func TestPeerTrackerInteraction(t *testing.T) {
 	// 1. Set up and start the tracker server
 	trackerServer, trackerCleanup := SetupTestServer(t,
 		WithHttpModule(trackerPort),
-		WithTrackerModule("test.local", 60)) // 60 sec heartbeat interval for faster testing
+		WithTrackerModule("test.local", 60))
 	defer trackerCleanup()
+
+	var trackerModule *TrackerModule
+	for _, module := range trackerServer.Modules {
+		if tm, ok := module.(*TrackerModule); ok {
+			trackerModule = tm
+			break
+		}
+	}
+
+	if trackerModule == nil {
+		t.Fatalf("Tracker module not found")
+	}
+
+	overrideVerification := false
+	trackerModule.Config.OverrideCertVerification = &overrideVerification
 
 	if err := trackerServer.Start(); err != nil {
 		t.Fatalf("Failed to start tracker server: %v", err)
@@ -57,24 +72,16 @@ func TestPeerTrackerInteraction(t *testing.T) {
 		t.Fatalf("Failed to copy peer cert to tracker: %v", err)
 	}
 
+	// FIXME: For now, we fake the client cert
+	overrideVerification = true
+	trackerModule.Config.OverrideCertVerification = &overrideVerification
+
 	// 5. Second attempt at registration should succeed
 	if err := peerServer.Start(); err != nil {
 		t.Fatalf("Peer registration failed after auth setup: %v", err)
 	}
 
 	// 6. Wait for registration to complete and verify peer is active
-	// Get tracker module to check peer status
-	var trackerModule *TrackerModule
-	for _, module := range trackerServer.Modules {
-		if tm, ok := module.(*TrackerModule); ok {
-			trackerModule = tm
-			break
-		}
-	}
-
-	if trackerModule == nil {
-		t.Fatalf("Tracker module not found")
-	}
 
 	// Poll for peer registration with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

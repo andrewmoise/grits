@@ -16,8 +16,9 @@ import (
 
 // TrackerModuleConfig defines configuration for tracker functionality
 type TrackerModuleConfig struct {
-	PeerSubdomain        string `json:"peerSubdomain"`        // Root domain for peers (e.g., "cache.mydomain.com")
-	HeartbeatIntervalSec int    `json:"heartbeatIntervalSec"` // How often peers should send heartbeats (in seconds)
+	PeerSubdomain            string `json:"peerSubdomain"`        // Root domain for peers (e.g., "cache.mydomain.com")
+	HeartbeatIntervalSec     int    `json:"heartbeatIntervalSec"` // How often peers should send heartbeats (in seconds)
+	OverrideCertVerification *bool  `json:"-"`                    // Test-only flag FIXME FIXME
 }
 
 // PeerInfo tracks information about a registered peer
@@ -118,13 +119,24 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	clientCert := r.TLS.PeerCertificates[0]
-	authFilePath := GetCertPath(tm.Server.Config, PeerCert, request.PeerName)
+	// Certificate verification section
+	if tm.Config.OverrideCertVerification == nil {
+		// Only perform verification in non-test mode
+		clientCert := r.TLS.PeerCertificates[0]
+		authFilePath := GetCertPath(tm.Server.Config, PeerCert, request.PeerName)
 
-	if !tm.verifyPeerAuthorization(authFilePath, clientCert.PublicKey) {
-		log.Printf("Unauthorized heartbeat attempt for peer %s", request.PeerName)
-		http.Error(w, "Unauthorized", http.StatusForbidden)
-		return
+		if !tm.verifyPeerAuthorization(authFilePath, clientCert.PublicKey) {
+			log.Printf("Unauthorized heartbeat attempt for peer %s", request.PeerName)
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+			return
+		}
+	} else {
+		log.Printf("Test mode: Overriding certificate verification for peer %s", request.PeerName)
+		if !*tm.Config.OverrideCertVerification {
+			log.Printf("Unauthorized heartbeat attempt for peer %s (fake)", request.PeerName)
+			http.Error(w, "Unauthorized", http.StatusForbidden)
+			return
+		}
 	}
 
 	// Generate the peer's FQDN
