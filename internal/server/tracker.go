@@ -120,7 +120,8 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Check if we have an authorization file for this peer
-	authFilePath := fmt.Sprintf("peercerts/%s", request.PeerName)
+	// Update to use the new certificate path structure
+	authFilePath := GetCertPath(tm.Server.Config, PeerCert, request.PeerName)
 	if !tm.verifyPeerAuthorization(authFilePath, peerPublicKey) {
 		log.Printf("Unauthorized registration attempt for peer %s", request.PeerName)
 		http.Error(w, "Unauthorized", http.StatusForbidden)
@@ -313,7 +314,7 @@ func (tm *TrackerModule) verifyPeerAuthorization(authFilePath string, peerPublic
 	// actual public key verification based on your specific requirements
 
 	// Check if authorization file exists
-	_, err := os.Stat(tm.Server.Config.ServerPath(authFilePath))
+	_, err := os.Stat(authFilePath)
 	if os.IsNotExist(err) {
 		return false
 	}

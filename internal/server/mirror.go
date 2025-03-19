@@ -33,10 +33,11 @@ import (
 
 // Served by tracker module:
 //
-// grits/v1/peer/register - For peers to authenticate to
-// grits/v1/peer/heartbeat
+// grits/v1/tracker/register-peer - For peers to authenticate to
+// grits/v1/tracker/peer-heartbeat - For peers to authenticate to
 
 // MirrorModuleConfig defines configuration for mirror functionality
+// FIXME - switch this to remoteUrl instead of remoteHost
 type MirrorModuleConfig struct {
 	RemoteHost    string `json:"remoteHost"`
 	MaxStorageMB  int    `json:"maxStorageMB,omitempty"`

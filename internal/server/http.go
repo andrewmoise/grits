@@ -26,12 +26,16 @@ type HTTPModuleConfig struct {
 	// For TLS certificates, two options:
 
 	// 1. Auto config:
-	AutoCertificate bool   `json:"autoCertificate,omitempty"` // Whether to automatically get certs
-	CertbotEmail    string `json:"certbotEmail,omitempty"`    // Your email for the certbot request
+	AutoCertificate bool   `json:"autoCertificate,omitempty"` // Enable automatic certificate acquisition
+	CertbotEmail    string `json:"certbotEmail,omitempty"`    // Email for Let's Encrypt registration
 
 	// 2. Manual config:
 	CertPath string `json:"certPath,omitempty"` // Path to fullchain.pem
 	KeyPath  string `json:"keyPath,omitempty"`  // Path to privkey.pem
+
+	// Temporary: Use self-signed certs instead of Let's Encrypt
+	// If both AutoCertificate and UseSelfSigned are true, AutoCertificate takes precedence
+	UseSelfSigned bool `json:"useSelfSigned,omitempty"` // Use self-signed certificates
 }
 
 type HTTPModule struct {
@@ -55,11 +59,30 @@ func (m *HTTPModule) GetConfig() interface{} {
 }
 
 // NewHTTPModule creates and initializes an HTTPModule instance based on the provided configuration.
-func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
+func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error) {
 	// If ReadOnly wasn't specified, default to true
 	if config.ReadOnly == nil {
 		readOnly := true
 		config.ReadOnly = &readOnly
+	}
+
+	// Validate certificate configuration
+	if config.EnableTls {
+		// If auto certificate is enabled, email is required
+		if config.AutoCertificate && config.CertbotEmail == "" {
+			return nil, fmt.Errorf("certbotEmail is required when autoCertificate is enabled")
+		}
+
+		// If manual paths are provided, check that both cert and key are provided
+		if !config.AutoCertificate && !config.UseSelfSigned &&
+			(config.CertPath == "" || config.KeyPath == "") {
+			return nil, fmt.Errorf("certPath and keyPath are required when not using automatic certificates")
+		}
+
+		// If hostname is empty, can't use Let's Encrypt
+		if config.AutoCertificate && config.ThisHost == "" {
+			return nil, fmt.Errorf("thisHost is required for Let's Encrypt certificates")
+		}
 	}
 
 	mux := http.NewServeMux()
@@ -95,29 +118,60 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) *HTTPModule {
 	server.AddModuleHook(httpModule.addServiceWorkerModule)
 	server.AddModuleHook(httpModule.addMirrorModule)
 
-	return httpModule
+	return httpModule, nil
 }
 
 func (hm *HTTPModule) Start() error {
-		var err error
+	var err error
 	var certPath, keyPath string
 
-		if hm.Config.EnableTls {
+	if hm.Config.EnableTls {
 		if hm.Config.AutoCertificate {
-			// Ensure TLS certificates
-			certbotConfig := CertbotConfig{
-				Domain:   hm.Config.ThisHost,
-				Email:    hm.Config.CertbotEmail,
-				CertsDir: hm.Server.Config.ServerPath("var/certbot"),
+			// Create certificate config for Let's Encrypt
+			certbotConfig := &CertbotConfig{
+				Domain: hm.Config.ThisHost,
+				Email:  hm.Config.CertbotEmail,
 			}
 
-			certPath, keyPath, err = EnsureTLSCertificates(&certbotConfig, hm.Config.AutoCertificate)
+			// Use the new certificate management structure for Let's Encrypt certificates
+			certPath, keyPath, err = EnsureTLSCertificates(hm.Server.Config, certbotConfig, true)
 			if err != nil {
-				log.Fatalf("TLS certificate error: %v", err)
+				return fmt.Errorf("let's encrypt certificate error: %v", err)
 			}
+
+			log.Printf("Using Let's Encrypt certificates for %s", hm.Config.ThisHost)
+		} else if hm.Config.UseSelfSigned {
+			// For self-signed certificates, generate them if they don't exist
+			err := GenerateSelfCert(hm.Server.Config)
+			if err != nil {
+				return fmt.Errorf("self-signed certificate generation error: %v", err)
+			}
+
+			// Get paths to the self-signed certificates
+			certPath, keyPath = GetCertificateFiles(hm.Server.Config, SelfSignedCert, hm.Config.ThisHost)
+			log.Printf("Using self-signed certificates for %s", hm.Config.ThisHost)
 		} else {
-			certPath = hm.Config.CertPath
-			keyPath = hm.Config.KeyPath
+			// Using manually specified certificate paths
+			// If manual certificate paths are provided, check if they're absolute paths
+			// or paths relative to the server configuration
+			if !filepath.IsAbs(hm.Config.CertPath) {
+				certPath = hm.Server.Config.ServerPath(hm.Config.CertPath)
+			} else {
+				certPath = hm.Config.CertPath
+			}
+
+			if !filepath.IsAbs(hm.Config.KeyPath) {
+				keyPath = hm.Server.Config.ServerPath(hm.Config.KeyPath)
+			} else {
+				keyPath = hm.Config.KeyPath
+			}
+
+			// Verify that the certificate files exist
+			if !fileExists(certPath) || !fileExists(keyPath) {
+				return fmt.Errorf("certificate files not found at %s and %s", certPath, keyPath)
+			}
+
+			log.Printf("Using manual certificate paths: cert=%s, key=%s", certPath, keyPath)
 		}
 	}
 

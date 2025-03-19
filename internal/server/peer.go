@@ -16,10 +16,8 @@ type PeerModuleConfig struct {
 	TrackerHost string `json:"trackerHost"`           // Host of the tracker to connect to
 	TrackerPort int    `json:"trackerPort,omitempty"` // Port the tracker is listening on (optional)
 	PeerName    string `json:"peerName"`              // Name this peer identifies as
-	Port        int    `json:"port,omitempty"`        // Port this peer will serve on
 }
 
-// PeerModule implements peer functionality
 type PeerModule struct {
 	Config     *PeerModuleConfig
 	Server     *Server
@@ -64,13 +62,18 @@ func NewPeerModule(server *Server, config *PeerModuleConfig) (*PeerModule, error
 	return pm, nil
 }
 
-// Start initializes and starts the peer module
 func (pm *PeerModule) Start() error {
 	log.Printf("Starting PeerModule with name %s connecting to tracker %s",
 		pm.Config.PeerName, pm.Config.TrackerHost)
 
+	// First, ensure we have self-signed certificates in the new location
+	err := GenerateSelfCert(pm.Server.Config)
+	if err != nil {
+		return fmt.Errorf("failed to generate self-certificates: %v", err)
+	}
+
 	// Attempt initial registration
-	err := pm.registerWithTracker()
+	err = pm.registerWithTracker()
 	if err != nil {
 		return fmt.Errorf("failed to register with tracker: %v", err)
 	}
@@ -106,12 +109,16 @@ func (pm *PeerModule) heartbeatLoop() {
 	}
 }
 
-// registerWithTracker sends registration/heartbeat to the tracker
 func (pm *PeerModule) registerWithTracker() error {
-	if pm.Config.Port <= 0 {
-		log.Printf("No port for peer, not registering.")
+	// Check if we have an HTTP module
+	if pm.httpModule == nil {
+		log.Printf("No HTTP module for peer, not registering.")
 		return nil
 	}
+
+	// Determine if this is initial registration or heartbeat
+	// We consider it initial registration if we don't have a registered FQDN yet
+	isInitialRegistration := !pm.registered
 
 	// Prepare request payload
 	payload := struct {
@@ -119,7 +126,7 @@ func (pm *PeerModule) registerWithTracker() error {
 		Port     int    `json:"port"`
 	}{
 		PeerName: pm.Config.PeerName,
-		Port:     pm.Config.Port,
+		Port:     pm.httpModule.Config.ThisPort,
 	}
 
 	// Convert to JSON
@@ -138,22 +145,32 @@ func (pm *PeerModule) registerWithTracker() error {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	// Load client certificate for authentication
-	certPath := pm.Server.Config.ServerPath(fmt.Sprintf("peercerts/%s.key", pm.Config.PeerName))
-	cert, err := tls.LoadX509KeyPair(certPath, certPath)
-	if err != nil {
-		return fmt.Errorf("failed to load client certificate: %v", err)
-	}
+	var client *http.Client
 
-	// Configure TLS with client certificate
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
+	// For initial registration, use standard HTTPS without client certificate
+	if isInitialRegistration {
+		client = &http.Client{}
+	} else {
+		// For heartbeats, use client certificate
+		// Load the self-signed certificate for client authentication
+		// Use the new path structure for certificates
+		certPath, keyPath := GetCertificateFiles(pm.Server.Config, SelfSignedCert, pm.Config.PeerName)
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load client certificate: %v", err)
+		}
+
+		// Configure TLS with client certificate
+		tlsConfig := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+
+		client = &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
+		}
 	}
 
 	// Send the request
@@ -230,11 +247,6 @@ func (pm *PeerModule) GetConfig() interface{} {
 
 // onModuleAdded is called whenever a new module is added to the server
 func (pm *PeerModule) onModuleAdded(module Module) {
-	// Only process if we don't have a port configured
-	if pm.Config.Port > 0 {
-		return
-	}
-
 	// Check if it's an HTTP module
 	httpModule, ok := module.(*HTTPModule)
 	if !ok {
@@ -243,11 +255,9 @@ func (pm *PeerModule) onModuleAdded(module Module) {
 
 	// We found an HTTP module - check if we already found one before
 	if pm.httpModule != nil {
-		log.Fatalf("Multiple HTTP modules found but no port configured for peer. Please specify a port explicitly.")
+		log.Fatalf("Multiple HTTP modules found.")
 	}
 
 	pm.httpModule = httpModule
-	pm.Config.Port = httpModule.Config.ThisPort
-
-	log.Printf("PeerModule: Using HTTP module port %d", pm.Config.Port)
+	log.Printf("PeerModule: Using HTTP module port %d", httpModule.Config.ThisPort)
 }

@@ -44,7 +44,10 @@ func WithHttpModule(port int) TestModuleInitializer {
 			ThisPort: port,
 			ReadOnly: &readOnly,
 		}
-		httpModule := NewHTTPModule(s, httpConfig)
+		httpModule, err := NewHTTPModule(s, httpConfig)
+		if err != nil {
+			log.Fatalf("can't create http module: %v", err)
+		}
 		s.AddModule(httpModule)
 	}
 }
@@ -62,5 +65,53 @@ func WithWikiVolume(volumeName string) TestModuleInitializer {
 		}
 		s.AddModule(wikiVolume)
 		s.AddVolume(wikiVolume)
+	}
+}
+
+// WithTrackerModule is an initializer for adding a tracker module to the server.
+// It sets up a server to track peer registrations and provide DNS services.
+func WithTrackerModule(subdomain string, heartbeatIntervalSec int) TestModuleInitializer {
+	return func(t *testing.T, s *Server) {
+		trackerConfig := &TrackerModuleConfig{
+			PeerSubdomain:        subdomain,
+			HeartbeatIntervalSec: heartbeatIntervalSec,
+		}
+
+		trackerModule, err := NewTrackerModule(s, trackerConfig)
+		if err != nil {
+			t.Fatalf("Failed to create tracker module: %v", err)
+		}
+
+		// Create token directory
+		tokensDir := s.Config.ServerPath("var/peertokens")
+		if err := os.MkdirAll(tokensDir, 0755); err != nil {
+			t.Fatalf("Failed to create token directory: %v", err)
+		}
+
+		// Create peer certificate directory
+		certDir := s.Config.ServerPath("peercerts")
+		if err := os.MkdirAll(certDir, 0755); err != nil {
+			t.Fatalf("Failed to create peer certificate directory: %v", err)
+		}
+
+		s.AddModule(trackerModule)
+	}
+}
+
+// WithPeerModule is an initializer for adding a peer module to the server.
+// It sets up a peer that will register with the specified tracker.
+func WithPeerModule(trackerHost string, trackerPort int, peerName string, port int) TestModuleInitializer {
+	return func(t *testing.T, s *Server) {
+		peerConfig := &PeerModuleConfig{
+			TrackerHost: trackerHost,
+			TrackerPort: trackerPort,
+			PeerName:    peerName,
+		}
+
+		peerModule, err := NewPeerModule(s, peerConfig)
+		if err != nil {
+			t.Fatalf("Failed to create peer module: %v", err)
+		}
+		s.AddModule(peerModule)
 	}
 }
