@@ -1,8 +1,8 @@
+/bin/gritsd
+/bin/acme-challenge-helper
 /content/
 /testbed/
 /var/
 /vendor/
 
 /grits.cfg
-/acme-challenge-helper
-/grits

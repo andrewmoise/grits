@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 )
 
@@ -104,6 +106,8 @@ func (pm *PeerModule) heartbeatLoop() {
 }
 
 func (pm *PeerModule) registerWithTracker() error {
+	log.Printf("Registering peer with tracker: %s", pm.Config.PeerName)
+
 	// Check if we have an HTTP module
 	if pm.httpModule == nil {
 		log.Printf("No HTTP module for peer, not registering.")
@@ -125,9 +129,16 @@ func (pm *PeerModule) registerWithTracker() error {
 		return fmt.Errorf("failed to marshal payload: %v", err)
 	}
 
-	// Create the request URL
-	url := fmt.Sprintf("%s/grits/v1/tracker/register-peer",
-		pm.Config.TrackerUrl)
+	// Create the request URL - ensure it uses HTTPS if tracker is using TLS
+	trackerUrl := pm.Config.TrackerUrl
+	if !strings.HasPrefix(trackerUrl, "http") {
+		// Default to https if not specified
+		trackerUrl = "https://" + trackerUrl
+	}
+
+	url := fmt.Sprintf("%s/grits/v1/tracker/register-peer", trackerUrl)
+	log.Printf("Posting to tracker at URL: %s", url)
+
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
@@ -135,7 +146,7 @@ func (pm *PeerModule) registerWithTracker() error {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	// Create HTTP client based on registration status
+	// Create HTTP client with TLS certificate
 	var client *http.Client
 
 	// Use client certificate for authentication
@@ -145,11 +156,22 @@ func (pm *PeerModule) registerWithTracker() error {
 	}
 
 	certPath, keyPath := GetCertificateFiles(pm.Server.Config, SelfSignedCert, "current")
+	log.Printf("Using certificate files: cert=%s, key=%s", certPath, keyPath)
+
+	// Check if the files exist
+	if _, err := os.Stat(certPath); os.IsNotExist(err) {
+		return fmt.Errorf("certificate file does not exist: %s", certPath)
+	}
+	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
+		return fmt.Errorf("key file does not exist: %s", keyPath)
+	}
+
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return fmt.Errorf("failed to load client certificate: %v", err)
 	}
 
+	// Create TLS config with our certificate and skip verification for self-signed server cert
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 	}
@@ -161,11 +183,15 @@ func (pm *PeerModule) registerWithTracker() error {
 	}
 
 	// Send the request
+	log.Printf("Sending registration request with TLS client certificate")
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %v", err)
 	}
 	defer resp.Body.Close()
+
+	// Log response headers for debugging
+	log.Printf("Response status: %s", resp.Status)
 
 	// Check response status
 	if resp.StatusCode != http.StatusOK {

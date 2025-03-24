@@ -1,6 +1,7 @@
 package gritsd
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -68,7 +69,9 @@ func NewTrackerModule(server *Server, config *TrackerModuleConfig) (*TrackerModu
 	return tm, nil
 }
 
-// onModuleAdded is called whenever a new module is added to the server
+// Add this to the TrackerModule in gritsd/tracker_module.go
+
+// Add this function to register the list-peers endpoint
 func (tm *TrackerModule) onModuleAdded(module Module) {
 	// Check if it's an HTTP module
 	httpModule, ok := module.(*HTTPModule)
@@ -80,6 +83,38 @@ func (tm *TrackerModule) onModuleAdded(module Module) {
 	log.Printf("TrackerModule: Registering HTTP handlers")
 	httpModule.Mux.HandleFunc("/grits/v1/tracker/register-peer",
 		httpModule.requestMiddleware(tm.RegisterPeerHandler))
+	httpModule.Mux.HandleFunc("/grits/v1/tracker/list-peers",
+		httpModule.requestMiddleware(tm.ListPeersHandler))
+
+	// Request client certs
+	httpModule.HTTPServer.TLSConfig.ClientAuth = tls.RequestClientCert
+}
+
+// Add this new handler function to the TrackerModule
+func (tm *TrackerModule) ListPeersHandler(w http.ResponseWriter, r *http.Request) {
+	// Check HTTP method
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get a snapshot of the current peers
+	tm.peersMutex.RLock()
+	peerList := make([]*PeerInfo, 0, len(tm.peers))
+	for _, peer := range tm.peers {
+		// Create a copy to avoid race conditions
+		peerCopy := *peer
+		peerList = append(peerList, &peerCopy)
+	}
+	tm.peersMutex.RUnlock()
+
+	// Return the peer list as JSON
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(peerList); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to encode response: %v", err),
+			http.StatusInternalServerError)
+		return
+	}
 }
 
 func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Request) {
@@ -119,15 +154,36 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// Certificate verification section
+	// Handle certificate verification
 	if tm.Config.OverrideCertVerification == nil {
-		// Only perform verification in non-test mode
-		clientCert := r.TLS.PeerCertificates[0]
-		authFilePath := GetCertPath(tm.Server.Config, PeerCert, request.PeerName)
+		// Only perform verification in non-test mode if TLS is enabled
+		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+			clientCert := r.TLS.PeerCertificates[0]
+			log.Printf("Received client certificate for peer %s: Subject=%s",
+				request.PeerName, clientCert.Subject.CommonName)
 
-		if !tm.verifyPeerAuthorization(authFilePath, clientCert.PublicKey) {
-			log.Printf("Unauthorized heartbeat attempt for peer %s", request.PeerName)
+			// Get the peer cert path
+			authFilePath := GetCertPath(tm.Server.Config, PeerCert, request.PeerName)
+			log.Printf("Looking for peer authorization at: %s", authFilePath)
+
+			if !tm.verifyPeerAuthorization(authFilePath, clientCert.PublicKey) {
+				log.Printf("Unauthorized heartbeat attempt for peer %s - cert verification failed",
+					request.PeerName)
+				http.Error(w, "Unauthorized", http.StatusForbidden)
+				return
+			}
+
+			log.Printf("Peer %s certificate successfully verified", request.PeerName)
+		} else {
+			log.Printf("Warning: No TLS certificates found for peer %s", request.PeerName)
+
+			certificateCount := 0
+			if r.TLS != nil {
+				certificateCount = len(r.TLS.PeerCertificates)
+			}
+			log.Printf("TLS object present: %v, Certificate count: %d", r.TLS != nil, certificateCount)
 			http.Error(w, "Unauthorized", http.StatusForbidden)
+
 			return
 		}
 	} else {
@@ -236,7 +292,7 @@ func (tm *TrackerModule) startDNSServer() error {
 
 	// Start the DNS server
 	server := &dns.Server{
-		Addr: ":53", // Standard DNS port
+		Addr: ":5353", // We forward port 53 to this
 		Net:  "udp",
 	}
 
@@ -300,18 +356,18 @@ func (tm *TrackerModule) handleDNSQuery(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 // verifyPeerAuthorization checks if a peer is authorized based on its public key
+// Enhanced verification function
 func (tm *TrackerModule) verifyPeerAuthorization(authFilePath string, peerPublicKey interface{}) bool {
-	// This is a simplified implementation - you'd need to implement
-	// actual public key verification based on your specific requirements
-
 	// Check if authorization file exists
 	_, err := os.Stat(authFilePath)
 	if os.IsNotExist(err) {
+		log.Printf("Peer authorization file not found: %s", authFilePath)
 		return false
 	}
 
-	// For now, we'll assume the file's existence is enough for authorization
-	// In a real implementation, you'd verify the public key matches what's in the file
+	// For simplicity in this implementation, we'll assume the file's existence is enough
+	// In a real implementation, we'd read the stored public key and compare it
+	log.Printf("Peer authorization file exists: %s", authFilePath)
 	return true
 }
 

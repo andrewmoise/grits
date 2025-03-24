@@ -1,0 +1,201 @@
+#!/bin/sh
+# port-helper - A script to manage port forwarding rules with iptables
+
+set -e  # Exit on error
+
+# Check if running as root
+if [ "$(id -u)" -ne 0 ]; then
+    echo "This script must be run as root" >&2
+    exit 1
+fi
+
+# Display help message
+show_help() {
+    echo "Usage: $0 COMMAND [OPTIONS]"
+    echo
+    echo "Commands:"
+    echo "  add     Add port forwarding rule"
+    echo "  remove  Remove port forwarding rule"
+    echo "  list    List current forwarding rules"
+    echo
+    echo "Options:"
+    echo "  -s, --source PORT    Source port (required for add/remove)"
+    echo "  -d, --dest PORT      Destination port (required for add/remove)"
+    echo "  -p, --proto PROTO    Protocol: tcp, udp, or both (default: both)"
+    echo
+    echo "Examples:"
+    echo "  $0 add -s 80 -d 8080       # Forward port 80 to 8080 (TCP and UDP)"
+    echo "  $0 add -s 443 -d 8443 -p tcp   # Forward port 443 to 8443 (TCP only)"
+    echo "  $0 remove -s 80 -d 8080    # Remove forwarding from port 80 to 8080"
+    echo "  $0 list                    # List all forwarding rules"
+    exit 1
+}
+
+# Function to check if a rule already exists
+rule_exists() {
+    proto=$1
+    source_port=$2
+    dest_port=$3
+    
+    iptables -t nat -C PREROUTING -p "$proto" --dport "$source_port" -j REDIRECT --to-port "$dest_port" 2>/dev/null
+    return $?
+}
+
+# Function to add a forwarding rule
+add_rule() {
+    proto=$1
+    source_port=$2
+    dest_port=$3
+    
+    # Check if rule already exists
+    if rule_exists "$proto" "$source_port" "$dest_port"; then
+        echo "Rule already exists for $proto: $source_port -> $dest_port" >&2
+        return 0
+    fi
+    
+    # Add the rule
+    iptables -t nat -A PREROUTING -p "$proto" --dport "$source_port" -j REDIRECT --to-port "$dest_port"
+    echo "Added forwarding rule for $proto: $source_port -> $dest_port"
+}
+
+# Function to remove a forwarding rule
+remove_rule() {
+    proto=$1
+    source_port=$2
+    dest_port=$3
+    
+    # Check if rule exists
+    if ! rule_exists "$proto" "$source_port" "$dest_port"; then
+        echo "Rule doesn't exist for $proto: $source_port -> $dest_port" >&2
+        return 0
+    fi
+    
+    # Remove the rule
+    iptables -t nat -D PREROUTING -p "$proto" --dport "$source_port" -j REDIRECT --to-port "$dest_port"
+    echo "Removed forwarding rule for $proto: $source_port -> $dest_port"
+}
+
+# Function to list all forwarding rules
+list_rules() {
+    echo "Current port forwarding rules:"
+    echo "-----------------------------"
+    
+    # Use a simpler approach to extract forwarding rules
+    iptables -t nat -L PREROUTING -n | grep "REDIRECT" | while read line; do
+        # Extract protocol and ports using a more portable method
+        proto=$(echo "$line" | awk '{print $4}')
+        source_port=$(echo "$line" | awk '{print $7}' | sed 's/dpt://')
+        dest_port=$(echo "$line" | awk '{print $NF}')
+        
+        echo "$proto: $source_port -> $dest_port"
+    done
+    
+    # If no rules found, display a message
+    rule_count=$(iptables -t nat -L PREROUTING -n | grep -c "REDIRECT" || true)
+    if [ "$rule_count" -eq 0 ]; then
+        echo "No port forwarding rules found."
+    fi
+}
+
+# Parse arguments
+if [ $# -eq 0 ]; then
+    show_help
+fi
+
+COMMAND=$1
+shift
+
+SOURCE_PORT=""
+DEST_PORT=""
+PROTO="both"
+
+# Parse options
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -s|--source)
+            SOURCE_PORT="$2"
+            shift 2
+            ;;
+        -d|--dest)
+            DEST_PORT="$2"
+            shift 2
+            ;;
+        -p|--proto)
+            PROTO="$2"
+            shift 2
+            ;;
+        -h|--help)
+            show_help
+            ;;
+        *)
+            echo "Unknown option: $1" >&2
+            show_help
+            ;;
+    esac
+done
+
+# Execute the appropriate command
+case "$COMMAND" in
+    add)
+        # Validate required parameters
+        if [ -z "$SOURCE_PORT" ] || [ -z "$DEST_PORT" ]; then
+            echo "Error: Source and destination ports are required for add command" >&2
+            show_help
+        fi
+        
+        # Handle different protocol options
+        case "$PROTO" in
+            tcp)
+                add_rule tcp "$SOURCE_PORT" "$DEST_PORT"
+                ;;
+            udp)
+                add_rule udp "$SOURCE_PORT" "$DEST_PORT"
+                ;;
+            both)
+                add_rule tcp "$SOURCE_PORT" "$DEST_PORT"
+                add_rule udp "$SOURCE_PORT" "$DEST_PORT"
+                ;;
+            *)
+                echo "Error: Invalid protocol '$PROTO'. Use tcp, udp, or both." >&2
+                exit 1
+                ;;
+        esac
+        ;;
+        
+    remove)
+        # Validate required parameters
+        if [ -z "$SOURCE_PORT" ] || [ -z "$DEST_PORT" ]; then
+            echo "Error: Source and destination ports are required for remove command" >&2
+            show_help
+        fi
+        
+        # Handle different protocol options
+        case "$PROTO" in
+            tcp)
+                remove_rule tcp "$SOURCE_PORT" "$DEST_PORT"
+                ;;
+            udp)
+                remove_rule udp "$SOURCE_PORT" "$DEST_PORT"
+                ;;
+            both)
+                remove_rule tcp "$SOURCE_PORT" "$DEST_PORT"
+                remove_rule udp "$SOURCE_PORT" "$DEST_PORT"
+                ;;
+            *)
+                echo "Error: Invalid protocol '$PROTO'. Use tcp, udp, or both." >&2
+                exit 1
+                ;;
+        esac
+        ;;
+        
+    list)
+        list_rules
+        ;;
+        
+    *)
+        echo "Unknown command: $COMMAND" >&2
+        show_help
+        ;;
+esac
+
+exit 0
