@@ -1,13 +1,20 @@
 package gritsd
 
 import (
+	"bytes"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -164,6 +171,7 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 
 			// Get the peer cert path
 			authFilePath := GetCertPath(tm.Server.Config, PeerCert, request.PeerName)
+			authFilePath = filepath.Join(authFilePath, "fullchain.pem")
 			log.Printf("Looking for peer authorization at: %s", authFilePath)
 
 			if !tm.verifyPeerAuthorization(authFilePath, clientCert.PublicKey) {
@@ -355,8 +363,7 @@ func (tm *TrackerModule) handleDNSQuery(w dns.ResponseWriter, r *dns.Msg) {
 	w.WriteMsg(m)
 }
 
-// verifyPeerAuthorization checks if a peer is authorized based on its public key
-// Enhanced verification function
+// Make sure the peer's authorization matches the one we were configured with
 func (tm *TrackerModule) verifyPeerAuthorization(authFilePath string, peerPublicKey interface{}) bool {
 	// Check if authorization file exists
 	_, err := os.Stat(authFilePath)
@@ -365,10 +372,60 @@ func (tm *TrackerModule) verifyPeerAuthorization(authFilePath string, peerPublic
 		return false
 	}
 
-	// For simplicity in this implementation, we'll assume the file's existence is enough
-	// In a real implementation, we'd read the stored public key and compare it
-	log.Printf("Peer authorization file exists: %s", authFilePath)
-	return true
+	// Read the authorized certificate file
+	authorizedCertBytes, err := os.ReadFile(authFilePath)
+	if err != nil {
+		log.Printf("Failed to read peer authorization file: %s, error: %v", authFilePath, err)
+		return false
+	}
+
+	// Parse the certificate
+	authorizedCert, err := x509.ParseCertificate(authorizedCertBytes)
+	if err != nil {
+		// Try parsing as PEM format if binary DER format fails
+		block, _ := pem.Decode(authorizedCertBytes)
+		if block == nil || block.Type != "CERTIFICATE" {
+			log.Printf("Failed to parse peer certificate from %s: not a valid certificate format", authFilePath)
+			return false
+		}
+
+		authorizedCert, err = x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			log.Printf("Failed to parse peer certificate from %s: %v", authFilePath, err)
+			return false
+		}
+	}
+
+	// Extract public key from authorized certificate
+	authorizedPublicKey := authorizedCert.PublicKey
+
+	// Compare the public keys
+	switch authorizedKey := authorizedPublicKey.(type) {
+	case *rsa.PublicKey:
+		if peerKey, ok := peerPublicKey.(*rsa.PublicKey); ok {
+			// Compare RSA public keys
+			return peerKey.N.Cmp(authorizedKey.N) == 0 && peerKey.E == authorizedKey.E
+		}
+	case *ecdsa.PublicKey:
+		if peerKey, ok := peerPublicKey.(*ecdsa.PublicKey); ok {
+			// Compare ECDSA public keys
+			return peerKey.X.Cmp(authorizedKey.X) == 0 &&
+				peerKey.Y.Cmp(authorizedKey.Y) == 0 &&
+				peerKey.Curve.Params().Name == authorizedKey.Curve.Params().Name
+		}
+	case ed25519.PublicKey:
+		if peerKey, ok := peerPublicKey.(ed25519.PublicKey); ok {
+			// Compare Ed25519 public keys
+			return bytes.Equal(peerKey, authorizedKey)
+		}
+	default:
+		log.Printf("Unsupported public key type: %T", authorizedPublicKey)
+		return false
+	}
+
+	log.Printf("Public key types don't match. Authorized: %T, Provided: %T",
+		authorizedPublicKey, peerPublicKey)
+	return false
 }
 
 // Start initializes and starts the tracker module
