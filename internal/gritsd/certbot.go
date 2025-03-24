@@ -51,13 +51,13 @@ func GetCertificateFiles(config *grits.Config, certType CertificateType, entityN
 
 // EnsureTLSCertificates generates keys and acquires certificates if needed
 // Returns paths to fullchain.pem and privkey.pem for use with HTTP server
-func EnsureTLSCertificates(config *grits.Config, cfg *CertbotConfig, autoCertificate bool) (certPath, keyPath string, err error) {
-	if cfg.Domain == "" {
+func EnsureTLSCertificates(serverConfig *grits.Config, certConfig *CertbotConfig, autoCertificate bool) (certPath, keyPath string, err error) {
+	if certConfig.Domain == "" {
 		return "", "", errors.New("domain name is required")
 	}
 
 	// Update the certificate directory to use our new structure
-	certsDir := GetCertPath(config, LetsEncryptCert, cfg.Domain)
+	certsDir := GetCertPath(serverConfig, LetsEncryptCert, certConfig.Domain)
 
 	// Set up certbot directory structure
 	configDir := filepath.Join(certsDir, "config")
@@ -65,28 +65,28 @@ func EnsureTLSCertificates(config *grits.Config, cfg *CertbotConfig, autoCertifi
 	logsDir := filepath.Join(certsDir, "logs")
 
 	// Define paths where certbot will store certificates
-	certPath = filepath.Join(configDir, "live", cfg.Domain, "fullchain.pem")
-	keyPath = filepath.Join(configDir, "live", cfg.Domain, "privkey.pem")
+	certPath = filepath.Join(configDir, "live", certConfig.Domain, "fullchain.pem")
+	keyPath = filepath.Join(configDir, "live", certConfig.Domain, "privkey.pem")
 
 	// Check if certificates already exist
 	if fileExists(certPath) && fileExists(keyPath) {
-		log.Printf("Using existing certificates for %s", cfg.Domain)
+		log.Printf("Using existing certificates for %s", certConfig.Domain)
 		return certPath, keyPath, nil
 	}
 
 	// If auto-certificate is disabled, return an error
 	if !autoCertificate {
-		return "", "", fmt.Errorf("certificates for %s not found and auto-certificate is disabled", cfg.Domain)
+		return "", "", fmt.Errorf("certificates for %s not found and auto-certificate is disabled", certConfig.Domain)
 	}
 
 	// If email is missing, we can't proceed with Let's Encrypt
-	if cfg.Email == "" {
+	if certConfig.Email == "" {
 		return "", "", errors.New("email address is required for Let's Encrypt")
 	}
 
 	// At this point we need to request new certificates
-	log.Printf("Acquiring new certificates for %s", cfg.Domain)
-	if err := obtainCertificate(cfg, configDir, workDir, logsDir); err != nil {
+	log.Printf("Acquiring new certificates for %s", certConfig.Domain)
+	if err := obtainCertificate(serverConfig, certConfig, configDir, workDir, logsDir); err != nil {
 		return "", "", fmt.Errorf("failed to obtain certificate: %w", err)
 	}
 
@@ -185,7 +185,7 @@ func UpgradeToCertbot(config *grits.Config, fqdn string, certbotConfig *CertbotC
 }
 
 // obtainCertificate gets a signed certificate from Let's Encrypt using certbot
-func obtainCertificate(cfg *CertbotConfig, configDir, workDir, logsDir string) error {
+func obtainCertificate(serverConfig *grits.Config, cfg *CertbotConfig, configDir, workDir, logsDir string) error {
 	// Create temporary webroot for ACME challenge
 	webRootPath := filepath.Join(workDir, "tmp-webroot")
 	acmePath := filepath.Join(webRootPath, ".well-known", "acme-challenge")
@@ -195,7 +195,7 @@ func obtainCertificate(cfg *CertbotConfig, configDir, workDir, logsDir string) e
 	defer os.RemoveAll(webRootPath) // Clean up when done
 
 	// Create a custom HTTP client for certbot that uses the ACME helper
-	acmeHelperPath := filepath.Join(os.Getenv("PATH"), "acme-challenge-helper")
+	acmeHelperPath := serverConfig.ServerPath("bin/acme-challenge-helper")
 	if !fileExists(acmeHelperPath) {
 		// Check in common locations
 		altPaths := []string{
