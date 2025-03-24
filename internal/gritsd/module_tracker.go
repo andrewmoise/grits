@@ -98,7 +98,6 @@ func (tm *TrackerModule) onModuleAdded(module Module) {
 	httpModule.HTTPServer.TLSConfig.ClientAuth = tls.RequestClientCert
 }
 
-// Add this new handler function to the TrackerModule
 func (tm *TrackerModule) ListPeersHandler(w http.ResponseWriter, r *http.Request) {
 	// Check HTTP method
 	if r.Method != http.MethodGet {
@@ -154,6 +153,9 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Convert PeerName to lowercase to ensure case-insensitive matching
+	lowerPeerName := strings.ToLower(request.PeerName)
+
 	// Get peer's IP address
 	peerIP, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -205,18 +207,19 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Generate the peer's FQDN
-	peerFQDN := fmt.Sprintf("%s.%s", request.PeerName, tm.Config.PeerSubdomain)
+	peerFQDN := fmt.Sprintf("%s.%s", lowerPeerName, tm.Config.PeerSubdomain)
 
 	// Update peer registry
 	tm.peersMutex.Lock()
 
-	peer, exists := tm.peers[request.PeerName]
+	// Check for the peer using the lowercase name
+	peer, exists := tm.peers[lowerPeerName]
 	wasInactive := exists && !peer.IsActive
 
 	if !exists {
 		// New peer registration
-		tm.peers[request.PeerName] = &PeerInfo{
-			Name:          request.PeerName,
+		tm.peers[lowerPeerName] = &PeerInfo{
+			Name:          request.PeerName, // Preserve original casing for display
 			LastHeartbeat: time.Now(),
 			IsActive:      true,
 			Port:          request.Port,
@@ -229,8 +232,11 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 		// Update existing peer
 		peer.LastHeartbeat = time.Now()
 		peer.IsActive = true
+		peer.Port = request.Port
+		peer.IPAddress = peerIP
 
-		// [Existing code for updating port and IP]
+		// Keep the original name for display purposes but ensure it's stored with lowercase key
+		peer.Name = request.PeerName
 	}
 
 	tm.peersMutex.Unlock()
@@ -358,7 +364,8 @@ func (tm *TrackerModule) handleDNSQuery(w dns.ResponseWriter, r *dns.Msg) {
 		}
 		tm.peersMutex.RUnlock()
 
-		log.Printf("  basic checks passed (ip '%s' type %d)", ipAddress, q.Qtype)
+		log.Printf("  DNS lookup for peer '%s', active: %v, ip: '%s', type %d",
+			peerName, active, ipAddress, q.Qtype)
 
 		if !active || ipAddress == "" {
 			continue // Peer not active or no IP
