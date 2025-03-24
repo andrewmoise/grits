@@ -50,7 +50,8 @@ type TrackerModule struct {
 	stoppedCh chan struct{} // Channel to signal when goroutines are stopped
 	running   bool          // Track if the module is running
 
-	dnsServer *dns.Server // DNS server instance
+	dnsServer4 *dns.Server // DNS server instance
+	dnsServer6 *dns.Server // DNS server instance
 }
 
 // NewTrackerModule creates a new TrackerModule instance
@@ -296,22 +297,36 @@ func (tm *TrackerModule) updatePeerActivity() {
 // startDNSServer starts a simple DNS server for peer subdomains
 func (tm *TrackerModule) startDNSServer() error {
 	// Set up DNS handler for our domain
-	dns.HandleFunc("peer."+tm.Config.PeerSubdomain+".", tm.handleDNSQuery)
+	dns.HandleFunc(tm.Config.PeerSubdomain+".", tm.handleDNSQuery)
 
-	// Start the DNS server
-	server := &dns.Server{
-		Addr: ":5353", // We forward port 53 to this
+	// Start two servers - one for IPv4 and one for IPv6
+	server4 := &dns.Server{
+		Addr: "0.0.0.0:5353", // Explicitly IPv4
 		Net:  "udp",
 	}
 
-	tm.dnsServer = server
+	server6 := &dns.Server{
+		Addr: "[::]:5353", // IPv6
+		Net:  "udp",
+	}
 
 	go func() {
-		log.Printf("Starting DNS server for domain: peer.%s", tm.Config.PeerSubdomain)
-		if err := server.ListenAndServe(); err != nil {
+		log.Printf("Starting IPv4 DNS server for domain: peer.%s", tm.Config.PeerSubdomain)
+		if err := server4.ListenAndServe(); err != nil {
 			log.Printf("DNS server error: %v", err)
 		}
 	}()
+
+	go func() {
+		log.Printf("Starting IPv6 DNS server for domain: peer.%s", tm.Config.PeerSubdomain)
+		if err := server4.ListenAndServe(); err != nil {
+			log.Printf("DNS server error: %v", err)
+		}
+	}()
+
+	// Store them for cleanup
+	tm.dnsServer4 = server4
+	tm.dnsServer6 = server6
 
 	return nil
 }
@@ -323,13 +338,16 @@ func (tm *TrackerModule) handleDNSQuery(w dns.ResponseWriter, r *dns.Msg) {
 	m.Authoritative = true
 
 	for _, q := range r.Question {
+		log.Printf("Got DNS query for %s", q.Name)
+
 		// Extract peer name from the query (e.g., "peer1.peer.example.com.")
 		domainParts := strings.Split(q.Name, ".")
 		if len(domainParts) < 4 {
 			continue // Invalid domain format
 		}
 
-		peerName := domainParts[0]
+		// Convert to lowercase for case-insensitive matching
+		peerName := strings.ToLower(domainParts[0])
 
 		tm.peersMutex.RLock()
 		peer, exists := tm.peers[peerName]
@@ -339,6 +357,8 @@ func (tm *TrackerModule) handleDNSQuery(w dns.ResponseWriter, r *dns.Msg) {
 			ipAddress = peer.IPAddress
 		}
 		tm.peersMutex.RUnlock()
+
+		log.Printf("  basic checks passed (ip '%s' type %d)", ipAddress, q.Qtype)
 
 		if !active || ipAddress == "" {
 			continue // Peer not active or no IP
@@ -360,7 +380,11 @@ func (tm *TrackerModule) handleDNSQuery(w dns.ResponseWriter, r *dns.Msg) {
 		}
 	}
 
-	w.WriteMsg(m)
+	log.Printf("Sending DNS response with %d answer records", len(m.Answer))
+	responseErr := w.WriteMsg(m)
+	if responseErr != nil {
+		log.Printf("Error sending DNS response: %v", responseErr)
+	}
 }
 
 // Make sure the peer's authorization matches the one we were configured with
@@ -452,9 +476,12 @@ func (tm *TrackerModule) Stop() error {
 
 	log.Printf("Stopping TrackerModule")
 
-	// Stop the DNS server if running
-	if tm.dnsServer != nil {
-		tm.dnsServer.Shutdown()
+	// Stop the DNS servers if running
+	if tm.dnsServer4 != nil {
+		tm.dnsServer4.Shutdown()
+	}
+	if tm.dnsServer6 != nil {
+		tm.dnsServer6.Shutdown()
 	}
 
 	// Send stop signal to goroutines
