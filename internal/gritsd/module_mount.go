@@ -109,19 +109,21 @@ func (mm *MountModule) Start() error {
 func (mm *MountModule) Stop() error {
 	log.Printf("We are stopping mount module")
 
-	// First attempt to unmount
-	err := mm.fsServer.Unmount()
-	if err != nil {
-		log.Printf("==========")
-		log.Printf("FAILED to unmount %s: %v", mm.config.MountPoint, err)
-		log.Printf("Please close open files, and unmount by hand.")
-		log.Printf("==========")
-	} else {
-		log.Printf("Successfully unmounted %s", mm.config.MountPoint)
-	}
+	if mm.fsServer != nil {
+		// First attempt to unmount
+		err := mm.fsServer.Unmount()
+		if err != nil {
+			log.Printf("==========")
+			log.Printf("FAILED to unmount %s: %v", mm.config.MountPoint, err)
+			log.Printf("Please close open files, and unmount by hand.")
+			log.Printf("==========")
+		} else {
+			log.Printf("Successfully unmounted %s", mm.config.MountPoint)
+		}
 
-	// Wait until unmount completes
-	mm.fsServer.Wait()
+		// Wait until unmount completes
+		mm.fsServer.Wait()
+	}
 
 	if !mm.mountPointExisted {
 		err := os.Remove(mm.config.MountPoint)
