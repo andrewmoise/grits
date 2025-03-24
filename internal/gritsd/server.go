@@ -101,6 +101,7 @@ func (s *Server) Start() error {
 	for _, module := range s.Modules {
 		log.Printf("Starting module %s\n", module.GetModuleName())
 		if err := module.Start(); err != nil {
+			log.Printf("Error starting %s module, shutting down", module.GetModuleName())
 			return fmt.Errorf("failed to start %s module: %v", module.GetModuleName(), err)
 		}
 	}
