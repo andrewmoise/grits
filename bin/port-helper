@@ -80,14 +80,14 @@ list_rules() {
     echo "Current port forwarding rules:"
     echo "-----------------------------"
     
-    # Use a simpler approach to extract forwarding rules
-    iptables -t nat -L PREROUTING -n | grep "REDIRECT" | while read line; do
-        # Extract protocol and ports using a more portable method
-        proto=$(echo "$line" | awk '{print $4}')
-        source_port=$(echo "$line" | awk '{print $7}' | sed 's/dpt://')
+    iptables -t nat -L PREROUTING -n --line-numbers | grep "REDIRECT" | while read line; do
+        # Extract protocol, source port, and destination port
+        line_num=$(echo "$line" | awk '{print $1}')
+        proto=$(echo "$line" | awk '{print $7}')
+        source_port=$(echo "$line" | awk '{print $8}' | sed 's/dpt://')
         dest_port=$(echo "$line" | awk '{print $NF}')
         
-        echo "$proto: $source_port -> $dest_port"
+        echo "$line_num: $proto: $source_port -> $dest_port"
     done
     
     # If no rules found, display a message
