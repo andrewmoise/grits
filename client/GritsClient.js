@@ -2,7 +2,7 @@
  * GritsClient - Client-side interface for interacting with the Grits file storage API
  */
 
-const debugClientTiming = true;
+const debugClientTiming = false;
 const debugPerformanceStats = true;
 
 const CLEANUP_INTERVAL = 5 * 60 * 1000; // ms
@@ -52,18 +52,7 @@ class GritsClient {
     this.cleanupInterval = setInterval(() => this._cleanupCaches(), CLEANUP_INTERVAL);
 
     // Setup stats interval
-    this.stats = {
-      totalRequests: 0,
-      contentLookups: 0,      // Used grits/v1/content
-      blobCacheHits: 0,       // Found in blob cache
-      blobCacheMisses: 0,     // Had to fetch from network
-      prefetchSuccesses: 0,   // Successfully prefetched items
-      timings: {              // Track timing in ms
-        contentLookups: [],   // Times for content lookups
-        blobCacheHits: [],    // Times for cache hits
-        blobCacheMisses: []   // Times for cache misses
-      }
-    };
+    this.resetStats();
   
     // Reset stats periodically and log them
     if (debugPerformanceStats) {
@@ -247,7 +236,7 @@ class GritsClient {
   }
 
   async _slowFetch(path, startTime) {
-    this.debugLog(path, "Hard fetching via HEAD request to /grits/v1/content");
+    this.debugLog(path, "Slow fetching via HEAD request to /grits/v1/content");
     
     const normalizedPath = this._normalizePath(path);
     const url = `${this.serverUrl}/grits/v1/content/${this.volume}/${normalizedPath}`;
@@ -304,6 +293,12 @@ class GritsClient {
       const lastEntry = pathMetadata[pathMetadata.length-1];
       const contentHash = lastEntry.contentHash;
       this.debugLog(path, `  content hash is ${contentHash}`);
+
+      const latency = performance.now() - startTime;
+      this.stats.contentUrls.push({
+        url: normalizedPath,
+        latency: latency.toFixed(2)
+      });
 
       // Pass the extension to _innerFetch
       const contentResponse = await this._innerFetch(contentHash, startTime, extension);
@@ -519,7 +514,7 @@ class GritsClient {
       }
       response = await fetch(url);
     }
-  
+
     if (startTime) {
         this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
         this.stats.blobCacheMisses++;
@@ -540,74 +535,89 @@ class GritsClient {
   /////
   // Performance tracking
 
-_logStats() {
-  // Calculate averages for regular stats
-  const calcAvg = arr => arr.length ? 
-    (arr.reduce((sum, val) => sum + val, 0) / arr.length).toFixed(2) : 
-    'N/A';
-  
-  const contentAvg = (this.stats.timings.contentLookups.length ? ` (avg ${calcAvg(this.stats.timings.contentLookups)}ms)` : '');
-  const hitAvg = (this.stats.timings.blobCacheHits.length ? ` (avg ${calcAvg(this.stats.timings.blobCacheHits)}ms)` : '');
-  const missAvg = (this.stats.timings.blobCacheMisses.length ? ` (avg ${calcAvg(this.stats.timings.blobCacheMisses)}ms)` : '');
-  
-  // Log regular stats
-  if (this.stats.totalRequests > 0) {
-    console.log(
-      `%c[GRITS STATS]%c Last 10s: ` + 
-      `Requests: ${this.stats.totalRequests} | ` +
-      `Content lookups: ${this.stats.contentLookups}${contentAvg} | ` + 
-      `Blob cache hits: ${this.stats.blobCacheHits}${hitAvg} | ` +
-      `Blob cache misses: ${this.stats.blobCacheMisses}${missAvg} | ` +
-      `Prefetch successes: ${this.stats.prefetchSuccesses}`,
-      'color: #22c55e; font-weight: bold', 'color: inherit'
-    );
-  }
-  
-  // Now log mirror stats
-  const mirrorStats = this.mirrorManager.getMirrorStats();
-  if (mirrorStats.length > 0) {
-    let loggedAny = false;
-    // Log one line per mirror
-    for (const stat of mirrorStats) {
-      if (stat.bytesFetched > 0) {
-        if (!loggedAny) {
-          console.log(`%c[MIRROR STATS]%c (${mirrorStats.length} mirrors)`, 
-            'color: #3b82f6; font-weight: bold', 'color: inherit');
+  _logStats() {
+    // Calculate averages for regular stats
+    const calcAvg = arr => arr.length ? 
+      (arr.reduce((sum, val) => sum + val, 0) / arr.length).toFixed(2) : 
+      'N/A';
+    
+    const contentAvg = (this.stats.timings.contentLookups.length ? ` (avg ${calcAvg(this.stats.timings.contentLookups)}ms)` : '');
+    const hitAvg = (this.stats.timings.blobCacheHits.length ? ` (avg ${calcAvg(this.stats.timings.blobCacheHits)}ms)` : '');
+    const missAvg = (this.stats.timings.blobCacheMisses.length ? ` (avg ${calcAvg(this.stats.timings.blobCacheMisses)}ms)` : '');
+    
+    // Log regular stats
+    if (this.stats.totalRequests > 0) {
+      console.log(
+        `%c[GRITS STATS]%c Last 10s: ` + 
+        `Requests: ${this.stats.totalRequests} | ` +
+        `Content lookups: ${this.stats.contentLookups}${contentAvg} | ` + 
+        `Blob cache hits: ${this.stats.blobCacheHits}${hitAvg} | ` +
+        `Blob cache misses: ${this.stats.blobCacheMisses}${missAvg} | ` +
+        `Prefetch successes: ${this.stats.prefetchSuccesses}`,
+        'color: #22c55e; font-weight: bold', 'color: inherit'
+      );
+    }
+    
+    if (this.stats.contentUrls.length > 0) {
+      console.log(
+        `%c[CONTENT URLS]%c Direct fetches from /grits/v1/content:`,
+        'color: #f59e0b; font-weight: bold', 'color: inherit'
+      );
+      
+      // Log each URL with its latency
+      this.stats.contentUrls.forEach(item => {
+        console.log(`  ${item.url}: ${item.latency}ms`);
+      });
+    }
+
+    // Now log mirror stats
+    const mirrorStats = this.mirrorManager.getMirrorStats();
+    if (mirrorStats.length > 0) {
+      let loggedAny = false;
+      // Log one line per mirror
+      for (const stat of mirrorStats) {
+        if (stat.bytesFetched > 0) {
+          if (!loggedAny) {
+            console.log(`%c[MIRROR STATS]%c (${mirrorStats.length} mirrors)`, 
+              'color: #3b82f6; font-weight: bold', 'color: inherit');
+            loggedAny = true;
+          }
+              
+          const host = new URL(stat.url).hostname;
+          console.log(
+            `  ${host}: Latency ${stat.latency} | Bandwidth ${stat.bandwidth} | ` +
+            `Reliability ${stat.reliability} | Requests ${stat.requests} | ` +
+            `Data ${stat.bytesFetched}`
+          );
           loggedAny = true;
         }
-            
-      const host = new URL(stat.url).hostname;
-      console.log(
-        `  ${host}: Latency ${stat.latency} | Bandwidth ${stat.bandwidth} | ` +
-        `Reliability ${stat.reliability} | Requests ${stat.requests} | ` +
-        `Data ${stat.bytesFetched}`
-      );
-        loggedAny = true;
       }
     }
+    
+    // Reset stats for next interval
+    this.resetStats();
+    this.mirrorManager.resetStats();
   }
-  
-  // Reset stats for next interval
-  this.stats = {
-    // Reset regular stats
-    totalRequests: 0,
-    contentLookups: 0,
-    blobCacheHits: 0,
-    blobCacheMisses: 0,
-    prefetchSuccesses: 0,
-    timings: {
-      contentLookups: [],
-      blobCacheHits: [],
-      blobCacheMisses: []
-    }
-  };
-  
-  // Reset mirror stats
-  this.mirrorManager.resetStats();
-}
 
   /////
   // Misc
+
+  resetStats() {
+    this.stats = {
+      // Reset regular stats
+      totalRequests: 0,
+      contentLookups: 0,
+      blobCacheHits: 0,
+      blobCacheMisses: 0,
+      prefetchSuccesses: 0,
+      timings: {
+        contentLookups: [],
+        blobCacheHits: [],
+        blobCacheMisses: []
+      },
+      contentUrls: [] // Reset the content URLs array
+    };
+  }
 
   getServiceWorkerHash() {
     return this.serviceWorkerHash;
