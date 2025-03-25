@@ -2,6 +2,8 @@
  * MirrorManager - Client-side class for managing connections with content mirrors
  */
 
+const debugMirrors = true;
+
 class MirrorManager {
   constructor(config = {}) {
     // Mirror configuration
@@ -51,44 +53,44 @@ class MirrorManager {
     }
   }
 
-  /**
-   * Refresh the list of available mirrors from the server
-   */
-  async refreshMirrorList() {
-    if (!this.serverUrl) {
-      this.debugLog("Cannot refresh mirror list: missing server URL");
+/**
+ * Refresh the list of available mirrors from the server
+ */
+async refreshMirrorList() {
+  if (!this.serverUrl) {
+    this.debugLog("Cannot refresh mirror list: missing server URL");
+    return;
+  }
+  
+  try {
+    const url = `${this.serverUrl}/grits/v1/origin/list-mirrors`;
+    this.debugLog(`Refreshing mirror list from ${url}`);
+    
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+
+    if (response.status == 404) {
+      // Nothing's really wrong; maybe they just aren't running the origin module.
+      this.mirrors = [];
       return;
     }
     
-    try {
-      const url = `${this.serverUrl}/grits/v1/origin/list-mirrors`;
-      this.debugLog(`Refreshing mirror list from ${url}`);
-      
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' }
-      });
+    if (!response.ok) {
+      // This, though, might indicate an actual problem.
+      console.error(`Failed to fetch mirror list: ${response.status}`);
+      return;
+    }
 
-      if (response.status == 404) {
-        // Nothing's really wrong; maybe they just aren't running the origin module.
-        this.mirrors = [];
-        return;
-      }
-      
-      if (!response.ok) {
-        // This, though, might indicate an actual problem.
-        console.error(`Failed to fetch mirror list: ${response.status}`);
-        return;
-      }
-
-      const mirrorList = await response.json();
+    const mirrorList = await response.json();
     
     // Log the first mirror for debugging
     if (mirrorList.length > 0) {
       this.debugLog(`Mirror sample: ${JSON.stringify(mirrorList[0])}`);
     }
-      
-      // Update the mirrors list
+    
+    // Update the mirrors list
     this.mirrors = mirrorList.map(mirror => {
       // The mirror.url is now the complete URL string
       const url = mirror.url?.replace(/\/$/, '') || null; // Remove trailing slash if present
@@ -102,43 +104,43 @@ class MirrorManager {
 
     //this.debugLog(`Updated mirror list, found ${this.mirrors.length} mirrors`);
     console.log(`Raw mirror list: ${JSON.stringify(mirrorList)}`);
-      
-      // Initialize performance metrics for any new mirrors
-      for (const mirror of this.mirrors) {
-        if (!this.mirrorPerformance.has(mirror.url)) {
-          this.mirrorPerformance.set(mirror.url, {
-            ttfb: { // Time to first byte
-              values: [],
-              average: 0
-            },
-            bandwidth: { // In bytes/sec
-              values: [],
-              average: 0
-            },
-            lastCommunicated: 0,
-            errorCount: 0,
-            successCount: 0,
-            totalRequests: 0,
-            inFlightRequests: 0
-          });
-        }
-        
-        // Initialize stats counters
-        if (!this.totalBytesReceived.has(mirror.url)) {
-          this.totalBytesReceived.set(mirror.url, 0);
-        }
-        
-        if (!this.requestsPerMirror.has(mirror.url)) {
-          this.requestsPerMirror.set(mirror.url, 0);
-        }
+    
+    // Initialize performance metrics for any new mirrors
+    for (const mirror of this.mirrors) {
+      if (!this.mirrorPerformance.has(mirror.url)) {
+        this.mirrorPerformance.set(mirror.url, {
+          ttfb: { // Time to first byte
+            values: [],
+            average: 0
+          },
+          bandwidth: { // In bytes/sec
+            values: [],
+            average: 0
+          },
+          lastCommunicated: 0,
+          errorCount: 0,
+          successCount: 0,
+          totalRequests: 0,
+          inFlightRequests: 0
+        });
       }
       
-      return this.mirrors;
-    } catch (error) {
-      console.error('Error refreshing mirror list:', error);
-      return [];
+      // Initialize stats counters
+      if (!this.totalBytesReceived.has(mirror.url)) {
+        this.totalBytesReceived.set(mirror.url, 0);
+      }
+      
+      if (!this.requestsPerMirror.has(mirror.url)) {
+        this.requestsPerMirror.set(mirror.url, 0);
+      }
     }
+    
+    return this.mirrors;
+  } catch (error) {
+    console.error('Error refreshing mirror list:', error);
+    return [];
   }
+}
 
   /**
    * Select the best mirror based on current performance metrics and load
@@ -231,6 +233,10 @@ class MirrorManager {
    * @returns {Promise<Response>} The fetch response
    */
   async fetchBlob(hash, extension = null) {
+    if (debugMirrors) {
+      console.log(`--- Starting fetchBlob for ${hash} with extension ${extension}`);
+    }
+
     this.activeRequests++;
     
     // If no mirrors are available, fall back to the server
@@ -253,12 +259,16 @@ class MirrorManager {
         throw new Error(`No suitable mirror found for ${this.volume}/${hash}`);
       }
       
+    if (debugMirrors) {
+      console.log(`Best mirror: ${mirrorUrl}`);
+    }
+
       // Construct the full URL
       let url = `${mirrorUrl}/grits/v1/blob/${hash}`;
       if (extension) {
         url += `.${extension}`;
       }
-      
+
       // Update mirror stats
       const stats = this.mirrorPerformance.get(mirrorUrl);
       stats.inFlightRequests++;
@@ -277,10 +287,15 @@ class MirrorManager {
       this.recordTTFB(mirrorUrl, ttfb);
       
       if (!response.ok) {
+        console.error(`Error return from mirror fetch: ${response.status}`);
         stats.errorCount++;
         throw new Error(`Mirror returned status ${response.status}`);
       }
       
+      if (debugMirrors) {
+        console.log(`Successfully fetched from mirror: ${url}`);
+      }
+            
       // Clone the response for bandwidth measurement
       const clonedResponse = response.clone();
       
