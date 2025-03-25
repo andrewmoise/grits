@@ -95,7 +95,13 @@ func (tm *TrackerModule) onModuleAdded(module Module) {
 		httpModule.requestMiddleware(tm.ListPeersHandler))
 
 	// Request client certs
-	httpModule.HTTPServer.TLSConfig.ClientAuth = tls.RequestClientCert
+	if httpModule.Config.EnableTls && httpModule.HTTPServer.TLSConfig != nil {
+		// Request client certs only when TLS is enabled
+		log.Printf("TrackerModule: Configuring client certificate authentication")
+		httpModule.HTTPServer.TLSConfig.ClientAuth = tls.RequestClientCert
+	} else {
+		log.Printf("TrackerModule: TLS not enabled, skipping client certificate configuration")
+	}
 }
 
 func (tm *TrackerModule) ListPeersHandler(w http.ResponseWriter, r *http.Request) {
