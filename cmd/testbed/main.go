@@ -113,7 +113,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	var originHttpConfig *gritsd.HTTPModuleConfig
 
 	for _, moduleRaw := range config.Modules {
-		var moduleMap map[string]interface{}
+		var moduleMap map[string]any
 		if err := json.Unmarshal(moduleRaw, &moduleMap); err != nil {
 			continue // Skip modules that can't be unmarshaled
 		}
@@ -154,7 +154,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	// Log the allowed mirrors for debugging
 	log.Printf("Configuring origin with allowed mirrors: %v", allowedMirrors)
 
-	originModuleConfig, err := json.Marshal(map[string]interface{}{
+	originModuleConfig, err := json.Marshal(map[string]any{
 		"type":                "origin",
 		"allowedMirrors":      allowedMirrors,
 		"inactiveTimeoutSecs": INACTIVE_TIMEOUT,
@@ -166,7 +166,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	// 2. Add tracker module configuration
 	// For testing purposes, override cert verification
 	trackerOverride := true
-	trackerModuleConfig, err := json.Marshal(map[string]interface{}{
+	trackerModuleConfig, err := json.Marshal(map[string]any{
 		"type":                     "tracker",
 		"peerSubdomain":            fmt.Sprintf("cache.%s", originHttpConfig.ThisHost),
 		"heartbeatIntervalSec":     60, // More frequent for testing
@@ -376,7 +376,7 @@ func setupMirrorServer(baseDir string, originConfig *grits.Config, originHttpCon
 		mirrorPort := MIRROR_BASE_PORT + index
 
 		// 1. Create HTTP module configuration
-		httpModuleConfig, err := json.Marshal(map[string]interface{}{
+		httpModuleConfig, err := json.Marshal(map[string]any{
 			"type":            "http",
 			"thisPort":        mirrorPort,
 			"thisHost":        fmt.Sprintf("%s.cache.%s", peerName, originHttpConfig.ThisHost),
@@ -399,7 +399,7 @@ func setupMirrorServer(baseDir string, originConfig *grits.Config, originHttpCon
 		localHostname := fmt.Sprintf("%s://%s:%d", protocol, originHttpConfig.ThisHost, mirrorPort)
 
 		// 2. Create Mirror module configuration
-		mirrorModuleConfig, err := json.Marshal(map[string]interface{}{
+		mirrorModuleConfig, err := json.Marshal(map[string]any{
 			"type":          "mirror",
 			"remoteHost":    fmt.Sprintf("%s:%d", originHttpConfig.ThisHost, originHttpConfig.ThisPort),
 			"remoteVolume":  "",  // Default volume
@@ -415,7 +415,7 @@ func setupMirrorServer(baseDir string, originConfig *grits.Config, originHttpCon
 		// Determine tracker URL based on origin protocol and port
 		trackerURL := fmt.Sprintf("%s://%s:%d", protocol, originHttpConfig.ThisHost, originHttpConfig.ThisPort)
 
-		peerModuleConfig, err := json.Marshal(map[string]interface{}{
+		peerModuleConfig, err := json.Marshal(map[string]any{
 			"type":       "peer",
 			"trackerUrl": trackerURL,
 			"peerName":   peerName,
