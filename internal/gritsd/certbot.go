@@ -1,13 +1,16 @@
 package gritsd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"grits/internal/grits"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
 
 // CertificateType indicates the source/purpose of a certificate
@@ -86,7 +89,7 @@ func EnsureTLSCertificates(serverConfig *grits.Config, certConfig *CertbotConfig
 
 	// At this point we need to request new certificates
 	log.Printf("Acquiring new certificates for %s", certConfig.Domain)
-	if err := obtainCertificate(serverConfig, certConfig, configDir, workDir, logsDir); err != nil {
+	if err := obtainCertificate(certConfig, configDir, workDir, logsDir); err != nil {
 		return "", "", fmt.Errorf("failed to obtain certificate: %w", err)
 	}
 
@@ -184,58 +187,62 @@ func UpgradeToCertbot(config *grits.Config, fqdn string, certbotConfig *CertbotC
 	return nil
 }
 
+// ServeAcmeChallengeDir starts a temporary HTTP server that serves ACME challenge files from a directory
+func ServeAcmeChallengeDir(challengeDir string, done chan struct{}) error {
+	// Create directory if it doesn't exist
+	if err := os.MkdirAll(filepath.Join(challengeDir, ".well-known", "acme-challenge"), 0755); err != nil {
+		return fmt.Errorf("failed to create challenge directory: %v", err)
+	}
+
+	// Create file server for the challenge directory
+	fileServer := http.FileServer(http.Dir(challengeDir))
+
+	// Create server
+	server := &http.Server{
+		Addr:              ":8080",
+		Handler:           fileServer,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	log.Printf("Starting ACME challenge server on port 8080 serving from %s", challengeDir)
+
+	// Start server in goroutine
+	go func() {
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			log.Printf("ACME challenge server error: %v", err)
+		}
+	}()
+
+	// Wait for signal to shutdown
+	<-done
+
+	// Graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return server.Shutdown(ctx)
+}
+
 // obtainCertificate gets a signed certificate from Let's Encrypt using certbot
-func obtainCertificate(serverConfig *grits.Config, cfg *CertbotConfig, configDir, workDir, logsDir string) error {
+func obtainCertificate(cfg *CertbotConfig, configDir, workDir, logsDir string) error {
 	// Create temporary webroot for ACME challenge
-	webRootPath := filepath.Join(workDir, "tmp-webroot")
-	acmePath := filepath.Join(webRootPath, ".well-known", "acme-challenge")
-	if err := os.MkdirAll(acmePath, 0755); err != nil {
-		return fmt.Errorf("failed to create webroot directory: %w", err)
-	}
-	defer os.RemoveAll(webRootPath) // Clean up when done
+	webRootPath := filepath.Join(workDir, "webroot")
 
-	// Create a custom HTTP client for certbot that uses the ACME helper
-	acmeHelperPath := serverConfig.ServerPath("bin/acme-challenge-helper")
-	if !fileExists(acmeHelperPath) {
-		// Check in common locations
-		altPaths := []string{
-			"/usr/local/bin/acme-challenge-helper",
-			"/usr/bin/acme-challenge-helper",
-			"./acme-challenge-helper", // Current directory
+	// Start the challenge server
+	done := make(chan struct{})
+	go func() {
+		if err := ServeAcmeChallengeDir(webRootPath, done); err != nil {
+			log.Printf("Error with ACME challenge server: %v", err)
 		}
+	}()
 
-		for _, path := range altPaths {
-			if fileExists(path) {
-				var err error
-				acmeHelperPath, err = filepath.Abs(path)
-				if err != nil {
-					return fmt.Errorf("cannot canonicalize %s", path)
-				}
-				break
-			}
-		}
-	}
+	// Make sure to signal shutdown when we're done
+	defer close(done)
 
-	// Path to the hook script we'll create
-	hookScript := filepath.Join(workDir, "acme-http-hook.sh")
-
-	// Create the hook script that will call our helper
-	err := createAcmeHttpHook(hookScript, acmeHelperPath)
-	if err != nil {
-		return fmt.Errorf("failed to create ACME HTTP hook: %w", err)
-	}
-
-	// Make it executable
-	if err := os.Chmod(hookScript, 0755); err != nil {
-		return fmt.Errorf("failed to make hook script executable: %w", err)
-	}
-
-	// Prepare certbot command with manual hooks
+	// Run certbot with webroot authentication
 	args := []string{
 		"certonly",
-		"--manual",
-		"--preferred-challenges", "http",
-		"--manual-auth-hook", hookScript,
+		"--webroot",
+		"--webroot-path", webRootPath,
 		"--email", cfg.Email,
 		"--agree-tos",
 		"--no-eff-email",
@@ -247,46 +254,19 @@ func obtainCertificate(serverConfig *grits.Config, cfg *CertbotConfig, configDir
 		"--non-interactive",
 	}
 
+	log.Printf("Ready to serve from %s", webRootPath)
+
 	cmd := exec.Command("certbot", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	// Pass environment variables to the certbot process
-	cmd.Env = os.Environ()
-
 	// Run certbot
-	err = cmd.Run()
+	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("certbot failed: %w", err)
 	}
 
 	return nil
-}
-
-// createAcmeHttpHook creates a shell script that calls our acme-challenge-helper
-func createAcmeHttpHook(scriptPath, helperPath string) error {
-	script := `#!/bin/sh
-# Auto-generated ACME HTTP challenge hook
-
-# Check if the helper exists
-if [ ! -x "` + helperPath + `" ]; then
-  echo "Error: ACME challenge helper not found at ` + helperPath + `" >&2
-  echo "Please install the acme-challenge-helper binary with setuid permissions." >&2
-  exit 1
-fi
-
-echo "Starting ACME challenge helper..."
-
-# Use nohup to make the process ignore SIGHUP when the parent exits
-# Also redirect output to /dev/null
-nohup "` + helperPath + `" --token "$CERTBOT_TOKEN" --response "$CERTBOT_VALIDATION" --timeout 120 > /dev/null 2>&1 &
-
-# Sleep briefly to let the server start
-sleep 1
-
-echo "Auth hook completed, helper running as daemon"
-`
-	return os.WriteFile(scriptPath, []byte(script), 0644)
 }
 
 // Helper function to check if a file exists
