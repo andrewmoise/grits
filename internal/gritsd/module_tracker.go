@@ -50,8 +50,7 @@ type TrackerModule struct {
 	stoppedCh chan struct{} // Channel to signal when goroutines are stopped
 	running   bool          // Track if the module is running
 
-	dnsServer4 *dns.Server // DNS server instance
-	dnsServer6 *dns.Server // DNS server instance
+	dnsServer *dns.Server // DNS server instance
 }
 
 // NewTrackerModule creates a new TrackerModule instance
@@ -313,34 +312,20 @@ func (tm *TrackerModule) startDNSServer() error {
 	// Set up DNS handler for our domain
 	dns.HandleFunc(tm.Config.PeerSubdomain+".", tm.handleDNSQuery)
 
-	// Start two servers - one for IPv4 and one for IPv6
-	server4 := &dns.Server{
-		Addr: "0.0.0.0:5353", // Explicitly IPv4
-		Net:  "udp",
-	}
-
-	server6 := &dns.Server{
-		Addr: "[::]:5353", // IPv6
+	server := &dns.Server{
+		Addr: ":5353",
 		Net:  "udp",
 	}
 
 	go func() {
-		log.Printf("Starting IPv4 DNS server for domain: peer.%s", tm.Config.PeerSubdomain)
-		if err := server4.ListenAndServe(); err != nil {
-			log.Printf("DNS server error: %v", err)
-		}
-	}()
-
-	go func() {
-		log.Printf("Starting IPv6 DNS server for domain: peer.%s", tm.Config.PeerSubdomain)
-		if err := server4.ListenAndServe(); err != nil {
+		log.Printf("Starting DNS server for domain: %s", tm.Config.PeerSubdomain)
+		if err := server.ListenAndServe(); err != nil {
 			log.Printf("DNS server error: %v", err)
 		}
 	}()
 
 	// Store them for cleanup
-	tm.dnsServer4 = server4
-	tm.dnsServer6 = server6
+	tm.dnsServer = server
 
 	return nil
 }
@@ -492,11 +477,8 @@ func (tm *TrackerModule) Stop() error {
 	log.Printf("Stopping TrackerModule")
 
 	// Stop the DNS servers if running
-	if tm.dnsServer4 != nil {
-		tm.dnsServer4.Shutdown()
-	}
-	if tm.dnsServer6 != nil {
-		tm.dnsServer6.Shutdown()
+	if tm.dnsServer != nil {
+		tm.dnsServer.Shutdown()
 	}
 
 	// Send stop signal to goroutines
