@@ -154,10 +154,12 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if request.Port <= 0 || request.Port > 65535 {
-		http.Error(w, "Invalid port number", http.StatusBadRequest)
-		return
-	}
+	// FIXME
+
+	//if request.Port <= 0 || request.Port > 65535 {
+	//	http.Error(w, "Invalid port number", http.StatusBadRequest)
+	//	return
+	//}
 
 	// Convert PeerName to lowercase to ensure case-insensitive matching
 	lowerPeerName := strings.ToLower(request.PeerName)
