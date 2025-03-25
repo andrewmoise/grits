@@ -51,22 +51,59 @@ func main() {
 		log.Fatalf("Failed to start origin server: %v", err)
 	}
 
-	// Setup and start mirror servers
+	log.Println("Origin server started. Setting up mirror servers with peer modules only...")
+
+	// Setup and start mirror servers with peer modules only
+	mirrorServers := make([]*gritsd.Server, NUM_MIRRORS)
 	for i := 0; i < NUM_MIRRORS; i++ {
-		mirrorServer, err := setupMirrorServer(baseDir, originServer.Config, originHttpConfig, i)
+		mirrorServer, _, err := setupMirrorServer(baseDir, originServer.Config, originHttpConfig, i)
 		if err != nil {
 			log.Fatalf("Failed to setup mirror server %d: %v", i, err)
 		}
+		mirrorServers[i] = mirrorServer
 		allServers = append(allServers, mirrorServer)
 
-		log.Printf("Starting mirror server %d", i)
-		if err := mirrorServer.Start(); err != nil {
-			log.Fatalf("Failed to start mirror server %d: %v", i, err)
+		// Copy certificate to tracker
+		peerName := fmt.Sprintf("mirror-%d", i)
+		if err := copyPeerCertToTracker(originServer.Config, baseDir, peerName, i); err != nil {
+			log.Fatalf("Failed to copy certificate for mirror %d: %v", i, err)
 		}
+
+		// Start the server with just the peer module
+		log.Printf("Starting mirror server %d with peer module", i)
+		if err := mirrorServer.Start(); err != nil {
+			log.Printf("Failed to start mirror server %d (expected): %v", i, err)
+		}
+
+		log.Println("Waiting...")
+		time.Sleep(1 * time.Second)
 	}
 
-	log.Println("All servers started. Testing functionality...")
+	// Wait then register peer modules with tracker
+	log.Println("Waiting...")
+	time.Sleep(2 * time.Second)
 
+	// Test peer-tracker registration
+	if err := testPeerTrackerSystem(originHttpConfig.ThisPort, originHttpConfig.ThisHost, originHttpConfig.EnableTls); err != nil {
+		log.Printf("WARNING: Initial peer-tracker test failed: %v", err)
+	} else {
+		log.Println("Initial peer-tracker test passed!")
+	}
+
+	// Now add HTTP and Mirror modules
+	log.Println("Adding HTTP and Mirror modules to mirror servers...")
+	for i, mirrorServer := range mirrorServers {
+		if err := addHttpAndMirrorModulesToServer(mirrorServer, originHttpConfig, i); err != nil {
+			log.Fatalf("Failed to add modules to mirror %d: %v", i, err)
+		}
+
+		// Give time for modules to start up
+		time.Sleep(1 * time.Second)
+	}
+
+	log.Println("All servers fully started. Testing functionality...")
+
+	// Run the tests after all modules are running
 	originPort := originHttpConfig.ThisPort
 	originHost := originHttpConfig.ThisHost
 	enableTls := originHttpConfig.EnableTls
@@ -78,7 +115,7 @@ func main() {
 		log.Println("Origin-Mirror tests passed successfully!")
 	}
 
-	// Test the peer-tracker system
+	// Test the peer-tracker system again
 	if err := testPeerTrackerSystem(originPort, originHost, enableTls); err != nil {
 		log.Printf("WARNING: Peer-Tracker test failed: %v", err)
 	} else {
@@ -97,7 +134,6 @@ func main() {
 		server.Stop()
 	}
 
-	// Wait for all server goroutines to exit
 	log.Println("All servers stopped successfully.")
 }
 
@@ -316,7 +352,11 @@ func testOriginMirrorSystem(originPort int, originHost string, enableTls bool, n
 		time.Sleep(500 * time.Millisecond)
 
 		log.Printf("Attempting to fetch from mirror %d (port %d)...", i, mirrorPort)
-		mirrorResp, err := http.Get(fmt.Sprintf("%s://localhost:%d/grits/v1/blob/%s", scheme, mirrorPort, blobAddr))
+		peerName := fmt.Sprintf("mirror-%d", i)
+		mirrorHost := fmt.Sprintf("%s.cache.%s", peerName, originHost)
+
+		mirrorResp, err := http.Get(fmt.Sprintf("%s://%s:%d/grits/v1/blob/%s",
+			scheme, mirrorHost, mirrorPort, blobAddr))
 		if err != nil {
 			return fmt.Errorf("failed to fetch from mirror %d: %v", i, err)
 		}
@@ -354,123 +394,154 @@ func testOriginMirrorSystem(originPort int, originHost string, enableTls bool, n
 	return nil
 }
 
-func setupMirrorServer(baseDir string, originConfig *grits.Config, originHttpConfig *gritsd.HTTPModuleConfig, index int) (*gritsd.Server, error) {
+func setupMirrorServer(baseDir string, originConfig *grits.Config, originHttpConfig *gritsd.HTTPModuleConfig, index int) (*gritsd.Server, *gritsd.PeerModule, error) {
 	// Create directory for this mirror
 	peerName := fmt.Sprintf("mirror-%d", index)
 	serverDir := filepath.Join(baseDir, peerName)
 
 	err := os.MkdirAll(filepath.Join(serverDir, "var"), 0755)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create mirror server directory: %v", err)
+		return nil, nil, fmt.Errorf("failed to create mirror server directory: %v", err)
 	}
 
-	configFilename := filepath.Join(serverDir, "grits.cfg")
-
-	if _, err = os.Stat(configFilename); os.IsNotExist(err) {
-		// No preexisting config, make one.
-
-		config := grits.NewConfig(serverDir)
-		config.ServerDir = serverDir
-
-		// Mirror port is base port + index
-		mirrorPort := MIRROR_BASE_PORT + index
-
-		// 1. Create HTTP module configuration
-		httpModuleConfig, err := json.Marshal(map[string]any{
-			"type":            "http",
-			"thisPort":        mirrorPort,
-			"thisHost":        fmt.Sprintf("%s.cache.%s", peerName, originHttpConfig.ThisHost),
-			"enableTls":       originHttpConfig.EnableTls,
-			"autoCertificate": originHttpConfig.AutoCertificate,
-			"certbotEmail":    originHttpConfig.CertbotEmail, // Reuse the email from origin
-			"useSelfSigned":   originHttpConfig.UseSelfSigned,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal HTTP module config: %v", err)
-		}
-
-		// Determine protocol based on TLS setting
-		protocol := "http"
-		if originHttpConfig.EnableTls {
-			protocol = "https"
-		}
-
-		// Use the fully qualified URL format for localHostname
-		localHostname := fmt.Sprintf("%s://%s:%d", protocol, originHttpConfig.ThisHost, mirrorPort)
-
-		// 2. Create Mirror module configuration
-		mirrorModuleConfig, err := json.Marshal(map[string]any{
-			"type":          "mirror",
-			"remoteHost":    fmt.Sprintf("%s:%d", originHttpConfig.ThisHost, originHttpConfig.ThisPort),
-			"remoteVolume":  "",  // Default volume
-			"maxStorageMB":  100, // 100MB cache
-			"protocol":      protocol,
-			"localHostname": localHostname,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal Mirror module config: %v", err)
-		}
-
-		// 3. Add Peer module configuration
-		// Determine tracker URL based on origin protocol and port
-		trackerURL := fmt.Sprintf("%s://%s:%d", protocol, originHttpConfig.ThisHost, originHttpConfig.ThisPort)
-
-		peerModuleConfig, err := json.Marshal(map[string]any{
-			"type":       "peer",
-			"trackerUrl": trackerURL,
-			"peerName":   peerName,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal Peer module config: %v", err)
-		}
-
-		// Add all modules to config
-		config.Modules = []json.RawMessage{
-			httpModuleConfig,
-			mirrorModuleConfig,
-			peerModuleConfig,
-		}
-
-		err = config.SaveToFile(configFilename)
-		if err != nil {
-			log.Fatalf("Couldn't save config to %s: %v", configFilename, err)
-		}
-	} else if err != nil {
-		log.Fatalf("Problem trying to find %s: %v", configFilename, err)
-	}
-
-	newConfig := grits.NewConfig(serverDir)
-	err = newConfig.LoadFromFile(configFilename)
-	if err != nil {
-		log.Fatalf("Couldn't load config from %s: %v", configFilename, err)
-	}
+	// Create a basic config without modules (we'll add them programmatically)
+	config := grits.NewConfig(serverDir)
+	config.ServerDir = serverDir
 
 	// Create the server instance
-	srv, err := gritsd.NewServer(newConfig)
+	srv, err := gritsd.NewServer(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create mirror server: %v", err)
+		return nil, nil, fmt.Errorf("failed to create mirror server: %v", err)
 	}
 
-	log.Printf("Mirror server %d configured for origin %s with peer module", index, originHttpConfig.ThisHost)
-
-	// Generate self-signed certificate for this mirror
-	err = gritsd.GenerateSelfCert(newConfig)
+	// Generate self-signed certificate
+	err = gritsd.GenerateSelfCert(config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to generate self-certificate for mirror %d: %v", index, err)
+		return nil, nil, fmt.Errorf("failed to generate self-certificate for mirror %d: %v", index, err)
 	}
 
-	// Copy the certificate to the tracker's peer cert directory
-	err = copyPeerCertToTracker(originConfig, baseDir, peerName, index)
-	if err != nil {
-		return nil, fmt.Errorf("failed to copy certificate for mirror %d: %v", index, err)
+	// Determine protocol based on TLS setting
+	protocol := "http"
+	if originHttpConfig.EnableTls {
+		protocol = "https"
 	}
 
-	log.Printf("Mirror server %d configured for origin %s with peer module", index, originHttpConfig.ThisHost)
+	// Create tracker URL
+	trackerURL := fmt.Sprintf("%s://%s:%d", protocol, originHttpConfig.ThisHost, originHttpConfig.ThisPort)
 
-	return srv, nil
+	// Create peer module config
+	peerConfig := &gritsd.PeerModuleConfig{
+		TrackerUrl: trackerURL,
+		PeerName:   peerName,
+	}
+
+	// Create peer module directly
+	peerModule, err := gritsd.NewPeerModule(srv, peerConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create peer module: %v", err)
+	}
+
+	// Add the peer module to the server
+	srv.AddModule(peerModule)
+
+	log.Printf("Mirror server %d configured with peer module", index)
+
+	return srv, peerModule, nil
 }
 
-// Add this new function to testbed.go
+func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gritsd.HTTPModuleConfig, index int) error {
+	// Get the existing config
+	config := server.Config
+	peerName := fmt.Sprintf("mirror-%d", index)
+	mirrorPort := MIRROR_BASE_PORT + index
+
+	// Create HTTP module configuration
+	httpModuleConfig, err := json.Marshal(map[string]interface{}{
+		"type":            "http",
+		"thisPort":        mirrorPort,
+		"thisHost":        fmt.Sprintf("%s.cache.%s", peerName, originHttpConfig.ThisHost),
+		"enableTls":       originHttpConfig.EnableTls,
+		"autoCertificate": originHttpConfig.AutoCertificate,
+		"certbotEmail":    originHttpConfig.CertbotEmail,
+		"useSelfSigned":   originHttpConfig.UseSelfSigned,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal HTTP module config: %v", err)
+	}
+
+	// Determine protocol based on TLS setting
+	protocol := "http"
+	if originHttpConfig.EnableTls {
+		protocol = "https"
+	}
+
+	// Use the fully qualified URL format for localHostname
+	localHostname := fmt.Sprintf("%s://%s:%d", protocol, originHttpConfig.ThisHost, mirrorPort)
+
+	// Create Mirror module configuration
+	mirrorModuleConfig, err := json.Marshal(map[string]interface{}{
+		"type":          "mirror",
+		"remoteHost":    fmt.Sprintf("%s:%d", originHttpConfig.ThisHost, originHttpConfig.ThisPort),
+		"remoteVolume":  "",
+		"maxStorageMB":  100,
+		"protocol":      protocol,
+		"localHostname": localHostname,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal Mirror module config: %v", err)
+	}
+
+	// Get the existing modules (should include peer module)
+	existingModules := config.Modules
+
+	// Add the new modules
+	config.Modules = append(existingModules, httpModuleConfig, mirrorModuleConfig)
+
+	// Save the updated config
+	err = config.SaveToFile(filepath.Join(config.ServerDir, "grits.cfg"))
+	if err != nil {
+		return fmt.Errorf("couldn't save updated config: %v", err)
+	}
+
+	// Create and add the new modules
+	httpModule, err := gritsd.NewHTTPModule(server, &gritsd.HTTPModuleConfig{
+		ThisHost:        fmt.Sprintf("%s.cache.%s", peerName, originHttpConfig.ThisHost),
+		ThisPort:        mirrorPort,
+		EnableTls:       originHttpConfig.EnableTls,
+		AutoCertificate: originHttpConfig.AutoCertificate,
+		CertbotEmail:    originHttpConfig.CertbotEmail,
+		UseSelfSigned:   originHttpConfig.UseSelfSigned,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP module: %v", err)
+	}
+
+	// Start the HTTP module
+	server.AddModule(httpModule)
+	if err := httpModule.Start(); err != nil {
+		return fmt.Errorf("failed to start HTTP module: %v", err)
+	}
+
+	// Create and add the mirror module
+	mirrorModule, err := gritsd.NewMirrorModule(server, &gritsd.MirrorModuleConfig{
+		RemoteHost:    fmt.Sprintf("%s:%d", originHttpConfig.ThisHost, originHttpConfig.ThisPort),
+		MaxStorageMB:  100,
+		Protocol:      protocol,
+		LocalHostname: localHostname,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create Mirror module: %v", err)
+	}
+
+	server.AddModule(mirrorModule)
+	if err := mirrorModule.Start(); err != nil {
+		return fmt.Errorf("failed to start Mirror module: %v", err)
+	}
+
+	log.Printf("Added and started HTTP and Mirror modules for server %d", index)
+	return nil
+}
+
 func testPeerTrackerSystem(originPort int, originHost string, enableTls bool) error {
 	log.Println("Testing peer-tracker functionality...")
 

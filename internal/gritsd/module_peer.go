@@ -108,10 +108,15 @@ func (pm *PeerModule) heartbeatLoop() {
 func (pm *PeerModule) registerWithTracker() error {
 	log.Printf("Registering peer with tracker: %s", pm.Config.PeerName)
 
+	var thisPort int
+
 	// Check if we have an HTTP module
 	if pm.httpModule == nil {
-		log.Printf("No HTTP module for peer, not registering.")
-		return nil
+		log.Printf("No HTTP module for peer.")
+		thisPort = -1
+		//return nil
+	} else {
+		thisPort = pm.httpModule.Config.ThisPort
 	}
 
 	// Prepare request payload
@@ -120,7 +125,7 @@ func (pm *PeerModule) registerWithTracker() error {
 		Port     int    `json:"port"`
 	}{
 		PeerName: pm.Config.PeerName,
-		Port:     pm.httpModule.Config.ThisPort,
+		Port:     thisPort,
 	}
 
 	// Convert to JSON
