@@ -22,6 +22,7 @@ show_help() {
     echo "  -s, --source PORT    Source port (required for add/remove)"
     echo "  -d, --dest PORT      Destination port (required for add/remove)"
     echo "  -p, --proto PROTO    Protocol: tcp, udp, or both (default: both)"
+    echo "  -l, --local          Enable local access forwarding (default: yes)"
     echo
     echo "Examples:"
     echo "  $0 add -s 80 -d 8080       # Forward port 80 to 8080 (TCP and UDP)"
@@ -31,8 +32,8 @@ show_help() {
     exit 1
 }
 
-# Function to check if a rule already exists
-rule_exists() {
+# Function to check if a PREROUTING rule already exists
+prerouting_rule_exists() {
     proto=$1
     source_port=$2
     dest_port=$3
@@ -41,21 +42,40 @@ rule_exists() {
     return $?
 }
 
+# Function to check if an OUTPUT rule already exists
+output_rule_exists() {
+    proto=$1
+    source_port=$2
+    dest_port=$3
+    
+    iptables -t nat -C OUTPUT -p "$proto" -o lo --dport "$source_port" -j REDIRECT --to-port "$dest_port" 2>/dev/null
+    return $?
+}
+
 # Function to add a forwarding rule
 add_rule() {
     proto=$1
     source_port=$2
     dest_port=$3
+    enable_local=$4
     
-    # Check if rule already exists
-    if rule_exists "$proto" "$source_port" "$dest_port"; then
-        echo "Rule already exists for $proto: $source_port -> $dest_port" >&2
-        return 0
+    # Add PREROUTING rule for external connections
+    if ! prerouting_rule_exists "$proto" "$source_port" "$dest_port"; then
+        iptables -t nat -A PREROUTING -p "$proto" --dport "$source_port" -j REDIRECT --to-port "$dest_port"
+        echo "Added external forwarding rule for $proto: $source_port -> $dest_port"
+    else
+        echo "External rule already exists for $proto: $source_port -> $dest_port" >&2
     fi
     
-    # Add the rule
-    iptables -t nat -A PREROUTING -p "$proto" --dport "$source_port" -j REDIRECT --to-port "$dest_port"
-    echo "Added forwarding rule for $proto: $source_port -> $dest_port"
+    # Add OUTPUT rule for local connections if requested
+    if [ "$enable_local" = "yes" ]; then
+        if ! output_rule_exists "$proto" "$source_port" "$dest_port"; then
+            iptables -t nat -A OUTPUT -p "$proto" -o lo --dport "$source_port" -j REDIRECT --to-port "$dest_port"
+            echo "Added local forwarding rule for $proto: $source_port -> $dest_port"
+        else
+            echo "Local rule already exists for $proto: $source_port -> $dest_port" >&2
+        fi
+    fi
 }
 
 # Function to remove a forwarding rule
@@ -63,16 +83,25 @@ remove_rule() {
     proto=$1
     source_port=$2
     dest_port=$3
+    enable_local=$4
     
-    # Check if rule exists
-    if ! rule_exists "$proto" "$source_port" "$dest_port"; then
-        echo "Rule doesn't exist for $proto: $source_port -> $dest_port" >&2
-        return 0
+    # Remove PREROUTING rule for external connections
+    if prerouting_rule_exists "$proto" "$source_port" "$dest_port"; then
+        iptables -t nat -D PREROUTING -p "$proto" --dport "$source_port" -j REDIRECT --to-port "$dest_port"
+        echo "Removed external forwarding rule for $proto: $source_port -> $dest_port"
+    else
+        echo "External rule doesn't exist for $proto: $source_port -> $dest_port" >&2
     fi
     
-    # Remove the rule
-    iptables -t nat -D PREROUTING -p "$proto" --dport "$source_port" -j REDIRECT --to-port "$dest_port"
-    echo "Removed forwarding rule for $proto: $source_port -> $dest_port"
+    # Remove OUTPUT rule for local connections if requested
+    if [ "$enable_local" = "yes" ]; then
+        if output_rule_exists "$proto" "$source_port" "$dest_port"; then
+            iptables -t nat -D OUTPUT -p "$proto" -o lo --dport "$source_port" -j REDIRECT --to-port "$dest_port"
+            echo "Removed local forwarding rule for $proto: $source_port -> $dest_port"
+        else
+            echo "Local rule doesn't exist for $proto: $source_port -> $dest_port" >&2
+        fi
+    fi
 }
 
 # Function to list all forwarding rules
@@ -80,8 +109,10 @@ list_rules() {
     echo "Current port forwarding rules:"
     echo "-----------------------------"
     
+    # List external connection rules (PREROUTING)
+    echo "External connection rules (PREROUTING):"
     iptables -t nat -L PREROUTING -n --line-numbers | grep "REDIRECT" | while read line; do
-        # Extract protocol, source port, and destination port
+        # Extract protocol, source port, and destination port using your original parsing approach
         line_num=$(echo "$line" | awk '{print $1}')
         proto=$(echo "$line" | awk '{print $7}')
         source_port=$(echo "$line" | awk '{print $8}' | sed 's/dpt://')
@@ -91,8 +122,35 @@ list_rules() {
     done
     
     # If no rules found, display a message
-    rule_count=$(iptables -t nat -L PREROUTING -n | grep -c "REDIRECT" || true)
-    if [ "$rule_count" -eq 0 ]; then
+    prerouting_rule_count=$(iptables -t nat -L PREROUTING -n | grep -c "REDIRECT" || true)
+    if [ "$prerouting_rule_count" -eq 0 ]; then
+        echo "No external forwarding rules found."
+    fi
+    
+    echo ""
+    echo "Local connection rules (OUTPUT):"
+    
+    # List local connection rules (OUTPUT)
+    iptables -t nat -L OUTPUT -n --line-numbers | grep "REDIRECT" | while read line; do
+        # Find the port numbers by looking for specific patterns
+        line_num=$(echo "$line" | awk '{print $1}')
+        proto=$(echo "$line" | awk '{print $7}')
+        
+        # The dport pattern is consistent across iptables output
+        source_port=$(echo "$line" | grep -o 'dpt:[0-9]*' | sed 's/dpt://')
+        dest_port=$(echo "$line" | awk '{print $NF}')
+        
+        echo "$line_num: $proto: $source_port -> $dest_port"
+    done
+    
+    # If no rules found, display a message
+    output_rule_count=$(iptables -t nat -L OUTPUT -n | grep -c "REDIRECT" || true)
+    if [ "$output_rule_count" -eq 0 ]; then
+        echo "No local forwarding rules found."
+    fi
+    
+    # Overall message if no rules at all
+    if [ "$prerouting_rule_count" -eq 0 ] && [ "$output_rule_count" -eq 0 ]; then
         echo "No port forwarding rules found."
     fi
 }
@@ -108,6 +166,7 @@ shift
 SOURCE_PORT=""
 DEST_PORT=""
 PROTO="both"
+ENABLE_LOCAL="yes"  # Enable local forwarding by default
 
 # Parse options
 while [ $# -gt 0 ]; do
@@ -122,6 +181,10 @@ while [ $# -gt 0 ]; do
             ;;
         -p|--proto)
             PROTO="$2"
+            shift 2
+            ;;
+        -l|--local)
+            ENABLE_LOCAL="$2"
             shift 2
             ;;
         -h|--help)
@@ -146,14 +209,14 @@ case "$COMMAND" in
         # Handle different protocol options
         case "$PROTO" in
             tcp)
-                add_rule tcp "$SOURCE_PORT" "$DEST_PORT"
+                add_rule tcp "$SOURCE_PORT" "$DEST_PORT" "$ENABLE_LOCAL"
                 ;;
             udp)
-                add_rule udp "$SOURCE_PORT" "$DEST_PORT"
+                add_rule udp "$SOURCE_PORT" "$DEST_PORT" "$ENABLE_LOCAL"
                 ;;
             both)
-                add_rule tcp "$SOURCE_PORT" "$DEST_PORT"
-                add_rule udp "$SOURCE_PORT" "$DEST_PORT"
+                add_rule tcp "$SOURCE_PORT" "$DEST_PORT" "$ENABLE_LOCAL"
+                add_rule udp "$SOURCE_PORT" "$DEST_PORT" "$ENABLE_LOCAL"
                 ;;
             *)
                 echo "Error: Invalid protocol '$PROTO'. Use tcp, udp, or both." >&2
@@ -172,14 +235,14 @@ case "$COMMAND" in
         # Handle different protocol options
         case "$PROTO" in
             tcp)
-                remove_rule tcp "$SOURCE_PORT" "$DEST_PORT"
+                remove_rule tcp "$SOURCE_PORT" "$DEST_PORT" "$ENABLE_LOCAL"
                 ;;
             udp)
-                remove_rule udp "$SOURCE_PORT" "$DEST_PORT"
+                remove_rule udp "$SOURCE_PORT" "$DEST_PORT" "$ENABLE_LOCAL"
                 ;;
             both)
-                remove_rule tcp "$SOURCE_PORT" "$DEST_PORT"
-                remove_rule udp "$SOURCE_PORT" "$DEST_PORT"
+                remove_rule tcp "$SOURCE_PORT" "$DEST_PORT" "$ENABLE_LOCAL"
+                remove_rule udp "$SOURCE_PORT" "$DEST_PORT" "$ENABLE_LOCAL"
                 ;;
             *)
                 echo "Error: Invalid protocol '$PROTO'. Use tcp, udp, or both." >&2
