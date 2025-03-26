@@ -24,7 +24,6 @@ type MirrorInfo struct {
 	Hostname         string    `json:"hostname"`
 	LastRegistration time.Time `json:"lastRegistration"`
 	IsActive         bool      `json:"isActive"`
-	// Any additional mirror metadata you want to track
 }
 
 // OriginModule implements Origin server functionality
@@ -112,82 +111,74 @@ func (om *OriginModule) ListMirrorsHandler(w http.ResponseWriter, r *http.Reques
 }
 
 // Modified RegisterMirror to expect and validate fully qualified URLs
-func (om *OriginModule) RegisterMirror(hostname string) error {
+func (om *OriginModule) RegisterMirror(localURL string) error {
 	om.mirrorsMutex.Lock()
 	defer om.mirrorsMutex.Unlock()
 
-	// Normalize the hostname if needed
-	normalizedHostname := hostname
-
-	// Add protocol if missing
-	if !strings.HasPrefix(normalizedHostname, "http://") && !strings.HasPrefix(normalizedHostname, "https://") {
-		normalizedHostname = "https://" + normalizedHostname
-	}
-
-	// Verify it's a complete URL with protocol and port
-	isValidURL := strings.HasPrefix(normalizedHostname, "http") &&
-		strings.Contains(normalizedHostname[8:], ":") // Contains port
-
-	if !isValidURL {
-		return fmt.Errorf("mirror URL %s is not a valid fully qualified URL with protocol and port", hostname)
-	}
-
-	if !om.IsMirrorAllowed(normalizedHostname) {
-		return fmt.Errorf("mirror %s not in allowed list", normalizedHostname)
+	if !om.IsMirrorAllowed(localURL) {
+		return fmt.Errorf("mirror %s not in allowed list", localURL)
 	}
 
 	// Add or update mirror with normalized hostname
-	om.mirrors[normalizedHostname] = &MirrorInfo{
-		Hostname:         normalizedHostname,
+	om.mirrors[localURL] = &MirrorInfo{
+		Hostname:         localURL,
 		LastRegistration: time.Now(),
 		IsActive:         true,
 	}
 
-	log.Printf("Mirror registered: %s", normalizedHostname)
+	log.Printf("Mirror registered: %s", localURL)
 	return nil
 }
 
-// Modified IsMirrorAllowed to handle fully qualified URLs
-func (om *OriginModule) IsMirrorAllowed(hostname string) bool {
+// IsMirrorAllowed checks if a given URL is in the allowed mirrors list
+func (om *OriginModule) IsMirrorAllowed(localURL string) bool {
 	// If the AllowedMirrors list is empty, don't allow any
 	if len(om.Config.AllowedMirrors) == 0 {
 		return false
 	}
 
-	// If the first allowed mirror doesn't start with http, assume the allowlist
-	// contains simple hostnames and we need to be more flexible in matching
-	if !strings.HasPrefix(om.Config.AllowedMirrors[0], "http") {
-		// Extract the hostname part from the URL for comparison
-		hostnameOnly := hostname
+	// Extract the hostname part from the URL for comparison
+	hostnameOnly := localURL
 
-		// Remove protocol
-		if strings.HasPrefix(hostnameOnly, "http://") {
-			hostnameOnly = hostnameOnly[7:]
-		} else if strings.HasPrefix(hostnameOnly, "https://") {
-			hostnameOnly = hostnameOnly[8:]
-		}
-
-		// Remove port
-		if colonIndex := strings.Index(hostnameOnly, ":"); colonIndex != -1 {
-			hostnameOnly = hostnameOnly[:colonIndex]
-		}
-
-		// Now check if this simple hostname is in the allowed list
-		for _, allowed := range om.Config.AllowedMirrors {
-			if allowed == hostnameOnly {
-				return true
-			}
-		}
-		return false
+	// Remove protocol if present
+	if strings.HasPrefix(hostnameOnly, "http://") {
+		hostnameOnly = hostnameOnly[7:]
+	} else if strings.HasPrefix(hostnameOnly, "https://") {
+		hostnameOnly = hostnameOnly[8:]
 	}
 
-	// If the allowed list contains full URLs, do exact matching
+	// Remove port if present
+	if colonIndex := strings.Index(hostnameOnly, ":"); colonIndex != -1 {
+		hostnameOnly = hostnameOnly[:colonIndex]
+	}
+
+	// First check exact matches (for fully qualified URLs in the allowed list)
 	for _, allowed := range om.Config.AllowedMirrors {
-		if allowed == hostname {
+		// Check if the exact URL is allowed
+		if allowed == localURL {
+			return true
+		}
+
+		// If allowed has protocol, strip it and compare hostnames
+		allowedHost := allowed
+		if strings.HasPrefix(allowed, "http://") {
+			allowedHost = allowed[7:]
+		} else if strings.HasPrefix(allowed, "https://") {
+			allowedHost = allowed[8:]
+		}
+
+		// Remove port from allowed if present
+		if colonIndex := strings.Index(allowedHost, ":"); colonIndex != -1 {
+			allowedHost = allowedHost[:colonIndex]
+		}
+
+		// Compare just the hostnames
+		if allowedHost == hostnameOnly {
 			return true
 		}
 	}
 
+	// If we got here, no match was found
 	return false
 }
 
@@ -254,9 +245,9 @@ func (om *OriginModule) RegisterMirrorHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Get the hostname from the request
+	// Get the URL from the request
 	var request struct {
-		Hostname string `json:"hostname"`
+		LocalURL string `json:"localURL"` // Changed from Hostname
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -265,7 +256,7 @@ func (om *OriginModule) RegisterMirrorHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// Register the mirror
-	if err := om.RegisterMirror(request.Hostname); err != nil {
+	if err := om.RegisterMirror(request.LocalURL); err != nil {
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}

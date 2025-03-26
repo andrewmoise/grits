@@ -186,7 +186,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	allowedMirrors := make([]string, NUM_MIRRORS)
 	for i := 0; i < NUM_MIRRORS; i++ {
 		// Use http:// protocol, localhost, and the expected mirror port
-		allowedMirrors[i] = fmt.Sprintf("%s://%s:%d", originProtocol, originHttpConfig.ThisHost, MIRROR_BASE_PORT+i)
+		allowedMirrors[i] = fmt.Sprintf("%s://mirror-%d.cache.%s:%d", originProtocol, i, originHttpConfig.ThisHost, MIRROR_BASE_PORT+i)
 	}
 
 	// Log the allowed mirrors for debugging
@@ -461,7 +461,7 @@ func setupMirrorServer(baseDir string, originHttpConfig *gritsd.HTTPModuleConfig
 		if originHttpConfig.EnableTls {
 			protocol = "https"
 		}
-		trackerURL := fmt.Sprintf("%s://%s:%d", protocol, originHttpConfig.ThisHost, originHttpConfig.ThisPort)
+		trackerURL := fmt.Sprintf("%s://%s", protocol, originHttpConfig.ThisHost)
 
 		peerConfig := &gritsd.PeerModuleConfig{
 			TrackerUrl: trackerURL,
@@ -485,12 +485,13 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 	config := server.Config
 	peerName := fmt.Sprintf("mirror-%d", index)
 	mirrorPort := MIRROR_BASE_PORT + index
+	thisHost := fmt.Sprintf("%s.cache.%s", peerName, originHttpConfig.ThisHost)
 
 	// Create HTTP module configuration
 	httpModuleConfig, err := json.Marshal(map[string]interface{}{
 		"type":            "http",
 		"thisPort":        mirrorPort,
-		"thisHost":        fmt.Sprintf("%s.cache.%s", peerName, originHttpConfig.ThisHost),
+		"thisHost":        thisHost,
 		"enableTls":       originHttpConfig.EnableTls,
 		"autoCertificate": originHttpConfig.AutoCertificate,
 		"certbotEmail":    originHttpConfig.CertbotEmail,
@@ -506,17 +507,17 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 		protocol = "https"
 	}
 
-	// Use the fully qualified URL format for localHostname
-	localHostname := fmt.Sprintf("%s://%s:%d", protocol, originHttpConfig.ThisHost, mirrorPort)
+	// Create fully qualified URL for the mirror
+	localURL := fmt.Sprintf("%s://%s:%d", protocol, thisHost, mirrorPort)
 
 	// Create Mirror module configuration
 	mirrorModuleConfig, err := json.Marshal(map[string]interface{}{
-		"type":          "mirror",
-		"remoteHost":    fmt.Sprintf("%s:%d", originHttpConfig.ThisHost, originHttpConfig.ThisPort),
-		"remoteVolume":  "",
-		"maxStorageMB":  100,
-		"protocol":      protocol,
-		"localHostname": localHostname,
+		"type":         "mirror",
+		"remoteHost":   originHttpConfig.ThisHost,
+		"remoteVolume": "",
+		"maxStorageMB": 100,
+		"protocol":     protocol,
+		"localURL":     localURL,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to marshal Mirror module config: %v", err)
@@ -536,7 +537,7 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 
 	// Create and add the new modules
 	httpModule, err := gritsd.NewHTTPModule(server, &gritsd.HTTPModuleConfig{
-		ThisHost:        fmt.Sprintf("%s.cache.%s", peerName, originHttpConfig.ThisHost),
+		ThisHost:        thisHost,
 		ThisPort:        mirrorPort,
 		EnableTls:       originHttpConfig.EnableTls,
 		AutoCertificate: originHttpConfig.AutoCertificate,
@@ -555,10 +556,10 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 
 	// Create and add the mirror module
 	mirrorModule, err := gritsd.NewMirrorModule(server, &gritsd.MirrorModuleConfig{
-		RemoteHost:    fmt.Sprintf("%s:%d", originHttpConfig.ThisHost, originHttpConfig.ThisPort),
-		MaxStorageMB:  100,
-		Protocol:      protocol,
-		LocalHostname: localHostname,
+		RemoteHost:   originHttpConfig.ThisHost,
+		MaxStorageMB: 100,
+		Protocol:     protocol,
+		LocalURL:     localURL, // Use LocalURL instead of LocalHostname
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create Mirror module: %v", err)

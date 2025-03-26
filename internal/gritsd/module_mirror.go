@@ -38,10 +38,10 @@ import (
 // MirrorModuleConfig defines configuration for mirror functionality
 // FIXME - switch this to remoteUrl instead of remoteHost
 type MirrorModuleConfig struct {
-	RemoteHost    string `json:"remoteHost"`
-	MaxStorageMB  int    `json:"maxStorageMB,omitempty"`
-	Protocol      string `json:"protocol,omitempty"` // Protocol to use (http/https)
-	LocalHostname string `json:"localHostname"`      // Hostname of this mirror server
+	RemoteHost   string `json:"remoteHost"`
+	MaxStorageMB int    `json:"maxStorageMB,omitempty"`
+	Protocol     string `json:"protocol,omitempty"` // Protocol to use (http/https)
+	LocalURL     string `json:"localURL"`           // Base URL of this mirror server
 }
 
 // MirrorModule implements mirror functionality for a remote volume
@@ -166,19 +166,18 @@ func (mm *MirrorModule) heartbeatLoop() {
 }
 
 // sendHeartbeat sends a heartbeat to the upstream server
-// sendHeartbeat registers with the origin server
 func (mm *MirrorModule) sendHeartbeat() error {
 	// Construct the registration URL
 	registrationURL := fmt.Sprintf("%s://%s/grits/v1/origin/register-mirror",
 		mm.Config.Protocol, mm.Config.RemoteHost)
 
-	log.Printf("Register mirror %s via %s", mm.Config.LocalHostname, registrationURL)
+	log.Printf("Register mirror %s via %s", mm.Config.LocalURL, registrationURL)
 
-	// Create request payload with our hostname
+	// Create request payload with our localURL
 	payload := struct {
-		Hostname string `json:"hostname"`
+		LocalURL string `json:"localURL"`
 	}{
-		Hostname: mm.Config.LocalHostname,
+		LocalURL: mm.Config.LocalURL,
 	}
 
 	// Convert payload to JSON
