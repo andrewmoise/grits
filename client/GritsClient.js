@@ -503,9 +503,11 @@ class GritsClient {
       const totalElapsed = startTime ? (afterFetchTime - startTime).toFixed(2) : 'N/A';
       const fetchElapsed = (afterFetchTime - rightBeforeTime).toFixed(2);
       
-      console.log(`Fetch timing for ${hash.substring(0, 8)}: 
-        - Total elapsed: ${totalElapsed} ms
-        - Mirror fetch elapsed: ${fetchElapsed} ms`);    
+      if (debugClientTiming) {
+        console.log(`Fetch timing for ${hash.substring(0, 8)}: 
+          - Total elapsed: ${totalElapsed} ms
+          - Mirror fetch elapsed: ${fetchElapsed} ms`);
+      }
     } else {
       // Option 2:
       let url = `${this.serverUrl}/grits/v1/blob/${hash}`;
@@ -576,24 +578,24 @@ class GritsClient {
       let loggedAny = false;
       // Log one line per mirror
       for (const stat of mirrorStats) {
-        if (stat.bytesFetched > 0) {
+        // Use the raw numeric value for comparison
+        if (stat.rawBytes > 0) {
           if (!loggedAny) {
             console.log(`%c[MIRROR STATS]%c (${mirrorStats.length} mirrors)`, 
               'color: #3b82f6; font-weight: bold', 'color: inherit');
             loggedAny = true;
           }
-              
+          
           const host = new URL(stat.url).hostname;
           console.log(
             `  ${host}: Latency ${stat.latency} | Bandwidth ${stat.bandwidth} | ` +
-            `Reliability ${stat.reliability} | Requests ${stat.requests} | ` +
+            `Reliability ${stat.reliability} | ` + //Requests ${stat.requests} | ` +
             `Data ${stat.bytesFetched}`
           );
-          loggedAny = true;
         }
       }
     }
-    
+
     // Reset stats for next interval
     this.resetStats();
     this.mirrorManager.resetStats();

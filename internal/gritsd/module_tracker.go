@@ -36,6 +36,7 @@ type PeerInfo struct {
 	IsActive      bool      `json:"isActive"`
 	Port          int       `json:"port"`
 	IPAddress     string    `json:"ipAddress"` // Store peer's IP address for DNS resolution
+	FQDN          string    `json:"fqdn"`      // Fully qualified domain name for the peer
 }
 
 // TrackerModule implements tracker server functionality
@@ -231,19 +232,24 @@ func (tm *TrackerModule) RegisterPeerHandler(w http.ResponseWriter, r *http.Requ
 			IsActive:      true,
 			Port:          request.Port,
 			IPAddress:     peerIP,
+			FQDN:          peerFQDN, // Set the FQDN when creating a new peer
 		}
 
-		log.Printf("New peer registered: %s (IP: %s, Port: %d)",
-			request.PeerName, peerIP, request.Port)
+		log.Printf("New peer registered: %s (IP: %s, Port: %d, FQDN: %s)",
+			request.PeerName, peerIP, request.Port, peerFQDN)
 	} else {
 		// Update existing peer
 		peer.LastHeartbeat = time.Now()
 		peer.IsActive = true
 		peer.Port = request.Port
 		peer.IPAddress = peerIP
+		peer.FQDN = peerFQDN // Make sure FQDN is updated if it wasn't set before
 
 		// Keep the original name for display purposes but ensure it's stored with lowercase key
 		peer.Name = request.PeerName
+
+		log.Printf("Updated peer: %s (IP: %s, Port: %d, FQDN: %s)",
+			request.PeerName, peerIP, request.Port, peerFQDN)
 	}
 
 	tm.peersMutex.Unlock()

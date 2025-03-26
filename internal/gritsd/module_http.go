@@ -261,8 +261,29 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 		log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
 
 		tracker.Step("Setting CORS headers")
-		w.Header().Set("Access-Control-Allow-Origin", fmt.Sprintf("http://localhost:%d/", srv.Config.ThisPort))
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, PUT, DELETE")
+
+		// CORS - Allow requests from origin server and our own origin
+		thisScheme := "http"
+		if srv.Config.EnableTls {
+			thisScheme = "https"
+		}
+		// Our own origin
+		thisOrigin := fmt.Sprintf("%s://%s:%d", thisScheme, srv.Config.ThisHost, srv.Config.ThisPort)
+
+		// If we're a mirror, also include the origin server we're mirroring
+		if srv.activeMirrorModule != nil {
+			originServer := fmt.Sprintf("%s://%s",
+				srv.activeMirrorModule.Config.Protocol,
+				srv.activeMirrorModule.Config.RemoteHost)
+
+			// Set the header to allow the origin server
+			w.Header().Set("Access-Control-Allow-Origin", originServer)
+		} else {
+			// Set to our own origin otherwise
+			w.Header().Set("Access-Control-Allow-Origin", thisOrigin)
+		}
+
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, POST")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		// Set cache headers based on the request path

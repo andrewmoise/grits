@@ -46,9 +46,9 @@ func TestOriginModule(t *testing.T) {
 
 	// Test 1: Register a mirror - update with protocol and port
 	registrationPayload := struct {
-		Hostname string `json:"hostname"`
+		LocalURL string `json:"localURL"`
 	}{
-		Hostname: "http://test-mirror-1.example.com:80",
+		LocalURL: "http://test-mirror-1.example.com:80",
 	}
 
 	payloadBytes, _ := json.Marshal(registrationPayload)
@@ -141,9 +141,9 @@ func TestOriginModule(t *testing.T) {
 
 	// Test 4: Test rejected registration for disallowed mirror
 	badRegistrationPayload := struct {
-		Hostname string `json:"hostname"`
+		LocalURL string `json:"localURL"`
 	}{
-		Hostname: "http://unauthorized-mirror.example.com:80",
+		LocalURL: "http://unauthorized-mirror.example.com:80",
 	}
 
 	badPayloadBytes, _ := json.Marshal(badRegistrationPayload)

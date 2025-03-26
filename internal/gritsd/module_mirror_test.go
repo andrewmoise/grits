@@ -14,10 +14,10 @@ import (
 func WithMirrorModule(remoteHost string, maxStorageMB int, port int) TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
 		config := &MirrorModuleConfig{
-			RemoteHost:    remoteHost,
-			MaxStorageMB:  maxStorageMB,
-			Protocol:      "http",
-			LocalHostname: "localhost:" + fmt.Sprintf("%d", port), // Add proper local hostname
+			RemoteHost:   remoteHost,
+			MaxStorageMB: maxStorageMB,
+			Protocol:     "http",
+			LocalURL:     "http://localhost:" + fmt.Sprintf("%d", port),
 		}
 
 		mirrorModule, err := NewMirrorModule(s, config)
