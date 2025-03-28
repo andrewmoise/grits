@@ -60,6 +60,10 @@ func (pm *PinModule) GetModuleName() string {
 	return "pin"
 }
 
+func (*PinModule) GetDependencies() []*Dependency {
+	return []*Dependency{}
+}
+
 func (pm *PinModule) GetConfig() any {
 	return pm.Config
 }

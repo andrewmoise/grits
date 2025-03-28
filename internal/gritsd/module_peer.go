@@ -259,6 +259,10 @@ func (pm *PeerModule) GetModuleName() string {
 	return "peer"
 }
 
+func (*PeerModule) GetDependencies() []*Dependency {
+	return []*Dependency{}
+}
+
 func (pm *PeerModule) GetConfig() any {
 	return pm.Config
 }

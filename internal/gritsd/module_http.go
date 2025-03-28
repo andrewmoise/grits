@@ -54,6 +54,15 @@ func (*HTTPModule) GetModuleName() string {
 	return "http"
 }
 
+func (*HTTPModule) GetDependencies() []*Dependency {
+	return []*Dependency{
+		{
+			ModuleType: "peer",
+			Type:       DependOptional,
+		},
+	}
+}
+
 func (m *HTTPModule) GetConfig() any {
 	return m.Config
 }

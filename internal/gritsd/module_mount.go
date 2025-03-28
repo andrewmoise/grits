@@ -53,6 +53,10 @@ func (*MountModule) GetModuleName() string {
 	return "mount"
 }
 
+func (*MountModule) GetDependencies() []*Dependency {
+	return []*Dependency{}
+}
+
 func (m *MountModule) GetConfig() any {
 	return m.config
 }
