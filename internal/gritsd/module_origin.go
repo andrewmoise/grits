@@ -59,6 +59,10 @@ func (om *OriginModule) GetModuleName() string {
 	return "origin"
 }
 
+func (*OriginModule) GetDependencies() []*Dependency {
+	return []*Dependency{}
+}
+
 func (m *OriginModule) GetConfig() any {
 	return m.Config
 }

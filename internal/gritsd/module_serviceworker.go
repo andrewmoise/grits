@@ -400,6 +400,10 @@ func (swm *ServiceWorkerModule) GetModuleName() string {
 	return "serviceworker"
 }
 
+func (*ServiceWorkerModule) GetDependencies() []*Dependency {
+	return []*Dependency{}
+}
+
 func (swm *ServiceWorkerModule) GetConfig() any {
 	return swm.Config
 }

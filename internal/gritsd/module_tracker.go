@@ -503,6 +503,10 @@ func (tm *TrackerModule) GetModuleName() string {
 	return "tracker"
 }
 
+func (*TrackerModule) GetDependencies() []*Dependency {
+	return []*Dependency{}
+}
+
 func (tm *TrackerModule) GetConfig() any {
 	return tm.Config
 }

@@ -89,6 +89,10 @@ func (wv *WikiVolume) GetModuleName() string {
 	return "wiki"
 }
 
+func (*WikiVolume) GetDependencies() []*Dependency {
+	return []*Dependency{}
+}
+
 func (wv *WikiVolume) GetConfig() any {
 	return &WikiVolumeConfig{
 		VolumeName: wv.name,

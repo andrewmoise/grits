@@ -85,23 +85,32 @@ func (s *Server) Start() error {
 		return fmt.Errorf("failed to load modules: %v", err)
 	}
 
+	// First pass: Check for required dependencies and auto-create as needed
+	if err := s.resolveModuleDependencies(); err != nil {
+		return err
+	}
+
+	// Next pass: Sort modules topologically
+	orderedModules := sortModulesByDependency(s.Modules)
+
+	// Finally, start modules in dependency order
 	startupSuccess := false
 	defer func() {
 		if !startupSuccess {
-			for _, module := range s.Modules {
-				err := module.Stop()
-				if err != nil {
-					log.Printf("Couldn't shut down module %s: %v", module.GetModuleName(), err)
+			// Shutdown in reverse order
+			for i := len(orderedModules) - 1; i >= 0; i-- {
+				module := orderedModules[i]
+				log.Printf("Stopping module %s\n", module.GetModuleName())
+				if err := module.Stop(); err != nil {
+					log.Printf("Error stopping %s module: %v", module.GetModuleName(), err)
 				}
 			}
 		}
 	}()
 
-	// Start modules
-	for _, module := range s.Modules {
+	for _, module := range orderedModules {
 		log.Printf("Starting module %s\n", module.GetModuleName())
 		if err := module.Start(); err != nil {
-			log.Printf("Error starting %s module, shutting down", module.GetModuleName())
 			return fmt.Errorf("failed to start %s module: %v", module.GetModuleName(), err)
 		}
 	}

@@ -37,6 +37,10 @@ func (dm *DeploymentModule) GetModuleName() string {
 	return "deployment"
 }
 
+func (*DeploymentModule) GetDependencies() []*Dependency {
+	return []*Dependency{}
+}
+
 func (dm *DeploymentModule) GetConfig() any {
 	return dm.Config
 }

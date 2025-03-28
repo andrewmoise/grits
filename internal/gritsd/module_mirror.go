@@ -139,6 +139,15 @@ func (mm *MirrorModule) GetModuleName() string {
 	return "mirror"
 }
 
+func (*MirrorModule) GetDependencies() []*Dependency {
+	return []*Dependency{
+		{
+			ModuleType: "peer",
+			Type:       DependOptional,
+		},
+	}
+}
+
 func (m *MirrorModule) GetConfig() any {
 	return m.Config
 }
