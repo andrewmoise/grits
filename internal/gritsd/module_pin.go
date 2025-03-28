@@ -60,6 +60,6 @@ func (pm *PinModule) GetModuleName() string {
 	return "pin"
 }
 
-func (pm *PinModule) GetConfig() interface{} {
+func (pm *PinModule) GetConfig() any {
 	return pm.Config
 }

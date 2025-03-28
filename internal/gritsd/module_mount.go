@@ -53,7 +53,7 @@ func (*MountModule) GetModuleName() string {
 	return "mount"
 }
 
-func (m *MountModule) GetConfig() interface{} {
+func (m *MountModule) GetConfig() any {
 	return m.config
 }
 

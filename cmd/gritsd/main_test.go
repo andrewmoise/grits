@@ -68,7 +68,7 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
 
-	var lookupResponse [][]interface{}
+	var lookupResponse [][]any
 	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
 
-	lookupResponse = make([][]interface{}, 0)
+	lookupResponse = make([][]any, 0)
 	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}

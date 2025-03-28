@@ -37,6 +37,6 @@ func (dm *DeploymentModule) GetModuleName() string {
 	return "deployment"
 }
 
-func (dm *DeploymentModule) GetConfig() interface{} {
+func (dm *DeploymentModule) GetConfig() any {
 	return dm.Config
 }

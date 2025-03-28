@@ -259,7 +259,7 @@ func (pm *PeerModule) GetModuleName() string {
 	return "peer"
 }
 
-func (pm *PeerModule) GetConfig() interface{} {
+func (pm *PeerModule) GetConfig() any {
 	return pm.Config
 }
 

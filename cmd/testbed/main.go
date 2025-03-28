@@ -488,7 +488,7 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 	thisHost := fmt.Sprintf("%s.cache.%s", peerName, originHttpConfig.ThisHost)
 
 	// Create HTTP module configuration
-	httpModuleConfig, err := json.Marshal(map[string]interface{}{
+	httpModuleConfig, err := json.Marshal(map[string]any{
 		"type":            "http",
 		"thisPort":        mirrorPort,
 		"thisHost":        thisHost,
@@ -511,7 +511,7 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 	localURL := fmt.Sprintf("%s://%s:%d", protocol, thisHost, mirrorPort)
 
 	// Create Mirror module configuration
-	mirrorModuleConfig, err := json.Marshal(map[string]interface{}{
+	mirrorModuleConfig, err := json.Marshal(map[string]any{
 		"type":         "mirror",
 		"remoteHost":   originHttpConfig.ThisHost,
 		"remoteVolume": "",

@@ -59,7 +59,7 @@ func (om *OriginModule) GetModuleName() string {
 	return "origin"
 }
 
-func (m *OriginModule) GetConfig() interface{} {
+func (m *OriginModule) GetConfig() any {
 	return m.Config
 }
 
