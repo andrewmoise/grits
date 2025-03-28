@@ -89,7 +89,7 @@ func (wv *WikiVolume) GetModuleName() string {
 	return "wiki"
 }
 
-func (wv *WikiVolume) GetConfig() interface{} {
+func (wv *WikiVolume) GetConfig() any {
 	return &WikiVolumeConfig{
 		VolumeName: wv.name,
 	}

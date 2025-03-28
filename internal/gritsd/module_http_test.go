@@ -98,7 +98,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	}
 
 	// Updated for new response format: [path, metadataHash, contentHash, contentSize]
-	var lookupResponse [][]interface{}
+	var lookupResponse [][]any
 	if err := json.NewDecoder(resp.Body).Decode(&lookupResponse); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}

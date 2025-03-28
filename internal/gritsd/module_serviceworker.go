@@ -400,6 +400,6 @@ func (swm *ServiceWorkerModule) GetModuleName() string {
 	return "serviceworker"
 }
 
-func (swm *ServiceWorkerModule) GetConfig() interface{} {
+func (swm *ServiceWorkerModule) GetConfig() any {
 	return swm.Config
 }

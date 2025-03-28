@@ -54,7 +54,7 @@ func (*HTTPModule) GetModuleName() string {
 	return "http"
 }
 
-func (m *HTTPModule) GetConfig() interface{} {
+func (m *HTTPModule) GetConfig() any {
 	return m.Config
 }
 
@@ -596,14 +596,14 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Transform to the format expected by the client
-	response := make([][]interface{}, len(pathNodePairs))
+	response := make([][]any, len(pathNodePairs))
 	for i, pair := range pathNodePairs {
 		node := pair.Node
 		metadataHash := node.MetadataBlob().GetAddress().Hash
 		contentHash := node.ExportedBlob().GetAddress().Hash
 		contentSize := node.ExportedBlob().GetSize()
 
-		response[i] = []interface{}{
+		response[i] = []any{
 			pair.Path,
 			metadataHash,
 			contentHash,

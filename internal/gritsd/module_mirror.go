@@ -139,7 +139,7 @@ func (mm *MirrorModule) GetModuleName() string {
 	return "mirror"
 }
 
-func (m *MirrorModule) GetConfig() interface{} {
+func (m *MirrorModule) GetConfig() any {
 	return m.Config
 }
 

@@ -394,7 +394,7 @@ func (tm *TrackerModule) handleDNSQuery(w dns.ResponseWriter, r *dns.Msg) {
 }
 
 // Make sure the peer's authorization matches the one we were configured with
-func (tm *TrackerModule) verifyPeerAuthorization(authFilePath string, peerPublicKey interface{}) bool {
+func (tm *TrackerModule) verifyPeerAuthorization(authFilePath string, peerPublicKey any) bool {
 	// Check if authorization file exists
 	_, err := os.Stat(authFilePath)
 	if os.IsNotExist(err) {
@@ -503,6 +503,6 @@ func (tm *TrackerModule) GetModuleName() string {
 	return "tracker"
 }
 
-func (tm *TrackerModule) GetConfig() interface{} {
+func (tm *TrackerModule) GetConfig() any {
 	return tm.Config
 }
