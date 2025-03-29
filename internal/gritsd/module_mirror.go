@@ -146,12 +146,6 @@ func (m *MirrorModule) GetDependencies() []*Dependency {
 			ModuleType: "http",
 			Type:       DependRequired,
 		},
-
-		// Require Peer module
-		{
-			ModuleType: "peer",
-			Type:       DependRequired,
-		},
 	}
 }
 
