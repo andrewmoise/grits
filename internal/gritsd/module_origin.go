@@ -60,13 +60,7 @@ func (om *OriginModule) GetModuleName() string {
 }
 
 func (m *OriginModule) GetDependencies() []*Dependency {
-	return []*Dependency{
-		// We have to have tracker to keep track of the mirrors
-		{
-			ModuleType: "tracker",
-			Type:       DependRequired,
-		},
-	}
+	return []*Dependency{}
 }
 
 func (m *OriginModule) GetConfig() any {

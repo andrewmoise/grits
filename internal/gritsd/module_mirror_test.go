@@ -37,7 +37,10 @@ func TestMirrorModule(t *testing.T) {
 		WithOriginModule([]string{"localhost:2388"})) // Add allowed mirrors
 	defer originCleanup()
 
-	originServer.Start()
+	err := originServer.Start()
+	if err != nil {
+		t.Fatalf("Can't start origin server: %v", err)
+	}
 	defer originServer.Stop()
 	time.Sleep(500 * time.Millisecond)
 
@@ -100,7 +103,10 @@ func TestMirrorModule(t *testing.T) {
 		WithMirrorModule(originHost, 10, mirrorPort)) // 10MB cache
 	defer mirrorCleanup()
 
-	mirrorServer.Start()
+	err = mirrorServer.Start()
+	if err != nil {
+		t.Fatalf("Error starting mirror server: %v", err)
+	}
 	defer mirrorServer.Stop()
 	time.Sleep(500 * time.Millisecond)
 
