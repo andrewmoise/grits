@@ -505,10 +505,14 @@ func (tm *TrackerModule) GetModuleName() string {
 
 func (*TrackerModule) GetDependencies() []*Dependency {
 	return []*Dependency{
-		// We have to have tracker to keep track of the mirrors
 		{
 			ModuleType: "http",
 			Type:       DependRequired,
+		},
+		// FIXME -- We need this for ordering, but this is bad.
+		{
+			ModuleType: "origin",
+			Type:       DependOptional,
 		},
 	}
 }
