@@ -59,6 +59,9 @@ func (*HTTPModule) GetDependencies() []*Dependency {
 		{
 			ModuleType: "peer",
 			Type:       DependOptional,
+
+			// Ordering only - we need to load up the peer first, to
+			// get DNS working, if we're a mirror that needs certbot for TLS
 		},
 	}
 }

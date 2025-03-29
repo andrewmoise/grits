@@ -21,7 +21,8 @@ type Module interface {
 type DependencyType int
 
 const (
-	// DependOptional - Use if available, but don't require it
+	// DependOptional - Use if available, but don't require it. Only affects ordering of
+	// when the module loads (which maybe means it needs a different name).
 	DependOptional DependencyType = iota
 
 	// DependRequired - Must exist, error if not found

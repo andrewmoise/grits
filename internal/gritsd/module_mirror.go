@@ -139,11 +139,18 @@ func (mm *MirrorModule) GetModuleName() string {
 	return "mirror"
 }
 
-func (*MirrorModule) GetDependencies() []*Dependency {
+func (m *MirrorModule) GetDependencies() []*Dependency {
 	return []*Dependency{
+		// Require HTTP module
+		{
+			ModuleType: "http",
+			Type:       DependRequired,
+		},
+
+		// Require Peer module
 		{
 			ModuleType: "peer",
-			Type:       DependOptional,
+			Type:       DependRequired,
 		},
 	}
 }
