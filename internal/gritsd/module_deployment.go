@@ -37,8 +37,14 @@ func (dm *DeploymentModule) GetModuleName() string {
 	return "deployment"
 }
 
-func (*DeploymentModule) GetDependencies() []*Dependency {
-	return []*Dependency{}
+func (m *DeploymentModule) GetDependencies() []*Dependency {
+	return []*Dependency{
+		// We have to have http to deploy something to it
+		{
+			ModuleType: "http",
+			Type:       DependRequired,
+		},
+	}
 }
 
 func (dm *DeploymentModule) GetConfig() any {
