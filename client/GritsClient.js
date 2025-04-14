@@ -7,6 +7,12 @@ const debugPerformanceStats = true;
 
 const CLEANUP_INTERVAL = 5 * 60 * 1000; // ms
 
+// For ES Modules environment
+import MirrorManager from './MirrorManager.js'; // %FOR MODULE%
+
+// For ServiceWorker environment (this will be commented out in the module version)
+//importScripts('/grits/v1/content/client/MirrorManager-sw.js');  // %FOR SERVICEWORKER%
+
 class GritsClient {
 
   /////
@@ -28,7 +34,8 @@ class GritsClient {
     this.jsonCache = new Map(); // Key: hash, Value: {data: Object, lastAccessed: timestamp}
     
     // Initialize mirror manager
-    this.mirrorManager = new MirrorManager({
+    this.mirrorManager = new MirrorManager({  // %FOR MODULE%
+    //this.mirrorManager = new self.MirrorManager({ // %FOR SERVICEWORKER%
       serverUrl: this.serverUrl,
       volume: this.volume,
       debug: debugClientTiming,
@@ -696,8 +703,5 @@ class GritsClient {
 // service worker, apparently. The handler will comment and uncomment this stuff so that we can
 // have both, as separate files GritsClient.js and GritsClient-sw.js:
 
-// %MODULE%
-export default GritsClient;
-
-// %SERVICEWORKER%
-//self.GritsClient = GritsClient;
+export default GritsClient; // %FOR MODULE%
+//self.GritsClient = GritsClient; // %FOR SERVICEWORKER%

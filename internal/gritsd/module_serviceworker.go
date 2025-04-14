@@ -6,6 +6,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -73,61 +75,71 @@ type ServiceWorkerModule struct {
 }
 
 func (swm *ServiceWorkerModule) loadClientFiles(wv *WikiVolume) error {
-	// Define the template file to load first
-	templatePath := "client/GritsClient.js"
-
-	log.Printf("Loading template file: %s", templatePath)
-	templateCf, err := wv.AddBlob(templatePath)
-	if err != nil {
-		return fmt.Errorf("failed to load template file: %v", err)
-	}
-	defer templateCf.Release()
-
-	// Read the template content
-	templateData, err := templateCf.Read(0, templateCf.GetSize())
-	if err != nil {
-		return fmt.Errorf("failed to read template data: %v", err)
-	}
-	templateStr := string(templateData)
-
-	// Process template for both versions
-	moduleVersion, swVersion := processTemplate(templateStr)
-
-	// List of files to generate
-	fileContents := map[string]string{
-		"GritsClient.js":    moduleVersion,
-		"GritsClient-sw.js": swVersion,
+	// List of template files to process
+	templateFiles := []string{
+		"client/GritsClient.js",
+		"client/MirrorManager.js",
 	}
 
-	// List of static files to load directly
+	// List of static files to load directly (no processing needed)
 	staticFiles := []string{
 		"serviceworker/grits-bootstrap.js",
 		"serviceworker/grits-serviceworker.js",
 		"GritsClientTests.js",
-		"MirrorManager-sw.js",
 		"client-test.html",
 	}
 
-	// Handle template-generated files
-	for filename, content := range fileContents {
-		// Create a blob from the processed content
-		contentBytes := []byte(content)
-		contentCf, err := swm.Server.BlobStore.AddDataBlock(contentBytes)
+	// Process each template file
+	for _, templatePath := range templateFiles {
+		log.Printf("Loading template file: %s", templatePath)
+		templateCf, err := wv.AddBlob(templatePath)
 		if err != nil {
-			return fmt.Errorf("failed to create blob for %s: %v", filename, err)
+			return fmt.Errorf("failed to load template file %s: %v", templatePath, err)
 		}
-		defer contentCf.Release()
+		defer templateCf.Release()
 
-		// Create metadata and link the file
-		contentMetadata, err := wv.CreateMetadata(contentCf)
+		// Read the template content
+		templateData, err := templateCf.Read(0, templateCf.GetSize())
 		if err != nil {
-			return fmt.Errorf("failed to create metadata for %s: %v", filename, err)
+			return fmt.Errorf("failed to read template data: %v", err)
+		}
+		templateStr := string(templateData)
+
+		// Process template for both module and service worker versions
+		moduleVersion, swVersion := processTemplate(templateStr)
+
+		// Determine output filenames based on input template name
+		baseName := filepath.Base(templatePath)
+		moduleName := baseName
+		swName := strings.TrimSuffix(baseName, ".js") + "-sw.js"
+
+		// Create file content map
+		fileContents := map[string]string{
+			moduleName: moduleVersion,
+			swName:     swVersion,
 		}
 
-		log.Printf("Linking generated file: %s", filename)
-		err = wv.LinkByMetadata(filename, contentMetadata.GetAddress())
-		if err != nil {
-			return fmt.Errorf("failed to link %s: %v", filename, err)
+		// Handle each processed file
+		for filename, content := range fileContents {
+			// Create a blob from the processed content
+			contentBytes := []byte(content)
+			contentCf, err := swm.Server.BlobStore.AddDataBlock(contentBytes)
+			if err != nil {
+				return fmt.Errorf("failed to create blob for %s: %v", filename, err)
+			}
+			defer contentCf.Release()
+
+			// Create metadata and link the file
+			contentMetadata, err := wv.CreateMetadata(contentCf)
+			if err != nil {
+				return fmt.Errorf("failed to create metadata for %s: %v", filename, err)
+			}
+
+			log.Printf("Linking generated file: %s", filename)
+			err = wv.LinkByMetadata(filename, contentMetadata.GetAddress())
+			if err != nil {
+				return fmt.Errorf("failed to link %s: %v", filename, err)
+			}
 		}
 	}
 
@@ -153,35 +165,57 @@ func (swm *ServiceWorkerModule) loadClientFiles(wv *WikiVolume) error {
 
 // Process the template to generate both versions
 func processTemplate(templateStr string) (moduleVersion, swVersion string) {
-	// Find marker positions
-	moduleStart := strings.Index(templateStr, "// %MODULE%")
-	serviceWorkerStart := strings.Index(templateStr, "// %SERVICEWORKER%")
+	// Split the content into lines for processing
+	lines := strings.Split(templateStr, "\n")
 
-	// Base content is everything up to the first marker
-	baseContent := templateStr
-	if moduleStart != -1 {
-		baseContent = templateStr[:moduleStart]
+	// Prepare slices for each version
+	var moduleLines, serviceWorkerLines []string
+
+	commentRe := regexp.MustCompile(`^\s*//`)
+
+	// Process each line
+	for _, line := range lines {
+		// Check if line contains module-specific marker
+		isModuleSpecific := strings.Contains(line, "%FOR MODULE%")
+
+		// Check if line contains service worker-specific marker
+		isServiceWorkerSpecific := strings.Contains(line, "%FOR SERVICEWORKER%")
+
+		if isModuleSpecific {
+			// For module version, include the line without the marker
+			moduleLines = append(moduleLines, line)
+
+			// For service worker version, comment out this line if not already commented
+			if matched := commentRe.MatchString(line); matched {
+				// Already commented, just keep the line
+				serviceWorkerLines = append(serviceWorkerLines, line)
+			} else {
+				// Comment it out
+				serviceWorkerLines = append(serviceWorkerLines, "// "+line)
+			}
+		} else if isServiceWorkerSpecific {
+			// For module version, keep it commented (as it already is)
+			moduleLines = append(moduleLines, line)
+
+			// For service worker version, uncomment the line if it starts with //
+			if matched := commentRe.MatchString(line); matched {
+				// Replace just the first // that appears after any leading whitespace
+				uncommentedLine := regexp.MustCompile(`^(\s*)//`).ReplaceAllString(line, "$1")
+				serviceWorkerLines = append(serviceWorkerLines, uncommentedLine)
+			} else {
+				// Already uncommented, just keep the line
+				serviceWorkerLines = append(serviceWorkerLines, line)
+			}
+		} else {
+			// Regular line, include in both versions
+			moduleLines = append(moduleLines, line)
+			serviceWorkerLines = append(serviceWorkerLines, line)
+		}
 	}
 
-	// Extract module section
-	moduleSection := ""
-	if moduleStart != -1 && serviceWorkerStart != -1 {
-		moduleSection = templateStr[moduleStart:serviceWorkerStart]
-	} else if moduleStart != -1 {
-		moduleSection = templateStr[moduleStart:]
-	}
-
-	// Extract service worker section
-	swSection := ""
-	if serviceWorkerStart != -1 {
-		swSection = templateStr[serviceWorkerStart:]
-		// Remove the comment marker from the self.GritsClient line
-		swSection = strings.Replace(swSection, "//self.GritsClient", "self.GritsClient", 1)
-	}
-
-	// Create the two versions
-	moduleVersion = baseContent + moduleSection
-	swVersion = baseContent + swSection
+	// Join the lines back together
+	moduleVersion = strings.Join(moduleLines, "\n")
+	swVersion = strings.Join(serviceWorkerLines, "\n")
 
 	return moduleVersion, swVersion
 }
