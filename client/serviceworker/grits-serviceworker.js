@@ -11,7 +11,6 @@ let gritsClients = new Map();
 
 // Import GritsClient
 importScripts('/grits/v1/content/client/GritsClient-sw.js');
-importScripts('/grits/v1/content/client/MirrorManager-sw.js');
 
 // Initialize GritsClient for a specific volume
 function initializeGritsClient(volume) {
@@ -212,12 +211,21 @@ self.addEventListener('install', event => {
         fetchConfig()
             .then(() => {
                 console.log('[Grits] Config fetched, initializing clients');
-                initializeAllClients();
+                return initializeAllClients();
+            })
+            .then(() => {
+                console.log('[Grits] Clients initialized, skipping waiting');
                 return self.skipWaiting();
             })
             .catch(error => {
                 console.error('[Grits] Install failed during config fetch:', error);
-                throw new Error('Failed to load grits SW configuration');
+                // More detailed error reporting
+                console.error('[Grits] Error details:', {
+                    message: error.message,
+                    stack: error.stack,
+                    name: error.name
+                });
+                throw error; // Important to ensure the installation fails properly
             })
     );
 });

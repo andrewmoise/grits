@@ -596,5 +596,5 @@ async refreshMirrorList() {
   }
 }
 
-// Export, in stupid serviceworker-appropriate form
-self.MirrorManager = MirrorManager;
+export default MirrorManager; // %FOR MODULE%
+//self.MirrorManager = MirrorManager; // %FOR SERVICEWORKER%
