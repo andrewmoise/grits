@@ -41,3 +41,4 @@ Minor punch list:
 * Make templating of the JS exports cleaner
 * Mandate some limits on what characters are allowed in things (volumes, peerNames, etc)
 * Need to worry about key expiration for the certbot keys
+* Standardize on URL format for identifying peer and mirror protocol/hostname/port
