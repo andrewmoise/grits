@@ -233,7 +233,10 @@ async refreshMirrorList() {
    * @param {string} [extension] - Optional file extension
    * @returns {Promise<Response>} The fetch response
    */
+
   async fetchBlob(hash, extension = null) {
+    //console.log(`[DEBUG:TIMING] fetchBlob start: ${performance.now()}`);
+    
     // If no mirrors are available, fall back to the server
     if (this.mirrors.length === 0) {
       try {
@@ -246,7 +249,7 @@ async refreshMirrorList() {
         this.activeRequests--;
       }
     }
-
+  
     // Create a tracking object for this request
     const trackingObj = {
       url: null,
@@ -258,72 +261,76 @@ async refreshMirrorList() {
       bandwidthMeasured: false
     };
     
+    //console.log(`[DEBUG:TIMING] tracking object created at: ${trackingObj.startTime}`);
+    
     this.activeRequests++;
     
     // Try to fetch from a mirror
     try {
+      const mirrorSelectionStart = performance.now();
       const mirrorUrl = this.selectBestMirror(hash);
+      const mirrorSelectionEnd = performance.now();
+      //console.log(`[DEBUG:TIMING] mirror selection took: ${mirrorSelectionEnd - mirrorSelectionStart}ms`);
+      
       if (!mirrorUrl) {
         throw new Error(`No suitable mirror found for ${this.volume}/${hash}`);
       }
-      if (debugMirrors) {
-        console.log(`Best mirror: ${mirrorUrl}`);
-      }
-  
+      
       // Set the URL in our tracking object
       trackingObj.url = mirrorUrl;
-
+      //console.log(`[DEBUG:TIMING] selected mirror: ${mirrorUrl} at: ${performance.now()}`);
+  
       // Construct the full URL
       let url = `${mirrorUrl}/grits/v1/blob/${hash}`;
       if (extension) {
         url += `.${extension}`;
       }
-
+  
       // Update mirror stats
       const stats = this.mirrorPerformance.get(mirrorUrl);
       stats.inFlightRequests++;
       stats.totalRequests++;
-      //this.requestsPerMirror.set(mirrorUrl, (this.requestsPerMirror.get(mirrorUrl) || 0) + 1);
       
-      // Start timing
-      const startTime = performance.now();
+      // Just before fetch
+      const fetchStartTime = performance.now();
+      //console.log(`[DEBUG:TIMING] about to fetch at: ${fetchStartTime}, elapsed since tracking obj creation: ${fetchStartTime - trackingObj.startTime}ms`);
       
-      if (debugMirrors) {
-        console.log(`About to execute fetch for ${url}`);
-      }
       const response = await fetch(url);
-      if (debugMirrors) {
-        console.log(`Fetch completed with status: ${response.status}, ok: ${response.ok}`);
-      }
-
+      
+      const fetchEndTime = performance.now();
+      //console.log(`[DEBUG:TIMING] fetch completed at: ${fetchEndTime}, took: ${fetchEndTime - fetchStartTime}ms`);
+  
       // Record TTFB
-      trackingObj.ttfb = performance.now() - trackingObj.startTime;
-
+      trackingObj.ttfb = fetchEndTime - trackingObj.startTime;
+      //console.log(`[DEBUG:TIMING] setting ttfb to: ${trackingObj.ttfb}ms`);
+  
       if (!response.ok) {
         console.error(`Error return from mirror fetch: ${response.status}`);
         stats.errorCount++;
         throw new Error(`Mirror returned status ${response.status}`);
       }
-      
-      if (debugMirrors) {
-        console.log(`Successfully fetched from mirror: ${url}`);
-      }
             
       // Clone the response for bandwidth measurement
       const clonedResponse = response.clone();
       
-      // Measure bandwidth in the background (which will add the tracking obj to stats, also)
+      // Measure bandwidth in the background
+      const measureStart = performance.now();
+      //console.log(`[DEBUG:TIMING] starting bandwidth measurement at: ${measureStart}`);
       this.measureBandwidth(clonedResponse, trackingObj);
-
+  
       stats.successCount++;
+      
+      // Decrement the in-flight count for this mirror
+      stats.inFlightRequests--;
+      
       return response;
     } catch (error) {
+      console.log(`[DEBUG:TIMING] error in fetch at: ${performance.now()}`);
       trackingObj.success = false;
       trackingObj.requestComplete = true;
       this.completedTrackingObjects.push(trackingObj);
-
+  
       console.error(`Error fetching ${hash} from mirror: ${error.message}`);
-      console.error(`Stack: ${error.stack}`);
            
       // Fall back to server if mirror fails
       let url = `${this.serverUrl}/grits/v1/blob/${hash}`;
@@ -333,6 +340,7 @@ async refreshMirrorList() {
       return await fetch(url);
     } finally {
       this.activeRequests--;
+      //console.log(`[DEBUG:TIMING] fetchBlob finally block at: ${performance.now()}`);
     }
   }
 
@@ -350,20 +358,20 @@ async refreshMirrorList() {
         return;
       }
       
-      console.log(`Starting bandwidth measurement for ${mirrorUrl}`);
+      //console.log(`Starting bandwidth measurement for ${mirrorUrl}`);
       
       // Try to get content length first
       const contentLength = response.headers.get('content-length');
       if (contentLength) {
         trackingObj.bytesReceived = parseInt(contentLength, 10);
-        console.log(`Content-Length header indicates ${trackingObj.bytesReceived} bytes`);
+        //console.log(`Content-Length header indicates ${trackingObj.bytesReceived} bytes`);
       } else {
-        console.log(`No Content-Length header for ${mirrorUrl}`);
+        //console.log(`No Content-Length header for ${mirrorUrl}`);
       }
       
       // Check if response body is available
       if (!response.body) {
-        console.warn(`No response body available for ${mirrorUrl}`);
+        //console.warn(`No response body available for ${mirrorUrl}`);
         trackingObj.requestComplete = true;
         this.completedTrackingObjects.push(trackingObj);
         return;
@@ -380,7 +388,7 @@ async refreshMirrorList() {
           const {done, value} = await reader.read();
           
           if (done) {
-            console.log(`Done reading after ${chunkCount} chunks, ${bytesReceived} total bytes`);
+            //console.log(`Done reading after ${chunkCount} chunks, ${bytesReceived} total bytes`);
             break;
           }
           
@@ -388,13 +396,13 @@ async refreshMirrorList() {
           bytesReceived += value.length;
           
           if (chunkCount === 1) {
-            console.log(`First chunk received: ${value.length} bytes`);
+            //console.log(`First chunk received: ${value.length} bytes`);
           }
           
           // Check if we've measured enough
           const measureDuration = performance.now() - startMeasureTime;
           if (measureDuration > 500 || bytesReceived > 50000) {
-            console.log(`Reached measurement limit after ${chunkCount} chunks and ${bytesReceived} bytes (${measureDuration.toFixed(2)}ms)`);
+            //console.log(`Reached measurement limit after ${chunkCount} chunks and ${bytesReceived} bytes (${measureDuration.toFixed(2)}ms)`);
             // Calculate bandwidth
             const bandwidthBps = (bytesReceived / measureDuration) * 1000;
             this.recordBandwidth(mirrorUrl, bandwidthBps);
@@ -405,11 +413,11 @@ async refreshMirrorList() {
         console.error(`Error reading response body: ${readError}`);
       }
       
-      console.log(`Read completed, received ${bytesReceived} bytes`);
+      //console.log(`Read completed, received ${bytesReceived} bytes`);
       
       // Use the greater of content-length or actual bytes measured
       trackingObj.bytesReceived = Math.max(trackingObj.bytesReceived, bytesReceived);
-      console.log(`Final byte count for ${mirrorUrl}: ${trackingObj.bytesReceived}`);
+      //console.log(`Final byte count for ${mirrorUrl}: ${trackingObj.bytesReceived}`);
   
       // Mark as complete
       trackingObj.success = true;
@@ -417,7 +425,7 @@ async refreshMirrorList() {
       trackingObj.requestComplete = true;
   
       this.completedTrackingObjects.push(trackingObj);
-      console.log(`Added successful tracking object for ${mirrorUrl}`);
+      //console.log(`Added successful tracking object for ${mirrorUrl}`);
   
     } catch (error) {
       console.warn(`Error in measureBandwidth: ${error.message}\n${error.stack}`);
