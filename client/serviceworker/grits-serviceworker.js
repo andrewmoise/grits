@@ -252,6 +252,7 @@ self.addEventListener('message', event => {
     }
 });
   
+let configFetchPromise = null; // To track ongoing config fetches
 
 self.addEventListener('fetch', event => {
     const url = event.request.url;
@@ -284,6 +285,45 @@ self.addEventListener('fetch', event => {
         return;
     }
 
+    // If pathConfig is null, try to reload it first
+    if (!pathConfig) {
+        console.log('[Grits] No path config available, attempting to reload');
+        
+        // Use the existing promise or create a new one to avoid multiple fetches
+        if (!configFetchPromise) {
+            configFetchPromise = fetchConfig()
+                .then(() => {
+                    return initializeAllClients();
+                })
+                .catch(error => {
+                    console.error('[Grits] Failed to load config on demand:', error);
+                })
+                .finally(() => {
+                    // Clear the promise when done to allow future fetches
+                    configFetchPromise = null;
+                });
+        }
+        
+        // Wait for config to be loaded before handling the request
+        event.respondWith((async () => {
+            try {
+                await configFetchPromise;
+                
+                // Now check if we should handle this with Grits
+                const gritsMapping = shouldHandleWithGrits(url);
+                if (gritsMapping) {
+                    return fetchFromGrits(gritsMapping, event.request);
+                }
+            } catch (error) {
+                console.error('[Grits] Error in config-fetch-and-handle flow:', error);
+            }
+            
+            // Fall back to network request
+            return fetch(event.request);
+        })());
+        return;
+    }
+
     // Check if we should handle this request with Grits
     const gritsMapping = shouldHandleWithGrits(url);
     
@@ -292,7 +332,6 @@ self.addEventListener('fetch', event => {
             console.log(`[Grits] Intercepting request: ${url}`);
         }
         event.respondWith(fetchFromGrits(gritsMapping, event.request));
-
         return;
     }
 });
