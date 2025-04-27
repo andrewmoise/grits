@@ -208,35 +208,24 @@ async function fetchFromGrits(mapping, request) {
 self.addEventListener('install', event => {
     console.log('[Grits] New service worker installing');
     event.waitUntil(
-        fetchConfig()
-            .then(() => {
-                console.log('[Grits] Config fetched, initializing clients');
-                return initializeAllClients();
-            })
-            .then(() => {
-                console.log('[Grits] Clients initialized, skipping waiting');
-                return self.skipWaiting();
-            })
-            .catch(error => {
-                console.error('[Grits] Install failed during config fetch:', error);
-                // More detailed error reporting
-                console.error('[Grits] Error details:', {
-                    message: error.message,
-                    stack: error.stack,
-                    name: error.name
-                });
-                throw error; // Important to ensure the installation fails properly
-            })
+      ensureConfigLoaded()
+        .then(() => {
+          console.log('[Grits] Clients initialized, skipping waiting');
+          return self.skipWaiting();
+        })
+        .catch(error => {
+          console.error('[Grits] Install failed:', error);
+          throw error; // Important to ensure installation fails properly
+        })
     );
-});
-
-self.addEventListener('activate', event => {
+  });
+  
+  self.addEventListener('activate', event => {
     console.log('[Grits] New service worker activating and claiming clients');
-    // Make sure we have clients initialized
-    if (pathConfig && gritsClients.size === 0) {
-        initializeAllClients();
-    }
-    event.waitUntil(self.clients.claim());
+    event.waitUntil(
+      ensureConfigLoaded()
+        .then(() => self.clients.claim())
+    );
 });
 
 // Navigation events should trigger a resetRoot to ensure fresh data
@@ -285,56 +274,51 @@ self.addEventListener('fetch', event => {
         return;
     }
 
-    // If pathConfig is null, try to reload it first
-    if (!pathConfig) {
-        console.log('[Grits] No path config available, attempting to reload');
+    event.respondWith((async () => {
+        try {
+        await ensureConfigLoaded();
         
-        // Use the existing promise or create a new one to avoid multiple fetches
-        if (!configFetchPromise) {
-            configFetchPromise = fetchConfig()
-                .then(() => {
-                    return initializeAllClients();
-                })
-                .catch(error => {
-                    console.error('[Grits] Failed to load config on demand:', error);
-                })
-                .finally(() => {
-                    // Clear the promise when done to allow future fetches
-                    configFetchPromise = null;
-                });
+        // Now check if we should handle this with Grits
+        const gritsMapping = shouldHandleWithGrits(url);
+        if (gritsMapping) {
+            return fetchFromGrits(gritsMapping, event.request);
+        }
+        } catch (error) {
+        console.error('[Grits] Error in config-fetch-and-handle flow:', error);
         }
         
-        // Wait for config to be loaded before handling the request
-        event.respondWith((async () => {
-            try {
-                await configFetchPromise;
-                
-                // Now check if we should handle this with Grits
-                const gritsMapping = shouldHandleWithGrits(url);
-                if (gritsMapping) {
-                    return fetchFromGrits(gritsMapping, event.request);
-                }
-            } catch (error) {
-                console.error('[Grits] Error in config-fetch-and-handle flow:', error);
-            }
-            
-            // Fall back to network request
-            return fetch(event.request);
-        })());
-        return;
-    }
-
-    // Check if we should handle this request with Grits
-    const gritsMapping = shouldHandleWithGrits(url);
-    
-    if (gritsMapping) {
-        if (debugServiceworker) {
-            console.log(`[Grits] Intercepting request: ${url}`);
-        }
-        event.respondWith(fetchFromGrits(gritsMapping, event.request));
-        return;
-    }
+        // Fall back to network request
+        return fetch(event.request);
+    })());
 });
+
+// Ensure config is loaded
+async function ensureConfigLoaded() {
+    // Return early if config is already loaded
+    if (pathConfig) {
+      return pathConfig;
+    }
+    
+    // Use existing promise or create a new one
+    if (!configFetchPromise) {
+      console.log('[Grits] Initializing config and clients on demand');
+      configFetchPromise = fetchConfig()
+        .then(() => {
+          return initializeAllClients();
+        })
+        .catch(error => {
+          console.error('[Grits] Failed to load config on demand:', error);
+          // Important: reset pathConfig to null on error
+          pathConfig = null;
+        })
+        .finally(() => {
+          // Clear the promise when done to allow future fetch attempts
+          configFetchPromise = null;
+        });
+    }
+    
+    return configFetchPromise;
+  }
 
 // Fetch the configuration from blob address
 async function fetchConfig() {
