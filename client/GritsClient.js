@@ -243,76 +243,69 @@ class GritsClient {
   }
 
   async _slowFetch(path, startTime) {
-    this.debugLog(path, "Slow fetching via HEAD request to /grits/v1/content");
+    this.debugLog(path, "Fetching via GET request to /grits/v1/content");
     
     const normalizedPath = this._normalizePath(path);
     const url = `${this.serverUrl}/grits/v1/content/${this.volume}/${normalizedPath}`;
     
     try {
-      // First make a HEAD request to get metadata without the content
-      const headResponse = await fetch(url, { 
-        method: 'HEAD',
+      // Make a GET request instead of HEAD
+      const response = await fetch(url, { 
+        method: 'GET',
         headers: {
           'Cache-Control': 'no-cache'
         }
       });
       
       // Check if we got a valid response
-      if (!headResponse.ok) {
-        throw new Error(`HEAD request failed with status ${headResponse.status}`);
+      if (!response.ok) {
+        throw new Error(`GET request failed with status ${response.status}`);
       }
       
-      // Update service worker hash if available
-      const newClientHash = headResponse.headers.get('X-Grits-Service-Worker-Hash');
+      // Extract metadata from headers, just like we did with HEAD
+      const newClientHash = response.headers.get('X-Grits-Service-Worker-Hash');
       if (newClientHash) {
         this.serviceWorkerHash = newClientHash;
       }
       
-      const metadataJson = headResponse.headers.get('X-Path-Metadata-JSON');
+      const metadataJson = response.headers.get('X-Path-Metadata-JSON');
       if (!metadataJson) {
         this.debugLog("headers", "No X-Path-Metadata-JSON header found");
-        return;
+        return response; // Return the response directly if no metadata
       }
       
       // Parse the JSON data
       const pathMetadata = JSON.parse(metadataJson);
       this.debugLog("headers", `Parsed ${pathMetadata.length} path metadata entries`);
   
-      // Process each entry
+      // Process metadata entries
       for (const entry of pathMetadata) {
-        // With the new format, the root entry still needs to be identified
-        // but the property names have changed
         if (entry.path === "") {
           this.debugLog("rootHash", `Updating root hash: ${entry.metadataHash}`);
           this.rootHash = entry.metadataHash;
           this.rootHashTimestamp = Date.now();
         }
       }
-
+  
       // Start background prefetching
       this.debugLog(path, `Starting prefetch: ${JSON.stringify(pathMetadata, null, 2)}`);
       this._startMetadataPrefetch(pathMetadata);
-
-      // Extract extension from path
-      const extension = this.extractExtension(path);
-      
-      // Get the content hash from the last entry's contentHash property
+  
+      // Get content hash and update stats
       const lastEntry = pathMetadata[pathMetadata.length-1];
       const contentHash = lastEntry.contentHash;
-      this.debugLog(path, `  content hash is ${contentHash}`);
-
+      this.debugLog(path, `content hash is ${contentHash}`);
+  
       const latency = performance.now() - startTime;
       this.stats.contentUrls.push({
         url: normalizedPath,
         latency: latency.toFixed(2)
       });
-
-      // Pass the extension to _innerFetch
-      const contentResponse = await this._innerFetch(contentHash, startTime, extension);
-      
-      return contentResponse;
+  
+      // We already have the content in the response, so return it directly
+      return response;
     } catch (error) {
-      console.error(`Error during metadata fetch for ${path}:`, error);
+      console.error(`Error during GET request for ${path}:`, error);
       throw error;
     }
   }
@@ -480,9 +473,18 @@ class GritsClient {
     }
   }
 
-  async _innerFetch(hash, startTime = null, extension = null) {
-    // Check if caching is available
-    if (this.blobCache) {
+  async _innerFetch(hash, startTime = null, extension = null, existingResponse = null) {
+    let response = existingResponse;
+
+    if (!response) {
+      // Try the blob cache
+
+      // Note - we COULD do this even if we had an existing response. We don't, because
+      // if we got here from a slow fetch path, it's unlikely that this is in the blob cache,
+      // and maybe faster+simpler just to continue the network fetch we already started than to
+      // try to fire up a whole new cache access to check.
+
+      if (this.blobCache) {
         // Try to get from cache first
         const cachedResponse = await this.blobCache.match(hash);
         if (cachedResponse) {
@@ -493,15 +495,14 @@ class GritsClient {
             this.debugLog("cache:" + hash.substring(0, 8), "Blob cache hit");
             return cachedResponse;
         }
+      }
     }
-    
-    // If not in cache or caching unavailable, fetch from network
-    // We use mirror manager unconditionally; it'll fall back to the origin server if needed.
-    this.debugLog("cache:" + hash.substring(0, 8), "Blob cache miss, fetching from network");
 
-    let response;
-    if (true) {
-      // Option 1:
+    if (!response) {
+      // Try the mirror manager
+
+      this.debugLog("cache:" + hash.substring(0, 8), "Blob cache miss, fetching from network");
+
       const rightBeforeTime = performance.now();
       response = await this.mirrorManager.fetchBlob(hash, extension);
       const afterFetchTime = performance.now();
@@ -511,33 +512,44 @@ class GritsClient {
       const fetchElapsed = (afterFetchTime - rightBeforeTime).toFixed(2);
       
       if (debugClientTiming) {
-        console.log(`Fetch timing for ${hash.substring(0, 8)}: 
-          - Total elapsed: ${totalElapsed} ms
-          - Mirror fetch elapsed: ${fetchElapsed} ms`);
+          console.log(`Fetch timing for ${hash.substring(0, 8)}: 
+            - Total elapsed: ${totalElapsed} ms
+            - Mirror fetch elapsed: ${fetchElapsed} ms`);
       }
-    } else {
-      // Option 2:
-      let url = `${this.serverUrl}/grits/v1/blob/${hash}`;
-      if (extension) {
-          url += `.${extension}`;
+
+      if (startTime) {
+          this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
+          this.stats.blobCacheMisses++;
       }
-      response = await fetch(url);
     }
 
-    if (startTime) {
-        this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
-        this.stats.blobCacheMisses++;
+    // Okay, so we didn't find stuff in the blob cache, and also hopefully we have a response at 
+    // this point one way or another. Stick it in the blob cache for future use as we return
+    // it to the client.
+          
+    // Hash verification for responses from mirror manager
+    if (response.ok) {
+      const verificationResponse = response.clone();
+      
+      // Verify the hash in the background without blocking
+      this.verifyContentHash(verificationResponse, hash)
+        .then(isValid => {
+          if (isValid) {
+            console.log("[Grits] Successful hash verification");
+          }
+        })
+        .catch(err => {
+          console.error(`[Grits] Error during hash verification:`, err);
+        });
     }
-            
-    // Store a clone in the cache for future use (if caching is available)
+
     if (this.blobCache && response.ok) {
-        // We need to clone the response because it can only be consumed once
         const clonedResponse = response.clone();
         this.blobCache.put(hash, clonedResponse).catch(err => {
             console.error(`Failed to cache blob ${hash}:`, err);
         });
     }
-    
+
     return response;
   }
 
@@ -697,7 +709,119 @@ class GritsClient {
       console.log(`${logPrefix} ${message}`);
     }
   }
+
+  /////
+  // Hash and crypto stuff
+
+  /**
+   * Verifies if the provided content matches the expected hash
+   * @param {Blob|ArrayBuffer} content - The content to verify
+   * @param {string} expectedHash - The expected IPFS-style multihash
+   * @returns {Promise<boolean>} - Whether the hash matches
+   */
+  async verifyContentHash(contentResponse, expectedHash) {
+    const buffer = await contentResponse.arrayBuffer();
+      
+    // Compute the actual hash
+    const actualHash = await this._computeIPFSHash(buffer);
+    
+    // Compare with expected hash
+    const hashesMatch = (actualHash === expectedHash);
+    
+    // Log the result
+    if (!hashesMatch) {
+      console.error(`[Grits] Hash verification FAILED:
+        Expected: ${expectedHash}
+        Actual:   ${actualHash}`);
+    } else if (debugClientTiming) {
+      console.log(`[Grits] Hash verification succeeded for ${expectedHash.substring(0, 8)}`);
+    }
+    
+    return hashesMatch;
+  } catch (error) {
+    console.error('[Grits] Error during hash verification:', error);
+    return false;
+  }
+
+  // Create IPFS-style multihash (CIDv0) from SHA-256 digest
+  async _computeIPFSHash(buffer) {
+    // Compute SHA-256 hash using browser's crypto API
+    const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+    const hashArray = new Uint8Array(hashBuffer);
+    
+    // Create multihash format: [0x12, 0x20, ...digest]
+    const multihash = new Uint8Array(34);
+    multihash[0] = 0x12;  // code for SHA-256
+    multihash[1] = 0x20;  // length of hash (32 bytes)
+    multihash.set(hashArray, 2);
+    
+    // Convert to Base58
+    return Base58.encode(multihash);
+  }
 }
+  // Base58 implementation (self-contained, no dependencies)
+  const Base58 = {
+    ALPHABET: '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz',
+    ALPHABET_MAP: {},
+    
+    // Initialize the alphabet map
+    init: function() {
+      for (let i = 0; i < this.ALPHABET.length; i++) {
+        this.ALPHABET_MAP[this.ALPHABET.charAt(i)] = i;
+      }
+    },
+    
+    encode: function(buffer) {
+      if (buffer.length === 0) return '';
+      
+      // Count leading zeros
+      let zeros = 0;
+      while (zeros < buffer.length && buffer[zeros] === 0) {
+        zeros++;
+      }
+      
+      // Allocate enough space in big-endian base58 representation
+      const size = Math.floor((buffer.length - zeros) * 138 / 100) + 1; // log(256) / log(58)
+      const b58 = new Uint8Array(size);
+      
+      // Process the bytes
+      let length = 0;
+      for (let i = zeros; i < buffer.length; i++) {
+        let carry = buffer[i];
+        
+        // Apply b58 = b58 * 256 + ch
+        let j = 0;
+        for (let k = b58.length - 1; k >= 0; k--, j++) {
+          if (carry === 0 && j >= length) break;
+          carry += 256 * b58[k];
+          b58[k] = carry % 58;
+          carry = Math.floor(carry / 58);
+        }
+        
+        length = j;
+      }
+      
+      // Skip leading zeros in base58 result
+      let i = b58.length - length;
+      while (i < b58.length && b58[i] === 0) {
+        i++;
+      }
+      
+      // Translate the result into a string
+      let str = '';
+      for (let j = 0; j < zeros; j++) {
+        str += '1';
+      }
+      for (; i < b58.length; ++i) {
+        str += this.ALPHABET.charAt(b58[i]);
+      }
+      
+      return str;
+    }
+  };
+  
+  // Initialize the alphabet map
+  Base58.init();
 
 // This is fairly silly, but we need two versions of this file for main client code and for the
 // service worker, apparently. The handler will comment and uncomment this stuff so that we can
