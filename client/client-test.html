@@ -10,7 +10,7 @@
       max-width: 800px;
       margin: 0 auto;
     }
-    h1 {
+    h1, h2 {
       color: #333;
       border-bottom: 2px solid #eee;
       padding-bottom: 0.5rem;
@@ -24,8 +24,15 @@
       text-decoration: none;
       display: inline-block;
       font-size: 16px;
-      margin: 1rem 0;
+      margin: 0.5rem 0.5rem 0.5rem 0;
       cursor: pointer;
+      border-radius: 4px;
+    }
+    input[type="text"] {
+      padding: 8px;
+      margin: 0.5rem 0;
+      width: 80%;
+      border: 1px solid #ddd;
       border-radius: 4px;
     }
     .info {
@@ -40,13 +47,19 @@
       border: 1px solid #ddd;
       border-radius: 4px;
       background-color: #f9f9f9;
-      display: none;
     }
-    .test-passed {
+    .success {
       color: #4CAF50;
+      font-weight: bold;
     }
-    .test-failed {
+    .error {
       color: #f44336;
+      font-weight: bold;
+    }
+    .test-group {
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid #eee;
     }
   </style>
 </head>
@@ -54,130 +67,241 @@
   <h1>Grits Client Testing</h1>
   
   <div class="info">
-    <p>This page allows you to test the Grits client with your server.</p>
+    <p>This page allows you to test the core functionality of the Grits client.</p>
     <p>Open your console (F12) to see detailed logs during testing.</p>
   </div>
   
-  <button id="run-tests">Run All Tests</button>
-  
-  <div id="result-container">
-    <h2>Test Results</h2>
-    <div id="test-summary"></div>
-    <div id="test-details"></div>
+  <!-- Service Worker Section -->
+  <div class="test-group">
+    <h2>Service Worker Management</h2>
+    <button id="load-service-worker">Load Service Worker</button>
+    <button id="unregister-service-worker">Unregister Service Worker</button>
+    <div id="sw-status"></div>
   </div>
   
+  <!-- Manual File Fetch Testing -->
+  <div class="test-group">
+    <h2>Fetch File Testing</h2>
+    <div>
+      <input type="text" id="fetch-path" placeholder="Path to fetch (e.g., client-test.html)">
+      <button id="fetch-file">Fetch File</button>
+    </div>
+    <div id="fetch-result"></div>
+  </div>
+  
+  <!-- Root Reset Testing -->
+  <div class="test-group">
+    <h2>Root Reset Testing</h2>
+    <p>Test the impact of resetting the root hash:</p>
+    <button id="reset-root">Reset Root Hash</button>
+    <div id="reset-result"></div>
+  </div>
+  
+  <!-- Auto Test Suite -->
+  <div class="test-group">
+    <h2>Automated Tests</h2>
+    <button id="run-tests">Run Basic Tests</button>
+    <div id="test-results"></div>
+  </div>
+
   <script type="module">
-    // Import the modules
+    // Import the GritsClient
     import GritsClient from './GritsClient.js';
-    import GritsClientTests from './GritsClientTests.js';
     
-    // Make them available globally for console testing
+    // Make it available globally for console testing
     window.GritsClient = GritsClient;
     
-    // Dynamically determine the server URL
+    // Determine the server URL
     const getServerUrl = () => {
-      // Extract protocol, hostname, and port from current location
-      const { protocol, hostname, port } = window.location;
-      
-      return `${protocol}//${hostname}:${port}`;
+      return `${window.location.protocol}//${window.location.host}`;
     };
     
-    // Create a pre-configured instance for convenience
+    // Create a client instance
     window.client = new GritsClient({
       serverUrl: getServerUrl(),
-      volume: 'root'
+      volume: 'client'
     });
     
-    // Create the test suite
-    const tests = new GritsClientTests(window.client);
-    window.gritsTests = tests;
+    // Update status display
+    const updateStatus = (elementId, message, isError = false) => {
+      const element = document.getElementById(elementId);
+      element.innerHTML = `<p class="${isError ? 'error' : 'success'}">${message}</p>`;
+    };
     
-    // Set up the button to run tests
-    document.getElementById('run-tests').addEventListener('click', async () => {
-      const resultContainer = document.getElementById('result-container');
-      const testSummary = document.getElementById('test-summary');
-      const testDetails = document.getElementById('test-details');
-      
-      // Clear previous results
-      testSummary.innerHTML = 'Running tests...';
-      testDetails.innerHTML = '';
-      resultContainer.style.display = 'block';
-      
-      // Run the tests
-      const results = await tests.runAllTests();
-      
-      const failClass = (results.failed > 0 ? "test-failed" : "test-passed");
-
-      // Display the results
-      testSummary.innerHTML = `
-        <p><strong>Tests completed:</strong> 
-           <span class="test-passed">${results.passed} passed</span>, 
-           <span class="${failClass}">${results.failed} failed</span>
-        </p>
-      `;
-      
-      // Show details for each test
-      let detailsHtml = '';
-      for (const test of results.tests) {
-        const statusClass = test.passed ? 'test-passed' : 'test-failed';
-        const statusIcon = test.passed ? '✅' : '❌';
-        
-        detailsHtml += `
-          <div>
-            <h3 class="${statusClass}">${statusIcon} ${test.name}</h3>
-            <p>Assertions: ${test.assertions.filter(a => a.passed).length} of ${test.assertions.length} passed</p>
-          </div>
-        `;
-        
-        // Show failed assertions
-        const failedAssertions = test.assertions.filter(a => !a.passed);
-        if (failedAssertions.length > 0) {
-          detailsHtml += '<ul>';
-          for (const assertion of failedAssertions) {
-            detailsHtml += `<li class="test-failed">${assertion.message}</li>`;
-          }
-          detailsHtml += '</ul>';
-        }
-      }
-      
-      testDetails.innerHTML = detailsHtml;
-    });
-    
-    // Log a message to let you know it's ready
-    console.log('Grits client is ready for testing!');
-    console.log('Connected to server:', getServerUrl());
-    console.log('Try: client.lookupPath("some/path").then(console.log)');
-    console.log('Or run all tests with: gritsTests.runAllTests()');
-  </script>
-
-  <!-- HTML for the button -->
-  <button id="load-service-worker" class="btn btn-primary">Load Service Worker</button>
-
-  <!-- JavaScript to handle the button click -->
-  <script>
+    // Service Worker functions
     document.getElementById('load-service-worker').addEventListener('click', function() {
-      // Create a script element
+      this.disabled = true;
+      this.textContent = 'Loading...';
+      
+      // Create and append the script
       const script = document.createElement('script');
       script.src = '/grits-bootstrap.js';
       script.async = true;
-      
-      // Append it to the document
       document.body.appendChild(script);
       
-      this.textContent = 'Service Worker Loading...';
-      this.disabled = true;
-      
-      script.onload = function() {
-        document.getElementById('load-service-worker').textContent = 'Service Worker Loaded';
+      script.onload = () => {
+        updateStatus('sw-status', 'Service Worker bootstrap script loaded successfully');
+        this.textContent = 'Service Worker Loaded';
       };
       
-      script.onerror = function() {
-        const button = document.getElementById('load-service-worker');
-        button.textContent = 'Failed to Load';
-        button.disabled = false;
+      script.onerror = () => {
+        updateStatus('sw-status', 'Failed to load Service Worker bootstrap script', true);
+        this.disabled = false;
+        this.textContent = 'Load Service Worker';
       };
     });
+    
+    document.getElementById('unregister-service-worker').addEventListener('click', async function() {
+      if ('serviceWorker' in navigator) {
+        try {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          for (const registration of registrations) {
+            await registration.unregister();
+          }
+          updateStatus('sw-status', 'Service Worker unregistered successfully');
+        } catch (error) {
+          updateStatus('sw-status', `Error unregistering Service Worker: ${error.message}`, true);
+        }
+      } else {
+        updateStatus('sw-status', 'Service Worker API not available in this browser', true);
+      }
+    });
+    
+    // File fetch testing
+    document.getElementById('fetch-file').addEventListener('click', async function() {
+      const path = document.getElementById('fetch-path').value.trim();
+      if (!path) {
+        updateStatus('fetch-result', 'Please enter a valid path', true);
+        return;
+      }
+      
+      this.disabled = true;
+      this.textContent = 'Fetching...';
+      
+      try {
+        const startTime = performance.now();
+        const response = await window.client.fetchFile(path);
+        const endTime = performance.now();
+        
+        if (response.ok) {
+          const contentType = response.headers.get('content-type');
+          const size = response.headers.get('content-length') || 'unknown';
+          
+          updateStatus('fetch-result', 
+            `Successfully fetched ${path} (${contentType}, ${size} bytes) in ${(endTime - startTime).toFixed(2)}ms`);
+        } else {
+          updateStatus('fetch-result', `Failed to fetch ${path}: ${response.status} ${response.statusText}`, true);
+        }
+      } catch (error) {
+        updateStatus('fetch-result', `Error fetching ${path}: ${error.message}`, true);
+      } finally {
+        this.disabled = false;
+        this.textContent = 'Fetch File';
+      }
+    });
+    
+    // Root reset testing
+    document.getElementById('reset-root').addEventListener('click', function() {
+      try {
+        window.client.resetRoot();
+        updateStatus('reset-result', 'Root hash timestamp reset successfully');
+        
+        // Add a suggestion to test the impact
+        document.getElementById('reset-result').innerHTML += `
+          <p>Now try fetching a file to see if it refreshes the merkle tree from the server.</p>
+        `;
+      } catch (error) {
+        updateStatus('reset-result', `Error resetting root hash: ${error.message}`, true);
+      }
+    });
+    
+    // Automated test suite
+    document.getElementById('run-tests').addEventListener('click', async function() {
+      this.disabled = true;
+      this.textContent = 'Running...';
+      const resultsElement = document.getElementById('test-results');
+      resultsElement.innerHTML = '<p>Running tests...</p>';
+      
+      const results = [];
+      
+      try {
+        // Test 1: Basic file fetch
+        try {
+          resultsElement.innerHTML += '<p>Test 1: Fetching a known file...</p>';
+          const response = await window.client.fetchFile('client-test.html');
+          if (response.ok) {
+            results.push({ name: 'Basic Fetch', passed: true });
+            resultsElement.innerHTML += '<p class="success">✓ Basic fetch test passed</p>';
+          } else {
+            results.push({ name: 'Basic Fetch', passed: false, error: `Status: ${response.status}` });
+            resultsElement.innerHTML += `<p class="error">✗ Basic fetch test failed: ${response.status}</p>`;
+          }
+        } catch (error) {
+          results.push({ name: 'Basic Fetch', passed: false, error: error.message });
+          resultsElement.innerHTML += `<p class="error">✗ Basic fetch test failed: ${error.message}</p>`;
+        }
+        
+        // Test 2: Reset and refetch
+        try {
+          resultsElement.innerHTML += '<p>Test 2: Testing reset and refetch...</p>';
+          window.client.resetRoot();
+          const response = await window.client.fetchFile('client-test.html');
+          if (response.ok) {
+            results.push({ name: 'Reset and Refetch', passed: true });
+            resultsElement.innerHTML += '<p class="success">✓ Reset and refetch test passed</p>';
+          } else {
+            results.push({ name: 'Reset and Refetch', passed: false, error: `Status: ${response.status}` });
+            resultsElement.innerHTML += `<p class="error">✗ Reset and refetch test failed: ${response.status}</p>`;
+          }
+        } catch (error) {
+          results.push({ name: 'Reset and Refetch', passed: false, error: error.message });
+          resultsElement.innerHTML += `<p class="error">✗ Reset and refetch test failed: ${error.message}</p>`;
+        }
+        
+        // Test 3: Nonexistent path
+        try {
+          resultsElement.innerHTML += '<p>Test 3: Testing nonexistent path handling...</p>';
+          const response = await window.client.fetchFile('nonexistent/path.html');
+          if (!response.ok && response.status === 404) {
+            results.push({ name: 'Nonexistent Path', passed: true });
+            resultsElement.innerHTML += '<p class="success">✓ Nonexistent path test passed</p>';
+          } else {
+            results.push({ name: 'Nonexistent Path', passed: false, error: `Expected 404, got: ${response.status}` });
+            resultsElement.innerHTML += `<p class="error">✗ Nonexistent path test failed: Expected 404, got: ${response.status}</p>`;
+          }
+        } catch (error) {
+          // Some implementations might throw instead of returning a 404 response
+          if (error.message.includes('404') || error.message.includes('not found')) {
+            results.push({ name: 'Nonexistent Path', passed: true });
+            resultsElement.innerHTML += '<p class="success">✓ Nonexistent path test passed (exception handled)</p>';
+          } else {
+            results.push({ name: 'Nonexistent Path', passed: false, error: error.message });
+            resultsElement.innerHTML += `<p class="error">✗ Nonexistent path test failed: ${error.message}</p>`;
+          }
+        }
+        
+        // Summary
+        const passed = results.filter(r => r.passed).length;
+        const total = results.length;
+        
+        resultsElement.innerHTML += `
+          <p>Test summary: ${passed} of ${total} tests passed</p>
+        `;
+        
+      } catch (error) {
+        resultsElement.innerHTML += `
+          <p class="error">Error running tests: ${error.message}</p>
+        `;
+      } finally {
+        this.disabled = false;
+        this.textContent = 'Run Basic Tests';
+      }
+    });
+    
+    // Log ready message
+    console.log('Grits client test page loaded');
+    console.log('Server URL:', getServerUrl());
+    console.log('Try in console: client.fetchFile("client-test.html").then(r => r.text()).then(console.log)');
   </script>
-
 </body>
 </html>
