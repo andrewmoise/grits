@@ -475,7 +475,7 @@ class GritsClient {
 
   async _innerFetch(hash, startTime = null, extension = null, existingResponse = null) {
     let response = existingResponse;
-
+  
     if (!response) {
       // Try the blob cache
 
@@ -484,25 +484,31 @@ class GritsClient {
       // and maybe faster+simpler just to continue the network fetch we already started than to
       // try to fire up a whole new cache access to check.
 
+      // Might be good to check the size of the response, and if it's above 50k or something then 
+      // fire off some async thing to check the blob cache and sidestep over to returning
+      // the part of the thing after the first 50k from the blob cache if there is something
+      // in there.
+
       if (this.blobCache) {
         // Try to get from cache first
         const cachedResponse = await this.blobCache.match(hash);
         if (cachedResponse) {
-            if (startTime) {
-                this.stats.blobCacheHits++;
-                this.stats.timings.blobCacheHits.push(performance.now() - startTime);
-            }
-            this.debugLog("cache:" + hash.substring(0, 8), "Blob cache hit");
-            return cachedResponse;
+          if (startTime) {
+            this.stats.blobCacheHits++;
+            this.stats.timings.blobCacheHits.push(performance.now() - startTime);
+          }
+          this.debugLog("cache:" + hash.substring(0, 8), "Blob cache hit");
+          
+          // We trust cached responses - they were verified when stored
+          return cachedResponse;
         }
       }
     }
-
+  
+    // Fetch from mirror manager if not in cache
     if (!response) {
-      // Try the mirror manager
-
       this.debugLog("cache:" + hash.substring(0, 8), "Blob cache miss, fetching from network");
-
+  
       const rightBeforeTime = performance.now();
       response = await this.mirrorManager.fetchBlob(hash, extension);
       const afterFetchTime = performance.now();
@@ -512,44 +518,63 @@ class GritsClient {
       const fetchElapsed = (afterFetchTime - rightBeforeTime).toFixed(2);
       
       if (debugClientTiming) {
-          console.log(`Fetch timing for ${hash.substring(0, 8)}: 
-            - Total elapsed: ${totalElapsed} ms
-            - Mirror fetch elapsed: ${fetchElapsed} ms`);
+        console.log(`Fetch timing for ${hash.substring(0, 8)}: 
+          - Total elapsed: ${totalElapsed} ms
+          - Mirror fetch elapsed: ${fetchElapsed} ms`);
       }
-
+  
       if (startTime) {
-          this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
-          this.stats.blobCacheMisses++;
+        this.stats.timings.blobCacheMisses.push(performance.now() - startTime);
+        this.stats.blobCacheMisses++;
       }
-    }
 
-    // Okay, so we didn't find stuff in the blob cache, and also hopefully we have a response at 
-    // this point one way or another. Stick it in the blob cache for future use as we return
-    // it to the client.
+      // Verify mirror responses (FIXME -- doesn't the mirror manager
+      // fall through to the origin server sometimes? Do we need to
+      // verify or re-create non-OK statuses too, to prevent something sneaky
+      // from coming through via non-OK responses with content
+      // attached to them?)
+
+      if (response.ok) {
+        const verifyStartTime = performance.now();
+        
+        // Clone the response for verification
+        const verificationResponse = response.clone();
+        
+        // WAIT for verification to complete (not .then())
+        const isValid = await this.verifyContentHash(verificationResponse, hash);
+        
+        const verifyEndTime = performance.now();
+        //if (debugClientTiming) {
+          console.log(`Hash verification took ${(verifyEndTime - verifyStartTime).toFixed(2)}ms`);
+        //}
+        
+        if (!isValid) {
+          // Hash verification failed - create an error response
+          console.error(`[Grits] Hash verification FAILED for ${hash}`);
           
-    // Hash verification for responses from mirror manager
-    if (response.ok) {
-      const verificationResponse = response.clone();
-      
-      // Verify the hash in the background without blocking
-      this.verifyContentHash(verificationResponse, hash)
-        .then(isValid => {
-          if (isValid) {
-            console.log("[Grits] Successful hash verification");
-          }
-        })
-        .catch(err => {
-          console.error(`[Grits] Error during hash verification:`, err);
-        });
+          // Return a 502 Bad Gateway - indicates upstream server provided invalid content
+          return new Response(
+            `Hash verification failed: Content from mirror did not match expected hash`,
+            { 
+              status: 502, 
+              headers: { 'Content-Type': 'text/plain' }
+            }
+          );
+        }
+      }
     }
 
     if (this.blobCache && response.ok) {
+      // Only cache valid content
+      if (this.blobCache) {
         const clonedResponse = response.clone();
         this.blobCache.put(hash, clonedResponse).catch(err => {
-            console.error(`Failed to cache blob ${hash}:`, err);
+          console.error(`Failed to cache blob ${hash}:`, err);
         });
+      }
     }
-
+          
+    // Give back whatever we got
     return response;
   }
 
