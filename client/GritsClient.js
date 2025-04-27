@@ -745,29 +745,31 @@ class GritsClient {
    * @returns {Promise<boolean>} - Whether the hash matches
    */
   async verifyContentHash(contentResponse, expectedHash) {
-    const buffer = await contentResponse.arrayBuffer();
+    try {
+      const buffer = await contentResponse.arrayBuffer();
+        
+      // Compute the actual hash
+      const actualHash = await this._computeIPFSHash(buffer);
       
-    // Compute the actual hash
-    const actualHash = await this._computeIPFSHash(buffer);
-    
-    // Compare with expected hash
-    const hashesMatch = (actualHash === expectedHash);
-    
-    // Log the result
-    if (!hashesMatch) {
-      console.error(`[Grits] Hash verification FAILED:
-        Expected: ${expectedHash}
-        Actual:   ${actualHash}`);
-    } else if (debugClientTiming) {
-      console.log(`[Grits] Hash verification succeeded for ${expectedHash.substring(0, 8)}`);
+      // Compare with expected hash
+      const hashesMatch = (actualHash === expectedHash);
+      
+      // Log the result
+      if (!hashesMatch) {
+        console.error(`[Grits] Hash verification FAILED:
+          Expected: ${expectedHash}
+          Actual:   ${actualHash}`);
+      } else if (debugClientTiming) {
+        console.log(`[Grits] Hash verification succeeded for ${expectedHash.substring(0, 8)}`);
+      }
+      
+      return hashesMatch;
+    } catch (error) {
+      console.error('[Grits] Error during hash verification:', error);
+      return false;
     }
-    
-    return hashesMatch;
-  } catch (error) {
-    console.error('[Grits] Error during hash verification:', error);
-    return false;
   }
-
+  
   // Create IPFS-style multihash (CIDv0) from SHA-256 digest
   async _computeIPFSHash(buffer) {
     // Compute SHA-256 hash using browser's crypto API
