@@ -544,9 +544,9 @@ class GritsClient {
         const isValid = await this.verifyContentHash(verificationResponse, hash);
         
         const verifyEndTime = performance.now();
-        //if (debugClientTiming) {
+        if (debugClientTiming) {
           console.log(`Hash verification took ${(verifyEndTime - verifyStartTime).toFixed(2)}ms`);
-        //}
+        }
         
         if (!isValid) {
           // Hash verification failed - create an error response
@@ -769,7 +769,7 @@ class GritsClient {
       return false;
     }
   }
-  
+
   // Create IPFS-style multihash (CIDv0) from SHA-256 digest
   async _computeIPFSHash(buffer) {
     // Compute SHA-256 hash using browser's crypto API
