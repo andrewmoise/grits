@@ -139,7 +139,7 @@ Of course, the benefit of doing something like this above something like nginx i
 
 To set the thing up is actually pretty complex, with a bunch of different modules and config elements involved. For now, what's recommended is to do a testbed network.
 
-First, add an NS record indicating that anything under `cache.(your hostname)` is going to be served by the nameserver at your host's IP address. We're authenticating proxies via TLS and DNS, no different than any other web server, which means this is the simplest way to do it from the mirror-operator's and the browser's perspective.
+First, add an NS record indicating that anything under `cache.(your hostname)` is going to be served by the nameserver at your host's IP address. We're authenticating mirrors via TLS and DNS, no different than any other web server, which means this is the simplest way to do it from the mirror-operator's and the browser's perspective.
 
 Next, create a port redirect so our local little DNS server can run.
 
@@ -194,7 +194,7 @@ As mentioned, this is the core config file. Most of it involved configuring part
 
 * `wiki` is the (badly named) module creating a local writable volume of storage
 * `mount` creates a FUSE mount of a particular volume to a local directory
-* `http` creates an HTTP endpoint providing access to the API, and optionally some files directly
+* `http` creates an HTTP endpoint providing access to the API, and optionally serving some files directly
 * `deployment` requests that a particular directory from a particular volume get served in some particular URL space. This is analagous to `location` in nginx. This affects both the `http` module (by mapping the volume-storage space to URL path space), and also the `serviceworker` module (requesting that the service worker do the same on the client side, avoiding RTTs and potentially utilizing other mirrors)
 * `serviceworker` sets up necessary server-side stuff to support the service worker
 
@@ -206,14 +206,14 @@ Other modules of note:
 * `peer` - Connect to a network of grits servers to share content
 * `tracker` - Host a network of peers
 
-These are obviously closely related, but for now the peer-to-peer communication modules are separated from the file mirroring modules.
+Mirror/origin and peer/tracker are obviously closely related, but for now the base peer-to-peer communication modules are separated from the file mirroring modules.
 
 * `pin` - Configure a "pin" on a particular part of the file space, keep its files always in local storage. This is mostly unused yet, it will become a lot more relevant once remote volumes come into play.
 
 ### Other useful directories
 
 * `client/` defines vital client-side content. It gets populated into a special read-only volume on startup, so that clients can always access stuff within it.
-* `var/` is where all data for the server is kept. I think it would be fine (and recommended) to have the entire `grits/` directory outside of `var/` owned by some different user and read-only from the point of view of the server process.
+* `var/` is where all writable data for the server is kept. I think it would be fine (and recommended) to have the entire `grits/` directory outside of `var/` owned by some different user and read-only from the point of view of the server process.
 * `testbed/` is where scratch data for all the testbed's mirror servers is kept. This should be safe to blow away if you want to, although that will cause a repeat of the entire slow startup process including requesting all new certs for the testbed mirrors.
 
 ## Roadmap
@@ -236,27 +236,27 @@ There's a more detailed task list, mostly just internal nodes, in TODO.md.
 
 ### Isn't this IPFS?
 
-Yeah, kind of. I'd like to reuse parts of IPFS, and delvers into the code may have noticed that I'm reusing CID v0 as the format for the content blob addresses. It is *so* heavyweight, though, that I've wound up reimplementing a lot of stuff instead of trying to use IPFS's stuff. We are more or less reinventing it, although with a somewhat different scope.
+Yeah, kind of. I'd like to reuse parts of IPFS, and delvers into the code may have noticed that I'm reusing CID v0 as the format for the content blob addresses. IPFS is *so* heavyweight, though, and its latency seems to be high enough that it is a non-starter for use for individual web assets at the level of a single small file. I've wound up reimplementing a lot of stuff instead of trying to use IPFS's stuff. We're just operating in a different scope.
 
 Specifically, we are *not* attempting massive scale or full peer-to-peer operation, but we *are* attempting to have high performance and lightweight process footprints, so that it's feasible to run the thing in a service worker or on a not-powerful server.
 
 ### Won't this be subject to malicious nodes?
 
-Yes, probably. We're only requesting data with a specified known hash, and verifying the hash, so it shouldn't be possible to provide poisoned data real easily, but yes you could mess up the system in other ways. I'm not envisioning everyone in the world being able to run a node in any system; it would be a semi-trusted role which if they're clearly messing up the system then you would boot them out of.
+Yes. We're only requesting data with a specified known hash, and verifying the hash, so it shouldn't be possible to provide poisoned data real easily, but yes you could mess up the system in other ways. I'm not envisioning everyone in the world being able to run a node in any system; it would be a semi-trusted role which if they're clearly messing up the system then you would boot them out of.
 
 In particular, the current service worker will return an internal server error to the user if some mirror is serving up content that doesn't match the hash it is supposed to have. The intent is that this gets noticed and then handled on the human level, as opposed to at the technical level with malicious nodes being an "expected" happening that the code is coping with.
 
+### Is this secure? Should I turn this on and leave the endpoint up on my production server?
+
+Oh mercy, no. At some point I will do some basic level of security audit to the endpoints but that has not been done. Internal testing only.
+
 ### What about performance? Dropped nodes? NAT?
 
-So, all of these are solved problems within IPFS -- my plan is to try to be lightweight with implementation where possible, but there's always the option (particularly with NAT and maintenance of the swarm) to just back up and punt to using IPFS, and focus on the stuff that's genuinely new design ideas.
+So, all of these are solved problems within IPFS -- my plan is to try to be lightweight with implementation where possible, but there's always the option (particularly with NAT and maintenance of the swarm) to just back up and punt to using IPFS, and focus on the stuff that's genuinely new design ideas. At this point, I've more or less settled on reimplementing most of it, but there's always the option of doing (for example) the blob storage from one of the boxo modules and saving ourselves some getting-it-production-ready pain.
 
 ### What about privacy?
 
-Yes. You're exposing your IP address to the world if you decide to participate in the swarm. That's potentially an issue; we'll have to be a little careful about who we expose the proxy network to, and to make sure that people are anonymous if they do participate in the proxy network, but even so it'll be something to be careful with.
-
-### What about losing data?
-
-We can afford to simply say, if you want your data to exist it's your job to pin it (and make sure you have enough nodes online with the whole thing pinned to handle any outages), if you make a big write it's your job to keep that node online until all the data has synced to the pin-maintaining nodes. And so on. Nothing comes "for free" in terms of the system maintaining data for you; you have to make sure nodes are online to keep it available.
+Well, you're exposing your IP address to the world if you decide to participate in the swarm. That's potentially an issue. We'll have to be a little careful about who we expose the proxy network to, and to make sure that people are anonymous if they do participate in the proxy network, but even so it'll be something to be careful with.
 
 ### How do we incentivize people to contribute resources, and prevent free riders?
 
@@ -264,7 +264,7 @@ So since we're in a relatively small "all friends here" network, we can afford t
 
 ## Contributing
 
-If you're interested in trying out running a node once it gets to that point, you can star the repo and I'll send an update, or you can reach me on Mastodon at mose@hachyderm.io. In the meantime feel free to check out the code (although, again, it's still super rough -- the `dev` branch is where the active refactoring is happening) and let me know what you think of the concept or the implementation.
+If you're interested in trying out running a node once it gets to that point, you can star the repo and I'll send an update, or just send me a note here. In the meantime feel free to check out the code (although, again, it's still super rough) and let me know what you think of the concept or the implementation.
 
 ## Enjoy!
 
