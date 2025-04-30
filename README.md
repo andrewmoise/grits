@@ -190,13 +190,13 @@ Almost all the server's functionality is implemented via modules. You will see m
 
 * `module_http.go` for providing HTTP service
 * `module_mount.go` for FUSE mounting
-* `module_wiki.go` (which needs to be renamed) for a local writable storage volume
+* `module_localvolume.go` for a local writable storage volume
 
 ### `grits.cfg`
 
 As mentioned, this is the core config file. Most of it involved configuring particular modules. If you look at the sample config, you'll be able to see the setup of some of the main modules to make a simple instance of the server work:
 
-* `wiki` is the (badly named) module creating a local writable volume of storage
+* `localvolume` is the module creating a local writable volume of storage
 * `mount` creates a FUSE mount of a particular volume to a local directory
 * `http` creates an HTTP endpoint providing access to the API, and optionally serving some files directly
 * `deployment` requests that a particular directory from a particular volume get served in some particular URL space. This is analagous to `location` in nginx. This affects both the `http` module (by mapping the volume-storage space to URL path space), and also the `serviceworker` module (requesting that the service worker do the same on the client side, avoiding RTTs and potentially utilizing other mirrors)
