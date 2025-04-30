@@ -33,7 +33,7 @@ func TestMirrorModule(t *testing.T) {
 	originPort := 2387
 	originServer, originCleanup := SetupTestServer(t,
 		WithHttpModule(originPort),
-		WithWikiVolume("source"),
+		WithLocalVolume("source"),
 		WithOriginModule([]string{"localhost:2388"})) // Add allowed mirrors
 	defer originCleanup()
 

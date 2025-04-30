@@ -6,25 +6,25 @@ import (
 	"testing"
 )
 
-func TestWikiVolumePersistenceDirect(t *testing.T) {
-	// Setup server and wiki volume
+func TestLocalVolumePersistenceDirect(t *testing.T) {
+	// Setup server and local volume
 	server, cleanup := SetupTestServer(t)
 	defer cleanup()
 
-	volumeName := "testwiki"
-	wikiConfig := &WikiVolumeConfig{VolumeName: volumeName}
-	wikiVolume, err := NewWikiVolume(wikiConfig, server, false)
+	volumeName := "testlocal"
+	localConfig := &LocalVolumeConfig{VolumeName: volumeName}
+	localVolume, err := NewLocalVolume(localConfig, server, false)
 	if err != nil {
-		t.Fatalf("Failed to create wiki volume: %v", err)
+		t.Fatalf("Failed to create local volume: %v", err)
 	}
-	server.AddModule(wikiVolume)
+	server.AddModule(localVolume)
 
 	// Start the server to ensure all components are initialized properly.
 	server.Start()
 	defer server.Stop()
 
-	// Create a blob representing content to be linked in the wiki volume.
-	testContent := "Hello, wiki!"
+	// Create a blob representing content to be linked in the local volume.
+	testContent := "Hello, local!"
 	testPath := "testPage"
 	blobFile, err := server.BlobStore.AddDataBlock([]byte(testContent))
 	if err != nil {
@@ -34,27 +34,27 @@ func TestWikiVolumePersistenceDirect(t *testing.T) {
 
 	typedAddr := grits.NewTypedFileAddr(blobFile.GetAddress().Hash, blobFile.GetSize(), grits.Blob)
 
-	// Link the new blob to the wiki volume using the test path.
-	err = wikiVolume.Link(testPath, typedAddr)
+	// Link the new blob to the local volume using the test path.
+	err = localVolume.Link(testPath, typedAddr)
 	if err != nil {
-		t.Fatalf("Failed to link blob in wiki volume: %v", err)
+		t.Fatalf("Failed to link blob in local volume: %v", err)
 	}
 
 	// Simulate a server restart by explicitly invoking save and then reloading the volume.
-	if err = wikiVolume.save(); err != nil {
-		t.Fatalf("Failed to save wiki volume: %v", err)
+	if err = localVolume.save(); err != nil {
+		t.Fatalf("Failed to save local volume: %v", err)
 	}
 
-	// Reload the wiki volume to simulate reading from disk after a restart.
-	wikiVolumeReloaded, err := NewWikiVolume(wikiConfig, server, false)
+	// Reload the local volume to simulate reading from disk after a restart.
+	localVolumeReloaded, err := NewLocalVolume(localConfig, server, false)
 	if err != nil {
-		t.Fatalf("Failed to reload wiki volume: %v", err)
+		t.Fatalf("Failed to reload local volume: %v", err)
 	}
 
 	// Verify the content persisted by looking up the previously linked path.
-	addr, err := wikiVolumeReloaded.Lookup(testPath)
+	addr, err := localVolumeReloaded.Lookup(testPath)
 	if err != nil {
-		t.Fatalf("Failed to lookup content in wiki volume: %v", err)
+		t.Fatalf("Failed to lookup content in local volume: %v", err)
 	}
 
 	cachedFile, err := server.BlobStore.ReadFile(&addr.BlobAddr)

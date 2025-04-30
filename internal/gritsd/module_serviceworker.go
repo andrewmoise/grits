@@ -74,7 +74,7 @@ type ServiceWorkerModule struct {
 	pathMappings []*PathMapping
 }
 
-func (swm *ServiceWorkerModule) loadClientFiles(wv *WikiVolume) error {
+func (swm *ServiceWorkerModule) loadClientFiles(wv *LocalVolume) error {
 	// List of template files to process
 	templateFiles := []string{
 		"client/GritsClient.js",
@@ -229,10 +229,10 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 
 	log.Printf("Creating client volume")
 
-	wvc := &WikiVolumeConfig{
+	wvc := &LocalVolumeConfig{
 		VolumeName: "client",
 	}
-	wv, err := NewWikiVolume(wvc, server, true)
+	wv, err := NewLocalVolume(wvc, server, true)
 	if err != nil {
 		return nil, err
 	}

@@ -18,7 +18,7 @@ import (
 
 func TestLookupAndLinkEndpoints(t *testing.T) {
 	url := "http://localhost:1887/grits/v1"
-	server, cleanup := SetupTestServer(t, WithHttpModule(1887), WithWikiVolume("root"))
+	server, cleanup := SetupTestServer(t, WithHttpModule(1887), WithLocalVolume("root"))
 	defer cleanup()
 
 	server.Start()
