@@ -184,9 +184,13 @@ TODO
 
 ### `internal/gritsd`: Server implementation
 
-`server.go` defines the actual server implementation.
+* `server.go` defines the actual server implementation.
 
-Almost all the server's functionality is implemented via modules. You will see many of them; of particular importance are `module_http.go` for HTTP service, `module_mount.go` for FUSE mounting, and `module_wiki.go` (which needs to be renamed) for a local writable storage volume.
+Almost all the server's functionality is implemented via modules. You will see many of them; of particular importance are:
+
+* `module_http.go` for providing HTTP service
+* `module_mount.go` for FUSE mounting
+* `module_wiki.go` (which needs to be renamed) for a local writable storage volume
 
 ### `grits.cfg`
 
@@ -208,7 +212,7 @@ Other modules of note:
 
 Mirror/origin and peer/tracker are obviously closely related, but for now the base peer-to-peer communication modules are separated from the file mirroring modules.
 
-* `pin` - Configure a "pin" on a particular part of the file space, keep its files always in local storage. This is mostly unused yet, it will become a lot more relevant once remote volumes come into play.
+* `pin` - Configure a "pin" on a particular part of the file space, keep its files always in local storage. This is mostly unused yet, it will become a lot more relevant once remote volumes and sparsely storing namespaces come into play.
 
 ### Other useful directories
 
@@ -230,7 +234,7 @@ The big roadmap, more or less, is:
 * Performance (todo)
 * Production polish and what's needed for real server operation (todo)
 
-There's a more detailed task list, mostly just internal nodes, in TODO.md.
+There's a more detailed task list, mostly just internal notes, in TODO.md.
 
 ## Obvious questions
 
