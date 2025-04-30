@@ -223,16 +223,16 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return trackerModule, nil
 
-	case "wiki":
-		var wikiConfig WikiVolumeConfig
-		if err := json.Unmarshal(rawConfig, &wikiConfig); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal WikiVolume module config: %v", err)
+	case "localvolume":
+		var localConfig LocalVolumeConfig
+		if err := json.Unmarshal(rawConfig, &localConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal LocalVolume module config: %v", err)
 		}
-		wikiVolume, err := NewWikiVolume(&wikiConfig, s, false)
+		localVolume, err := NewLocalVolume(&localConfig, s, false)
 		if err != nil {
-			return nil, fmt.Errorf("failed to instantiate WikiVolume: %v", err)
+			return nil, fmt.Errorf("failed to instantiate LocalVolume: %v", err)
 		}
-		return wikiVolume, nil
+		return localVolume, nil
 
 	default:
 		return nil, fmt.Errorf("unknown module type: %s", moduleType)

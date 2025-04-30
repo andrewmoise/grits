@@ -17,7 +17,7 @@ import (
 func TestFileOperations(t *testing.T) {
 	// Setup
 	baseURL := "http://localhost:2187"
-	s, cleanup := gritsd.SetupTestServer(t, gritsd.WithHttpModule(2187), gritsd.WithWikiVolume("root"))
+	s, cleanup := gritsd.SetupTestServer(t, gritsd.WithHttpModule(2187), gritsd.WithLocalVolume("root"))
 	defer cleanup()
 
 	s.Start()

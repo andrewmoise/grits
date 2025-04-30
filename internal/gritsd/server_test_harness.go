@@ -52,19 +52,19 @@ func WithHttpModule(port int) TestModuleInitializer {
 	}
 }
 
-// WithWikiVolume is an initializer for adding a WikiVolume module to the server.
-func WithWikiVolume(volumeName string) TestModuleInitializer {
+// WithLocalVolume is an initializer for adding a LocalVolume module to the server.
+func WithLocalVolume(volumeName string) TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
-		wikiConfig := &WikiVolumeConfig{
+		localConfig := &LocalVolumeConfig{
 			VolumeName: volumeName,
 		}
 
-		wikiVolume, err := NewWikiVolume(wikiConfig, s, false)
+		localVolume, err := NewLocalVolume(localConfig, s, false)
 		if err != nil {
 			t.Fatalf("Can't create %s volume: %v", volumeName, err)
 		}
-		s.AddModule(wikiVolume)
-		s.AddVolume(wikiVolume)
+		s.AddModule(localVolume)
+		s.AddVolume(localVolume)
 	}
 }
 
