@@ -42,4 +42,3 @@ Minor punch list:
 * Mandate some limits on what characters are allowed in things (volumes, peerNames, etc)
 * Need to worry about key expiration for the certbot keys
 * Standardize on URL format for identifying peer and mirror protocol/hostname/port
-* "wiki" is a bad module name. Should be "volume" for a class LocalVolume, and there should be 'remote' and RemoteVolume.
