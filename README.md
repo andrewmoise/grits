@@ -8,7 +8,7 @@ How it works is that the site's client-side code includes the ability to fetch s
 
 This first cut, being able to operate as a sort of community CDN, is actually a precursor to what I'd *actually* like to do, which is to enable a type of web app where most of the app is defined almost all on the client side, and the server is primarily just responsible for CRUD semantics and revision history and permissions on the shared store. I think that'll carry a ton of benefit in terms of security, potentially performance, and user-configurability / empowerment. But, I think it's important to start with one piece that's clearly useful now and see how it works and how difficult it is to get it into real production.
 
-And, even the initial cut has some significant advantages in addition to lowered load. For one example, because the whole thing is handed to the client as a [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree), you can get complete cache coherency right away -- on every page load, it gets from the central server the new root hash, so that if a big directory hasn't changed at all, the client won't need to spend an RTT seeing if it's up to date, but if it *has* changed you'll be guaranteed to fetch the new files instead of having to shift-reload or anything like that.
+And, even the initial cut has some significant advantages in addition to lowered load. For one example, because the whole thing is handed to the client as a [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree), you can get perfect cache coherency for free -- on every page load, it gets from the central server the new root hash, so that if a big directory hasn't changed at all, the client won't need to spend an RTT seeing if it's up to date, but if it *has* changed you'll be guaranteed to fetch the new files instead of having to shift-reload or anything like that.
 
 ## Current Status
 
@@ -22,6 +22,8 @@ General guide:
 * Client and service worker pieces - In progress
 
 ## Quickstart
+
+If you want to see it working, this is how you can set up a little test node with some test mirrors attached to it, put content in it, install the service worker, and see it all in action. It doesn't do too much beyond that yet.
 
 ### Prerequisites
 
@@ -98,7 +100,7 @@ So: This is still a work in progress. It's just in development. If you're psyche
 
 Okay, so with the simple setup, you should have a working web server. If you want to have more of (any of) the actual benefits of using a server that uses this approach, the first thing to enable is the service worker. The necessary stuff is already turned on from the server side, but you'll need to enable the right stuff in the browser in order for it to actually do something productive.
 
-Note that I have only tried the service worker on Chrome, and I would expect it to be a little flaky in other browsers. Buyer beware.
+Note that I have only tried the service worker on Chrome, and I would expect it to need a little work before it's assured of working in other browsers. Buyer beware.
 
 Anyway. Navigate to:
 
@@ -139,7 +141,7 @@ Of course, the benefit of doing something like this above something like nginx i
 
 To set the thing up is actually pretty complex, with a bunch of different modules and config elements involved. For now, what's recommended is to do a testbed network.
 
-First, add an NS record indicating that anything under `cache.(your hostname)` is going to be served by the nameserver at your host's IP address. We're authenticating mirrors via TLS and DNS, no different than any other web server, which means this is the simplest way to do it from the mirror-operator's and the browser's perspective.
+First, add an NS record indicating that anything under `cache.(your hostname)` is going to be served by the nameserver at your host's IP address. (To make everything easy for the browser, we are authenticating and locating mirrors via TLS and DNS, no different than any other web site it might talk with, so we need to serve DNS for the mirrors.)
 
 Next, create a port redirect so our local little DNS server can run.
 
@@ -185,8 +187,7 @@ TODO
 ### `internal/gritsd`: Server implementation
 
 * `server.go` defines the actual server implementation.
-
-Almost all the server's functionality is implemented via modules. You will see many of them; of particular importance are:
+* `modules.go` defines an interface for "modules" added to the server. Almost all the server's functionality is implemented via these modules. You will see many of them; of particular importance are:
 
 * `module_http.go` for providing HTTP service
 * `module_mount.go` for FUSE mounting
@@ -194,7 +195,7 @@ Almost all the server's functionality is implemented via modules. You will see m
 
 ### `grits.cfg`
 
-As mentioned, this is the core config file. Most of it involved configuring particular modules. If you look at the sample config, you'll be able to see the setup of some of the main modules to make a simple instance of the server work:
+This is the core config file. Most of it involves configuring particular modules. If you look at the sample config, you'll be able to see the setup of some of the main modules to make a simple instance of the server work:
 
 * `localvolume` is the module creating a local writable volume of storage
 * `mount` creates a FUSE mount of a particular volume to a local directory
@@ -240,7 +241,7 @@ There's a more detailed task list, mostly just internal notes, in TODO.md.
 
 ### Isn't this IPFS?
 
-Yeah, kind of. I'd like to reuse parts of IPFS, and delvers into the code may have noticed that I'm reusing CID v0 as the format for the content blob addresses. IPFS is *so* heavyweight, though, and its latency seems to be high enough that it is a non-starter for use for individual web assets at the level of a single small file. I've wound up reimplementing a lot of stuff instead of trying to use IPFS's stuff. We're just operating in a different scope.
+Yeah, kind of. I'd like to reuse parts of IPFS, and delvers into the code may have noticed that I'm reusing CID v0 as the format for the content blob addresses. IPFS is *so* heavyweight, though, and its latency seems to be high enough that it is a non-starter for use for individual web assets at the level of a single small file. I've wound up reimplementing a lot of stuff instead of trying to use IPFS's stuff. We're just operating in a different domain.
 
 Specifically, we are *not* attempting massive scale or full peer-to-peer operation, but we *are* attempting to have high performance and lightweight process footprints, so that it's feasible to run the thing in a service worker or on a not-powerful server.
 
@@ -248,11 +249,11 @@ Specifically, we are *not* attempting massive scale or full peer-to-peer operati
 
 Yes. We're only requesting data with a specified known hash, and verifying the hash, so it shouldn't be possible to provide poisoned data real easily, but yes you could mess up the system in other ways. I'm not envisioning everyone in the world being able to run a node in any system; it would be a semi-trusted role which if they're clearly messing up the system then you would boot them out of.
 
-In particular, the current service worker will return an internal server error to the user if some mirror is serving up content that doesn't match the hash it is supposed to have. The intent is that this gets noticed and then handled on the human level, as opposed to at the technical level with malicious nodes being an "expected" happening that the code is coping with.
+In particular, the current service worker will return an internal server error to the user if some mirror is serving up content that doesn't match the hash it is supposed to have. The intent is that this gets noticed and then handled as an administrative problem, as opposed to a technical problem with malicious nodes being an "expected" happening that the code is coping with.
 
 ### Is this secure? Should I turn this on and leave the endpoint up on my production server?
 
-Oh mercy, no. At some point I will do some basic level of security audit to the endpoints but that has not been done. Internal testing only.
+Oh mercy, no. At some point I will do some basic level of security audit to the endpoints but that has not been done. There are surely exploits and ways you can use the endpoints to do malicious things. Internal testing only.
 
 ### What about performance? Dropped nodes? NAT?
 
