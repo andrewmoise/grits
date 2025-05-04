@@ -2,7 +2,7 @@
 
 Grits is load-sharing software, designed to allow a community-supported web site to operate based on direct contribution of hosting resources by the members of the site. A site using grits proxies should be able to shift the cost of operating the site towards the members of the community by having them run pretty simple software, while still operating in a fast and secure manner.
 
-The motivation is that for at least 20 years, people have been talking about switching to a more peer-to-peer vision of the internet, but there are significant centralized hosting issues that still haven't gone away. Bittorrent is great, ActivityPub is great, but Wikipedia still runs on expensive centrally-served hosting. People still invest in S3 to run their Mastodon nodes. My vision would be that it becomes realistic to run a busy Mastodon node, or a site like Wikipedia, and have a substantial amount of the hosting being done by the users.
+The motivation is that for at least 20 years, people have been talking about switching to a more peer-to-peer vision of the internet, but there are significant centralized hosting issues that still haven't gone away. Bittorrent is great, ActivityPub is great, but popular sites still run on expensive centrally-served hosting. People still invest in S3 to run their Mastodon nodes. My vision would be that it becomes realistic to run a busy Mastodon node or Peertube instance, and have a substantial amount of the hosting being done by the users.
 
 How it works is that the site's client-side code includes the ability to fetch static content from a swarm of user-operated proxies which provide a content-addressable store, verify that the hash of any blocks that come back, and provide it to the browser as if it had come from the central server. Thus the central server has a lot less load. And thus, whoever operates the central instance has lower hosting bills, their organization has less pressure to create a profit or solicit donations, and the internet gets better.
 
@@ -213,7 +213,7 @@ Other modules of note:
 
 Mirror/origin and peer/tracker are obviously closely related, but for now the base peer-to-peer communication modules are separated from the file mirroring modules.
 
-* `pin` - Configure a "pin" on a particular part of the file space, keep its files always in local storage. This is mostly unused yet, it will become a lot more relevant once remote volumes and sparsely storing namespaces come into play.
+* `pin` - Configure a "pin" on a particular part of the file space, keep its files always in local storage. This is mostly unused yet, it will become a lot more relevant once remote volumes and sparsely stored namespaces come into play.
 
 ### Other useful directories
 
@@ -235,7 +235,7 @@ The big roadmap, more or less, is:
 * Performance (todo)
 * Production polish and what's needed for real server operation (todo)
 
-There's a more detailed task list, mostly just internal notes, in TODO.md.
+There's a more detailed task list, mostly just an internal punch list, in TODO.md.
 
 ## Obvious questions
 
