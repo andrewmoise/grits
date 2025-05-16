@@ -1,11 +1,11 @@
-Currently in progress are:
+Current todo list:
 
-* DHT and node-to-node communication
-* Clean up naming, capitalization, consistency issues
-* Fixing some FUSE issues
-* Some better efficiencies in the service worker
+* Remote mounts of a volume on a different server
+* Command line interface and FIFO for local command execution
+* Save and restore config, instead of using a config file
+* Security for endpoints, only allow certain characters in main name / identifier things
 
-Minor punch list:
+Backlog:
 
 * Switch to mmap instead of stream file I/O for blobs
 * Chunking of files
@@ -21,16 +21,13 @@ Minor punch list:
 * Debounce multiple writes into a single consolidated change to the tree
 * Performance - e.g. `gatsby new ecommerce-demo https://github.com/gatsbyjs/gatsby-starter-shopify`
 * File permissions, defaulting to something safe (in particular read-only for the HTTP endpoints)
-* Make a command-line utility for control of the server
-* Do a rough security audit, see if there are obvious insecurities
+* Do a rough security audit of the whole codebase
 * HTTP3
 * Figure out something for octal modes in metadata
-* Remote mounts of a volume on a different server
 * Switch over client freshness check to whole directory, and make timestamp handling better so we don't reload always on server restart
 * Clean up Volume API
-* Make capitalization consistent in config file
 * Unify path normalization in GritsClient and SW
-* Do hash verifications in client (configurable)
+* Make hash verifications in client configurable
 * Rate limiting and some level of DDOS or malicious request resistance
 * Graceful reloading of config file
 * Terminal "control panel" showing pertinent information and letting you issue commands
@@ -42,3 +39,4 @@ Minor punch list:
 * Mandate some limits on what characters are allowed in things (volumes, peerNames, etc)
 * Need to worry about key expiration for the certbot keys
 * Standardize on URL format for identifying peer and mirror protocol/hostname/port
+* Clean up naming, capitalization, consistency issues
