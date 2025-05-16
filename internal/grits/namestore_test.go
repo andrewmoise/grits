@@ -3,6 +3,7 @@ package grits
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -884,4 +885,144 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestLookupMultiplePaths tests the NameStore's ability to look up multiple paths in one batch,
+// including handling cases where some paths don't exist.
+func TestLookupMultiplePaths(t *testing.T) {
+    nameStore, blobStore, cleanup := setupNameStoreTestEnv(t)
+    defer cleanup()
+
+    // Create some test content
+    testData := []struct {
+        path    string
+        content string
+    }{
+        {"file1.txt", "Content of file 1"},
+        {"dir/file2.txt", "Content of file 2"},
+        {"dir/subdir/file3.txt", "Content of file 3"},
+        {"dir/subdir/file4.txt", "Content of file 4"},
+    }
+
+    // Setup directory structure first
+    emptyDirInterface, err := blobStore.AddDataBlock([]byte("{}"))
+    if err != nil {
+        t.Fatalf("Failed to add empty dir blob: %v", err)
+    }
+    emptyDir, ok := emptyDirInterface.(*LocalCachedFile)
+    if !ok {
+        t.Fatalf("Failed to assert type *LocalCachedFile")
+    }
+    defer emptyDir.Release()
+
+    // Create necessary directories
+    err = nameStore.LinkTree("dir", emptyDir.GetAddress())
+    if err != nil {
+        t.Fatalf("Failed to create dir: %v", err)
+    }
+
+    err = nameStore.LinkTree("dir/subdir", emptyDir.GetAddress())
+    if err != nil {
+        t.Fatalf("Failed to create dir/subdir: %v", err)
+    }
+
+    // Add files
+    for _, item := range testData {
+        content := []byte(item.content)
+        blobInterface, err := blobStore.AddDataBlock(content)
+        if err != nil {
+            t.Fatalf("Failed to add content for %s: %v", item.path, err)
+        }
+        blob, ok := blobInterface.(*LocalCachedFile)
+        if !ok {
+            t.Fatalf("Failed to assert type *LocalCachedFile for %s", item.path)
+        }
+        defer blob.Release()
+
+        err = nameStore.LinkBlob(item.path, blob.GetAddress(), blob.GetSize())
+        if err != nil {
+            t.Fatalf("Failed to link %s: %v", item.path, err)
+        }
+    }
+
+    // Test batch lookup with multiple paths - mix of existing and non-existing
+    paths := []string{
+        "file1.txt",                // Exists
+        "dir/file2.txt",            // Exists
+        "nonexistent.txt",          // Doesn't exist
+        "dir/subdir/file3.txt",     // Exists
+        "dir/subdir/nonexistent",   // Doesn't exist
+        "dir/nonexistent/file.txt", // Middle part doesn't exist
+    }
+
+    // Call LookupFull
+    pathNodePairs, wasPartialFailure, err := nameStore.LookupFull(paths)
+    if err != nil {
+        t.Fatalf("Failed to lookup paths: %v", err)
+    }
+
+    // We expect some paths to fail, so wasPartialFailure should be true
+    if !wasPartialFailure {
+        t.Error("Expected partial failure flag to be true, but it was false")
+    }
+
+    // Build a map of path -> node for easier verification
+    resultsByPath := make(map[string]FileNode)
+    for _, pair := range pathNodePairs {
+        resultsByPath[pair.Path] = pair.Node
+    }
+    
+    // 1. Verify we got results for existing paths
+    for _, path := range []string{"file1.txt", "dir/file2.txt", "dir/subdir/file3.txt"} {
+        node, ok := resultsByPath[path]
+        if !ok {
+            t.Errorf("Expected to find result for %s, but it was missing", path)
+            continue
+        }
+
+        // Verify content matches what we expect
+        contentReader, err := node.ExportedBlob().Reader()
+        if err != nil {
+            t.Errorf("Failed to get reader for %s: %v", path, err)
+            continue
+        }
+        
+        contentBytes, err := io.ReadAll(contentReader)
+        contentReader.Close()
+        if err != nil {
+            t.Errorf("Failed to read content for %s: %v", path, err)
+            continue
+        }
+        
+        // Find the expected content for this path
+        var expectedContent string
+        for _, item := range testData {
+            if item.path == path {
+                expectedContent = item.content
+                break
+            }
+        }
+        
+        if string(contentBytes) != expectedContent {
+            t.Errorf("Content mismatch for %s: got %s, expected %s", 
+                path, string(contentBytes), expectedContent)
+        }
+    }
+
+    // 2. Check we didn't get results for non-existing paths
+    for _, path := range []string{"nonexistent.txt", "dir/subdir/nonexistent", "dir/nonexistent/file.txt"} {
+        if _, ok := resultsByPath[path]; ok {
+            t.Errorf("Got unexpected result for non-existent path %s", path)
+        }
+    }
+
+    // 3. For paths with non-existent intermediate components, check we got the existing parts
+    if _, ok := resultsByPath["dir"]; !ok {
+        t.Errorf("Expected to find result for 'dir' as partial path, but it was missing")
+    }
+
+    // Clean up - ensure all references are released
+    for _, pair := range pathNodePairs {
+        pair.Node.Release()
+    }
 }

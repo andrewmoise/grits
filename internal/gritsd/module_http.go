@@ -601,7 +601,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pathNodePairs, partialResult, err := volume.LookupFull(lookupPath)
+	pathNodePairs, partialResult, err := volume.LookupFull([]string{lookupPath})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
 		return
@@ -800,7 +800,7 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 	tracker.Step("Looking up resource in volume")
 	// Look up the resource in the volume to get its address
 
-	pathNodes, isPartial, err := volume.LookupFull(path)
+	pathNodes, isPartial, err := volume.LookupFull([]string{path})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return

@@ -51,7 +51,7 @@ type Volume interface {
 
 	Lookup(path string) (*grits.TypedFileAddr, error)
 	LookupNode(path string) (grits.FileNode, error)
-	LookupFull(name string) ([]*grits.PathNodePair, bool, error)
+	LookupFull(name []string) ([]*grits.PathNodePair, bool, error)
 	GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode, error)
 
 	// FIXME - This whole API needs a bunch of cleanup

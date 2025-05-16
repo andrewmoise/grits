@@ -127,8 +127,8 @@ func (wv *LocalVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
 	return node.Address(), nil
 }
 
-func (wv *LocalVolume) LookupFull(path string) ([]*grits.PathNodePair, bool, error) {
-	return wv.ns.LookupFull(path)
+func (wv *LocalVolume) LookupFull(paths []string) ([]*grits.PathNodePair, bool, error) {
+	return wv.ns.LookupFull(paths)
 }
 
 func (wv *LocalVolume) LookupNode(path string) (grits.FileNode, error) {
