@@ -17,6 +17,8 @@ import (
 // Main API endpoints
 
 func TestLookupAndLinkEndpoints(t *testing.T) {
+	emptyDirAddr := "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"
+
 	url := "http://localhost:1887/grits/v1"
 	server, cleanup := SetupTestServer(t, WithHttpModule(1887), WithLocalVolume("root"))
 	defer cleanup()
@@ -31,8 +33,8 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		Path string `json:"path"`
 		Addr string `json:"addr"`
 	}{
-		{Path: "dir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
-		{Path: "dir/subdir", Addr: "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"},
+		{Path: "dir", Addr: emptyDirAddr},
+		{Path: "dir/subdir", Addr: emptyDirAddr},
 	}
 
 	linkPayload, _ := json.Marshal(linkData)
@@ -155,6 +157,113 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 			t.Errorf("Content size is not a number: %v", lookupResponse[lastIndex][3])
 		} else if int(contentSize) != len("one") {
 			t.Errorf("Expected content size %d for 'one', got %f", len("one"), contentSize)
+		}
+	}
+}
+
+func TestLinkReturnsPathMetadata(t *testing.T) {
+	url := "http://localhost:1888/grits/v1"
+	server, cleanup := SetupTestServer(t, WithHttpModule(1888), WithLocalVolume("root"))
+	defer cleanup()
+
+	server.Start()
+	defer server.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+
+	// Test linking a blob and verify we get path metadata in response
+	testContent := "Test content"
+
+	// First upload a blob
+	uploadResp, err := http.Post(url+"/upload", "text/plain",
+		bytes.NewBufferString(testContent))
+	if err != nil || uploadResp.StatusCode != http.StatusOK {
+		t.Fatalf("Failed to upload blob: %v %d", err, uploadResp.StatusCode)
+	}
+
+	var blobAddr string
+	if err := json.NewDecoder(uploadResp.Body).Decode(&blobAddr); err != nil {
+		t.Fatalf("Failed to decode upload response: %v", err)
+	}
+	uploadResp.Body.Close()
+
+	// Link the blob to a nested path
+	emptyDirAddr := "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"
+
+	linkPaths := []string{"", "test", "test/nested", "test/nested/path.txt"}
+
+	linkData := []struct {
+		Path string `json:"path"`
+		Addr string `json:"addr"`
+	}{
+		{Path: linkPaths[1], Addr: emptyDirAddr},
+		{Path: linkPaths[2], Addr: emptyDirAddr},
+		{Path: linkPaths[3], Addr: fmt.Sprintf("blob:%s-%d", blobAddr, len(testContent))},
+	}
+
+	linkPayload, _ := json.Marshal(linkData)
+	linkResp, err := http.Post(url+"/link/root", "application/json",
+		bytes.NewBuffer(linkPayload))
+	if err != nil {
+		t.Fatalf("Failed to perform link: %v", err)
+	}
+	defer linkResp.Body.Close()
+
+	if linkResp.StatusCode != http.StatusOK && linkResp.StatusCode != http.StatusMultiStatus {
+		t.Fatalf("Link failed with status code %d", linkResp.StatusCode)
+	}
+
+	// Decode the response
+	var linkResponse [][]any
+	if err := json.NewDecoder(linkResp.Body).Decode(&linkResponse); err != nil {
+		t.Fatalf("Failed to decode link response: %v", err)
+	}
+
+	// Verify response structure
+	// We should get entries for "", "test", "test/nested", and "test/nested/path.txt"
+
+	if len(linkResponse) < len(linkPaths) {
+		t.Fatalf("Expected at least %d path entries in the link response, got %d",
+			len(linkPaths), len(linkResponse))
+	}
+
+	// Build a map of paths in the response for easier verification
+	responsePaths := make(map[string]bool)
+	for _, entry := range linkResponse {
+		path, ok := entry[0].(string)
+		if !ok {
+			t.Errorf("Path is not a string: %v", entry[0])
+			continue
+		}
+		responsePaths[path] = true
+	}
+
+	// Check that all expected paths are present
+	for _, path := range linkPaths {
+		if !responsePaths[path] {
+			t.Errorf("Expected path %s in response, but it was not found", path)
+		}
+	}
+
+	// Find the entry for the linked file and verify it
+	for i, entry := range linkResponse {
+		path, ok := entry[0].(string)
+		if !ok || path != linkPaths[i] {
+			continue
+		}
+
+		// Verify we have content size, metadata, and content hash at least
+		_, ok = entry[3].(float64)
+		if !ok {
+			t.Errorf("Content size is not a number: %v", entry[3])
+		}
+
+		//
+		if _, ok := entry[1].(string); !ok {
+			t.Errorf("Metadata hash is not a string: %v", entry[1])
+		}
+		if _, ok := entry[2].(string); !ok {
+			t.Errorf("Content hash is not a string: %v", entry[2])
 		}
 	}
 }
