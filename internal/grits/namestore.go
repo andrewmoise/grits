@@ -540,56 +540,67 @@ type PathNodePair struct {
 	Node FileNode
 }
 
-// LookupFull returns a list of path and node pairs for a given path
+// LookupFull returns a list of path and node pairs for a given path or paths
 
 // Second part of the return value indicates whether we got a partial failure
 
-func (ns *NameStore) LookupFull(name string) ([]*PathNodePair, bool, error) {
+func (ns *NameStore) LookupFull(names []string) ([]*PathNodePair, bool, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	name = strings.TrimRight(name, "/")
-	nodes, failureParts, err := ns.resolvePath(name)
-	if err != nil {
-		return nil, false, err
-	}
-	if len(nodes) <= 0 {
-		log.Printf("Can't happen! No nodes returned on lookup of %s", name)
-		return nil, false, ErrNotExist
-	}
+	seenPaths := make(map[string]bool)
+	var response []*PathNodePair
+	wasFailure := false
 
-	parts := strings.Split(name, "/")
-	partialPath := ""
-
-	// Prepare the response
-	response := make([]*PathNodePair, 0, len(nodes))
-
-	// Add the root node with empty path
-	response = append(response, &PathNodePair{
-		Path: "",
-		Node: nodes[0],
-	})
-
-	// Add each path component and its corresponding node
-	index := 1
-	for _, part := range parts {
-		if part == "" {
-			continue
+	for _, name := range names {
+		name = strings.TrimRight(name, "/")
+		nodes, failureParts, err := ns.resolvePath(name)
+		if err != nil {
+			return nil, false, err
+		}
+		if failureParts != 0 {
+			wasFailure = true
+		}
+		if len(nodes) <= 0 {
+			log.Printf("Can't happen! No nodes returned on lookup of %s", name)
+			return nil, false, ErrNotExist
 		}
 
-		if index >= len(nodes) {
-			break // Safeguard against potential out-of-bounds
+		parts := strings.Split(name, "/")
+		partialPath := ""
+
+		if _, exists := seenPaths[""]; !exists {
+			response = append(response, &PathNodePair{
+				Path: "",
+				Node: nodes[0],
+			})
+			seenPaths[""] = true
 		}
 
-		partialPath = filepath.Join(partialPath, part)
-		node := nodes[index]
+		// Add each path component and its corresponding node
+		index := 1
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
 
-		response = append(response, &PathNodePair{
-			Path: partialPath,
-			Node: node,
-		})
+			if index >= len(nodes) {
+				break // Safeguard against potential out-of-bounds
+			}
 
-		index++
+			partialPath = filepath.Join(partialPath, part)
+			node := nodes[index]
+
+			if _, exists := seenPaths[partialPath]; !exists {
+				response = append(response, &PathNodePair{
+					Path: partialPath,
+					Node: node,
+				})
+				seenPaths[partialPath] = true
+			}
+
+			index++
+		}
 	}
 
 	// Take a reference to each node we're returning
@@ -597,7 +608,7 @@ func (ns *NameStore) LookupFull(name string) ([]*PathNodePair, bool, error) {
 		pair.Node.Take()
 	}
 
-	return response, failureParts != 0, nil
+	return response, wasFailure, nil
 }
 
 // FIXME - Clean up this API a lot.
@@ -1772,8 +1783,5 @@ func (ns *NameStore) CleanupUnreferencedNodes() {
 // nodes directly, since they are getting more capable and stateful now.
 
 // LookupNode() is perfect, no change
-
-// LookupFull() should start to return nodes. We just need to take away the ".AddressString()"
-// in it, and worry about reference counting.
 
 // Likewise resolvePath() is already converted, nothing to do for now.
