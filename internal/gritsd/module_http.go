@@ -689,23 +689,105 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		// Perform link
 		log.Printf("Perform link: %s to %s\n", linkData.Path, addr.String())
 		if err := volume.Link(linkData.Path, addr); err != nil {
+			log.Printf("Link failed: %v", err)
 			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 			return
 		}
 		log.Printf("Link successful for path\n")
 	}
 
+	// Checkpoint the volume after all links are performed
 	err := volume.Checkpoint()
 	if err != nil {
+		log.Printf("Failed to checkpoint %s: %v", volume, err)
 		http.Error(w, fmt.Sprintf("Failed to checkpoint %s: %v", volume, err), http.StatusInternalServerError)
+		return
 	}
 
-	result := make([][]string, 0) // TODO
+	// Gather all paths that were affected by the link operations
+	paths := make([]string, len(allLinkData))
+	for i, data := range allLinkData {
+		paths[i] = data.Path
+	}
 
+	// LookupFull will automatically include all parent paths
+	pathNodePairs, _, err := volume.LookupFull(paths)
+	if err != nil {
+		log.Printf("Lookup after link failed: %v", err)
+		http.Error(w, fmt.Sprintf("Lookup after link failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Transform to the format expected by the client (same as lookup endpoint)
+	response := make([][]any, len(pathNodePairs))
+	for i, pair := range pathNodePairs {
+		node := pair.Node
+		metadataHash := node.MetadataBlob().GetAddress().Hash
+		contentHash := node.ExportedBlob().GetAddress().Hash
+		contentSize := node.ExportedBlob().GetSize()
+
+		response[i] = []any{
+			pair.Path,
+			metadataHash,
+			contentHash,
+			contentSize,
+		}
+
+		// Release the reference we took in LookupFull
+		node.Release()
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	// So... even if we got a partial failure from the lookup, the *link*
+	// probably actually succeeded. It's not wholly relevant whether the
+	// stuff we linked went away after we linked it, so even though it maybe
+	// is not ideal we still return success to the client in that case.
+	// Use same status code approach as lookup endpoint
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(result)
 
-	fmt.Fprintf(w, "Link successful")
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+// Helper function to gather all affected paths, including parent paths
+func gatherAffectedPaths(linkData []struct {
+	Path string `json:"path"`
+	Addr string `json:"addr"`
+}) []string {
+	pathMap := make(map[string]bool)
+	paths := []string{}
+
+	// Always include root
+	pathMap[""] = true
+	paths = append(paths, "")
+
+	for _, data := range linkData {
+		// Split the path into components
+		parts := strings.Split(data.Path, "/")
+		current := ""
+
+		// Build paths incrementally and add them
+		for _, part := range parts {
+			if part == "" {
+				continue
+			}
+
+			if current == "" {
+				current = part
+			} else {
+				current = current + "/" + part
+			}
+
+			if !pathMap[current] {
+				pathMap[current] = true
+				paths = append(paths, current)
+			}
+		}
+	}
+
+	return paths
 }
 
 func (s *HTTPModule) handleDeployment(w http.ResponseWriter, r *http.Request) {
