@@ -14,11 +14,124 @@ import (
 	"grits/internal/grits"
 )
 
+// setupEmptyDir prepares an empty directory node on the target server
+// and returns its metadata address for linking operations
+func setupEmptyDir(volume Volume, remoteUrl string) (*grits.BlobAddr, error) {
+	// Get the empty directory metadata address from the volume
+	emptyDirMetadataAddr := volume.GetEmptyDirMetadataAddr()
+
+	// Get the FileNode for the empty directory
+	emptyDir, err := volume.GetFileNode(emptyDirMetadataAddr)
+	if err != nil {
+		return nil, fmt.Errorf("couldn't read node for empty dir: %v", err)
+	}
+	defer emptyDir.Release() // Release our reference when we're done
+
+	// Upload the content blob
+	contentBlob := emptyDir.ExportedBlob()
+	contentReader, err := contentBlob.Reader()
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create reader for empty dir content blob: %v", err)
+	}
+	defer contentReader.Close()
+
+	contentUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", contentReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload empty dir content blob: %v", err)
+	}
+	defer contentUploadResp.Body.Close()
+
+	if contentUploadResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upload of empty dir content blob failed with status: %d", contentUploadResp.StatusCode)
+	}
+
+	// Verify the hash matches
+	var uploadedContentHash string
+	if err := json.NewDecoder(contentUploadResp.Body).Decode(&uploadedContentHash); err != nil {
+		return nil, fmt.Errorf("failed to decode content blob upload response: %v", err)
+	}
+
+	if uploadedContentHash != contentBlob.GetAddress().Hash {
+		return nil, fmt.Errorf("content blob hash mismatch. Expected: %s, Got: %s",
+			contentBlob.GetAddress().Hash, uploadedContentHash)
+	}
+
+	// Upload the metadata blob
+	metadataBlob := emptyDir.MetadataBlob()
+	metadataReader, err := metadataBlob.Reader()
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create reader for empty dir metadata blob: %v", err)
+	}
+	defer metadataReader.Close()
+
+	metadataUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", metadataReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload empty dir metadata blob: %v", err)
+	}
+	defer metadataUploadResp.Body.Close()
+
+	if metadataUploadResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upload of empty dir metadata blob failed with status: %d", metadataUploadResp.StatusCode)
+	}
+
+	var uploadedMetadataHash string
+	if err := json.NewDecoder(metadataUploadResp.Body).Decode(&uploadedMetadataHash); err != nil {
+		return nil, fmt.Errorf("failed to decode metadata blob upload response: %v", err)
+	}
+
+	// Verify the hash matches
+	if uploadedMetadataHash != metadataBlob.GetAddress().Hash {
+		return nil, fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
+			metadataBlob.GetAddress().Hash, uploadedMetadataHash)
+	}
+
+	// Return the metadata address to use in link operations
+	return &grits.BlobAddr{Hash: uploadedMetadataHash}, nil
+}
+
+// createAndUploadMetadata creates a metadata blob for a content blob and uploads it to the server
+// Returns the metadata blob address
+func createAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUrl string) (*grits.BlobAddr, error) {
+	metadataCf, err := volume.CreateMetadata(contentCf)
+	if err != nil {
+		return nil, err
+	}
+	defer metadataCf.Release()
+
+	// Upload the metadata blob to the server
+	metadataReader, err := metadataCf.Reader()
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create reader for metadata blob: %v", err)
+	}
+	defer metadataReader.Close()
+
+	metadataUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", metadataReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload metadata blob: %v", err)
+	}
+	defer metadataUploadResp.Body.Close()
+
+	if metadataUploadResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upload of metadata blob failed with status: %d", metadataUploadResp.StatusCode)
+	}
+
+	var uploadedMetadataHash string
+	if err := json.NewDecoder(metadataUploadResp.Body).Decode(&uploadedMetadataHash); err != nil {
+		return nil, fmt.Errorf("failed to decode metadata blob upload response: %v", err)
+	}
+
+	// Verify the hash matches
+	if uploadedMetadataHash != metadataCf.GetAddress().Hash {
+		return nil, fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
+			metadataCf.GetAddress().Hash, uploadedMetadataHash)
+	}
+
+	return &grits.BlobAddr{Hash: uploadedMetadataHash}, nil
+}
+
 // Main API endpoints
 
 func TestLookupAndLinkEndpoints(t *testing.T) {
-	emptyDirAddr := "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"
-
 	url := "http://localhost:1887/grits/v1"
 	server, cleanup := SetupTestServer(t, WithHttpModule(1887), WithLocalVolume("root"))
 	defer cleanup()
@@ -28,13 +141,15 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
+	emptyDirAddr, err := setupEmptyDir(server.FindVolumeByName("root"), url)
+	if err != nil {
+		t.Fatalf("Couldn't make empty dir: %v", err)
+	}
+
 	// Set up directory structure
-	linkData := []struct {
-		Path string `json:"path"`
-		Addr string `json:"addr"`
-	}{
-		{Path: "dir", Addr: emptyDirAddr},
-		{Path: "dir/subdir", Addr: emptyDirAddr},
+	linkData := []LinkData{
+		{Path: "dir", MetadataAddr: emptyDirAddr.Hash},
+		{Path: "dir/subdir", MetadataAddr: emptyDirAddr.Hash},
 	}
 
 	linkPayload, _ := json.Marshal(linkData)
@@ -66,14 +181,27 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		if err := json.Unmarshal(addressJson, &addresses[i]); err != nil {
 			t.Fatalf("Failed to unmarshal address: %v", err)
 		}
+		resp.Body.Close()
 
-		// Link the blob to two paths
-		linkData := []struct {
-			Path string `json:"path"`
-			Addr string `json:"addr"`
-		}{
-			{Path: content, Addr: fmt.Sprintf("blob:%s-%d", addresses[i], len(content))},
-			{Path: "dir/subdir/" + content, Addr: fmt.Sprintf("blob:%s-%d", addresses[i], len(content))},
+		// Create metadata for the blob
+		// We can use the local volume to create and upload the metadata node
+		volume := server.FindVolumeByName("root")
+
+		contentCf, err := server.BlobStore.AddDataBlock([]byte(content))
+		if err != nil {
+			t.Fatalf("Couldn't add %s to blob store: %v", content, err)
+		}
+		defer contentCf.Release()
+
+		metadataBlob, err := createAndUploadMetadata(volume, contentCf, url)
+		if err != nil {
+			t.Fatalf("Couldn't upload metadata: %v", err)
+		}
+
+		// Link the blob to two paths using metadata address
+		linkData := []LinkData{
+			{Path: content, MetadataAddr: metadataBlob.Hash},
+			{Path: "dir/subdir/" + content, MetadataAddr: metadataBlob.Hash},
 		}
 
 		linkPayload, _ := json.Marshal(linkData)
@@ -187,18 +315,29 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	}
 	uploadResp.Body.Close()
 
-	// Link the blob to a nested path
-	emptyDirAddr := "tree:QmSvPd3sHK7iWgZuW47fyLy4CaZQe2DwxvRhrJ39VpBVMK-2"
+	// Upload an empty directory to put it in
+	emptyDirAddr, err := setupEmptyDir(server.FindVolumeByName("root"), url)
+	if err != nil {
+		t.Fatalf("Couldn't make empty directory: %v", err)
+	}
+
+	// Create metadata for the blob content
+	contentCf, err := server.BlobStore.AddDataBlock([]byte(testContent))
+	if err != nil {
+		t.Fatalf("Couldn't add test content to blob store: %v", err)
+	}
+	defer contentCf.Release()
+
+	blobMetadataAddr, err := createAndUploadMetadata(server.FindVolumeByName("root"), contentCf, url)
+	if err != nil {
+		t.Fatalf("Couldn't create and upload metadata: %v", err)
+	}
 
 	linkPaths := []string{"", "test", "test/nested", "test/nested/path.txt"}
-
-	linkData := []struct {
-		Path string `json:"path"`
-		Addr string `json:"addr"`
-	}{
-		{Path: linkPaths[1], Addr: emptyDirAddr},
-		{Path: linkPaths[2], Addr: emptyDirAddr},
-		{Path: linkPaths[3], Addr: fmt.Sprintf("blob:%s-%d", blobAddr, len(testContent))},
+	linkData := []LinkData{
+		{Path: linkPaths[1], MetadataAddr: emptyDirAddr.Hash},
+		{Path: linkPaths[2], MetadataAddr: emptyDirAddr.Hash},
+		{Path: linkPaths[3], MetadataAddr: blobMetadataAddr.Hash},
 	}
 
 	linkPayload, _ := json.Marshal(linkData)

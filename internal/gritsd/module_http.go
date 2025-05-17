@@ -640,6 +640,11 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type LinkData struct {
+	Path         string `json:"path"`
+	MetadataAddr string `json:"addr"`
+}
+
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Handling link request\n")
 
@@ -653,10 +658,8 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var allLinkData []struct {
-		Path string `json:"path"`
-		Addr string `json:"addr"`
-	}
+	var allLinkData []LinkData
+
 	if err := json.NewDecoder(r.Body).Decode(&allLinkData); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
@@ -680,15 +683,9 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for _, linkData := range allLinkData {
-		addr, err := grits.NewTypedFileAddrFromString(linkData.Addr)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to decode TypedFileAddr %s", linkData.Addr), http.StatusBadRequest)
-			return
-		}
-
-		// Perform link
-		log.Printf("Perform link: %s to %s\n", linkData.Path, addr.String())
-		if err := volume.Link(linkData.Path, addr); err != nil {
+		// Perform link using LinkByMetadata
+		log.Printf("Perform link: %s to %s\n", linkData.Path, linkData.MetadataAddr)
+		if err := volume.LinkByMetadata(linkData.Path, &grits.BlobAddr{Hash: linkData.MetadataAddr}); err != nil {
 			log.Printf("Link failed: %v", err)
 			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 			return
@@ -749,45 +746,6 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 		return
 	}
-}
-
-// Helper function to gather all affected paths, including parent paths
-func gatherAffectedPaths(linkData []struct {
-	Path string `json:"path"`
-	Addr string `json:"addr"`
-}) []string {
-	pathMap := make(map[string]bool)
-	paths := []string{}
-
-	// Always include root
-	pathMap[""] = true
-	paths = append(paths, "")
-
-	for _, data := range linkData {
-		// Split the path into components
-		parts := strings.Split(data.Path, "/")
-		current := ""
-
-		// Build paths incrementally and add them
-		for _, part := range parts {
-			if part == "" {
-				continue
-			}
-
-			if current == "" {
-				current = part
-			} else {
-				current = current + "/" + part
-			}
-
-			if !pathMap[current] {
-				pathMap[current] = true
-				paths = append(paths, current)
-			}
-		}
-	}
-
-	return paths
 }
 
 func (s *HTTPModule) handleDeployment(w http.ResponseWriter, r *http.Request) {
@@ -1009,15 +967,23 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 	}
 
 	// Store the file content in the blob store
-	cf, err := bs.AddDataBlock(data)
+	contentCf, err := bs.AddDataBlock(data)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to store %s content", path), http.StatusInternalServerError)
 		return
 	}
-	defer cf.Release()
+	defer contentCf.Release()
 
-	addr := grits.NewTypedFileAddr(cf.GetAddress().Hash, cf.GetSize(), grits.Blob)
-	err = volume.Link(path, addr)
+	// Create metadata for the content
+	metadataCf, err := volume.CreateMetadata(contentCf)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create metadata for %s", path), http.StatusInternalServerError)
+		return
+	}
+	defer metadataCf.Release()
+
+	// Link using the metadata address
+	err = volume.LinkByMetadata(path, metadataCf.GetAddress())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
 		return
