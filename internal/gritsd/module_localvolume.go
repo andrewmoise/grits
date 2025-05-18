@@ -118,6 +118,65 @@ func (wv *LocalVolume) CreateMetadata(cf grits.CachedFile) (grits.CachedFile, er
 	return metadataCf, nil
 }
 
+// CreateTreeNode creates a new empty directory node
+// The returned node has an additional reference taken which the caller must release when done
+func (v *LocalVolume) CreateTreeNode() (*grits.TreeNode, error) {
+	emptyChildren := make(map[string]*grits.BlobAddr)
+	treeNode, err := v.ns.CreateTreeNode(emptyChildren)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create empty tree node: %v", err)
+	}
+
+	// Take an extra reference for the caller
+	treeNode.Take()
+	return treeNode, nil
+}
+
+// CreateBlobNode creates a metadata node that points to the given content blob
+// The returned node has an additional reference taken which the caller must release when done
+func (v *LocalVolume) CreateBlobNode(contentAddr *grits.BlobAddr, size int64) (*grits.BlobNode, error) {
+	// Create the metadata for this blob
+	_, metadataBlob, err := v.ns.CreateMetadataBlob(contentAddr, size, false, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create metadata for blob: %v", err)
+	}
+	defer metadataBlob.Release()
+
+	// Now get a FileNode for this metadata blob
+	node, err := v.ns.GetFileNode(metadataBlob.GetAddress())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create blob node: %v", err)
+	}
+	defer node.Release()
+
+	// Convert to BlobNode (this should always succeed since we created it as such)
+	blobNode, ok := node.(*grits.BlobNode)
+	if !ok {
+		return nil, fmt.Errorf("created node is not a BlobNode")
+	}
+
+	// Take an extra reference for the caller
+	blobNode.Take()
+	return blobNode, nil
+}
+
+// GetBlob retrieves a blob from the blobstore by its address
+func (v *LocalVolume) GetBlob(addr *grits.BlobAddr) (grits.CachedFile, error) {
+	return v.ns.BlobStore.ReadFile(addr)
+}
+
+// PutBlob adds a file to the blob store and returns its address
+func (v *LocalVolume) PutBlob(file *os.File) (*grits.BlobAddr, error) {
+	cachedFile, err := v.ns.BlobStore.AddReader(file)
+	if err != nil {
+		return nil, err
+	}
+	defer cachedFile.Release() // We don't need to maintain this reference
+
+	// Return a copy of the address
+	return &grits.BlobAddr{Hash: cachedFile.GetAddress().Hash}, nil
+}
+
 func (wv *LocalVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
 	node, err := wv.ns.LookupNode(path) // FIXME FIXME - Need to release after this
 	if err != nil {
