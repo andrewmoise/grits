@@ -53,12 +53,13 @@ func TestLocalVolumePersistenceDirect(t *testing.T) {
 	}
 
 	// Verify the content persisted by looking up the previously linked path.
-	addr, err := localVolumeReloaded.Lookup(testPath)
+	testNode, err := localVolumeReloaded.LookupNode(testPath)
 	if err != nil {
 		t.Fatalf("Failed to lookup content in local volume: %v", err)
 	}
+	defer testNode.Release()
 
-	cachedFile, err := server.BlobStore.ReadFile(&addr.BlobAddr)
+	cachedFile, err := server.BlobStore.ReadFile(&grits.BlobAddr{Hash: testNode.Metadata().ContentHash})
 	if err != nil {
 		t.Fatalf("Failed to read file contents: %v", err)
 	}
