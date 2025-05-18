@@ -92,14 +92,14 @@ func setupEmptyDir(volume Volume, remoteUrl string) (*grits.BlobAddr, error) {
 // createAndUploadMetadata creates a metadata blob for a content blob and uploads it to the server
 // Returns the metadata blob address
 func createAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUrl string) (*grits.BlobAddr, error) {
-	metadataCf, err := volume.CreateMetadata(contentCf)
+	contentNode, err := volume.CreateBlobNode(contentCf.GetAddress(), contentCf.GetSize())
 	if err != nil {
 		return nil, err
 	}
-	defer metadataCf.Release()
+	defer contentNode.Release()
 
 	// Upload the metadata blob to the server
-	metadataReader, err := metadataCf.Reader()
+	metadataReader, err := contentNode.MetadataBlob().Reader()
 	if err != nil {
 		return nil, fmt.Errorf("couldn't create reader for metadata blob: %v", err)
 	}
@@ -121,9 +121,9 @@ func createAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUr
 	}
 
 	// Verify the hash matches
-	if uploadedMetadataHash != metadataCf.GetAddress().Hash {
+	if uploadedMetadataHash != contentNode.MetadataBlob().GetAddress().Hash {
 		return nil, fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
-			metadataCf.GetAddress().Hash, uploadedMetadataHash)
+			contentNode.MetadataBlob().GetAddress().Hash, uploadedMetadataHash)
 	}
 
 	return &grits.BlobAddr{Hash: uploadedMetadataHash}, nil

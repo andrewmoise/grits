@@ -109,15 +109,6 @@ func (wv *LocalVolume) GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode
 	return wv.ns.GetFileNode(metadataAddr)
 }
 
-func (wv *LocalVolume) CreateMetadata(cf grits.CachedFile) (grits.CachedFile, error) {
-	_, metadataCf, err := wv.ns.CreateMetadataBlob(cf.GetAddress(), cf.GetSize(), false, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	return metadataCf, nil
-}
-
 // CreateTreeNode creates a new empty directory node
 // The returned node has an additional reference taken which the caller must release when done
 func (v *LocalVolume) CreateTreeNode() (*grits.TreeNode, error) {

@@ -975,15 +975,16 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 	defer contentCf.Release()
 
 	// Create metadata for the content
-	metadataCf, err := volume.CreateMetadata(contentCf)
+	metadataNode, err := volume.CreateBlobNode(contentCf.GetAddress(), contentCf.GetSize())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create metadata for %s", path), http.StatusInternalServerError)
 		return
 	}
-	defer metadataCf.Release()
+	defer metadataNode.Release()
 
 	// Link using the metadata address
-	err = volume.LinkByMetadata(path, metadataCf.GetAddress())
+	log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
+	err = volume.LinkByMetadata(path, &grits.BlobAddr{Hash: metadataNode.MetadataBlob().GetAddress().Hash})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
 		return
