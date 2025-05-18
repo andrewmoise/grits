@@ -132,6 +132,18 @@ func (s *Server) AddModuleHook(hook func(Module)) {
 // Create a helper function that can create a single module
 func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMessage) (Module, error) {
 	switch moduleType {
+	case "cmdline":
+		var cmdlineConfig CommandLineModuleConfig
+		if err := json.Unmarshal(rawConfig, &cmdlineConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal CommandLine module config: %v", err)
+		}
+
+		cmdlineModule, err := NewCommandLineModule(s, &cmdlineConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CommandLine module: %v", err)
+		}
+		return cmdlineModule, nil
+
 	case "deployment":
 		var deploymentConfig DeploymentConfig
 		if err := json.Unmarshal(rawConfig, &deploymentConfig); err != nil {
