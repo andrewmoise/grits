@@ -1201,6 +1201,11 @@ func CreateTimestamp() string {
 	return time.Now().UTC().Format(time.RFC3339)
 }
 
+// A word about ref counting: This will return a GNodeMetadata, which is not ref-counted, alongside
+// a CachedFile with a reference taken. Most commonly, that file will wind up getting assigned to a
+// newly-created FileNode of some sort, which will then hold that reference for as long as *it*
+// remains un-garbage-collected.
+
 func (ns *NameStore) CreateMetadataBlob(contentHash *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()

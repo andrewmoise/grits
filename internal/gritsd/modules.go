@@ -57,6 +57,10 @@ type Volume interface {
 	// FIXME - This whole API needs a bunch of cleanup
 	CreateMetadata(grits.CachedFile) (grits.CachedFile, error)
 
+	// New methods for cleaner interface
+	CreateTreeNode() (*grits.TreeNode, error)
+	CreateBlobNode(contentAddr *grits.BlobAddr, size int64) (*grits.BlobNode, error)
+
 	Link(path string, addr *grits.TypedFileAddr) error
 	LinkByMetadata(path string, metadataAddr *grits.BlobAddr) error
 	MultiLink([]*grits.LinkRequest) error
@@ -65,6 +69,9 @@ type Volume interface {
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
 	AddMetadataBlob(*grits.GNodeMetadata) (grits.CachedFile, error)
+
+	GetBlob(addr *grits.BlobAddr) (grits.CachedFile, error)
+	PutBlob(file *os.File) (*grits.BlobAddr, error)
 
 	GetEmptyDirMetadataAddr() *grits.BlobAddr
 	GetEmptyDirAddr() *grits.TypedFileAddr
@@ -91,6 +98,7 @@ func (s *Server) GetModules(name string) []Module {
 	return matches
 }
 
+// FIXME - Rename to GetVolume()
 func (s *Server) FindVolumeByName(name string) Volume {
 	if volume, exists := s.Volumes[name]; exists {
 		return volume
