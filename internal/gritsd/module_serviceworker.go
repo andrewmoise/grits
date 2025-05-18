@@ -3,6 +3,7 @@ package gritsd
 import (
 	"encoding/json"
 	"fmt"
+	"grits/internal/grits"
 	"io"
 	"log"
 	"net/http"
@@ -129,14 +130,14 @@ func (swm *ServiceWorkerModule) loadClientFiles(wv *LocalVolume) error {
 			}
 			defer contentCf.Release()
 
-			// Create metadata and link the file
-			contentMetadata, err := wv.CreateMetadata(contentCf)
+			contentNode, err := wv.CreateBlobNode(contentCf.GetAddress(), contentCf.GetSize())
 			if err != nil {
-				return fmt.Errorf("failed to create metadata for %s: %v", filename, err)
+				return fmt.Errorf("failed to create metadata for content node: %v", err)
 			}
+			defer contentNode.Release()
 
 			log.Printf("Linking generated file: %s", filename)
-			err = wv.LinkByMetadata(filename, contentMetadata.GetAddress())
+			err = wv.LinkByMetadata(filename, contentNode.MetadataBlob().GetAddress())
 			if err != nil {
 				return fmt.Errorf("failed to link %s: %v", filename, err)
 			}
@@ -283,12 +284,13 @@ func (swm *ServiceWorkerModule) updateServiceWorkerConfig() error {
 	}
 	defer configCf.Release()
 
-	configMetadata, err := swm.clientVolume.CreateMetadata(configCf)
+	configMetadataNode, err := swm.clientVolume.CreateBlobNode(configCf.GetAddress(), configCf.GetSize())
 	if err != nil {
 		return err
 	}
+	defer configMetadataNode.Release()
 
-	err = swm.clientVolume.LinkByMetadata("serviceworker/grits-serviceworker-config.json", configMetadata.GetAddress())
+	err = swm.clientVolume.LinkByMetadata("serviceworker/grits-serviceworker-config.json", &grits.BlobAddr{Hash: configMetadataNode.Metadata().ContentHash})
 	if err != nil {
 		return err
 	}

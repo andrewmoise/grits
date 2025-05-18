@@ -53,10 +53,6 @@ type Volume interface {
 	LookupFull(name []string) ([]*grits.PathNodePair, bool, error)
 	GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode, error)
 
-	// FIXME - This whole API needs a bunch of cleanup
-	CreateMetadata(grits.CachedFile) (grits.CachedFile, error)
-
-	// New methods for cleaner interface
 	CreateTreeNode() (*grits.TreeNode, error)
 	CreateBlobNode(contentAddr *grits.BlobAddr, size int64) (*grits.BlobNode, error)
 
