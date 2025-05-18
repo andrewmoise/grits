@@ -331,17 +331,19 @@ func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Req
 	// Get current hash values for template substitution
 	swDirHash := swm.getClientDirHash()
 
-	swAddr, err := swm.clientVolume.Lookup("serviceworker/grits-serviceworker.js")
+	swNode, err := swm.clientVolume.LookupNode("serviceworker/grits-serviceworker.js")
 	if err != nil {
 		http.Error(w, "Service worker not found", http.StatusInternalServerError)
 		return
 	}
+	defer swNode.Release()
 
-	configAddr, err := swm.clientVolume.Lookup("serviceworker/grits-serviceworker-config.json")
+	configNode, err := swm.clientVolume.LookupNode("serviceworker/grits-serviceworker-config.json")
 	if err != nil {
 		http.Error(w, "Service worker config not found", http.StatusInternalServerError)
 		return
 	}
+	defer configNode.Release()
 
 	// Read the template file
 	templateNode, err := swm.clientVolume.LookupNode(templatePath)
@@ -361,8 +363,8 @@ func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Req
 	// Perform the substitutions
 	templateStr := string(templateData)
 	templateStr = strings.Replace(templateStr, "{{SW_DIR_HASH}}", swDirHash, -1)
-	templateStr = strings.Replace(templateStr, "{{SW_SCRIPT_HASH}}", swAddr.Hash, -1)
-	templateStr = strings.Replace(templateStr, "{{SW_CONFIG_HASH}}", configAddr.Hash, -1)
+	templateStr = strings.Replace(templateStr, "{{SW_SCRIPT_HASH}}", swNode.Metadata().ContentHash, -1)
+	templateStr = strings.Replace(templateStr, "{{SW_CONFIG_HASH}}", configNode.Metadata().ContentHash, -1)
 
 	// Send the processed template
 	fmt.Fprint(w, templateStr)

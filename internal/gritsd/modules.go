@@ -49,7 +49,6 @@ type Volume interface {
 	isReadOnly() bool
 	Checkpoint() error
 
-	Lookup(path string) (*grits.TypedFileAddr, error)
 	LookupNode(path string) (grits.FileNode, error)
 	LookupFull(name []string) ([]*grits.PathNodePair, bool, error)
 	GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode, error)

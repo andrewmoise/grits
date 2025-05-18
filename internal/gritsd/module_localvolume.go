@@ -177,15 +177,6 @@ func (v *LocalVolume) PutBlob(file *os.File) (*grits.BlobAddr, error) {
 	return &grits.BlobAddr{Hash: cachedFile.GetAddress().Hash}, nil
 }
 
-func (wv *LocalVolume) Lookup(path string) (*grits.TypedFileAddr, error) {
-	node, err := wv.ns.LookupNode(path) // FIXME FIXME - Need to release after this
-	if err != nil {
-		return nil, err
-	}
-
-	return node.Address(), nil
-}
-
 func (wv *LocalVolume) LookupFull(paths []string) ([]*grits.PathNodePair, bool, error) {
 	return wv.ns.LookupFull(paths)
 }

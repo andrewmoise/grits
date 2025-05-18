@@ -957,8 +957,9 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 	fullPath := filepath.Join(gn.path, name)
 	//log.Printf("Create(%s)", fullPath)
 	if flags&uint32(os.O_EXCL) != 0 {
-		addr, _ := gn.module.volume.Lookup(fullPath)
-		if addr != nil {
+		node, _ := gn.module.volume.LookupNode(fullPath)
+		if node != nil {
+			node.Release()
 			return nil, nil, 0, syscall.EEXIST
 		}
 	}
