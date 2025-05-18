@@ -22,8 +22,8 @@ import (
 // Module stuff
 
 type MountModuleConfig struct {
-	MountPoint string `json:"mountPoint"`
 	Volume     string `json:"volume"`
+	MountPoint string `json:"mountPoint"`
 }
 
 type MountModule struct {
