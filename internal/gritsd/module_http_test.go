@@ -18,14 +18,11 @@ import (
 // and returns its metadata address for linking operations
 func setupEmptyDir(volume Volume, remoteUrl string) (*grits.BlobAddr, error) {
 	// Get the empty directory metadata address from the volume
-	emptyDirMetadataAddr := volume.GetEmptyDirMetadataAddr()
-
-	// Get the FileNode for the empty directory
-	emptyDir, err := volume.GetFileNode(emptyDirMetadataAddr)
+	emptyDir, err := volume.CreateTreeNode()
 	if err != nil {
-		return nil, fmt.Errorf("couldn't read node for empty dir: %v", err)
+		return nil, err
 	}
-	defer emptyDir.Release() // Release our reference when we're done
+	defer emptyDir.Release()
 
 	// Upload the content blob
 	contentBlob := emptyDir.ExportedBlob()
