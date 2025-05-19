@@ -111,7 +111,7 @@ func main() {
 	enableTls := originHttpConfig.EnableTls
 
 	// Test the origin-mirror system
-	if err := testOriginMirrorSystem(originPort, originHost, enableTls, NUM_MIRRORS); err != nil {
+	if err := testOriginMirrorSystem(originServer, originPort, originHost, enableTls, NUM_MIRRORS); err != nil {
 		log.Printf("WARNING: Origin-Mirror test failed: %v", err)
 	} else {
 		log.Println("Origin-Mirror tests passed successfully!")
@@ -233,7 +233,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 // testOriginMirrorSystem verifies that:
 // 1. Mirrors register with the origin
 // 2. Content uploaded to origin can be fetched from mirrors
-func testOriginMirrorSystem(originPort int, originHost string, enableTls bool, numMirrors int) error {
+func testOriginMirrorSystem(originServer *gritsd.Server, originPort int, originHost string, enableTls bool, numMirrors int) error {
 	// Step 1: Check that mirrors have registered with the origin
 	log.Println("Testing mirror registration...")
 
@@ -309,14 +309,33 @@ func testOriginMirrorSystem(originPort int, originHost string, enableTls bool, n
 
 	log.Printf("Uploaded test content, got blob address: %s", blobAddr)
 
-	// Immediately link the blob
-	linkData := []struct {
-		Path string `json:"path"`
-		Addr string `json:"addr"`
-	}{
+	// Get a reference to the root volume
+	rootVolume := originServer.FindVolumeByName("root")
+	if rootVolume == nil {
+		return fmt.Errorf("couldn't find root volume on origin server")
+	}
+
+	// First, we need to get a CachedFile for the content we uploaded
+	contentCf, err := originServer.BlobStore.AddDataBlock(testContent)
+	if err != nil {
+		return fmt.Errorf("couldn't add test content to blob store: %v", err)
+	}
+	defer contentCf.Release()
+
+	// Create and upload the metadata for our content blob
+	metadataAddr, err := gritsd.CreateAndUploadMetadata(
+		rootVolume,
+		contentCf,
+		fmt.Sprintf("%s://%s:%d/grits/v1", scheme, originHost, originPort))
+	if err != nil {
+		return fmt.Errorf("failed to create and upload metadata: %v", err)
+	}
+
+	// Link the blob using the metadata address
+	linkData := []gritsd.LinkData{
 		{
-			Path: "test-blob",
-			Addr: fmt.Sprintf("blob:%s-%d", blobAddr, len(testContent)), // Ugh
+			Path:         "test-blob",
+			MetadataAddr: metadataAddr.Hash,
 		},
 	}
 

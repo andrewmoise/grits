@@ -89,46 +89,6 @@ func setupEmptyDir(volume Volume, remoteUrl string) (*grits.BlobAddr, error) {
 	return &grits.BlobAddr{Hash: uploadedMetadataHash}, nil
 }
 
-// createAndUploadMetadata creates a metadata blob for a content blob and uploads it to the server
-// Returns the metadata blob address
-func createAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUrl string) (*grits.BlobAddr, error) {
-	contentNode, err := volume.CreateBlobNode(contentCf.GetAddress(), contentCf.GetSize())
-	if err != nil {
-		return nil, err
-	}
-	defer contentNode.Release()
-
-	// Upload the metadata blob to the server
-	metadataReader, err := contentNode.MetadataBlob().Reader()
-	if err != nil {
-		return nil, fmt.Errorf("couldn't create reader for metadata blob: %v", err)
-	}
-	defer metadataReader.Close()
-
-	metadataUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", metadataReader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to upload metadata blob: %v", err)
-	}
-	defer metadataUploadResp.Body.Close()
-
-	if metadataUploadResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upload of metadata blob failed with status: %d", metadataUploadResp.StatusCode)
-	}
-
-	var uploadedMetadataHash string
-	if err := json.NewDecoder(metadataUploadResp.Body).Decode(&uploadedMetadataHash); err != nil {
-		return nil, fmt.Errorf("failed to decode metadata blob upload response: %v", err)
-	}
-
-	// Verify the hash matches
-	if uploadedMetadataHash != contentNode.MetadataBlob().GetAddress().Hash {
-		return nil, fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
-			contentNode.MetadataBlob().GetAddress().Hash, uploadedMetadataHash)
-	}
-
-	return &grits.BlobAddr{Hash: uploadedMetadataHash}, nil
-}
-
 // Main API endpoints
 
 func TestLookupAndLinkEndpoints(t *testing.T) {
@@ -193,7 +153,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		}
 		defer contentCf.Release()
 
-		metadataBlob, err := createAndUploadMetadata(volume, contentCf, url)
+		metadataBlob, err := CreateAndUploadMetadata(volume, contentCf, url)
 		if err != nil {
 			t.Fatalf("Couldn't upload metadata: %v", err)
 		}
@@ -328,7 +288,7 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	}
 	defer contentCf.Release()
 
-	blobMetadataAddr, err := createAndUploadMetadata(server.FindVolumeByName("root"), contentCf, url)
+	blobMetadataAddr, err := CreateAndUploadMetadata(server.FindVolumeByName("root"), contentCf, url)
 	if err != nil {
 		t.Fatalf("Couldn't create and upload metadata: %v", err)
 	}
