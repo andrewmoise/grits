@@ -884,35 +884,50 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr *BlobAddr) error {
 	return nil
 }
 
-func (ns *NameStore) LinkBlob(name string, addr *BlobAddr, size int64) error {
-	var tfa *TypedFileAddr
-
-	if addr != nil {
-		tfa = &TypedFileAddr{
-			BlobAddr: *addr,
-			Type:     Blob,
-			Size:     size,
-		}
-	} else {
-		tfa = nil
+// linkBlob creates metadata for a blob and links it into the path
+func (ns *NameStore) linkBlob(name string, addr *BlobAddr, size int64) error {
+	if addr == nil {
+		// If addr is nil, we're unlinking
+		return ns.LinkByMetadata(name, nil)
 	}
 
-	return ns.Link(name, tfa)
+	// Create metadata for the blob
+	_, metadataBlob, err := ns.createMetadataBlob(addr, size, false, 0)
+	if err != nil {
+		return fmt.Errorf("failed to create blob metadata: %v", err)
+	}
+	defer metadataBlob.Release()
+
+	// Link using the metadata address
+	return ns.LinkByMetadata(name, metadataBlob.GetAddress())
 }
 
-func (ns *NameStore) LinkTree(name string, addr *BlobAddr) error {
-	var tfa *TypedFileAddr
-
-	if addr != nil {
-		tfa = &TypedFileAddr{
-			BlobAddr: *addr,
-			Type:     Tree,
-		}
-	} else {
-		tfa = nil
+// linkTree creates metadata for a tree and links it into the path
+func (ns *NameStore) linkTree(name string, addr *BlobAddr) error {
+	if addr == nil {
+		// If addr is nil, we're unlinking
+		return ns.LinkByMetadata(name, nil)
 	}
 
-	return ns.Link(name, tfa)
+	// For a tree node, we don't have size information readily available
+	// We'll need to read the file to get its size
+	contentCf, err := ns.BlobStore.ReadFile(addr)
+	if err != nil {
+		return fmt.Errorf("failed to read tree content: %v", err)
+	}
+	defer contentCf.Release()
+
+	size := contentCf.GetSize()
+
+	// Create metadata for the tree
+	_, metadataBlob, err := ns.createMetadataBlob(addr, size, true, 0)
+	if err != nil {
+		return fmt.Errorf("failed to create tree metadata: %v", err)
+	}
+	defer metadataBlob.Release()
+
+	// Link using the metadata address
+	return ns.LinkByMetadata(name, metadataBlob.GetAddress())
 }
 
 // Core link function helper.
