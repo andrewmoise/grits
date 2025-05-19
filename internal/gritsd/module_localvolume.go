@@ -176,10 +176,6 @@ func (wv *LocalVolume) LookupNode(path string) (grits.FileNode, error) {
 	return wv.ns.LookupNode(path)
 }
 
-func (wv *LocalVolume) Link(path string, addr *grits.TypedFileAddr) error {
-	return wv.ns.Link(path, addr)
-}
-
 func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr *grits.BlobAddr) error {
 	return wv.ns.LinkByMetadata(name, metadataAddr)
 }

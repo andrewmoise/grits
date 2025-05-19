@@ -238,18 +238,24 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 		return nil, err
 	}
 
+	emptyTreeNode, err := wv.CreateTreeNode()
+	if err != nil {
+		return nil, err
+	}
+	defer emptyTreeNode.Release()
+
 	// Initialize the directory structure
-	err = wv.Link("", wv.GetEmptyDirAddr())
+	err = wv.LinkByMetadata("", emptyTreeNode.MetadataBlob().GetAddress())
 	if err != nil {
 		return nil, err
 	}
 
-	err = wv.Link("client", wv.GetEmptyDirAddr())
+	err = wv.LinkByMetadata("client", emptyTreeNode.MetadataBlob().GetAddress())
 	if err != nil {
 		return nil, err
 	}
 
-	err = wv.ns.Link("serviceworker", wv.GetEmptyDirAddr())
+	err = wv.ns.LinkByMetadata("serviceworker", emptyTreeNode.MetadataBlob().GetAddress())
 	if err != nil {
 		return nil, err
 	}

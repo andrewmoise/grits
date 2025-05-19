@@ -33,10 +33,14 @@ func TestLocalVolumePersistenceDirect(t *testing.T) {
 	}
 	defer blobFile.Release()
 
-	typedAddr := grits.NewTypedFileAddr(blobFile.GetAddress().Hash, blobFile.GetSize(), grits.Blob)
+	blobNode, err := localVolume.CreateBlobNode(blobFile.GetAddress(), blobFile.GetSize())
+	if err != nil {
+		t.Fatalf("Failed to create metadata for blob node: %v", err)
+	}
+	defer blobNode.Release()
 
 	// Link the new blob to the local volume using the test path.
-	err = localVolume.Link(testPath, typedAddr)
+	err = localVolume.LinkByMetadata(testPath, blobNode.MetadataBlob().GetAddress())
 	if err != nil {
 		t.Fatalf("Failed to link blob in local volume: %v", err)
 	}
