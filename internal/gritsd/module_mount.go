@@ -1202,16 +1202,21 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	// FIXME - Empty dirs need timestamps, too
 
 	fullPath := filepath.Join(gn.path, name)
-	emptyAddr := gn.module.volume.GetEmptyDirMetadataAddr()
+	emptyNode, err := gn.module.volume.CreateTreeNode()
+	if err != nil {
+		log.Printf("Empty node fail %v", err)
+		return nil, syscall.EIO
+	}
+	defer emptyNode.Release()
 
 	req := &grits.LinkRequest{
 		Path:     fullPath,
-		NewAddr:  emptyAddr,
+		NewAddr:  emptyNode.MetadataBlob().GetAddress(),
 		PrevAddr: nil,
 		Assert:   grits.AssertPrevValueMatches,
 	}
 
-	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
+	err = gn.module.volume.MultiLink([]*grits.LinkRequest{req})
 	if grits.IsAssertionFailed(err) {
 		return nil, syscall.EEXIST
 	} else if err != nil {

@@ -180,14 +180,6 @@ func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr *grits.BlobAddr)
 	return wv.ns.LinkByMetadata(name, metadataAddr)
 }
 
-func (wv *LocalVolume) GetEmptyDirMetadataAddr() *grits.BlobAddr {
-	return wv.emptyDirNode.MetadataBlob().GetAddress()
-}
-
-func (wv *LocalVolume) GetEmptyDirAddr() *grits.TypedFileAddr {
-	return wv.emptyDirNode.Address()
-}
-
 // MultiLink also needs updating since it's part of the same transition
 func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest) error {
 	return wv.ns.MultiLink(req)
