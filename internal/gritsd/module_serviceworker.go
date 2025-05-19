@@ -154,8 +154,14 @@ func (swm *ServiceWorkerModule) loadClientFiles(wv *LocalVolume) error {
 		}
 		defer fileCf.Release()
 
+		blobNode, err := wv.CreateBlobNode(fileCf.GetAddress(), fileCf.GetSize())
+		if err != nil {
+			return err
+		}
+		defer blobNode.Release()
+
 		log.Printf("Linking static file: %s", filename)
-		err = wv.ns.LinkBlob(filename, fileCf.GetAddress(), fileCf.GetSize())
+		err = wv.ns.LinkByMetadata(filename, blobNode.MetadataBlob().GetAddress())
 		if err != nil {
 			return fmt.Errorf("failed to link %s: %v", filename, err)
 		}
