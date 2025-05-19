@@ -1012,3 +1012,46 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "File deleted successfully")
 }
+
+// Temporary helper function. As long as we (for now) have to do this outside of a remote volume
+// abstraction, we might as well unify the definition of how to do it.
+
+// CreateAndUploadMetadata creates a metadata blob for a content blob and uploads it to the server
+// Returns the metadata blob address
+func CreateAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUrl string) (*grits.BlobAddr, error) {
+	contentNode, err := volume.CreateBlobNode(contentCf.GetAddress(), contentCf.GetSize())
+	if err != nil {
+		return nil, err
+	}
+	defer contentNode.Release()
+
+	// Upload the metadata blob to the server
+	metadataReader, err := contentNode.MetadataBlob().Reader()
+	if err != nil {
+		return nil, fmt.Errorf("couldn't create reader for metadata blob: %v", err)
+	}
+	defer metadataReader.Close()
+
+	metadataUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", metadataReader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to upload metadata blob: %v", err)
+	}
+	defer metadataUploadResp.Body.Close()
+
+	if metadataUploadResp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upload of metadata blob failed with status: %d", metadataUploadResp.StatusCode)
+	}
+
+	var uploadedMetadataHash string
+	if err := json.NewDecoder(metadataUploadResp.Body).Decode(&uploadedMetadataHash); err != nil {
+		return nil, fmt.Errorf("failed to decode metadata blob upload response: %v", err)
+	}
+
+	// Verify the hash matches
+	if uploadedMetadataHash != contentNode.MetadataBlob().GetAddress().Hash {
+		return nil, fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
+			contentNode.MetadataBlob().GetAddress().Hash, uploadedMetadataHash)
+	}
+
+	return &grits.BlobAddr{Hash: uploadedMetadataHash}, nil
+}
