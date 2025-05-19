@@ -59,7 +59,6 @@ type Volume interface {
 	LinkByMetadata(path string, metadataAddr *grits.BlobAddr) error
 	MultiLink([]*grits.LinkRequest) error
 
-	ReadFile(*grits.TypedFileAddr) (grits.CachedFile, error)
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
 	AddMetadataBlob(*grits.GNodeMetadata) (grits.CachedFile, error)
