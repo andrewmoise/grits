@@ -1002,7 +1002,7 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 		return
 	}
 
-	err := volume.Link(path, nil)
+	err := volume.LinkByMetadata(path, nil)
 	if err != nil {
 		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
 		return

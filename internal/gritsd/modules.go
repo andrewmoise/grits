@@ -56,7 +56,6 @@ type Volume interface {
 	CreateTreeNode() (*grits.TreeNode, error)
 	CreateBlobNode(contentAddr *grits.BlobAddr, size int64) (*grits.BlobNode, error)
 
-	Link(path string, addr *grits.TypedFileAddr) error
 	LinkByMetadata(path string, metadataAddr *grits.BlobAddr) error
 	MultiLink([]*grits.LinkRequest) error
 
