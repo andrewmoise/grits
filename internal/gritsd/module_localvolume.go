@@ -193,10 +193,6 @@ func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest) error {
 	return wv.ns.MultiLink(req)
 }
 
-func (wv *LocalVolume) ReadFile(addr *grits.TypedFileAddr) (grits.CachedFile, error) {
-	return wv.ns.BlobStore.ReadFile(&addr.BlobAddr)
-}
-
 func (wv *LocalVolume) AddBlob(path string) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.AddLocalFile(path)
 }
