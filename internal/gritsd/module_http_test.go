@@ -7,15 +7,12 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
 	"grits/internal/grits"
 )
 
-// setupEmptyDir prepares an empty directory node on the target server
-// and returns its metadata address for linking operations
 func setupEmptyDir(volume Volume, remoteUrl string) (grits.BlobAddr, error) {
 	// Get the empty directory metadata address from the volume
 	emptyDir, err := volume.CreateTreeNode()
@@ -32,28 +29,42 @@ func setupEmptyDir(volume Volume, remoteUrl string) (grits.BlobAddr, error) {
 	}
 	defer contentReader.Close()
 
-	contentUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", contentReader)
+	// Create PUT request for content blob
+	contentReq, err := http.NewRequest(http.MethodPut, remoteUrl+"/blob/", contentReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request for content upload: %v", err)
+	}
+	contentReq.Header.Set("Content-Type", "application/octet-stream")
+
+	client := &http.Client{}
+	contentUploadResp, err := client.Do(contentReq)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload empty dir content blob: %v", err)
 	}
 	defer contentUploadResp.Body.Close()
 
-	if contentUploadResp.StatusCode != http.StatusOK {
+	if contentUploadResp.StatusCode != http.StatusOK && contentUploadResp.StatusCode != http.StatusNoContent {
 		return "", fmt.Errorf("upload of empty dir content blob failed with status: %d", contentUploadResp.StatusCode)
 	}
 
-	// Verify the hash matches
 	var uploadedContentHash grits.BlobAddr
-	if err := json.NewDecoder(contentUploadResp.Body).Decode(&uploadedContentHash); err != nil {
-		return "", fmt.Errorf("failed to decode content blob upload response: %v", err)
+
+	// Only decode response if it's 200 OK (not 204 No Content)
+	if contentUploadResp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(contentUploadResp.Body).Decode(&uploadedContentHash); err != nil {
+			return "", fmt.Errorf("failed to decode content blob upload response: %v", err)
+		}
+
+		if uploadedContentHash != contentBlob.GetAddress() {
+			return "", fmt.Errorf("content blob hash mismatch. Expected: %s, Got: %s",
+				contentBlob.GetAddress(), uploadedContentHash)
+		}
+	} else {
+		// For 204, just use the hash we already know
+		uploadedContentHash = contentBlob.GetAddress()
 	}
 
-	if uploadedContentHash != contentBlob.GetAddress() {
-		return "", fmt.Errorf("content blob hash mismatch. Expected: %s, Got: %s",
-			contentBlob.GetAddress(), uploadedContentHash)
-	}
-
-	// Upload the metadata blob
+	// Upload the metadata blob using PUT
 	metadataBlob := emptyDir.MetadataBlob()
 	metadataReader, err := metadataBlob.Reader()
 	if err != nil {
@@ -61,25 +72,39 @@ func setupEmptyDir(volume Volume, remoteUrl string) (grits.BlobAddr, error) {
 	}
 	defer metadataReader.Close()
 
-	metadataUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", metadataReader)
+	// Create PUT request for metadata blob
+	metadataReq, err := http.NewRequest(http.MethodPut, remoteUrl+"/blob/", metadataReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request for metadata upload: %v", err)
+	}
+	metadataReq.Header.Set("Content-Type", "application/octet-stream")
+
+	metadataUploadResp, err := client.Do(metadataReq)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload empty dir metadata blob: %v", err)
 	}
 	defer metadataUploadResp.Body.Close()
 
-	if metadataUploadResp.StatusCode != http.StatusOK {
+	if metadataUploadResp.StatusCode != http.StatusOK && metadataUploadResp.StatusCode != http.StatusNoContent {
 		return "", fmt.Errorf("upload of empty dir metadata blob failed with status: %d", metadataUploadResp.StatusCode)
 	}
 
 	var uploadedMetadataHash grits.BlobAddr
-	if err := json.NewDecoder(metadataUploadResp.Body).Decode(&uploadedMetadataHash); err != nil {
-		return "", fmt.Errorf("failed to decode metadata blob upload response: %v", err)
-	}
 
-	// Verify the hash matches
-	if uploadedMetadataHash != metadataBlob.GetAddress() {
-		return "", fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
-			metadataBlob.GetAddress(), uploadedMetadataHash)
+	// Only decode response if it's 200 OK (not 204 No Content)
+	if metadataUploadResp.StatusCode == http.StatusOK {
+		if err := json.NewDecoder(metadataUploadResp.Body).Decode(&uploadedMetadataHash); err != nil {
+			return "", fmt.Errorf("failed to decode metadata blob upload response: %v", err)
+		}
+
+		// Verify the hash matches
+		if uploadedMetadataHash != metadataBlob.GetAddress() {
+			return "", fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
+				metadataBlob.GetAddress(), uploadedMetadataHash)
+		}
+	} else {
+		// For 204, just use the hash we already know
+		uploadedMetadataHash = metadataBlob.GetAddress()
 	}
 
 	// Return the metadata address to use in link operations
@@ -125,17 +150,12 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 	for i, content := range blobContents {
 		// Upload blob
-		resp, err := http.Post(url+"/upload", "text/plain", bytes.NewBufferString(content))
+		resp, body, err := makeRequest(url, http.MethodPut, "/blob", []byte(content))
 		if err != nil || resp.StatusCode != http.StatusOK {
 			t.Fatalf("Failed to upload blob '%s': %v %d", content, err, resp.StatusCode)
 		}
 
-		addressJson, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatalf("Failed to read response body: %v", err)
-		}
-
-		if err := json.Unmarshal(addressJson, &addresses[i]); err != nil {
+		if err := json.Unmarshal(body, &addresses[i]); err != nil {
 			t.Fatalf("Failed to unmarshal address: %v", err)
 		}
 		resp.Body.Close()
@@ -260,14 +280,13 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	testContent := "Test content"
 
 	// First upload a blob
-	uploadResp, err := http.Post(url+"/upload", "text/plain",
-		bytes.NewBufferString(testContent))
+	uploadResp, body, err := makeRequest(url, http.MethodPut, "/blob", []byte(testContent))
 	if err != nil || uploadResp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to upload blob: %v %d", err, uploadResp.StatusCode)
 	}
 
 	var blobAddr string
-	if err := json.NewDecoder(uploadResp.Body).Decode(&blobAddr); err != nil {
+	if err := json.Unmarshal(body, &blobAddr); err != nil {
 		t.Fatalf("Failed to decode upload response: %v", err)
 	}
 	uploadResp.Body.Close()
@@ -364,41 +383,318 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	}
 }
 
+// Helper function to make HTTP requests
+func makeRequest(baseUrl, method, path string, body []byte) (*http.Response, []byte, error) {
+	log.Printf("Make request: %s %s via %s", baseUrl, path, method)
+	req, err := http.NewRequest(method, baseUrl+path, bytes.NewBuffer(body))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create request: %v", err)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, fmt.Errorf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read response body: %v", err)
+	}
+
+	return resp, respBody, nil
+}
+
+func TestBlobEndpoint(t *testing.T) {
+	// Use the provided helper to set up a test server with HTTP module and local volume
+	server, cleanup := SetupTestServer(t,
+		WithHttpModule(2288),
+		WithLocalVolume("root"))
+	defer cleanup()
+
+	// Start the server and defer stopping it
+	server.Start()
+	defer server.Stop()
+
+	// Give server time to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Base URL for our API requests
+	url := "http://localhost:2288"
+
+	// Test cases
+	t.Run("Upload without specifying hash", func(t *testing.T) {
+		content := []byte("Test content without hash")
+		resp, body, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/", content)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200, got %d: %s", resp.StatusCode, body)
+		}
+
+		var hash string
+		if err := json.Unmarshal(body, &hash); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		if hash == "" {
+			t.Errorf("Expected non-empty hash in response")
+		}
+
+		// Verify content is retrievable
+		getResp, getBody, err := makeRequest(url, http.MethodGet, "/grits/v1/blob/"+hash, nil)
+		if err != nil {
+			t.Fatalf("Get request failed: %v", err)
+		}
+
+		if getResp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200 for GET, got %d", getResp.StatusCode)
+		}
+
+		if !bytes.Equal(getBody, content) {
+			t.Errorf("Retrieved content doesn't match original. Got %s, want %s",
+				string(getBody), string(content))
+		}
+	})
+
+	t.Run("Upload with specified hash", func(t *testing.T) {
+		// First upload to get a valid hash
+		content := []byte("Test content with hash")
+		_, body, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/", content)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+
+		var hash string
+		if err := json.Unmarshal(body, &hash); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		// Now upload again with the hash specified
+		resp2, body2, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/"+hash, content)
+		if err != nil {
+			t.Fatalf("Request with hash failed: %v", err)
+		}
+
+		// Should get status no content since we already have it
+		if resp2.StatusCode != http.StatusNoContent {
+			t.Errorf("Expected status 204, got %d: %s", resp2.StatusCode, body2)
+		}
+	})
+
+	t.Run("Upload existing content with hash", func(t *testing.T) {
+		// Upload content first
+		content := []byte("Test duplicate content")
+		_, body, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/", content)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+
+		var hash string
+		if err := json.Unmarshal(body, &hash); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		// Upload again with hash - should return 204 No Content
+		resp2, _, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/"+hash, content)
+		if err != nil {
+			t.Fatalf("Second request failed: %v", err)
+		}
+
+		if resp2.StatusCode != http.StatusNoContent {
+			t.Errorf("Expected status 204 for duplicate content, got %d", resp2.StatusCode)
+		}
+	})
+
+	t.Run("Upload with mismatched hash", func(t *testing.T) {
+		// First, let's compute hash for two different contents
+		firstContent := []byte("First content")
+		secondContent := []byte("Second content")
+		thirdContent := []byte("Third content")
+
+		// Upload first content to get its hash - just for setup
+		_, body1, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/", firstContent)
+		if err != nil {
+			t.Fatalf("First upload failed: %v", err)
+		}
+		var firstHash string
+		if err := json.Unmarshal(body1, &firstHash); err != nil {
+			t.Fatalf("Failed to decode first response: %v", err)
+		}
+
+		// Upload second content to get its hash - just for setup
+		_, body2, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/", secondContent)
+		if err != nil {
+			t.Fatalf("Second upload failed: %v", err)
+		}
+		var secondHash string
+		if err := json.Unmarshal(body2, &secondHash); err != nil {
+			t.Fatalf("Failed to decode second response: %v", err)
+		}
+
+		// Compute hash for third content (without uploading it)
+		thirdHash := grits.ComputeHash(thirdContent)
+
+		// Now the actual test: upload second content but claiming it has third hash
+		// This should fail with 400 Bad Request
+		resp, _, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/"+thirdHash, secondContent)
+		if err != nil {
+			t.Fatalf("Test request failed: %v", err)
+		}
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("Expected status 400 for hash mismatch, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("Upload with invalid hash format", func(t *testing.T) {
+		content := []byte("Test content")
+		resp, _, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/not-a-valid-hash", content)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("Expected status 400 for invalid hash, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("Fetch existing resource", func(t *testing.T) {
+		content := []byte("Content to fetch")
+		_, body, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/", content)
+		if err != nil {
+			t.Fatalf("Upload failed: %v", err)
+		}
+
+		var hash string
+		if err := json.Unmarshal(body, &hash); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		// Now fetch it
+		resp2, body2, err := makeRequest(url, http.MethodGet, "/grits/v1/blob/"+hash, nil)
+		if err != nil {
+			t.Fatalf("Fetch failed: %v", err)
+		}
+
+		if resp2.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200 for fetch, got %d", resp2.StatusCode)
+		}
+
+		if !bytes.Equal(body2, content) {
+			t.Errorf("Retrieved content doesn't match original")
+		}
+	})
+
+	t.Run("Fetch nonexistent resource", func(t *testing.T) {
+		// Generate a valid hash format but one that shouldn't exist
+		// This assumes the hash format matches what NewBlobAddrFromString accepts
+		nonexistentHash := "abcdef1234567890"
+		resp, _, err := makeRequest(url, http.MethodGet, "/grits/v1/blob/"+nonexistentHash, nil)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+
+		// Could be 400 if the hash format is invalid or 404 if valid but not found
+		// The exact behavior depends on how NewBlobAddrFromString validates hashes
+		expectedStatuses := []int{http.StatusNotFound, http.StatusBadRequest}
+		statusOK := false
+		for _, status := range expectedStatuses {
+			if resp.StatusCode == status {
+				statusOK = true
+				break
+			}
+		}
+
+		if !statusOK {
+			t.Errorf("Expected status in %v for nonexistent resource, got %d",
+				expectedStatuses, resp.StatusCode)
+		}
+	})
+
+	t.Run("Fetch with invalid hash format", func(t *testing.T) {
+		resp, _, err := makeRequest(url, http.MethodGet, "/grits/v1/blob/invalid-hash-format", nil)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("Expected status 400 for invalid hash format, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("HEAD request for existing resource", func(t *testing.T) {
+		// First upload content
+		content := []byte("Content for HEAD test")
+		_, body, err := makeRequest(url, http.MethodPut, "/grits/v1/blob/", content)
+		if err != nil {
+			t.Fatalf("Upload failed: %v", err)
+		}
+
+		var hash string
+		if err := json.Unmarshal(body, &hash); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		// Make HEAD request
+		resp2, _, err := makeRequest(url, http.MethodHead, "/grits/v1/blob/"+hash, nil)
+		if err != nil {
+			t.Fatalf("Failed to create HEAD request: %v", err)
+		}
+
+		if resp2.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200 for HEAD, got %d", resp2.StatusCode)
+		}
+
+		// Check content length is set correctly
+		contentLength := resp2.Header.Get("Content-Length")
+		expectedLength := fmt.Sprintf("%d", len(content))
+		if contentLength != expectedLength {
+			t.Errorf("Expected Content-Length %s, got %s", expectedLength, contentLength)
+		}
+
+		// Body should be empty for HEAD requests
+		headBody, err := io.ReadAll(resp2.Body)
+		if err != nil {
+			t.Fatalf("Failed to read HEAD response body: %v", err)
+		}
+
+		if len(headBody) != 0 {
+			t.Errorf("HEAD request returned non-empty body")
+		}
+	})
+}
+
+// Update the existing upload test to use the new API
 func TestUploadAndDownloadBlob(t *testing.T) {
-	tempDir, err := os.MkdirTemp("", "grits_server")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+	// Use the helper function to set up the server
+	server, cleanup := SetupTestServer(t,
+		WithHttpModule(2287),
+		WithLocalVolume("root"))
+	defer cleanup()
 
-	config := grits.NewConfig(tempDir)
-	srv, err := NewServer(config)
-	if err != nil {
-		t.Fatalf("Failed to create server: %v", err)
-	}
+	server.Start()
+	defer server.Stop()
 
-	readOnly := false
-	httpConfig := &HTTPModuleConfig{
-		ThisHost: "localhost",
-		ThisPort: 2287, // Just for setup, actual port not used with httptest
-		ReadOnly: &readOnly,
-	}
-	url := "http://" + httpConfig.ThisHost + ":" + fmt.Sprintf("%d", httpConfig.ThisPort)
+	// Give server time to start
+	time.Sleep(100 * time.Millisecond)
 
-	httpModule, err := NewHTTPModule(srv, httpConfig)
-	if err != nil {
-		t.Fatalf("can't create http module: %v", err)
-	}
-	srv.AddModule(httpModule)
+	url := "http://localhost:2287"
 
-	srv.Start()
-	defer srv.Stop()
-
-	time.Sleep(1 * time.Second)
-
-	// Test upload
+	// Test upload using the new PUT method
 	testBlobContent := "Test blob content"
-	uploadResp, err := http.Post(url+"/grits/v1/upload", "text/plain", bytes.NewBufferString(testBlobContent))
+
+	req, err := http.NewRequest(http.MethodPut, url+"/grits/v1/blob/",
+		bytes.NewBufferString(testBlobContent))
+	if err != nil {
+		t.Fatalf("Failed to create request: %v", err)
+	}
+
+	client := &http.Client{}
+	uploadResp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to upload blob: %v", err)
 	}
@@ -421,7 +717,6 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 	// Test download using the received blob address
 	downloadURL := url + "/grits/v1/blob/" + blobAddress
 	downloadResp, err := http.Get(downloadURL)
-	log.Printf("Download %s", downloadURL)
 	if err != nil || downloadResp.StatusCode != http.StatusOK {
 		t.Fatalf("Failed to download blob: %v; HTTP status code: %d", err, downloadResp.StatusCode)
 	}
@@ -433,6 +728,7 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 	}
 
 	if string(downloadedContent) != testBlobContent {
-		t.Errorf("Downloaded content does not match uploaded content. Got %s, want %s", string(downloadedContent), testBlobContent)
+		t.Errorf("Downloaded content does not match uploaded content. Got %s, want %s",
+			string(downloadedContent), testBlobContent)
 	}
 }
