@@ -14,50 +14,34 @@ import (
 ////////////////////////
 // BlobAddr
 
-type BlobAddr struct {
-	Hash string // SHA-256 hash as an IPFS CID v0 string
-}
-
-// NewBlobAddr creates a new BlobAddr with a hash string and size
-func NewBlobAddr(hash string) *BlobAddr {
-	return &BlobAddr{Hash: hash}
-}
+type BlobAddr string // SHA-256 hash as an IPFS CID v0 string
+const NilAddr BlobAddr = ""
 
 // NewBlobAddrFromString creates a BlobAddr from a CID v0 string.
-func NewBlobAddrFromString(cidStr string) (*BlobAddr, error) {
+func NewBlobAddrFromString(cidStr string) (BlobAddr, error) {
 	// Verify that the CID starts with 'Qm'
 	if !strings.HasPrefix(cidStr, "Qm") {
-		return nil, fmt.Errorf("invalid CID v0 format - %s", cidStr)
+		return "", fmt.Errorf("invalid CID v0 format - %s", cidStr)
 	}
-	return NewBlobAddr(cidStr), nil
-}
-
-// String returns the string representation of BlobAddr.
-func (ba *BlobAddr) String() string {
-	return ba.Hash
-}
-
-// Equals checks if two BlobAddr instances are equal.
-func (ba *BlobAddr) Equals(other *BlobAddr) bool {
-	return ba.Hash == other.Hash
+	return BlobAddr(cidStr), nil
 }
 
 // computeBlobAddr computes the SHA-256 hash, size, and file extension for an existing file,
 // and returns a new BlobAddr instance based on these parameters.
-func ComputeBlobAddr(path string) (*BlobAddr, error) {
+func ComputeBlobAddr(path string) (BlobAddr, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer file.Close()
 
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	cid := ComputeHash(data)
-	return NewBlobAddr(cid), nil
+	return BlobAddr(cid), nil
 }
 
 ////////////////////////
@@ -79,13 +63,11 @@ type TypedFileAddr struct {
 }
 
 // NewTypedFileAddr creates a new TypedFileAddr.
-func NewTypedFileAddr(hash string, size int64, t AddrType) *TypedFileAddr {
+func NewTypedFileAddr(hash BlobAddr, size int64, t AddrType) *TypedFileAddr {
 	return &TypedFileAddr{
-		BlobAddr: BlobAddr{
-			Hash: hash,
-		},
-		Size: size,
-		Type: t,
+		BlobAddr: hash,
+		Size:     size,
+		Type:     t,
 	}
 }
 
@@ -95,7 +77,7 @@ func (tfa *TypedFileAddr) String() string {
 	if tfa.Type == Tree {
 		typePrefix = "tree"
 	}
-	return fmt.Sprintf("%s:%s-%d", typePrefix, tfa.BlobAddr.Hash, tfa.Size)
+	return fmt.Sprintf("%s:%s-%d", typePrefix, tfa.BlobAddr, tfa.Size)
 }
 
 // NewTypedFileAddrFromString parses a string into a TypedFileAddr.
@@ -132,11 +114,9 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 	}
 
 	return &TypedFileAddr{
-		BlobAddr: BlobAddr{
-			Hash: hash,
-		},
-		Size: size,
-		Type: addrType,
+		BlobAddr: BlobAddr(hash),
+		Size:     size,
+		Type:     addrType,
 	}, nil
 }
 
@@ -144,7 +124,7 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 // Blob storage interfaces
 
 type BlobStore interface {
-	ReadFile(blobAddr *BlobAddr) (CachedFile, error)
+	ReadFile(blobAddr BlobAddr) (CachedFile, error)
 	AddLocalFile(srcPath string) (CachedFile, error)
 	AddReader(file io.Reader) (CachedFile, error)
 	AddDataBlock(data []byte) (CachedFile, error)
@@ -154,7 +134,7 @@ type BlobStore interface {
 
 // CachedFile defines the interface for interacting with a cached file.
 type CachedFile interface {
-	GetAddress() *BlobAddr
+	GetAddress() BlobAddr
 	GetSize() int64
 
 	Touch()

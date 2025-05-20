@@ -319,7 +319,7 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 		if srv.serviceWorkerModule != nil {
 			// Get the hash from the service worker module's volume
 			clientDirHash := srv.serviceWorkerModule.getClientDirHash()
-			w.Header().Set("X-Grits-Service-Worker-Hash", clientDirHash)
+			w.Header().Set("X-Grits-Service-Worker-Hash", string(clientDirHash))
 		}
 
 		// Wrap the response writer to capture when the handler finishes
@@ -496,7 +496,7 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	defer reader.Close()
 
 	// Serve the content
-	http.ServeContent(w, r, filepath.Base(fileAddr.Hash), time.Now(), reader)
+	http.ServeContent(w, r, filepath.Base(string(fileAddr)), time.Now(), reader)
 	cachedFile.Touch()
 }
 
@@ -564,14 +564,14 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Minute)
 		// Then release it, allowing GC to potentially clean it up if no other references exist
 		file.Release()
-		log.Printf("Released temporary reference to %s", file.GetAddress().Hash)
+		log.Printf("Released temporary reference to %s", file.GetAddress())
 	}(cachedFile)
 
 	// Log that we're holding a temporary reference
-	log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress().Hash)
+	log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress())
 
 	// Respond with the address of the new blob
-	addrStr := cachedFile.GetAddress().String()
+	addrStr := cachedFile.GetAddress()
 	w.WriteHeader(http.StatusOK)
 
 	json.NewEncoder(w).Encode(addrStr)
@@ -611,8 +611,8 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	response := make([][]any, len(pathNodePairs))
 	for i, pair := range pathNodePairs {
 		node := pair.Node
-		metadataHash := node.MetadataBlob().GetAddress().Hash
-		contentHash := node.ExportedBlob().GetAddress().Hash
+		metadataHash := node.MetadataBlob().GetAddress()
+		contentHash := node.ExportedBlob().GetAddress()
 		contentSize := node.ExportedBlob().GetSize()
 
 		response[i] = []any{
@@ -641,8 +641,8 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 }
 
 type LinkData struct {
-	Path         string `json:"path"`
-	MetadataAddr string `json:"addr"`
+	Path         string         `json:"path"`
+	MetadataAddr grits.BlobAddr `json:"addr"`
 }
 
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
@@ -685,7 +685,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	for _, linkData := range allLinkData {
 		// Perform link using LinkByMetadata
 		log.Printf("Perform link: %s to %s\n", linkData.Path, linkData.MetadataAddr)
-		if err := volume.LinkByMetadata(linkData.Path, &grits.BlobAddr{Hash: linkData.MetadataAddr}); err != nil {
+		if err := volume.LinkByMetadata(linkData.Path, linkData.MetadataAddr); err != nil {
 			log.Printf("Link failed: %v", err)
 			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 			return
@@ -719,8 +719,8 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	response := make([][]any, len(pathNodePairs))
 	for i, pair := range pathNodePairs {
 		node := pair.Node
-		metadataHash := node.MetadataBlob().GetAddress().Hash
-		contentHash := node.ExportedBlob().GetAddress().Hash
+		metadataHash := node.MetadataBlob().GetAddress()
+		contentHash := node.ExportedBlob().GetAddress()
 		contentSize := node.ExportedBlob().GetSize()
 
 		response[i] = []any{
@@ -890,8 +890,8 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 
 		pathMetadata = append(pathMetadata, map[string]any{
 			"path":         pathComponent,
-			"metadataHash": pathNode.Node.MetadataBlob().GetAddress().Hash,
-			"contentHash":  pathNode.Node.ExportedBlob().GetAddress().Hash,
+			"metadataHash": pathNode.Node.MetadataBlob().GetAddress(),
+			"contentHash":  pathNode.Node.ExportedBlob().GetAddress(),
 			"contentSize":  pathNode.Node.ExportedBlob().GetSize(),
 		})
 	}
@@ -906,7 +906,7 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 	}
 
 	// Use the address hash as the ETag
-	etag := fmt.Sprintf("\"%s\"", node.MetadataBlob().GetAddress().Hash)
+	etag := fmt.Sprintf("\"%s\"", node.MetadataBlob().GetAddress())
 	w.Header().Set("ETag", etag)
 
 	// Tell browsers to revalidate every time
@@ -984,7 +984,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 
 	// Link using the metadata address
 	log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
-	err = volume.LinkByMetadata(path, &grits.BlobAddr{Hash: metadataNode.MetadataBlob().GetAddress().Hash})
+	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
 		return
@@ -1002,7 +1002,7 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 		return
 	}
 
-	err := volume.LinkByMetadata(path, nil)
+	err := volume.LinkByMetadata(path, "")
 	if err != nil {
 		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
 		return
@@ -1018,40 +1018,40 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 
 // CreateAndUploadMetadata creates a metadata blob for a content blob and uploads it to the server
 // Returns the metadata blob address
-func CreateAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUrl string) (*grits.BlobAddr, error) {
+func CreateAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUrl string) (grits.BlobAddr, error) {
 	contentNode, err := volume.CreateBlobNode(contentCf.GetAddress(), contentCf.GetSize())
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer contentNode.Release()
 
 	// Upload the metadata blob to the server
 	metadataReader, err := contentNode.MetadataBlob().Reader()
 	if err != nil {
-		return nil, fmt.Errorf("couldn't create reader for metadata blob: %v", err)
+		return "", fmt.Errorf("couldn't create reader for metadata blob: %v", err)
 	}
 	defer metadataReader.Close()
 
 	metadataUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", metadataReader)
 	if err != nil {
-		return nil, fmt.Errorf("failed to upload metadata blob: %v", err)
+		return "", fmt.Errorf("failed to upload metadata blob: %v", err)
 	}
 	defer metadataUploadResp.Body.Close()
 
 	if metadataUploadResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upload of metadata blob failed with status: %d", metadataUploadResp.StatusCode)
+		return "", fmt.Errorf("upload of metadata blob failed with status: %d", metadataUploadResp.StatusCode)
 	}
 
-	var uploadedMetadataHash string
+	var uploadedMetadataHash grits.BlobAddr
 	if err := json.NewDecoder(metadataUploadResp.Body).Decode(&uploadedMetadataHash); err != nil {
-		return nil, fmt.Errorf("failed to decode metadata blob upload response: %v", err)
+		return "", fmt.Errorf("failed to decode metadata blob upload response: %v", err)
 	}
 
 	// Verify the hash matches
-	if uploadedMetadataHash != contentNode.MetadataBlob().GetAddress().Hash {
-		return nil, fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
-			contentNode.MetadataBlob().GetAddress().Hash, uploadedMetadataHash)
+	if uploadedMetadataHash != contentNode.MetadataBlob().GetAddress() {
+		return "", fmt.Errorf("metadata blob hash mismatch. Expected: %s, Got: %s",
+			contentNode.MetadataBlob().GetAddress(), uploadedMetadataHash)
 	}
 
-	return &grits.BlobAddr{Hash: uploadedMetadataHash}, nil
+	return uploadedMetadataHash, nil
 }

@@ -21,7 +21,7 @@ import (
 
 type LocalBlobStore struct {
 	config     *Config
-	files      map[string]*LocalCachedFile
+	files      map[BlobAddr]*LocalCachedFile
 	mtx        sync.RWMutex
 	storageDir string
 	lock       *FileLock
@@ -43,7 +43,7 @@ func NewLocalBlobStore(config *Config) *LocalBlobStore {
 
 	bs := &LocalBlobStore{
 		config: config,
-		files:  make(map[string]*LocalCachedFile),
+		files:  make(map[BlobAddr]*LocalCachedFile),
 		lock:   lock,
 	}
 
@@ -102,7 +102,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 					return err // continue scanning other files even if one fails
 				}
 
-				if computedBlobAddr.String() != relativePath {
+				if string(computedBlobAddr) != relativePath {
 					return fmt.Errorf("failure to verify %s", path)
 				}
 			}
@@ -121,7 +121,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 			}
 
 			// Create a LocalCachedFile object and add it to the map
-			bs.files[blobAddr.Hash] = &LocalCachedFile{
+			bs.files[blobAddr] = &LocalCachedFile{
 				Path:        path,
 				Size:        stat.Size,
 				RefCount:    0, // Initially, no references to the file
@@ -135,13 +135,13 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 	})
 }
 
-func (bs *LocalBlobStore) ReadFile(blobAddr *BlobAddr) (CachedFile, error) {
+func (bs *LocalBlobStore) ReadFile(blobAddr BlobAddr) (CachedFile, error) {
 	bs.mtx.RLock()
 	defer bs.mtx.RUnlock()
 
-	cachedFile, ok := bs.files[blobAddr.Hash]
+	cachedFile, ok := bs.files[blobAddr]
 	if !ok {
-		return nil, fmt.Errorf("file with address %s not found in cache", blobAddr.String())
+		return nil, fmt.Errorf("file with address %s not found in cache", blobAddr)
 	}
 
 	// Increment RefCount to reserve the file and protect it from cleanup
@@ -189,10 +189,10 @@ func (bs *LocalBlobStore) AddReader(reader io.Reader) (CachedFile, error) {
 	tempFile.Close()
 
 	// Create the blob address
-	blobAddr := NewBlobAddr(hash)
+	blobAddr := BlobAddr(hash)
 
 	// Check if we already have this blob
-	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
+	if cachedFile, exists := bs.files[blobAddr]; exists {
 		// We already have this blob, increment ref count and clean up temp file
 		os.Remove(tempPath)
 		cachedFile.RefCount++
@@ -201,7 +201,7 @@ func (bs *LocalBlobStore) AddReader(reader io.Reader) (CachedFile, error) {
 	}
 
 	// We don't have this blob, move temp file to final location
-	destPath := filepath.Join(bs.storageDir, blobAddr.String())
+	destPath := filepath.Join(bs.storageDir, string(blobAddr))
 
 	// Ensure the directory exists
 	destDir := filepath.Dir(destPath)
@@ -228,7 +228,7 @@ func (bs *LocalBlobStore) AddReader(reader io.Reader) (CachedFile, error) {
 	}
 
 	// Add to the files map
-	bs.files[blobAddr.Hash] = cachedFile
+	bs.files[blobAddr] = cachedFile
 
 	return cachedFile, nil
 }
@@ -275,17 +275,17 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	blobAddr := NewBlobAddr(hash)
+	blobAddr := BlobAddr(hash)
 
 	// Check if the data block already exists in the store
-	if cachedFile, exists := bs.files[blobAddr.Hash]; exists {
+	if cachedFile, exists := bs.files[blobAddr]; exists {
 		// Increment RefCount since the file is being accessed
 		cachedFile.RefCount++
 		return cachedFile, nil
 	}
 
 	// Since the data block does not exist, store it
-	destPath := filepath.Join(bs.storageDir, blobAddr.String())
+	destPath := filepath.Join(bs.storageDir, string(blobAddr))
 
 	if err := os.WriteFile(destPath, data, 0644); err != nil {
 		return nil, fmt.Errorf("error writing data block to store: %v", err)
@@ -302,7 +302,7 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 	}
 
 	// Add the new data block to the files map
-	bs.files[blobAddr.Hash] = cachedFile
+	bs.files[blobAddr] = cachedFile
 
 	return cachedFile, nil
 }
@@ -321,7 +321,7 @@ func (bs *LocalBlobStore) Take(cachedFile *LocalCachedFile) {
 	// Log the operation
 	if DebugRefCounts {
 		log.Printf("TAKE: %s (count: %d)",
-			cachedFile.Address.Hash,
+			cachedFile.Address,
 			cachedFile.RefCount)
 		PrintStack()
 	}
@@ -336,7 +336,7 @@ func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 
 	if DebugRefCounts {
 		log.Printf("RELEASE: %s (count: %d)",
-			cachedFile.Address.Hash,
+			cachedFile.Address,
 			cachedFile.RefCount)
 		PrintStack()
 	}
@@ -350,7 +350,7 @@ func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 	// Delete file, if we're done with it
 	if !bs.config.DelayedEviction && cachedFile.RefCount == 0 {
 		// Remove from the files map
-		delete(bs.files, cachedFile.Address.Hash)
+		delete(bs.files, cachedFile.Address)
 
 		// Delete the file from disk (without the lock, in case of slowness)
 		bs.mtx.Unlock()
@@ -481,7 +481,7 @@ func (bs *LocalBlobStore) EvictOldFiles() {
 			evictedBytes += file.Size
 		}
 
-		delete(bs.files, file.Address.Hash)
+		delete(bs.files, file.Address)
 		evictedCount++
 
 		err := os.Remove(file.Path)
@@ -499,7 +499,7 @@ func (bs *LocalBlobStore) EvictOldFiles() {
 type LocalCachedFile struct {
 	Path        string
 	RefCount    int
-	Address     *BlobAddr
+	Address     BlobAddr
 	Size        int64
 	LastTouched time.Time
 	IsHardLink  bool
@@ -509,7 +509,7 @@ type LocalCachedFile struct {
 // Ensure that LocalCachedFile implements CachedFile
 var _ CachedFile = &LocalCachedFile{}
 
-func (c *LocalCachedFile) GetAddress() *BlobAddr {
+func (c *LocalCachedFile) GetAddress() BlobAddr {
 	return c.Address
 }
 
@@ -572,17 +572,17 @@ func (bs *LocalBlobStore) DumpStats() {
 	// Sort files by hash for consistent output
 	hashes := make([]string, 0, len(bs.files))
 	for hash := range bs.files {
-		hashes = append(hashes, hash)
+		hashes = append(hashes, string(hash))
 	}
 	sort.Strings(hashes)
 
 	for _, hash := range hashes {
-		file := bs.files[hash]
+		file := bs.files[BlobAddr(hash)]
 		if file.RefCount <= 0 {
 			continue
 		}
 
-		log.Printf("File: %s", file.Address.String())
+		log.Printf("File: %s", file.Address)
 		log.Printf("  Size: %d bytes", file.Size)
 		log.Printf("  RefCount: %d", file.RefCount)
 		log.Printf("  Path: %s", file.Path)

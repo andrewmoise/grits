@@ -420,12 +420,12 @@ func TestConcurrentAccess(t *testing.T) {
 }
 
 // Helper to find a FileNode by its content blob address
-func (ns *NameStore) lookupNodeByContent(contentHash string) FileNode {
+func (ns *NameStore) lookupNodeByContent(contentHash BlobAddr) FileNode {
 	ns.mtx.RLock()
 	defer ns.mtx.RUnlock()
 
 	for _, node := range ns.fileCache {
-		if node != nil && node.ExportedBlob().GetAddress().String() == contentHash {
+		if node != nil && node.ExportedBlob().GetAddress() == contentHash {
 			return node
 		}
 	}
@@ -453,7 +453,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// Create empty directory node
-	emptyDirMap := make(map[string]*BlobAddr)
+	emptyDirMap := make(map[string]BlobAddr)
 	emptyDirNode, err := ns.CreateTreeNode(emptyDirMap)
 	if err != nil {
 		t.Fatalf("Failed to create empty tree node: %v", err)
@@ -462,7 +462,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	defer emptyDirNode.Release()
 
 	emptyTfa := &TypedFileAddr{
-		BlobAddr: *emptyDirNode.blob.GetAddress(),
+		BlobAddr: emptyDirNode.blob.GetAddress(),
 		Type:     Tree,
 	}
 
@@ -530,7 +530,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		}
 
 		// Only files 0-5 should have FileNodes
-		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		fn := ns.lookupNodeByContent(cf.GetAddress())
 		if i <= 5 {
 			// Should have FileNode with ref count 1
 			if fn == nil {
@@ -576,12 +576,12 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// 3. Unlink one and five
-	err = ns.linkBlob(fileNames[1], nil, allFiles[1].GetSize())
+	err = ns.linkBlob(fileNames[1], "", allFiles[1].GetSize())
 	if err != nil {
 		t.Fatalf("Failed to unlink one: %v", err)
 	}
 
-	err = ns.linkBlob(fileNames[5], nil, allFiles[5].GetSize())
+	err = ns.linkBlob(fileNames[5], "", allFiles[5].GetSize())
 	if err != nil {
 		t.Fatalf("Failed to unlink five: %v", err)
 	}
@@ -615,7 +615,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		}
 
 		// Check for FileNode presence/absence
-		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		fn := ns.lookupNodeByContent(cf.GetAddress())
 
 		// Shouldn't have FileNodes for stuff that was never added
 		if i >= 6 || expectedContentRefCount == 1 {
@@ -683,11 +683,11 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			t.Fatalf("After unlinking someplace, expected content reference count of %d for %d, got %d", expectedRefCount, i, cf.RefCount)
 		}
 
-		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		fn := ns.lookupNodeByContent(cf.GetAddress())
 		if fn != nil {
 			bn, ok := fn.(*BlobNode)
 			if !ok {
-				t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress().String())
+				t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress())
 				continue
 			}
 			metadataRef := bn.metadataBlob.(*LocalCachedFile)
@@ -704,8 +704,8 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	ns.DumpFileCache()
 
 	newRoot := make(map[string]string)
-	log.Printf("Old root metadata is: %s", ns.root.MetadataBlob().GetAddress().String())
-	newRoot["tree"] = ns.root.MetadataBlob().GetAddress().String()
+	log.Printf("Old root metadata is: %s", ns.root.MetadataBlob().GetAddress())
+	newRoot["tree"] = string(ns.root.MetadataBlob().GetAddress())
 
 	newRootJson, err := json.Marshal(newRoot)
 	if err != nil {
@@ -717,7 +717,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 	}
 
-	tfa := NewTypedFileAddr(rootContent.GetAddress().Hash, rootContent.GetSize(), Tree)
+	tfa := NewTypedFileAddr(rootContent.GetAddress(), rootContent.GetSize(), Tree)
 
 	ns.Link("", tfa)
 	rootContent.Release()
@@ -730,8 +730,8 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Fatalf("Failed to lookup tree/zero: %v", err)
 	}
 
-	if cf.GetAddress().Hash != allFiles[0].GetAddress().Hash {
-		t.Fatalf("Expected tree/zero to point to %s, got %s", allFiles[0].GetAddress().Hash, cf.GetAddress().Hash)
+	if cf.GetAddress() != allFiles[0].GetAddress() {
+		t.Fatalf("Expected tree/zero to point to %s, got %s", allFiles[0].GetAddress(), cf.GetAddress())
 	}
 	cf.Release()
 
@@ -751,14 +751,14 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	for i := 6; i < 10; i++ {
 		newRoot := make(map[string]string)
-		newRoot["prev"] = ns.root.MetadataBlob().GetAddress().String()
+		newRoot["prev"] = string(ns.root.MetadataBlob().GetAddress())
 
 		treeNode, err := ns.LookupNode("tree")
 		if err != nil {
 			t.Fatalf("Failed to lookup tree: %v", err)
 		}
 
-		newRoot["tree"] = treeNode.MetadataBlob().GetAddress().String()
+		newRoot["tree"] = string(treeNode.MetadataBlob().GetAddress())
 		treeNode.Release()
 
 		newRootJson, err = json.Marshal(newRoot)
@@ -810,16 +810,16 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	expectedRefCounts := []int{1, 0, 0, 1, 1, 0, 1, 1, 1, 1}
 
 	for i, cf := range allFiles {
-		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		fn := ns.lookupNodeByContent(cf.GetAddress())
 		if fn == nil && expectedRefCounts[i] == 0 {
 			continue
 		} else if fn != nil && expectedRefCounts[i] == 0 {
-			t.Fatalf("FileNode for %s shouldn't be in cache", cf.GetAddress().String())
+			t.Fatalf("FileNode for %s shouldn't be in cache", cf.GetAddress())
 		}
 
 		blobNode, isBlobNode := fn.(*BlobNode)
 		if !isBlobNode {
-			t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress().String())
+			t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress())
 			continue
 		}
 
@@ -833,7 +833,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 			fileName = fmt.Sprintf("%d", i)
 		}
 		log.Printf("File %d - %s: expected %d, got node:%d content:%d metadata:%d (hash is %s)",
-			i, fileName, expectedRefCounts[i], actualRefCount, cf.RefCount, metadataRef.RefCount, cf.GetAddress().Hash)
+			i, fileName, expectedRefCounts[i], actualRefCount, cf.RefCount, metadataRef.RefCount, cf.GetAddress())
 
 		if actualRefCount != expectedRefCounts[i] {
 			t.Fatalf("After big revision setup, expected reference count of %d for file %d, got %d",
@@ -872,11 +872,11 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 				expectedRefCount, i, cf.RefCount)
 		}
 
-		fn := ns.lookupNodeByContent(cf.GetAddress().String())
+		fn := ns.lookupNodeByContent(cf.GetAddress())
 		if fn != nil {
 			bn, ok := fn.(*BlobNode)
 			if !ok {
-				t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress().String())
+				t.Fatalf("FileNode for %s is not a BlobNode", cf.GetAddress())
 				continue
 			}
 			metadataRef := bn.metadataBlob.(*LocalCachedFile)

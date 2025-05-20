@@ -302,7 +302,7 @@ func (swm *ServiceWorkerModule) updateServiceWorkerConfig() error {
 	}
 	defer configMetadataNode.Release()
 
-	err = swm.clientVolume.LinkByMetadata("serviceworker/grits-serviceworker-config.json", &grits.BlobAddr{Hash: configMetadataNode.Metadata().ContentHash})
+	err = swm.clientVolume.LinkByMetadata("serviceworker/grits-serviceworker-config.json", configMetadataNode.Metadata().ContentHash)
 	if err != nil {
 		return err
 	}
@@ -312,17 +312,17 @@ func (swm *ServiceWorkerModule) updateServiceWorkerConfig() error {
 	return nil
 }
 
-func (swm *ServiceWorkerModule) getClientDirHash() string {
+func (swm *ServiceWorkerModule) getClientDirHash() grits.BlobAddr {
 	clientDirNode, err := swm.clientVolume.LookupNode("serviceworker")
 	if err != nil {
-		return fmt.Sprintf("(error: %v)", err)
+		return grits.BlobAddr(fmt.Sprintf("(error: %v)", err)) // Er... bad idea...
 	}
 	if clientDirNode == nil {
 		return "(nil)"
 	}
 	defer clientDirNode.Release()
 
-	return clientDirNode.Address().Hash
+	return clientDirNode.Address().BlobAddr
 }
 
 func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Request) {
@@ -376,9 +376,9 @@ func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Req
 
 	// Perform the substitutions
 	templateStr := string(templateData)
-	templateStr = strings.Replace(templateStr, "{{SW_DIR_HASH}}", swDirHash, -1)
-	templateStr = strings.Replace(templateStr, "{{SW_SCRIPT_HASH}}", swNode.Metadata().ContentHash, -1)
-	templateStr = strings.Replace(templateStr, "{{SW_CONFIG_HASH}}", configNode.Metadata().ContentHash, -1)
+	templateStr = strings.Replace(templateStr, "{{SW_DIR_HASH}}", string(swDirHash), -1)
+	templateStr = strings.Replace(templateStr, "{{SW_SCRIPT_HASH}}", string(swNode.Metadata().ContentHash), -1)
+	templateStr = strings.Replace(templateStr, "{{SW_CONFIG_HASH}}", string(configNode.Metadata().ContentHash), -1)
 
 	// Send the processed template
 	fmt.Fprint(w, templateStr)
@@ -407,7 +407,7 @@ func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Reque
 
 	//log.Printf("  validated")
 
-	//if currentDir.Hash != requestedHash {
+	//if currentDir != requestedHash {
 	//	http.Error(w, "Hash mismatch - config has been updated", http.StatusBadRequest)
 	//	return
 	//}

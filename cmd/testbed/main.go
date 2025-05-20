@@ -335,7 +335,7 @@ func testOriginMirrorSystem(originServer *gritsd.Server, originPort int, originH
 	linkData := []gritsd.LinkData{
 		{
 			Path:         "test-blob",
-			MetadataAddr: metadataAddr.Hash,
+			MetadataAddr: metadataAddr,
 		},
 	}
 
