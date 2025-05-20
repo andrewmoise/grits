@@ -287,3 +287,46 @@ func TestLocalVolumeOperations(t *testing.T) {
 			testContent, string(childBytes))
 	}
 }
+
+func TestSerialNumberPersistence(t *testing.T) {
+	// Setup a test environment
+	server, cleanup := SetupTestServer(t)
+	defer cleanup()
+
+	// Create and populate a volume
+	vol1, _ := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false)
+
+	// Make changes to increment serial number
+	content, _ := server.BlobStore.AddDataBlock([]byte("test content"))
+	defer content.Release()
+
+	node, _ := vol1.CreateBlobNode(content.GetAddress(), content.GetSize())
+	defer node.Release()
+
+	// Link and track the resulting serial number
+	vol1.LinkByMetadata("file1.txt", node.MetadataBlob().GetAddress())
+	vol1.LinkByMetadata("file2.txt", node.MetadataBlob().GetAddress())
+	expectedSerial := vol1.ns.GetSerialNumber()
+
+	if expectedSerial != 2 {
+		t.Fatalf("Expected serial number 2, got %d", expectedSerial)
+	}
+
+	// Force a save
+	vol1.save()
+
+	// Create a new volume that will load the saved state
+	vol2, _ := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false)
+
+	// Verify serial number was preserved
+	if vol2.ns.GetSerialNumber() != expectedSerial {
+		t.Errorf("Serial number not preserved: expected %d, got %d",
+			expectedSerial, vol2.ns.GetSerialNumber())
+	}
+
+	// Make another change and confirm serial number increments
+	vol2.LinkByMetadata("file3.txt", node.MetadataBlob().GetAddress())
+	if vol2.ns.GetSerialNumber() != expectedSerial+1 {
+		t.Errorf("Serial number did not increment correctly after load")
+	}
+}
