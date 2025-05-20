@@ -235,13 +235,13 @@ func (mm *MirrorModule) sendHeartbeat() error {
 }
 
 // fetchBlobFromUpstream retrieves a blob from the upstream server
-func (mm *MirrorModule) fetchBlobFromUpstream(addr *grits.BlobAddr) (grits.CachedFile, error) {
-	log.Printf("Fetching blob %s from upstream %s", addr.Hash, mm.Config.RemoteHost)
+func (mm *MirrorModule) fetchBlobFromUpstream(addr grits.BlobAddr) (grits.CachedFile, error) {
+	log.Printf("Fetching blob %s from upstream %s", addr, mm.Config.RemoteHost)
 
 	upstreamURL := fmt.Sprintf("%s://%s/grits/v1/blob/%s",
 		mm.Config.Protocol,
 		mm.Config.RemoteHost,
-		addr.String())
+		addr)
 
 	log.Printf("Fetch: %s", upstreamURL)
 
@@ -288,15 +288,15 @@ func (mm *MirrorModule) fetchBlobFromUpstream(addr *grits.BlobAddr) (grits.Cache
 	}
 
 	// Verify the hash matches what we expected
-	if cachedFile.GetAddress().Hash != addr.Hash {
+	if cachedFile.GetAddress() != addr {
 		log.Printf("  hash mismatch!")
-		log.Printf("    %s", cachedFile.GetAddress().Hash)
-		log.Printf("    %s", addr.Hash)
+		log.Printf("    %s", cachedFile.GetAddress())
+		log.Printf("    %s", addr)
 		cachedFile.Release() // Release our reference before returning error
 		return nil, fmt.Errorf("hash mismatch: expected %s, got %s",
-			addr.Hash, cachedFile.GetAddress().Hash)
+			addr, cachedFile.GetAddress())
 	}
 
-	log.Printf("Successfully mirrored blob %s from upstream", addr.Hash)
+	log.Printf("Successfully mirrored blob %s from upstream", addr)
 	return cachedFile, nil
 }

@@ -841,7 +841,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 	}
 	defer contentBlob.Release()
 
-	gn.tmpMetadata.ContentHash = contentBlob.GetAddress().String()
+	gn.tmpMetadata.ContentHash = contentBlob.GetAddress()
 	gn.tmpMetadata.Size = contentBlob.GetSize()
 
 	if grits.DebugFuse {
@@ -856,7 +856,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 	defer metadataBlob.Release()
 
 	if grits.DebugFuse {
-		log.Printf("Ready to make request (metadata addr is %s", metadataBlob.GetAddress().String())
+		log.Printf("Ready to make request (metadata addr is %s", metadataBlob.GetAddress())
 	}
 
 	req := &grits.LinkRequest{
@@ -1212,7 +1212,7 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 	req := &grits.LinkRequest{
 		Path:     fullPath,
 		NewAddr:  emptyNode.MetadataBlob().GetAddress(),
-		PrevAddr: nil,
+		PrevAddr: grits.NilAddr,
 		Assert:   grits.AssertPrevValueMatches,
 	}
 
@@ -1253,7 +1253,7 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	// Create the LinkRequest with the required details
 	req := &grits.LinkRequest{
 		Path:    fullPath,
-		NewAddr: nil,
+		NewAddr: grits.NilAddr,
 		Assert:  grits.AssertIsNonEmpty | grits.AssertIsBlob,
 	}
 
@@ -1294,7 +1294,7 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	// Create the LinkRequest with the required details
 	req := &grits.LinkRequest{
 		Path:     fullPath,
-		NewAddr:  nil,
+		NewAddr:  grits.NilAddr,
 		PrevAddr: dirNode.MetadataBlob().GetAddress(),
 		Assert:   grits.AssertIsTree | grits.AssertPrevValueMatches,
 	}
@@ -1347,7 +1347,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		dirtyNode.mtx.Lock()
 		dirtyNode.path = fullNewPath
 
-		err := gn.module.volume.LinkByMetadata(fullPath, nil)
+		err := gn.module.volume.LinkByMetadata(fullPath, grits.NilAddr)
 		if grits.IsNotDir(err) || grits.IsNotExist(err) {
 			// Having an error is actually fine here; we don't care too much about the source
 			// as it may not exist yet in the merkle tree. As long as it's not some internal
@@ -1387,7 +1387,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 
 		oldNameReq := &grits.LinkRequest{
 			Path:     fullPath,
-			NewAddr:  nil,
+			NewAddr:  grits.NilAddr,
 			PrevAddr: prevNode.MetadataBlob().GetAddress(),
 			Assert:   grits.AssertPrevValueMatches,
 		}

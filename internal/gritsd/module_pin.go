@@ -42,7 +42,7 @@ func (pm *PinModule) Stop() error {
 	log.Printf("PinModule: Stopping and releasing all pinned nodes")
 
 	for metadataHash := range pm.refCount {
-		node, err := pm.Volume.GetFileNode(grits.NewBlobAddr(metadataHash))
+		node, err := pm.Volume.GetFileNode(grits.BlobAddr(metadataHash))
 		if err != nil {
 			log.Printf("Error getting node for cleanup: %v", err)
 			continue // Skip but continue with others

@@ -24,7 +24,7 @@ func TestBlobCache_Get_CacheHit(t *testing.T) {
 
 	// Manually add to cache
 	cache.mutex.Lock()
-	cache.cachedBlobs[addr.Hash] = &CacheEntry{
+	cache.cachedBlobs[addr] = &CacheEntry{
 		file:         cachedFile,
 		lastAccessed: time.Now(),
 	}
@@ -35,8 +35,8 @@ func TestBlobCache_Get_CacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get from cache: %v", err)
 	}
-	if result.GetAddress().Hash != addr.Hash {
-		t.Errorf("Got wrong blob, expected %s, got %s", addr.Hash, result.GetAddress().Hash)
+	if result.GetAddress() != addr {
+		t.Errorf("Got wrong blob, expected %s, got %s", addr, result.GetAddress())
 	}
 
 	// Check refcount increased
@@ -55,13 +55,13 @@ func TestBlobCache_Get_FetchNew(t *testing.T) {
 
 	// Create test content we'll "fetch"
 	content := []byte("fetched content")
-	fetchedAddr := NewBlobAddr(ComputeHash(content))
+	fetchedAddr := BlobAddr(ComputeHash(content))
 
 	// Track if fetch was called
 	fetchCalled := false
 
 	// Mock fetch function
-	mockFetch := func(addr *BlobAddr) (CachedFile, error) {
+	mockFetch := func(addr BlobAddr) (CachedFile, error) {
 		fetchCalled = true
 		// Actually add to blobstore
 		return bs.AddDataBlock(content)
@@ -82,18 +82,18 @@ func TestBlobCache_Get_FetchNew(t *testing.T) {
 	}
 
 	// Verify correct blob was fetched
-	if result.GetAddress().Hash != fetchedAddr.Hash {
-		t.Errorf("Got wrong blob, expected %s, got %s", fetchedAddr.Hash, result.GetAddress().Hash)
+	if result.GetAddress() != fetchedAddr {
+		t.Errorf("Got wrong blob, expected %s, got %s", fetchedAddr, result.GetAddress())
 	}
 
 	// Check blob is now in cache
 	cache.mutex.Lock()
-	entry, exists := cache.cachedBlobs[fetchedAddr.Hash]
+	entry, exists := cache.cachedBlobs[fetchedAddr]
 	cache.mutex.Unlock()
 
 	if !exists {
 		t.Errorf("Blob not added to cache after fetch")
-	} else if entry.file.GetAddress().Hash != fetchedAddr.Hash {
+	} else if entry.file.GetAddress() != fetchedAddr {
 		t.Errorf("Wrong blob added to cache")
 	}
 
@@ -132,7 +132,7 @@ func TestBlobCache_Cleanup(t *testing.T) {
 
 		// Manual addition to cache
 		cache.mutex.Lock()
-		cache.cachedBlobs[addr.Hash] = &CacheEntry{
+		cache.cachedBlobs[addr] = &CacheEntry{
 			file:         blobs[i].file,
 			lastAccessed: time.Now(),
 		}
@@ -160,12 +160,12 @@ func TestBlobCache_Cleanup(t *testing.T) {
 	defer cache.mutex.Unlock()
 
 	// The first blob should be evicted since it's the oldest
-	if _, exists := cache.cachedBlobs[blobs[0].file.GetAddress().Hash]; exists {
+	if _, exists := cache.cachedBlobs[blobs[0].file.GetAddress()]; exists {
 		t.Errorf("Expected oldest blob to be evicted, but it's still in cache")
 	}
 
 	// The newest blob should still be in cache
-	if _, exists := cache.cachedBlobs[blobs[2].file.GetAddress().Hash]; !exists {
+	if _, exists := cache.cachedBlobs[blobs[2].file.GetAddress()]; !exists {
 		t.Errorf("Expected newest blob to stay in cache, but it was evicted")
 	}
 
@@ -183,7 +183,7 @@ func TestBlobCache_ConcurrentFetch(t *testing.T) {
 
 	// Create test content we'll "fetch"
 	content := []byte("concurrent fetch content")
-	addr := NewBlobAddr(ComputeHash(content))
+	addr := BlobAddr(ComputeHash(content))
 
 	// Use a channel to control when fetch completes
 	fetchStarted := make(chan struct{})
@@ -191,7 +191,7 @@ func TestBlobCache_ConcurrentFetch(t *testing.T) {
 	fetchCount := 0
 
 	// Mock fetch function that pauses
-	mockFetch := func(a *BlobAddr) (CachedFile, error) {
+	mockFetch := func(a BlobAddr) (CachedFile, error) {
 		fetchCount++
 		fetchStarted <- struct{}{}
 		<-fetchComplete // Wait for signal to complete
@@ -241,10 +241,10 @@ func TestBlobCache_ConcurrentFetch(t *testing.T) {
 	}
 
 	// Both should have same blob
-	if result1.file.GetAddress().Hash != addr.Hash {
+	if result1.file.GetAddress() != addr {
 		t.Errorf("First result has wrong blob")
 	}
-	if result2.file.GetAddress().Hash != addr.Hash {
+	if result2.file.GetAddress() != addr {
 		t.Errorf("Second result has wrong blob")
 	}
 
@@ -259,11 +259,11 @@ func TestBlobCache_FetchError(t *testing.T) {
 	defer cleanup()
 
 	// Create a mock address
-	addr := NewBlobAddr("QmTest123456")
+	addr := BlobAddr("QmTest123456")
 
 	// Mock fetch function that always errors
 	mockError := errors.New("simulated fetch error")
-	mockFetch := func(a *BlobAddr) (CachedFile, error) {
+	mockFetch := func(a BlobAddr) (CachedFile, error) {
 		return nil, mockError
 	}
 
@@ -280,7 +280,7 @@ func TestBlobCache_FetchError(t *testing.T) {
 
 	// Ensure failed blob isn't in cache
 	cache.mutex.Lock()
-	_, exists := cache.cachedBlobs[addr.Hash]
+	_, exists := cache.cachedBlobs[addr]
 	cache.mutex.Unlock()
 
 	if exists {

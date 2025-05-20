@@ -1,7 +1,6 @@
 package gritsd
 
 import (
-	"grits/internal/grits"
 	"io"
 	"os"
 	"testing"
@@ -63,7 +62,7 @@ func TestLocalVolumePersistenceDirect(t *testing.T) {
 	}
 	defer testNode.Release()
 
-	cachedFile, err := server.BlobStore.ReadFile(&grits.BlobAddr{Hash: testNode.Metadata().ContentHash})
+	cachedFile, err := server.BlobStore.ReadFile(testNode.Metadata().ContentHash)
 	if err != nil {
 		t.Fatalf("Failed to read file contents: %v", err)
 	}
@@ -191,7 +190,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 	// This demonstrates how you might send the address to another system without linking locally
 	treeMetadataAddr := treeNode.MetadataBlob().GetAddress()
 	// Just use the address, no need to link it
-	if treeMetadataAddr.Hash == "" {
+	if treeMetadataAddr == "" {
 		t.Fatalf("Tree metadata address is empty")
 	}
 	// Now release our reference since we're done with it

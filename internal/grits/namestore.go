@@ -88,7 +88,7 @@ func (t *GNodeType) UnmarshalJSON(data []byte) error {
 type GNodeMetadata struct {
 	Type        GNodeType `json:"type"`
 	Size        int64     `json:"size"`
-	ContentHash string    `json:"contentHash"`
+	ContentHash BlobAddr  `json:"contentHash"`
 	Mode        uint32    `json:"mode,omitempty"`      // File mode (permissions)
 	Timestamp   string    `json:"timestamp,omitempty"` // Last modification time (UTC ISO format)
 }
@@ -97,7 +97,7 @@ type FileNode interface {
 	ExportedBlob() CachedFile
 	MetadataBlob() CachedFile
 	Metadata() *GNodeMetadata
-	Children() map[string]*BlobAddr
+	Children() map[string]BlobAddr
 	AddressString() string
 	Address() *TypedFileAddr
 
@@ -110,7 +110,7 @@ type TreeNode struct {
 	blob         CachedFile
 	metadataBlob CachedFile
 	metadata     *GNodeMetadata
-	ChildrenMap  map[string]*BlobAddr
+	ChildrenMap  map[string]BlobAddr
 	refCount     int
 	nameStore    *NameStore
 	mtx          sync.Mutex
@@ -138,17 +138,17 @@ func (bn *BlobNode) Metadata() *GNodeMetadata {
 	return bn.metadata
 }
 
-func (bn *BlobNode) Children() map[string]*BlobAddr {
+func (bn *BlobNode) Children() map[string]BlobAddr {
 	return nil
 }
 
 // Still maintaining TypedFileAddr compatibility for external APIs
 func (bn *BlobNode) AddressString() string {
-	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress().String(), bn.blob.GetSize())
+	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress(), bn.blob.GetSize())
 }
 
 func (bn *BlobNode) Address() *TypedFileAddr {
-	return NewTypedFileAddr(bn.blob.GetAddress().Hash, bn.blob.GetSize(), Blob)
+	return NewTypedFileAddr(bn.blob.GetAddress(), bn.blob.GetSize(), Blob)
 }
 
 func (bn *BlobNode) Take() {
@@ -218,19 +218,19 @@ func (tn *TreeNode) Metadata() *GNodeMetadata {
 	return tn.metadata
 }
 
-func (tn *TreeNode) Children() map[string]*BlobAddr {
+func (tn *TreeNode) Children() map[string]BlobAddr {
 	return tn.ChildrenMap
 }
 
 // Still maintaining TypedFileAddr compatibility for external APIs
 func (tn *TreeNode) Address() *TypedFileAddr {
 	tn.ensureSerialized()
-	return NewTypedFileAddr(tn.blob.GetAddress().Hash, tn.blob.GetSize(), Tree)
+	return NewTypedFileAddr(tn.blob.GetAddress(), tn.blob.GetSize(), Tree)
 }
 
 func (tn *TreeNode) AddressString() string {
 	tn.ensureSerialized()
-	return fmt.Sprintf("tree:%s-%d", tn.blob.GetAddress().String(), tn.blob.GetSize())
+	return fmt.Sprintf("tree:%s-%d", tn.blob.GetAddress(), tn.blob.GetSize())
 }
 
 func (tn *TreeNode) Take() {
@@ -294,7 +294,7 @@ func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 	for _, childAddr := range children {
 		childNode, err := ns.loadFileNode(childAddr, true)
 		if err != nil {
-			log.Panicf("couldn't load %s: %v", childAddr.String(), err)
+			log.Panicf("couldn't load %s: %v", childAddr, err)
 		}
 		ns.debugPrintTree(childNode, indent+"  ")
 	}
@@ -384,22 +384,22 @@ func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue Fil
 
 type Pin struct {
 	path     string
-	refCount map[string]int
+	refCount map[BlobAddr]int
 }
 
 func NewPin(path string) *Pin {
 	return &Pin{
 		path:     path,
-		refCount: make(map[string]int),
+		refCount: make(map[BlobAddr]int),
 	}
 }
 
 func (ns *NameStore) recursiveTake(pm *Pin, fn FileNode) error {
 	if DebugRefCounts {
-		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[fn.AddressString()])
+		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[BlobAddr(fn.AddressString())])
 	}
 
-	metadataHash := fn.MetadataBlob().GetAddress().String()
+	metadataHash := fn.MetadataBlob().GetAddress()
 
 	refCount, exists := pm.refCount[metadataHash]
 
@@ -442,7 +442,7 @@ func (ns *NameStore) recursiveTake(pm *Pin, fn FileNode) error {
 }
 
 func (ns *NameStore) recursiveRelease(pm *Pin, fn FileNode) error {
-	metadataHash := fn.MetadataBlob().GetAddress().String()
+	metadataHash := fn.MetadataBlob().GetAddress()
 	if DebugRefCounts {
 		log.Printf("Recursive release on %s: count %d/%d", fn.AddressString(), fn.RefCount(), pm.refCount[metadataHash])
 	}
@@ -480,7 +480,7 @@ func (ns *NameStore) recursiveRelease(pm *Pin, fn FileNode) error {
 type NameStore struct {
 	BlobStore BlobStore
 	root      FileNode
-	fileCache map[string]FileNode
+	fileCache map[BlobAddr]FileNode
 	mtx       sync.RWMutex
 
 	watchers []FileTreeWatcher
@@ -615,7 +615,7 @@ func (ns *NameStore) LookupFull(names []string) ([]*PathNodePair, bool, error) {
 
 // Get a FileNode from a metadata address, either from cache or loaded on demand.
 // Takes a reference to the node before returning it.
-func (ns *NameStore) GetFileNode(metadataAddr *BlobAddr) (FileNode, error) {
+func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -700,17 +700,17 @@ const (
 )
 
 type LinkRequest struct {
-	Path     string
-	NewAddr  *BlobAddr // new metadata blob
-	PrevAddr *BlobAddr // Must be the existing metadata addr
-	Assert   uint32
+	Path     string   `json:"path"`               // Path to link
+	NewAddr  BlobAddr `json:"addr"`               // New metadata blob address
+	PrevAddr BlobAddr `json:"prevAddr,omitempty"` // Optional previous address for assertions
+	Assert   uint32   `json:"assert,omitempty"`   // Optional assertion flags
 }
 
-func matchesAddr(a FileNode, b *BlobAddr) bool {
+func matchesAddr(a FileNode, b BlobAddr) bool {
 	if a == nil {
-		return b == nil
+		return b == ""
 	} else {
-		return b != nil && a.MetadataBlob().GetAddress().Equals(b)
+		return b != "" && a.MetadataBlob().GetAddress() == b
 	}
 }
 
@@ -835,7 +835,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	if addr == nil {
-		return ns.LinkByMetadata(name, nil)
+		return ns.LinkByMetadata(name, "")
 	}
 
 	metadataBlob, err := ns.typeToMetadata(addr)
@@ -848,7 +848,7 @@ func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 }
 
 // FIXME - This is the one we should actually be using, for everything
-func (ns *NameStore) LinkByMetadata(name string, metadataAddr *BlobAddr) error {
+func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 	name = strings.TrimRight(name, "/")
 	if name != "" && name[0] == '/' {
 		return fmt.Errorf("name must be relative")
@@ -885,10 +885,10 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr *BlobAddr) error {
 }
 
 // linkBlob creates metadata for a blob and links it into the path
-func (ns *NameStore) linkBlob(name string, addr *BlobAddr, size int64) error {
-	if addr == nil {
-		// If addr is nil, we're unlinking
-		return ns.LinkByMetadata(name, nil)
+func (ns *NameStore) linkBlob(name string, addr BlobAddr, size int64) error {
+	if addr == "" {
+		// If addr is "", we're unlinking
+		return ns.LinkByMetadata(name, "")
 	}
 
 	// Create metadata for the blob
@@ -903,10 +903,10 @@ func (ns *NameStore) linkBlob(name string, addr *BlobAddr, size int64) error {
 }
 
 // linkTree creates metadata for a tree and links it into the path
-func (ns *NameStore) linkTree(name string, addr *BlobAddr) error {
-	if addr == nil {
+func (ns *NameStore) linkTree(name string, addr BlobAddr) error {
+	if addr == "" {
 		// If addr is nil, we're unlinking
-		return ns.LinkByMetadata(name, nil)
+		return ns.LinkByMetadata(name, "")
 	}
 
 	// For a tree node, we don't have size information readily available
@@ -936,10 +936,10 @@ func (ns *NameStore) linkTree(name string, addr *BlobAddr) error {
 // modified version of `oldParent`.
 
 // Core link function helper
-func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *BlobAddr, oldParent FileNode) (FileNode, error) {
+func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr BlobAddr, oldParent FileNode) (FileNode, error) {
 	if DebugNameStore {
-		if metadataAddr != nil {
-			log.Printf("We're trying to link %s under path %s /// %s\n", metadataAddr.String(), prevPath, name)
+		if metadataAddr != "" {
+			log.Printf("We're trying to link %s under path %s /// %s\n", metadataAddr, prevPath, name)
 		} else {
 			log.Printf("We're trying to link nil under path %s /// %s\n", prevPath, name)
 		}
@@ -954,7 +954,7 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 		currPath = fmt.Sprintf("%s/%s", prevPath, parts[0])
 	}
 
-	var oldChildren map[string]*BlobAddr
+	var oldChildren map[string]BlobAddr
 	if oldParent != nil {
 		oldChildren = oldParent.Children()
 		if oldChildren == nil {
@@ -972,7 +972,7 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 	if exists {
 		oldChild, err = ns.loadFileNode(oldChildAddr, true)
 		if err != nil {
-			return nil, fmt.Errorf("can't load %s: %v", oldChildAddr.String(), err)
+			return nil, fmt.Errorf("can't load %s: %v", oldChildAddr, err)
 		}
 	} else if len(parts) > 1 {
 		// Directory doesn't exist while searching down in the path while doing a link
@@ -980,7 +980,7 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 	}
 
 	if len(parts) == 1 {
-		if metadataAddr == nil {
+		if metadataAddr == "" {
 			newValue = nil
 		} else {
 			newValue, err = ns.loadFileNode(metadataAddr, true)
@@ -999,7 +999,7 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 		}
 	}
 
-	newChildren := make(map[string]*BlobAddr)
+	newChildren := make(map[string]BlobAddr)
 	for k, v := range oldChildren {
 		newChildren[k] = v
 	}
@@ -1023,11 +1023,11 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr *B
 func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore: bs,
-		fileCache: make(map[string]FileNode),
+		fileCache: make(map[BlobAddr]FileNode),
 		rootPin:   NewPin(""),
 	}
 
-	rootNodeMap := make(map[string]*BlobAddr)
+	rootNodeMap := make(map[string]BlobAddr)
 	root, err := ns.CreateTreeNode(rootNodeMap)
 	if err != nil {
 		return nil, err
@@ -1037,7 +1037,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	ns.recursiveTake(ns.rootPin, root)
 
 	log.Printf("Done setting up root (%s). Ref count: %d / %d",
-		root.AddressString(), root.refCount, ns.rootPin.refCount[root.AddressString()])
+		root.AddressString(), root.refCount, ns.rootPin.refCount[BlobAddr(root.AddressString())])
 
 	ns.root = root
 	return ns, nil
@@ -1046,7 +1046,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore: bs,
-		fileCache: make(map[string]FileNode),
+		fileCache: make(map[BlobAddr]FileNode),
 		rootPin:   NewPin(""),
 	}
 
@@ -1078,13 +1078,13 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 		metadata = GNodeMetadata{
 			Type:        GNodeTypeFile,
 			Size:        addr.Size,
-			ContentHash: addr.BlobAddr.String(),
+			ContentHash: addr.BlobAddr,
 		}
 	} else {
 		metadata = GNodeMetadata{
 			Type:        GNodeTypeDirectory,
 			Size:        addr.Size,
-			ContentHash: addr.BlobAddr.String(),
+			ContentHash: addr.BlobAddr,
 		}
 	}
 
@@ -1103,12 +1103,12 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 
 // Get a file node, return it (same as GetFileNode(), but no reference or lock taken)
 
-func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (FileNode, error) {
+func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileNode, error) {
 	if printDebug && DebugFileCache {
-		log.Printf("We try to chase down %s\n", metadataAddr.String())
+		log.Printf("We try to chase down %s\n", metadataAddr)
 	}
 
-	cachedNode, exists := ns.fileCache[metadataAddr.String()]
+	cachedNode, exists := ns.fileCache[metadataAddr]
 	if exists {
 		if printDebug && DebugFileCache {
 			log.Printf("  found: %p", cachedNode)
@@ -1119,7 +1119,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 	// If not, we have to load it. First load and parse the metadata.
 	metadataCf, err := ns.BlobStore.ReadFile(metadataAddr)
 	if err != nil {
-		return nil, fmt.Errorf("error reading metadata %s: %v", metadataAddr.String(), err)
+		return nil, fmt.Errorf("error reading metadata %s: %v", metadataAddr, err)
 	}
 
 	metadataData, err := metadataCf.Read(0, metadataCf.GetSize())
@@ -1135,14 +1135,14 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 	}
 
 	// Load the content blob
-	contentHash := NewBlobAddr(metadata.ContentHash)
+	contentHash := BlobAddr(metadata.ContentHash)
 	contentCf, err := ns.BlobStore.ReadFile(contentHash)
 	if err != nil {
 		metadataCf.Release()
 		return nil, fmt.Errorf("error reading content: %v", err)
 	}
 
-	//log.Printf("We got it. The content addr is %s\n", contentHash.String())
+	//log.Printf("We got it. The content addr is %s\n", contentHash)
 
 	if metadata.Type == GNodeTypeFile {
 		bn := &BlobNode{
@@ -1155,16 +1155,16 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 			log.Printf("  created blob: %p", bn)
 		}
 
-		ns.fileCache[metadataAddr.String()] = bn // Now using metadata addr as cache key
+		ns.fileCache[metadataAddr] = bn // Now using metadata addr as cache key
 		return bn, nil
 	} else {
-		ns.fileCache[metadataAddr.String()] = nil
+		ns.fileCache[metadataAddr] = nil
 
 		dn := &TreeNode{
 			blob:         contentCf,
 			metadataBlob: metadataCf,
 			metadata:     &metadata,
-			ChildrenMap:  make(map[string]*BlobAddr),
+			ChildrenMap:  make(map[string]BlobAddr),
 			nameStore:    ns,
 		}
 
@@ -1181,7 +1181,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 
 		defer func() { // In case of error
 			if dn != nil {
-				delete(ns.fileCache, metadataAddr.String())
+				delete(ns.fileCache, metadataAddr)
 			}
 		}()
 
@@ -1190,7 +1190,7 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 			return nil, fmt.Errorf("error reading directory data: %v", err)
 		}
 
-		//log.Printf("We check contents of %s: %s\n", contentHash.String(), string(dirData))
+		//log.Printf("We check contents of %s: %s\n", contentHash, string(dirData))
 
 		dirMap := make(map[string]string)
 		if err := json.Unmarshal(dirData, &dirMap); err != nil {
@@ -1198,12 +1198,12 @@ func (ns *NameStore) loadFileNode(metadataAddr *BlobAddr, printDebug bool) (File
 		}
 
 		for name, childMetadataCID := range dirMap {
-			dn.ChildrenMap[name] = &BlobAddr{Hash: childMetadataCID}
+			dn.ChildrenMap[name] = BlobAddr(childMetadataCID)
 		}
 
-		ns.fileCache[metadataAddr.String()] = dn
+		ns.fileCache[metadataAddr] = dn
 		if printDebug && DebugFileCache {
-			log.Printf("  putting in file cache at %s", metadataAddr.String())
+			log.Printf("  putting in file cache at %s", metadataAddr)
 		}
 		resultDn := dn
 		dn = nil // Prevent deferred cleanup + removal from file cache
@@ -1221,7 +1221,7 @@ func CreateTimestamp() string {
 // newly-created FileNode of some sort, which will then hold that reference for as long as *it*
 // remains un-garbage-collected.
 
-func (ns *NameStore) CreateMetadataBlob(contentHash *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
+func (ns *NameStore) CreateMetadataBlob(contentHash BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -1229,7 +1229,7 @@ func (ns *NameStore) CreateMetadataBlob(contentHash *BlobAddr, size int64, isDir
 }
 
 // Create a metadata node with proper mode and timestamps
-func (ns *NameStore) createMetadataBlob(contentHash *BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
+func (ns *NameStore) createMetadataBlob(contentHash BlobAddr, size int64, isDir bool, mode uint32) (*GNodeMetadata, CachedFile, error) {
 	// If mode is 0, set default modes
 	if mode == 0 {
 		if isDir {
@@ -1246,7 +1246,7 @@ func (ns *NameStore) createMetadataBlob(contentHash *BlobAddr, size int64, isDir
 		metadata = GNodeMetadata{
 			Type:        GNodeTypeDirectory,
 			Size:        size,
-			ContentHash: contentHash.String(),
+			ContentHash: contentHash,
 			Mode:        mode,
 			Timestamp:   timestamp,
 		}
@@ -1254,7 +1254,7 @@ func (ns *NameStore) createMetadataBlob(contentHash *BlobAddr, size int64, isDir
 		metadata = GNodeMetadata{
 			Type:        GNodeTypeFile,
 			Size:        size,
-			ContentHash: contentHash.String(),
+			ContentHash: contentHash,
 			Mode:        mode,
 			Timestamp:   timestamp,
 		}
@@ -1274,12 +1274,12 @@ func (ns *NameStore) createMetadataBlob(contentHash *BlobAddr, size int64, isDir
 	return &metadata, metadataCf, nil
 }
 
-func (ns *NameStore) CreateTreeNode(children map[string]*BlobAddr) (*TreeNode, error) {
+func (ns *NameStore) CreateTreeNode(children map[string]BlobAddr) (*TreeNode, error) {
 	return ns.createTreeNode(children, true)
 }
 
 // Same as CreateTreeNode() but with no locking
-func (ns *NameStore) createTreeNode(children map[string]*BlobAddr, takeLock bool) (*TreeNode, error) {
+func (ns *NameStore) createTreeNode(children map[string]BlobAddr, takeLock bool) (*TreeNode, error) {
 	//log.Printf("Creating tree node for map with %d children", len(children))
 
 	//ns.BlobStore.DumpStats()
@@ -1295,9 +1295,9 @@ func (ns *NameStore) createTreeNode(children map[string]*BlobAddr, takeLock bool
 	}
 
 	// Create and serialize the directory listing
-	dirMap := make(map[string]string)
+	dirMap := make(map[string]BlobAddr)
 	for name, childAddr := range children {
-		dirMap[name] = childAddr.String()
+		dirMap[name] = childAddr
 	}
 
 	dirData, err := json.Marshal(dirMap)
@@ -1316,7 +1316,7 @@ func (ns *NameStore) createTreeNode(children map[string]*BlobAddr, takeLock bool
 		return nil, fmt.Errorf("error creating metadata: %v", err)
 	}
 
-	//log.Printf("Added metadata blob, addr %s, rc %d", metadataBlob.GetAddress().String(), metadataBlob.GetRefCount())
+	//log.Printf("Added metadata blob, addr %s, rc %d", metadataBlob.GetAddress(), metadataBlob.GetRefCount())
 
 	tn.blob = contentBlob
 	tn.metadata = metadata
@@ -1327,7 +1327,7 @@ func (ns *NameStore) createTreeNode(children map[string]*BlobAddr, takeLock bool
 		defer ns.mtx.Unlock()
 	}
 
-	existingNode, exists := ns.fileCache[tn.metadataBlob.GetAddress().String()]
+	existingNode, exists := ns.fileCache[tn.metadataBlob.GetAddress()]
 	if exists {
 		contentBlob.Release()
 		metadataBlob.Release()
@@ -1339,7 +1339,7 @@ func (ns *NameStore) createTreeNode(children map[string]*BlobAddr, takeLock bool
 
 		return existingTreeNode, nil
 	} else {
-		ns.fileCache[tn.metadataBlob.GetAddress().String()] = tn
+		ns.fileCache[tn.metadataBlob.GetAddress()] = tn
 		return tn, nil
 	}
 
@@ -1353,9 +1353,9 @@ func (tn *TreeNode) ensureSerialized() error {
 	}
 
 	// Directory format is now filename => metadata CID
-	dirMap := make(map[string]string)
+	dirMap := make(map[string]BlobAddr)
 	for name, childAddr := range tn.Children() {
-		dirMap[name] = childAddr.String()
+		dirMap[name] = childAddr
 	}
 
 	dirData, err := json.Marshal(dirMap)
@@ -1469,7 +1469,7 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 
 			childNode, err := ns.loadFileNode(childAddr, true)
 			if err != nil {
-				log.Panicf("couldn't load %s: %v", childAddr.String(), err)
+				log.Panicf("couldn't load %s: %v", childAddr, err)
 			}
 
 			ns.dumpTreeNode(indent+"  ", childNode, childName)
@@ -1487,7 +1487,7 @@ func (ns *NameStore) PrintBlobStorageDebugging() error {
 	defer ns.mtx.RUnlock()
 
 	// Map to track which blobs we've seen
-	seenBlobs := make(map[string]bool)
+	seenBlobs := make(map[BlobAddr]bool)
 
 	log.Println("=== Reference Count Debugging ===")
 	log.Println("Root node:", ns.GetRoot())
@@ -1549,7 +1549,7 @@ func (ns *NameStore) PrintBlobStorageDebugging() error {
 }
 
 // Helper function to recursively walk the tree
-func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs map[string]bool) {
+func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs map[BlobAddr]bool) {
 	if node == nil {
 		// ??? Can't happen
 		log.Printf("%s: <nil>\n", path)
@@ -1560,8 +1560,8 @@ func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs ma
 	metadataBlob := node.MetadataBlob()
 
 	// Mark these blobs as seen
-	seenBlobs[contentBlob.GetAddress().Hash] = true
-	seenBlobs[metadataBlob.GetAddress().Hash] = true
+	seenBlobs[contentBlob.GetAddress()] = true
+	seenBlobs[metadataBlob.GetAddress()] = true
 
 	// Get reference counts
 	var contentRefCount, metadataRefCount int
@@ -1579,9 +1579,9 @@ func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs ma
 		log.Printf("Path: %s\n", path)
 		log.Printf("  Node Type: %T\n", node)
 		log.Printf("  Node RefCount: %d\n", node.RefCount())
-		log.Printf("  Content Blob Hash: %s\n", contentBlob.GetAddress().Hash)
+		log.Printf("  Content Blob Hash: %s\n", contentBlob.GetAddress())
 		log.Printf("  Content Blob RefCount: %d\n", contentRefCount)
-		log.Printf("  Metadata Blob Hash: %s\n", metadataBlob.GetAddress().Hash)
+		log.Printf("  Metadata Blob Hash: %s\n", metadataBlob.GetAddress())
 		log.Printf("  Metadata Blob RefCount: %d\n", metadataRefCount)
 
 		// Print small blob contents
@@ -1662,15 +1662,15 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 	// Print reference counts
 	nodeRefCount := node.RefCount()
 	rootPinRefCount := 0
-	if metadataHash := metadataBlob.GetAddress().String(); metadataHash != "" {
+	if metadataHash := metadataBlob.GetAddress(); metadataHash != "" {
 		rootPinRefCount = ns.rootPin.refCount[metadataHash]
 	}
 
 	log.Printf("  Reference count: %d (object) / %d (rootPin)\n", nodeRefCount, rootPinRefCount)
 
 	// Print blob hashes
-	log.Printf("  Content blob hash: %s\n", contentBlob.GetAddress().String())
-	log.Printf("  Metadata blob hash: %s\n", metadataBlob.GetAddress().String())
+	log.Printf("  Content blob hash: %s\n", contentBlob.GetAddress())
+	log.Printf("  Metadata blob hash: %s\n", metadataBlob.GetAddress())
 
 	// For TreeNodes, print child count
 	if children := node.Children(); children != nil {
@@ -1731,14 +1731,14 @@ func (ns *NameStore) CleanupUnreferencedNodes() {
 	defer ns.mtx.Unlock()
 
 	//log.Printf("Starting cleanup of unreferenced nodes")
-	nodesToRemove := make([]string, 0)
+	nodesToRemove := make([]BlobAddr, 0)
 
 	// First, identify all nodes with zero references
 	for metadataAddr, node := range ns.fileCache {
 		// Check if the node has zero references
 		if node.RefCount() == 0 {
 			// Double check it's not in the pin structure
-			metadataHash := node.MetadataBlob().GetAddress().String()
+			metadataHash := node.MetadataBlob().GetAddress()
 			_, exists := ns.rootPin.refCount[metadataHash]
 			if exists {
 				log.Panicf("Node %s has 0 refCount but exists in pin structure", metadataHash)

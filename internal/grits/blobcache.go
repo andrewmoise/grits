@@ -10,20 +10,20 @@ import (
 
 // BlobCache manages a time-based LRU cache of blobs with size limits
 type BlobCache struct {
-	blobStore   *LocalBlobStore        // The underlying blob store
-	fetchBlob   FetchBlobFunc          // Function to fetch blobs not in cache
-	cachedBlobs map[string]*CacheEntry // Hash -> cache entry mapping
-	maxSize     int64                  // Maximum cache size in bytes
-	currentSize int64                  // Current size of all cached blobs
-	mutex       sync.Mutex             // Protects concurrent access
-	cleanupChan chan struct{}          // Signal channel for cleanup
+	blobStore   *LocalBlobStore          // The underlying blob store
+	fetchBlob   FetchBlobFunc            // Function to fetch blobs not in cache
+	cachedBlobs map[BlobAddr]*CacheEntry // Hash -> cache entry mapping
+	maxSize     int64                    // Maximum cache size in bytes
+	currentSize int64                    // Current size of all cached blobs
+	mutex       sync.Mutex               // Protects concurrent access
+	cleanupChan chan struct{}            // Signal channel for cleanup
 
 	// Requests for blobs that we're in the middle of fetching
-	inFlight map[string]*InFlightRequest
+	inFlight map[BlobAddr]*InFlightRequest
 }
 
 // FetchBlobFunc defines a function that can retrieve a blob by its address
-type FetchBlobFunc func(addr *BlobAddr) (CachedFile, error)
+type FetchBlobFunc func(addr BlobAddr) (CachedFile, error)
 
 // CacheEntry holds metadata about a cached blob
 type CacheEntry struct {
@@ -43,8 +43,8 @@ func NewBlobCache(blobStore *LocalBlobStore, maxSize int64, fetchFunc FetchBlobF
 	cache := &BlobCache{
 		blobStore:   blobStore,
 		fetchBlob:   fetchFunc,
-		cachedBlobs: make(map[string]*CacheEntry),
-		inFlight:    make(map[string]*InFlightRequest),
+		cachedBlobs: make(map[BlobAddr]*CacheEntry),
+		inFlight:    make(map[BlobAddr]*InFlightRequest),
 		maxSize:     maxSize,
 		cleanupChan: make(chan struct{}, 1),
 	}
@@ -56,16 +56,16 @@ func NewBlobCache(blobStore *LocalBlobStore, maxSize int64, fetchFunc FetchBlobF
 }
 
 // Get retrieves a blob from the cache, fetching it if necessary
-func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
+func (c *BlobCache) Get(addr BlobAddr) (CachedFile, error) {
 	if DebugBlobCache {
-		log.Printf("Blob cache get request for %s", addr.Hash)
+		log.Printf("Blob cache get request for %s", addr)
 	}
 
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 
 	// First check if it's in the cache
-	if entry, exists := c.cachedBlobs[addr.Hash]; exists {
+	if entry, exists := c.cachedBlobs[addr]; exists {
 		if DebugBlobCache {
 			log.Printf("Found in cache")
 		}
@@ -84,13 +84,13 @@ func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
 			file:         cachedFile,
 			lastAccessed: time.Now(),
 		}
-		c.cachedBlobs[addr.Hash] = entry
+		c.cachedBlobs[addr] = entry
 		cachedFile.Take() // We take *two* refs total, one for returning it, one for putting it in the store
 		return cachedFile, nil
 	}
 
 	// If not, check if we're already fetching it (FIXME -- this is better at the blob store layer, I guess)
-	if req, fetching := c.inFlight[addr.Hash]; fetching {
+	if req, fetching := c.inFlight[addr]; fetching {
 		if DebugBlobCache {
 			log.Printf("Request already in flight")
 		}
@@ -109,7 +109,7 @@ func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
 	req := &InFlightRequest{
 		cond: sync.NewCond(&c.mutex),
 	}
-	c.inFlight[addr.Hash] = req
+	c.inFlight[addr] = req
 
 	// Temporarily unlock while fetching
 	c.mutex.Unlock()
@@ -124,7 +124,7 @@ func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
 	req.err = err
 
 	// Remove from in-flight
-	delete(c.inFlight, addr.Hash)
+	delete(c.inFlight, addr)
 
 	// Signal all waiters that something has changed
 	req.cond.Broadcast()
@@ -133,9 +133,9 @@ func (c *BlobCache) Get(addr *BlobAddr) (CachedFile, error) {
 }
 
 // fetchAndCache fetches a blob and adds it to the cache
-func (c *BlobCache) fetchAndCache(addr *BlobAddr) (CachedFile, error) {
+func (c *BlobCache) fetchAndCache(addr BlobAddr) (CachedFile, error) {
 	if DebugBlobCache {
-		log.Printf("Fetching and caching %s", addr.Hash)
+		log.Printf("Fetching and caching %s", addr)
 	}
 
 	// Fetch the blob
@@ -144,7 +144,7 @@ func (c *BlobCache) fetchAndCache(addr *BlobAddr) (CachedFile, error) {
 		if DebugBlobCache {
 			log.Printf("  failed to fetch!")
 		}
-		return nil, fmt.Errorf("failed to fetch blob %s: %w", addr.Hash, err)
+		return nil, fmt.Errorf("failed to fetch blob %s: %w", addr, err)
 	}
 
 	// Take an extra reference for the cache
@@ -152,7 +152,7 @@ func (c *BlobCache) fetchAndCache(addr *BlobAddr) (CachedFile, error) {
 
 	// Add to cache
 	c.mutex.Lock()
-	c.cachedBlobs[addr.Hash] = &CacheEntry{
+	c.cachedBlobs[addr] = &CacheEntry{
 		file:         file,
 		lastAccessed: time.Now(),
 	}
@@ -191,14 +191,14 @@ func (c *BlobCache) performCleanup() {
 
 	// Create a list of entries ordered by access time
 	var entries []*struct {
-		hash  string
+		hash  BlobAddr
 		entry *CacheEntry
 	}
 
 	c.mutex.Lock()
 	for hash, entry := range c.cachedBlobs {
 		entries = append(entries, &struct {
-			hash  string
+			hash  BlobAddr
 			entry *CacheEntry
 		}{hash, entry})
 	}

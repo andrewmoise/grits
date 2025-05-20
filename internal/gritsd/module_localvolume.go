@@ -30,7 +30,7 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool) (*
 	}
 
 	// Create empty directory node
-	emptyDirMap := make(map[string]*grits.BlobAddr)
+	emptyDirMap := make(map[string]grits.BlobAddr)
 	emptyDirNode, err := ns.CreateTreeNode(emptyDirMap)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create empty directory node: %v", err)
@@ -105,14 +105,14 @@ func (wv *LocalVolume) GetVolumeName() string {
 
 // Get a FileNode from a metadata address, either from cache or loaded on demand.
 // Takes a reference to the node before returning it.
-func (wv *LocalVolume) GetFileNode(metadataAddr *grits.BlobAddr) (grits.FileNode, error) {
+func (wv *LocalVolume) GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error) {
 	return wv.ns.GetFileNode(metadataAddr)
 }
 
 // CreateTreeNode creates a new empty directory node
 // The returned node has an additional reference taken which the caller must release when done
 func (v *LocalVolume) CreateTreeNode() (*grits.TreeNode, error) {
-	emptyChildren := make(map[string]*grits.BlobAddr)
+	emptyChildren := make(map[string]grits.BlobAddr)
 	treeNode, err := v.ns.CreateTreeNode(emptyChildren)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create empty tree node: %v", err)
@@ -125,7 +125,7 @@ func (v *LocalVolume) CreateTreeNode() (*grits.TreeNode, error) {
 
 // CreateBlobNode creates a metadata node that points to the given content blob
 // The returned node has an additional reference taken which the caller must release when done
-func (v *LocalVolume) CreateBlobNode(contentAddr *grits.BlobAddr, size int64) (*grits.BlobNode, error) {
+func (v *LocalVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*grits.BlobNode, error) {
 	// Create the metadata for this blob
 	_, metadataBlob, err := v.ns.CreateMetadataBlob(contentAddr, size, false, 0)
 	if err != nil {
@@ -152,20 +152,20 @@ func (v *LocalVolume) CreateBlobNode(contentAddr *grits.BlobAddr, size int64) (*
 }
 
 // GetBlob retrieves a blob from the blobstore by its address
-func (v *LocalVolume) GetBlob(addr *grits.BlobAddr) (grits.CachedFile, error) {
+func (v *LocalVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 	return v.ns.BlobStore.ReadFile(addr)
 }
 
 // PutBlob adds a file to the blob store and returns its address
-func (v *LocalVolume) PutBlob(file *os.File) (*grits.BlobAddr, error) {
+func (v *LocalVolume) PutBlob(file *os.File) (grits.BlobAddr, error) {
 	cachedFile, err := v.ns.BlobStore.AddReader(file)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	defer cachedFile.Release() // We don't need to maintain this reference
 
 	// Return a copy of the address
-	return &grits.BlobAddr{Hash: cachedFile.GetAddress().Hash}, nil
+	return cachedFile.GetAddress(), nil
 }
 
 func (wv *LocalVolume) LookupFull(paths []string) ([]*grits.PathNodePair, bool, error) {
@@ -176,7 +176,7 @@ func (wv *LocalVolume) LookupNode(path string) (grits.FileNode, error) {
 	return wv.ns.LookupNode(path)
 }
 
-func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr *grits.BlobAddr) error {
+func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) error {
 	return wv.ns.LinkByMetadata(name, metadataAddr)
 }
 
