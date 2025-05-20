@@ -129,9 +129,9 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	}
 
 	// Set up directory structure
-	linkData := []LinkData{
-		{Path: "dir", MetadataAddr: emptyDirAddr},
-		{Path: "dir/subdir", MetadataAddr: emptyDirAddr},
+	linkData := []grits.LinkRequest{
+		{Path: "dir", NewAddr: emptyDirAddr},
+		{Path: "dir/subdir", NewAddr: emptyDirAddr},
 	}
 
 	linkPayload, _ := json.Marshal(linkData)
@@ -176,9 +176,9 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		}
 
 		// Link the blob to two paths using metadata address
-		linkData := []LinkData{
-			{Path: content, MetadataAddr: metadataBlob},
-			{Path: "dir/subdir/" + content, MetadataAddr: metadataBlob},
+		linkData := []grits.LinkRequest{
+			{Path: content, NewAddr: metadataBlob},
+			{Path: "dir/subdir/" + content, NewAddr: metadataBlob},
 		}
 
 		linkPayload, _ := json.Marshal(linkData)
@@ -310,10 +310,10 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	}
 
 	linkPaths := []string{"", "test", "test/nested", "test/nested/path.txt"}
-	linkData := []LinkData{
-		{Path: linkPaths[1], MetadataAddr: emptyDirAddr},
-		{Path: linkPaths[2], MetadataAddr: emptyDirAddr},
-		{Path: linkPaths[3], MetadataAddr: blobMetadataAddr},
+	linkData := []grits.LinkRequest{
+		{Path: linkPaths[1], NewAddr: emptyDirAddr},
+		{Path: linkPaths[2], NewAddr: emptyDirAddr},
+		{Path: linkPaths[3], NewAddr: blobMetadataAddr},
 	}
 
 	linkPayload, _ := json.Marshal(linkData)
