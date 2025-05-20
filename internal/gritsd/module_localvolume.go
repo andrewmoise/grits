@@ -193,6 +193,8 @@ func (wv *LocalVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
 	return wv.ns.BlobStore.AddReader(file)
 }
 
+// FIXME - This should go away, CreateBlobNode() instead
+
 func (wv *LocalVolume) AddMetadataBlob(metadata *grits.GNodeMetadata) (grits.CachedFile, error) {
 	// Serialize and store the metadata
 	metadataData, err := json.Marshal(metadata)
