@@ -34,7 +34,7 @@ func (dm *DeploymentModule) Stop() error {
 
 // GetModuleName returns the name of the deployment module.
 func (dm *DeploymentModule) GetModuleName() string {
-	return "deployment"
+	return "deploy"
 }
 
 func (m *DeploymentModule) GetDependencies() []*Dependency {

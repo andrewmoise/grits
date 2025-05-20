@@ -9,6 +9,36 @@ import (
 	"time"
 )
 
+type Volume interface {
+	GetVolumeName() string
+	Start() error
+	Stop() error
+	isReadOnly() bool
+	Checkpoint() error
+
+	LookupNode(path string) (grits.FileNode, error)
+	LookupFull(name []string) ([]*grits.PathNodePair, bool, error)
+	GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error)
+
+	CreateTreeNode() (*grits.TreeNode, error)
+	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*grits.BlobNode, error)
+
+	LinkByMetadata(path string, metadataAddr grits.BlobAddr) error
+	MultiLink([]*grits.LinkRequest) error
+
+	AddBlob(path string) (grits.CachedFile, error)
+	AddOpenBlob(*os.File) (grits.CachedFile, error)
+	AddMetadataBlob(*grits.GNodeMetadata) (grits.CachedFile, error)
+
+	GetBlob(addr grits.BlobAddr) (grits.CachedFile, error)
+	PutBlob(file *os.File) (grits.BlobAddr, error)
+
+	Cleanup() error
+
+	RegisterWatcher(watcher grits.FileTreeWatcher)
+	UnregisterWatcher(watcher grits.FileTreeWatcher)
+}
+
 type LocalVolume struct {
 	name     string
 	server   *Server
@@ -86,7 +116,7 @@ func (wv *LocalVolume) Checkpoint() error {
 }
 
 func (wv *LocalVolume) GetModuleName() string {
-	return "localvolume"
+	return "volume"
 }
 
 func (*LocalVolume) GetDependencies() []*Dependency {
@@ -222,6 +252,13 @@ func (wv *LocalVolume) UnregisterWatcher(watcher grits.FileTreeWatcher) {
 	wv.ns.UnregisterWatcher(watcher)
 }
 
+// RootState represents the serialized state of a NameStore root
+type RootState struct {
+	RootAddr     string `json:"rootAddr"`
+	SerialNumber int64  `json:"serialNumber"`
+	LastModified string `json:"lastModified,omitempty"`
+}
+
 // load retrieves the volume's NameStore root from persistent storage.
 func (wv *LocalVolume) load() error {
 	err := os.MkdirAll(wv.server.Config.ServerPath("var/localroots"), 0755)
@@ -248,17 +285,17 @@ func (wv *LocalVolume) load() error {
 		return err
 	}
 
-	var rootAddrStr string
-	if err := json.Unmarshal(data, &rootAddrStr); err != nil {
-		return fmt.Errorf("failed to unmarshal root address: %v", err)
+	var state RootState
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Errorf("failed to unmarshal volume state: %v", err)
 	}
 
-	rootAddr, err := grits.NewTypedFileAddrFromString(rootAddrStr)
+	rootAddr, err := grits.NewTypedFileAddrFromString(state.RootAddr)
 	if err != nil {
 		return fmt.Errorf("failed to parse root address: %v", err)
 	}
 
-	ns, err := grits.DeserializeNameStore(wv.server.BlobStore, rootAddr)
+	ns, err := grits.DeserializeNameStore(wv.server.BlobStore, rootAddr, state.SerialNumber)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize name store: %v", err)
 	}
@@ -272,9 +309,15 @@ func (wv *LocalVolume) save() error {
 	wv.persistMtx.Lock()
 	defer wv.persistMtx.Unlock()
 
-	// Prepare the data to be saved
-	rootAddrStr := wv.ns.GetRoot()
-	data, err := json.Marshal(rootAddrStr)
+	// Create the state to be serialized
+	state := RootState{
+		RootAddr:     string(wv.ns.GetRoot()),
+		SerialNumber: wv.ns.GetSerialNumber(),
+		LastModified: time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// Marshal to JSON
+	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to marshal root address: %v", err)
 	}
