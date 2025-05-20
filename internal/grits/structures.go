@@ -17,7 +17,7 @@ import (
 type BlobAddr string // SHA-256 hash as an IPFS CID v0 string
 const NilAddr BlobAddr = ""
 
-// NewBlobAddrFromString creates a BlobAddr from a CID v0 string.
+// NewBlobAddrFromString creates a BlobAddr from a CID v0 string, with error checking
 func NewBlobAddrFromString(cidStr string) (BlobAddr, error) {
 	// Verify that the CID starts with 'Qm'
 	if !strings.HasPrefix(cidStr, "Qm") {
