@@ -688,11 +688,6 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-type LinkData struct {
-	Path         string         `json:"path"`
-	MetadataAddr grits.BlobAddr `json:"addr"`
-}
-
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Handling link request\n")
 
@@ -706,9 +701,9 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var allLinkData []LinkData
+	var allLinkRequests []*grits.LinkRequest
 
-	if err := json.NewDecoder(r.Body).Decode(&allLinkData); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&allLinkRequests); err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
@@ -730,15 +725,10 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, linkData := range allLinkData {
-		// Perform link using LinkByMetadata
-		log.Printf("Perform link: %s to %s\n", linkData.Path, linkData.MetadataAddr)
-		if err := volume.LinkByMetadata(linkData.Path, linkData.MetadataAddr); err != nil {
-			log.Printf("Link failed: %v", err)
-			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
-			return
-		}
-		log.Printf("Link successful for path\n")
+	if err := volume.MultiLink(allLinkRequests); err != nil {
+		log.Printf("MultiLink failed: %v", err)
+		http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
+		return
 	}
 
 	// Checkpoint the volume after all links are performed
@@ -750,8 +740,8 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Gather all paths that were affected by the link operations
-	paths := make([]string, len(allLinkData))
-	for i, data := range allLinkData {
+	paths := make([]string, len(allLinkRequests))
+	for i, data := range allLinkRequests {
 		paths[i] = data.Path
 	}
 

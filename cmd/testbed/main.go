@@ -340,10 +340,10 @@ func testOriginMirrorSystem(originServer *gritsd.Server, originPort int, originH
 	}
 
 	// Link the blob using the metadata address
-	linkData := []gritsd.LinkData{
+	linkData := []grits.LinkRequest{
 		{
-			Path:         "test-blob",
-			MetadataAddr: metadataAddr,
+			Path:    "test-blob",
+			NewAddr: metadataAddr,
 		},
 	}
 
