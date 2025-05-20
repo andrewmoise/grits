@@ -484,9 +484,11 @@ type NameStore struct {
 	mtx       sync.RWMutex
 
 	watchers []FileTreeWatcher
-	wmtx     sync.RWMutex // Separate mutex for watchers list to avoid lock contention
+	wmtx     sync.RWMutex // Separate mutex for watchers list
 
 	rootPin *Pin
+
+	serialNumber int64 // Increments on every root change
 }
 
 func (ns *NameStore) GetRoot() string {
@@ -830,6 +832,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 	}
 
 	ns.root = newRoot
+	ns.serialNumber++
 	return nil
 }
 
@@ -880,6 +883,7 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 		ns.recursiveRelease(ns.rootPin, ns.root)
 	}
 
+	ns.serialNumber++
 	ns.root = newRoot
 	return nil
 }
@@ -1039,15 +1043,21 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	log.Printf("Done setting up root (%s). Ref count: %d / %d",
 		root.AddressString(), root.refCount, ns.rootPin.refCount[BlobAddr(root.AddressString())])
 
+	ns.serialNumber = 0
 	ns.root = root
 	return ns, nil
 }
 
-func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr) (*NameStore, error) {
+func (ns *NameStore) GetSerialNumber() int64 {
+	return ns.serialNumber
+}
+
+func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr, serialNumber int64) (*NameStore, error) {
 	ns := &NameStore{
-		BlobStore: bs,
-		fileCache: make(map[BlobAddr]FileNode),
-		rootPin:   NewPin(""),
+		BlobStore:    bs,
+		fileCache:    make(map[BlobAddr]FileNode),
+		rootPin:      NewPin(""),
+		serialNumber: serialNumber,
 	}
 
 	rootCf, err := ns.typeToMetadata(rootAddr)

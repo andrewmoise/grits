@@ -3,9 +3,7 @@ package gritsd
 import (
 	"encoding/json"
 	"fmt"
-	"grits/internal/grits"
 	"log"
-	"os"
 )
 
 // Module is an interface that all modules must implement.
@@ -39,37 +37,6 @@ type Dependency struct {
 
 	// For dynamic configuration based on parent module
 	ConfigGenerator func(parentModule Module) (json.RawMessage, error)
-}
-
-// More details for storage modules:
-type Volume interface {
-	GetVolumeName() string
-	Start() error
-	Stop() error
-	isReadOnly() bool
-	Checkpoint() error
-
-	LookupNode(path string) (grits.FileNode, error)
-	LookupFull(name []string) ([]*grits.PathNodePair, bool, error)
-	GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error)
-
-	CreateTreeNode() (*grits.TreeNode, error)
-	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*grits.BlobNode, error)
-
-	LinkByMetadata(path string, metadataAddr grits.BlobAddr) error
-	MultiLink([]*grits.LinkRequest) error
-
-	AddBlob(path string) (grits.CachedFile, error)
-	AddOpenBlob(*os.File) (grits.CachedFile, error)
-	AddMetadataBlob(*grits.GNodeMetadata) (grits.CachedFile, error)
-
-	GetBlob(addr grits.BlobAddr) (grits.CachedFile, error)
-	PutBlob(file *os.File) (grits.BlobAddr, error)
-
-	Cleanup() error
-
-	RegisterWatcher(watcher grits.FileTreeWatcher)
-	UnregisterWatcher(watcher grits.FileTreeWatcher)
 }
 
 // ModuleConfig represents a generic module configuration.
@@ -134,7 +101,7 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return cmdlineModule, nil
 
-	case "deployment":
+	case "deploy":
 		var deploymentConfig DeploymentConfig
 		if err := json.Unmarshal(rawConfig, &deploymentConfig); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal DeploymentModule config: %v", err)
@@ -233,7 +200,7 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return trackerModule, nil
 
-	case "localvolume":
+	case "volume":
 		var localConfig LocalVolumeConfig
 		if err := json.Unmarshal(rawConfig, &localConfig); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal LocalVolume module config: %v", err)
