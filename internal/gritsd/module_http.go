@@ -368,12 +368,10 @@ func (w *responseWriterWrapper) Write(b []byte) (int, error) {
 
 General route API:
 
-GET to /grits/v1/blob/{hash}-{size} returns the blob data
-
-POST to /grits/v1/upload accepts binary data for the blob in the request body,
-   and the response is the new address ("{hash}-{size}" format) as a JSON-encoded
-   bare string
-
+GET to /grits/v1/blob/{hash} gets blob data
+PUT to /grits/v1/blob uploads a new blob, the response is the new address ("{hash}-{size}" format)
+  as a JSON-encoded bare string
+Or, PUT to /grits/v1/blob/{hash} which will do an early HTTP 204 return if the server already has that blob
 POST to /grits/v1/lookup/{volume} accepts a bare JSON-encoded string in the request body,
   and returns a JSON-encoded array of pairs of strings: [$path, $resource_addr_at_that_path]
 
@@ -391,9 +389,8 @@ func (s *HTTPModule) setupRoutes() {
 	s.Mux.HandleFunc("/", s.requestMiddleware(s.handleDeployment))
 
 	// Content routes:
+	s.Mux.HandleFunc("/grits/v1/blob", s.requestMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/blob/", s.requestMiddleware(s.handleBlob))
-	s.Mux.HandleFunc("/grits/v1/upload", s.requestMiddleware(s.handleBlobUpload))
-
 	s.Mux.HandleFunc("/grits/v1/lookup/", s.requestMiddleware(s.handleLookup))
 	s.Mux.HandleFunc("/grits/v1/link/", s.requestMiddleware(s.handleLink))
 
@@ -418,6 +415,8 @@ func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 		s.handleBlobFetch(w, r) // Automatically skips sending the file for HEAD
 	case http.MethodGet:
 		s.handleBlobFetch(w, r)
+	case http.MethodPut:
+		s.handleBlobUpload(w, r)
 	default:
 		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
 	}
@@ -521,29 +520,65 @@ func getContentTypeFromExtension(ext string) string {
 	return mimeTypes[strings.ToLower(ext)]
 }
 
+// handleBlobUpload handles PUT requests to /grits/v1/blob/ and /grits/v1/blob/{hash}
 func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
-		return
-	}
-
+	// Check if we're in read-only mode
 	if *s.Config.ReadOnly {
 		http.Error(w, "Volume is read-only", http.StatusForbidden)
 		return
 	}
 
-	// Create a temporary file
+	// Extract hash from path if present
+	blobPath := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob")
+	blobPath = strings.TrimPrefix(blobPath, "/")
+
+	expectedHash := ""
+	if blobPath != "" {
+		// Path includes a hash, we'll use it for verification
+		expectedHash = blobPath
+
+		// Remove any extension if present
+		if lastDotIndex := strings.LastIndex(expectedHash, "."); lastDotIndex != -1 {
+			expectedHash = expectedHash[:lastDotIndex]
+		}
+
+		// Handle hash-size format
+		//if dashIndex := strings.LastIndex(expectedHash, "-"); dashIndex != -1 {
+		//	expectedHash = expectedHash[:dashIndex]
+		//}
+
+		// Validate the hash format
+		_, err := grits.NewBlobAddrFromString(expectedHash)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Invalid blob address format: %s", expectedHash), http.StatusBadRequest)
+			return
+		}
+
+		// Early optimization: Check if we already have this blob
+		existingCf, _ := s.Server.BlobStore.ReadFile(grits.BlobAddr(expectedHash))
+		if existingCf != nil {
+			existingCf.Release()
+			// We already have this blob, no need to upload again
+			log.Printf("Blob %s already exists, skipping upload", expectedHash)
+			w.WriteHeader(http.StatusNoContent)
+			json.NewEncoder(w).Encode(expectedHash)
+			return
+		}
+	}
+
+	// Create a temporary file for the upload
 	tmpFile, err := os.CreateTemp("", "blob-upload-*")
 	if err != nil {
 		log.Printf("Failed to create temporary file: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	defer os.Remove(tmpFile.Name()) // Clean up the file afterwards
+	tmpPath := tmpFile.Name()
+	defer os.Remove(tmpPath) // Clean up the file afterwards
 
 	// Read the request body and write it to the temporary file
 	_, err = io.Copy(tmpFile, r.Body)
-	tmpFile.Close()
+	tmpFile.Close() // Close the file now that we're done writing
 	if err != nil {
 		log.Printf("Failed to read request body: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -551,10 +586,25 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add the file to the blob store
-	cachedFile, err := s.Server.BlobStore.AddLocalFile(tmpFile.Name())
+	cachedFile, err := s.Server.BlobStore.AddLocalFile(tmpPath)
 	if err != nil {
 		log.Printf("Failed to add file to blob store: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// Get the actual hash of the uploaded content
+	actualHash := cachedFile.GetAddress()
+
+	// Verification step when expectedHash is provided
+	if expectedHash != "" && expectedHash != string(actualHash) {
+		// Clean up temporary resources and return error
+		cachedFile.Release()
+
+		http.Error(w, fmt.Sprintf(
+			"Hash mismatch: expected %s but got %s",
+			expectedHash, actualHash),
+			http.StatusBadRequest)
 		return
 	}
 
@@ -570,11 +620,9 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	// Log that we're holding a temporary reference
 	log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress())
 
-	// Respond with the address of the new blob
-	addrStr := cachedFile.GetAddress()
+	// Return the hash of the uploaded blob
 	w.WriteHeader(http.StatusOK)
-
-	json.NewEncoder(w).Encode(addrStr)
+	json.NewEncoder(w).Encode(actualHash)
 }
 
 func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
@@ -1019,29 +1067,45 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 // CreateAndUploadMetadata creates a metadata blob for a content blob and uploads it to the server
 // Returns the metadata blob address
 func CreateAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUrl string) (grits.BlobAddr, error) {
+	// Create a metadata node for the content
 	contentNode, err := volume.CreateBlobNode(contentCf.GetAddress(), contentCf.GetSize())
 	if err != nil {
 		return "", err
 	}
 	defer contentNode.Release()
 
-	// Upload the metadata blob to the server
+	// Get a reader for the metadata blob
 	metadataReader, err := contentNode.MetadataBlob().Reader()
 	if err != nil {
 		return "", fmt.Errorf("couldn't create reader for metadata blob: %v", err)
 	}
 	defer metadataReader.Close()
 
-	metadataUploadResp, err := http.Post(remoteUrl+"/upload", "application/octet-stream", metadataReader)
+	// Create a PUT request instead of using http.Post
+	req, err := http.NewRequest(http.MethodPut, remoteUrl+"/blob/", metadataReader)
+	if err != nil {
+		return "", fmt.Errorf("failed to create request for metadata upload: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	// Send the request
+	client := &http.Client{}
+	metadataUploadResp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("failed to upload metadata blob: %v", err)
 	}
 	defer metadataUploadResp.Body.Close()
 
-	if metadataUploadResp.StatusCode != http.StatusOK {
+	// Handle both 200 OK and 204 No Content responses
+	if metadataUploadResp.StatusCode == http.StatusNoContent {
+		// If we get a "No Content" response, the server already had this blob
+		// Return the hash we already know
+		return contentNode.MetadataBlob().GetAddress(), nil
+	} else if metadataUploadResp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("upload of metadata blob failed with status: %d", metadataUploadResp.StatusCode)
 	}
 
+	// For 200 OK responses, decode the hash from the response
 	var uploadedMetadataHash grits.BlobAddr
 	if err := json.NewDecoder(metadataUploadResp.Body).Decode(&uploadedMetadataHash); err != nil {
 		return "", fmt.Errorf("failed to decode metadata blob upload response: %v", err)

@@ -46,10 +46,19 @@ func TestMirrorModule(t *testing.T) {
 
 	originHost := "localhost:2387"
 
-	// Add some content to the origin server
+	// Add some content to the origin server using PUT instead of POST
 	testContent := "This is test content to be mirrored"
-	uploadResp, err := http.Post("http://"+originHost+"/grits/v1/upload", "text/plain",
+
+	// Create a PUT request to upload content
+	req, err := http.NewRequest(http.MethodPut, "http://"+originHost+"/grits/v1/blob/",
 		bytes.NewBufferString(testContent))
+	if err != nil {
+		t.Fatalf("Failed to create upload request: %v", err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+
+	client := &http.Client{}
+	uploadResp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("Failed to upload content to origin server: %v", err)
 	}
@@ -70,24 +79,22 @@ func TestMirrorModule(t *testing.T) {
 	t.Logf("Uploaded blob address: %s", blobAddress)
 
 	// Double-check that the fetch works okay from the actual origin server
+	fetchReq, _ := http.NewRequest("GET", "http://"+originHost+"/grits/v1/blob/"+blobAddress, nil)
 
-	req, _ := http.NewRequest("GET", "http://"+originHost+"/grits/v1/blob/"+blobAddress, nil)
-
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	fetchResp, err := client.Do(fetchReq)
 	if err != nil {
-		t.Fatalf("Failed to fetch blob from mirror: %v", err)
+		t.Fatalf("Failed to fetch blob from origin: %v", err)
 	}
-	defer resp.Body.Close()
+	defer fetchResp.Body.Close()
 
-	// When the mirror returns a non-OK status, read and print the response body
-	if resp.StatusCode != http.StatusOK {
-		errorBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("Mirror returned non-OK status: %d, body: %s", resp.StatusCode, string(errorBody))
+	// When the origin returns a non-OK status, read and print the response body
+	if fetchResp.StatusCode != http.StatusOK {
+		errorBody, _ := io.ReadAll(fetchResp.Body)
+		t.Fatalf("Origin returned non-OK status: %d, body: %s", fetchResp.StatusCode, string(errorBody))
 	}
 
 	// Read the response and verify content matches
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(fetchResp.Body)
 	if err != nil {
 		t.Fatalf("Failed to read response body: %v", err)
 	}
@@ -111,47 +118,49 @@ func TestMirrorModule(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Now fetch the content via the mirror using the correct mirror specifier format
-	req, _ = http.NewRequest("GET", "http://localhost:"+
+	mirrorReq, _ := http.NewRequest("GET", "http://localhost:"+
 		fmt.Sprintf("%d", mirrorPort)+"/grits/v1/blob/"+blobAddress, nil)
 
-	client = &http.Client{}
-	resp, err = client.Do(req)
+	mirrorResp, err := client.Do(mirrorReq)
 	if err != nil {
 		t.Fatalf("Failed to fetch blob from mirror: %v", err)
 	}
-	defer resp.Body.Close()
+	defer mirrorResp.Body.Close()
 
 	// When the mirror returns a non-OK status, read and print the response body
-	if resp.StatusCode != http.StatusOK {
-		errorBody, _ := io.ReadAll(resp.Body)
-		t.Fatalf("Mirror returned non-OK status: %d, body: %s", resp.StatusCode, string(errorBody))
+	if mirrorResp.StatusCode != http.StatusOK {
+		errorBody, _ := io.ReadAll(mirrorResp.Body)
+		t.Fatalf("Mirror returned non-OK status: %d, body: %s", mirrorResp.StatusCode, string(errorBody))
 	}
 
 	// Read the response and verify content matches
-	body, err = io.ReadAll(resp.Body)
+	mirrorBody, err := io.ReadAll(mirrorResp.Body)
 	if err != nil {
 		t.Fatalf("Failed to read response body: %v", err)
 	}
 
-	if string(body) != testContent {
-		t.Errorf("Content mismatch. Expected: %s, Got: %s", testContent, string(body))
+	if string(mirrorBody) != testContent {
+		t.Errorf("Content mismatch. Expected: %s, Got: %s", testContent, string(mirrorBody))
 	}
 
 	// Make a second request to verify it comes from the cache
 	// This doesn't actually verify the cache hit, but confirms functionality
-	resp2, err := client.Do(req)
+	mirrorReq2, _ := http.NewRequest("GET", "http://localhost:"+
+		fmt.Sprintf("%d", mirrorPort)+"/grits/v1/blob/"+blobAddress, nil)
+
+	mirrorResp2, err := client.Do(mirrorReq2)
 	if err != nil {
 		t.Fatalf("Failed to fetch blob from mirror (second request): %v", err)
 	}
-	defer resp2.Body.Close()
+	defer mirrorResp2.Body.Close()
 
-	body2, err := io.ReadAll(resp2.Body)
+	mirrorBody2, err := io.ReadAll(mirrorResp2.Body)
 	if err != nil {
 		t.Fatalf("Failed to read response body (second request): %v", err)
 	}
 
-	if string(body2) != testContent {
+	if string(mirrorBody2) != testContent {
 		t.Errorf("Content mismatch on second request. Expected: %s, Got: %s",
-			testContent, string(body2))
+			testContent, string(mirrorBody2))
 	}
 }

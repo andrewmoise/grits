@@ -229,7 +229,6 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	return srv, originHttpConfig, nil
 }
 
-// setupMirrorServer creates and configures a mirror server
 // testOriginMirrorSystem verifies that:
 // 1. Mirrors register with the origin
 // 2. Content uploaded to origin can be fetched from mirrors
@@ -276,12 +275,21 @@ func testOriginMirrorSystem(originServer *gritsd.Server, originPort int, originH
 	// Create test content
 	testContent := []byte("This is test content from the origin server - " + time.Now().String())
 
-	// Upload to origin server
-	uploadResp, err := http.Post(
-		fmt.Sprintf("%s://%s:%d/grits/v1/upload", scheme, originHost, originPort),
-		"application/octet-stream",
+	// Upload to origin server using PUT instead of POST
+	// Create a PUT request to the new blob endpoint
+	req, err := http.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("%s://%s:%d/grits/v1/blob/", scheme, originHost, originPort),
 		bytes.NewBuffer(testContent),
 	)
+	if err != nil {
+		return fmt.Errorf("failed to create upload request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	// Send the request using a client
+	client := &http.Client{}
+	uploadResp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to upload test content: %v", err)
 	}
