@@ -1,5 +1,8 @@
 Current todo list:
 
+* Switch "fetch" and "upload" to just be /grits/v1/blob via GET and PUT
+* Make "PUT" take the hash of the thing being uploaded and make an appropriate return
+  if we already have it
 * Remote mounts of a volume on a different server
 * Command line interface and FIFO for local command execution
 * Save and restore config, instead of using a config file
@@ -40,3 +43,4 @@ Backlog:
 * Need to worry about key expiration for the certbot keys
 * Standardize on URL format for identifying peer and mirror protocol/hostname/port
 * Clean up naming, capitalization, consistency issues
+* Clean up BlobAddr
