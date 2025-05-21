@@ -17,7 +17,7 @@ import (
 // Key structs:
 // - FileNode / TreeNode / BlobNode: A file or directory
 // - GNodeMetadata: Metadata for a file (including the file's content hash)
-// - Pin: Stops file trees from being garbage collected
+// - RefManager: Stops file trees from being garbage collected
 // - FileTreeWatcher: Gets notifications when something changed
 //
 // - NameStore: Main class managing the namespace and operations, main functions:
@@ -380,21 +380,21 @@ func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue Fil
 }
 
 /////
-// Pins
+// RefManagers
 
-type Pin struct {
+type RefManager struct {
 	path     string
 	refCount map[BlobAddr]int
 }
 
-func NewPin(path string) *Pin {
-	return &Pin{
+func NewRefManager(path string) *RefManager {
+	return &RefManager{
 		path:     path,
 		refCount: make(map[BlobAddr]int),
 	}
 }
 
-func (ns *NameStore) recursiveTake(pm *Pin, fn FileNode) error {
+func (pm *RefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 	if DebugRefCounts {
 		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[BlobAddr(fn.AddressString())])
 	}
@@ -434,14 +434,14 @@ func (ns *NameStore) recursiveTake(pm *Pin, fn FileNode) error {
 				return err
 			}
 
-			ns.recursiveTake(pm, childNode)
+			pm.recursiveTake(ns, childNode)
 		}
 	}
 
 	return nil
 }
 
-func (ns *NameStore) recursiveRelease(pm *Pin, fn FileNode) error {
+func (pm *RefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 	metadataHash := fn.MetadataBlob().GetAddress()
 	if DebugRefCounts {
 		log.Printf("Recursive release on %s: count %d/%d", fn.AddressString(), fn.RefCount(), pm.refCount[metadataHash])
@@ -462,7 +462,7 @@ func (ns *NameStore) recursiveRelease(pm *Pin, fn FileNode) error {
 				return err
 			}
 
-			ns.recursiveRelease(pm, childNode)
+			pm.recursiveRelease(ns, childNode)
 		}
 
 		fn.Release()
@@ -486,7 +486,7 @@ type NameStore struct {
 	watchers []FileTreeWatcher
 	wmtx     sync.RWMutex // Separate mutex for watchers list
 
-	rootPin *Pin
+	refManager *RefManager
 
 	serialNumber int64 // Increments on every root change
 }
@@ -823,12 +823,12 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 
 	if newRoot != nil {
 		//newRoot.Take()
-		ns.recursiveTake(ns.rootPin, newRoot)
+		ns.refManager.recursiveTake(ns, newRoot)
 	}
 
 	if ns.root != nil {
 		//ns.root.Release()
-		ns.recursiveRelease(ns.rootPin, ns.root)
+		ns.refManager.recursiveRelease(ns, ns.root)
 	}
 
 	ns.root = newRoot
@@ -956,11 +956,11 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 
 	if newRoot != nil {
 		//newRoot.Take()
-		ns.recursiveTake(ns.rootPin, newRoot)
+		ns.refManager.recursiveTake(ns, newRoot)
 	}
 	if ns.root != nil {
 		//ns.root.Release()
-		ns.recursiveRelease(ns.rootPin, ns.root)
+		ns.refManager.recursiveRelease(ns, ns.root)
 	}
 
 	ns.serialNumber++
@@ -1106,9 +1106,9 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr Bl
 
 func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	ns := &NameStore{
-		BlobStore: bs,
-		fileCache: make(map[BlobAddr]FileNode),
-		rootPin:   NewPin(""),
+		BlobStore:  bs,
+		fileCache:  make(map[BlobAddr]FileNode),
+		refManager: NewRefManager(""),
 	}
 
 	rootNodeMap := make(map[string]BlobAddr)
@@ -1118,10 +1118,10 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	}
 
 	//root.Take()
-	ns.recursiveTake(ns.rootPin, root)
+	ns.refManager.recursiveTake(ns, root)
 
 	log.Printf("Done setting up root (%s). Ref count: %d / %d",
-		root.AddressString(), root.refCount, ns.rootPin.refCount[BlobAddr(root.AddressString())])
+		root.AddressString(), root.refCount, ns.refManager.refCount[BlobAddr(root.AddressString())])
 
 	ns.serialNumber = 0
 	ns.root = root
@@ -1136,7 +1136,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr, serialNumber in
 	ns := &NameStore{
 		BlobStore:    bs,
 		fileCache:    make(map[BlobAddr]FileNode),
-		rootPin:      NewPin(""),
+		refManager:   NewRefManager(""),
 		serialNumber: serialNumber,
 	}
 
@@ -1152,7 +1152,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr, serialNumber in
 	}
 
 	//root.Take()
-	ns.recursiveTake(ns.rootPin, root)
+	ns.refManager.recursiveTake(ns, root)
 
 	ns.root = root
 	return ns, nil
@@ -1751,12 +1751,12 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 
 	// Print reference counts
 	nodeRefCount := node.RefCount()
-	rootPinRefCount := 0
+	refManagerRefCount := 0
 	if metadataHash := metadataBlob.GetAddress(); metadataHash != "" {
-		rootPinRefCount = ns.rootPin.refCount[metadataHash]
+		refManagerRefCount = ns.refManager.refCount[metadataHash]
 	}
 
-	log.Printf("  Reference count: %d (object) / %d (rootPin)\n", nodeRefCount, rootPinRefCount)
+	log.Printf("  Reference count: %d (object) / %d (refManager)\n", nodeRefCount, refManagerRefCount)
 
 	// Print blob hashes
 	log.Printf("  Content blob hash: %s\n", contentBlob.GetAddress())
@@ -1817,6 +1817,10 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 // CleanupUnreferencedNodes removes all zero-reference nodes from the fileCache
 // and releases their underlying storage.
 func (ns *NameStore) CleanupUnreferencedNodes() {
+	ns.refManager.Cleanup(ns)
+}
+
+func (rm *RefManager) Cleanup(ns *NameStore) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -1827,11 +1831,11 @@ func (ns *NameStore) CleanupUnreferencedNodes() {
 	for metadataAddr, node := range ns.fileCache {
 		// Check if the node has zero references
 		if node.RefCount() == 0 {
-			// Double check it's not in the pin structure
+			// Double check it's not in the RefManager structure
 			metadataHash := node.MetadataBlob().GetAddress()
-			_, exists := ns.rootPin.refCount[metadataHash]
+			_, exists := ns.refManager.refCount[metadataHash]
 			if exists {
-				log.Panicf("Node %s has 0 refCount but exists in pin structure", metadataHash)
+				log.Panicf("Node %s has 0 refCount but exists in RefManager structure", metadataHash)
 				continue
 			}
 
