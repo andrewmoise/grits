@@ -246,7 +246,7 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 
 		childNode, err := ns.loadFileNode(childAddr, true)
 		if err != nil {
-			return nil, -1, err
+			return nil, expectedResponseLen - len(response), err
 		}
 
 		node = childNode // Move to the next node in the path
@@ -621,7 +621,7 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr Bl
 	if exists {
 		oldChild, err = ns.loadFileNode(oldChildAddr, true)
 		if err != nil {
-			return nil, fmt.Errorf("can't load %s: %v", oldChildAddr, err)
+			return nil, err
 		}
 	} else if len(parts) > 1 {
 		// Directory doesn't exist while searching down in the path while doing a link
@@ -772,9 +772,12 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 	}
 
 	// If not, we have to load it. First load and parse the metadata.
+
+	// FIXME: In a perfect world, we would make sure it's actually a "file not found" error
+	// before we report ErrNotInStore
 	metadataCf, err := ns.BlobStore.ReadFile(metadataAddr)
 	if err != nil {
-		return nil, fmt.Errorf("error reading metadata %s: %v", metadataAddr, err)
+		return nil, ErrNotInStore
 	}
 
 	metadataData, err := metadataCf.Read(0, metadataCf.GetSize())
@@ -794,7 +797,7 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 	contentCf, err := ns.BlobStore.ReadFile(contentHash)
 	if err != nil {
 		metadataCf.Release()
-		return nil, fmt.Errorf("error reading content: %v", err)
+		return nil, ErrNotInStore
 	}
 
 	//log.Printf("We got it. The content addr is %s\n", contentHash)
@@ -1124,7 +1127,8 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 
 			childNode, err := ns.loadFileNode(childAddr, true)
 			if err != nil {
-				log.Panicf("couldn't load %s: %v", childAddr, err)
+				log.Printf("couldn't load %s: %v", childAddr, err)
+				continue
 			}
 
 			ns.dumpTreeNode(indent+"  ", childNode, childName)
@@ -1643,7 +1647,8 @@ func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 	for _, childAddr := range children {
 		childNode, err := ns.loadFileNode(childAddr, true)
 		if err != nil {
-			log.Panicf("couldn't load %s: %v", childAddr, err)
+			log.Printf("couldn't load %s: %v", childAddr, err)
+			continue
 		}
 		ns.debugPrintTree(childNode, indent+"  ")
 	}
@@ -1652,7 +1657,7 @@ func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 ////////////////////////
 // Error sentinels
 
-// Nonexistent files
+// Nonexistent file
 var ErrNotExist = errors.New("file does not exist")
 
 func IsNotExist(err error) bool {
@@ -1671,6 +1676,13 @@ var ErrNotDir = errors.New("path component is not a directory")
 
 func IsNotDir(err error) bool {
 	return errors.Is(err, ErrNotDir)
+}
+
+// Blob to support this data is not found locally
+var ErrNotInStore = errors.New("blob not found in local store")
+
+func IsNotInStore(err error) bool {
+	return errors.Is(err, ErrNotInStore)
 }
 
 /////
@@ -1786,6 +1798,7 @@ func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 		for _, childMetadataAddr := range children {
 			childNode, err := ns.loadFileNode(childMetadataAddr, true)
 			if err != nil {
+				log.Printf("Can't happen! Can't load %s in dense ref manager.", childMetadataAddr)
 				return err
 			}
 
@@ -1814,6 +1827,7 @@ func (pm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 		for _, childMetadataAddr := range children {
 			childNode, err := ns.loadFileNode(childMetadataAddr, true)
 			if err != nil {
+				log.Printf("Can't happen! Can't load %s in dense ref manager.", childMetadataAddr)
 				return err
 			}
 
