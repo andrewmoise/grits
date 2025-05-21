@@ -1,10 +1,6 @@
 Current todo list:
 
-* Switch "fetch" and "upload" to just be /grits/v1/blob via GET and PUT
-* Make "PUT" take the hash of the thing being uploaded and make an appropriate return
-  if we already have it
 * Remote mounts of a volume on a different server
-* Command line interface and FIFO for local command execution
 * Save and restore config, instead of using a config file
 * Security for endpoints, only allow certain characters in main name / identifier things
 
@@ -36,11 +32,17 @@ Backlog:
 * Terminal "control panel" showing pertinent information and letting you issue commands
 * Make validation of blobs / reference counts when you load, instead of leaking references and thus blobs
 * We could communicate client config information (e.g. the list of mirrors) via the volume storage itself
-* Fix infinite loop of trying to fetch when the server goes down
+* Fix infinite loop in GritsClient.js, of trying to fetch when the server goes down
 * Fix duplication of size limits and cleanup between BlobStore and BlobCache
 * Make templating of the JS exports cleaner
 * Mandate some limits on what characters are allowed in things (volumes, peerNames, etc)
 * Need to worry about key expiration for the certbot keys
 * Standardize on URL format for identifying peer and mirror protocol/hostname/port
 * Clean up naming, capitalization, consistency issues
-* Clean up BlobAddr
+* Make MultiLink() return path information like LookupFull()
+* Make multiple operations in a single /link call happen idempotently
+* Get rid of NameStore.Link()
+* Transition some names from what used to be the "new" approach, to just be the normal name (e.g.
+  LinkByMetadata() -> Link()).
+* Make mount module able to mount a subdirectory of a volume
+* mount module needs automated testing
