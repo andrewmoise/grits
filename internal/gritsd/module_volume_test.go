@@ -1,6 +1,7 @@
 package gritsd
 
 import (
+	"grits/internal/grits"
 	"io"
 	"os"
 	"testing"
@@ -329,4 +330,106 @@ func TestSerialNumberPersistence(t *testing.T) {
 	if vol2.ns.GetSerialNumber() != expectedSerial+1 {
 		t.Errorf("Serial number did not increment correctly after load")
 	}
+}
+
+func TestLookupFullAndMultiLinkResults(t *testing.T) {
+	// Setup a test environment
+	server, cleanup := SetupTestServer(t)
+	defer cleanup()
+
+	// Create and populate a volume
+	vol, _ := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false)
+
+	// Create some test files
+	file1, _ := server.BlobStore.AddDataBlock([]byte("file1 content"))
+	defer file1.Release()
+	file2, _ := server.BlobStore.AddDataBlock([]byte("file2 content"))
+	defer file2.Release()
+	file3, _ := server.BlobStore.AddDataBlock([]byte("file3 content"))
+	defer file3.Release()
+
+	// Create nodes for the files
+	node1, _ := vol.CreateBlobNode(file1.GetAddress(), file1.GetSize())
+	defer node1.Release()
+	node2, _ := vol.CreateBlobNode(file2.GetAddress(), file2.GetSize())
+	defer node2.Release()
+	node3, _ := vol.CreateBlobNode(file3.GetAddress(), file3.GetSize())
+	defer node3.Release()
+
+	emptyTree, _ := vol.CreateTreeNode()
+	defer emptyTree.Release()
+
+	vol.LinkByMetadata("dir1", emptyTree.MetadataBlob().GetAddress())
+	vol.LinkByMetadata("dir2", emptyTree.MetadataBlob().GetAddress())
+	vol.LinkByMetadata("dir1/dir3", emptyTree.MetadataBlob().GetAddress())
+
+	// Link the files
+	vol.LinkByMetadata("dir1/file1.txt", node1.MetadataBlob().GetAddress())
+	vol.LinkByMetadata("dir2/file2.txt", node2.MetadataBlob().GetAddress())
+	vol.LinkByMetadata("dir1/dir3/file3.txt", node3.MetadataBlob().GetAddress())
+
+	// Test LookupFull with a single path
+	results, _, _ := vol.LookupFull([]string{"dir1/file1.txt"})
+	if len(results) != 3 {
+		t.Errorf("Expected 3 results, got %d", len(results))
+	}
+	checkPath(t, results[0], "", true)
+	checkPath(t, results[1], "dir1", true)
+	checkPath(t, results[2], "dir1/file1.txt", false)
+
+	// Test LookupFull with multiple paths
+	results, _, _ = vol.LookupFull([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"})
+	if len(results) != 7 {
+		t.Errorf("Expected 7 results, got %d", len(results))
+	}
+	checkPath(t, results[0], "", true)
+	checkPath(t, results[len(results)-1], "dir1/dir3/file3.txt", false)
+	checkPathInResults(t, results, "dir1", true)
+	checkPathInResults(t, results, "dir2", true)
+	checkPathInResults(t, results, "dir1/file1.txt", false)
+	checkPathInResults(t, results, "dir2/file2.txt", false)
+
+	// Test MultiLink
+	linkRequests := []*grits.LinkRequest{
+		{Path: "newdir1", NewAddr: emptyTree.MetadataBlob().GetAddress()},
+		{Path: "newdir2", NewAddr: emptyTree.MetadataBlob().GetAddress()},
+		{Path: "newdir1/newdir3", NewAddr: emptyTree.MetadataBlob().GetAddress()},
+		{Path: "newdir1/newfile1.txt", NewAddr: node1.MetadataBlob().GetAddress()},
+		{Path: "newdir2/newfile2.txt", NewAddr: node2.MetadataBlob().GetAddress()},
+		{Path: "newdir1/newdir3/newfile3.txt", NewAddr: node3.MetadataBlob().GetAddress()},
+	}
+	linkResults, err := vol.MultiLink(linkRequests, true)
+	if err != nil {
+		t.Fatalf("Error return from link: %v", err)
+	}
+
+	if len(linkResults) != 7 {
+		t.Errorf("Expected 7 link results, got %d", len(linkResults))
+	}
+	checkPath(t, linkResults[0], "", true)
+	checkPath(t, linkResults[len(linkResults)-1], "newdir1/newdir3/newfile3.txt", false)
+	checkPathInResults(t, linkResults, "newdir1", true)
+	checkPathInResults(t, linkResults, "newdir2", true)
+	checkPathInResults(t, linkResults, "newdir1/newfile1.txt", false)
+	checkPathInResults(t, linkResults, "newdir2/newfile2.txt", false)
+}
+
+func checkPath(t *testing.T, pair *grits.PathNodePair, expectedPath string, expectedIsDir bool) {
+	if pair.Path != expectedPath {
+		t.Errorf("Expected path %s, got %s", expectedPath, pair.Path)
+	}
+	_, isDir := pair.Node.(*grits.TreeNode)
+	if isDir != expectedIsDir {
+		t.Errorf("Expected isDir %v for path %s, got %v", expectedIsDir, pair.Path, isDir)
+	}
+}
+
+func checkPathInResults(t *testing.T, results []*grits.PathNodePair, path string, isDir bool) {
+	for _, result := range results {
+		if result.Path == path {
+			checkPath(t, result, path, isDir)
+			return
+		}
+	}
+	t.Errorf("Path %s not found in results", path)
 }

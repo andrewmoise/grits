@@ -725,7 +725,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := volume.MultiLink(allLinkRequests); err != nil {
+	if _, err := volume.MultiLink(allLinkRequests, false); err != nil {
 		log.Printf("MultiLink failed: %v", err)
 		http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 		return

@@ -24,7 +24,7 @@ type Volume interface {
 	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*grits.BlobNode, error)
 
 	LinkByMetadata(path string, metadataAddr grits.BlobAddr) error
-	MultiLink([]*grits.LinkRequest) error
+	MultiLink([]*grits.LinkRequest, bool) ([]*grits.PathNodePair, error)
 
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
@@ -211,8 +211,8 @@ func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) 
 }
 
 // MultiLink also needs updating since it's part of the same transition
-func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest) error {
-	return wv.ns.MultiLink(req)
+func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) ([]*grits.PathNodePair, error) {
+	return wv.ns.MultiLink(req, returnResults)
 }
 
 func (wv *LocalVolume) AddBlob(path string) (grits.CachedFile, error) {

@@ -716,7 +716,7 @@ func matchesAddr(a FileNode, b BlobAddr) bool {
 	}
 }
 
-func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
+func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*PathNodePair, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -732,10 +732,10 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 		var node FileNode
 		nodes, failureParts, err := ns.resolvePath(req.Path)
 		if err != nil {
-			return err
+			return nil, err
 		} else if failureParts > 1 {
 			// We failed before we got to the dir we're trying to link into
-			return ErrNotExist
+			return nil, ErrNotExist
 		} else if failureParts == 1 {
 			// We found the parent, but not the requested file, so create it
 			node = nil
@@ -752,7 +752,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 				log.Printf("  Prev value matches")
 			}
 			if !matchesAddr(node, req.PrevAddr) {
-				return ErrAssertionFailed
+				return nil, ErrAssertionFailed
 			}
 			if DebugLinks {
 				log.Printf("  pass")
@@ -764,7 +764,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 				log.Printf("  Is blob")
 			}
 			if node == nil || node.Address().Type != Blob {
-				return ErrAssertionFailed
+				return nil, ErrAssertionFailed
 			}
 			if DebugLinks {
 				log.Printf("  pass")
@@ -776,7 +776,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 				log.Printf("  Is tree")
 			}
 			if node == nil || node.Address().Type != Tree {
-				return ErrAssertionFailed
+				return nil, ErrAssertionFailed
 			}
 			if DebugLinks {
 				log.Printf("  pass")
@@ -788,7 +788,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 				log.Printf("  Is nonempty")
 			}
 			if node == nil {
-				return ErrAssertionFailed
+				return nil, ErrAssertionFailed
 			}
 			if DebugLinks {
 				log.Printf("  pass")
@@ -802,7 +802,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 	for _, req := range requests {
 		name := strings.TrimRight(req.Path, "/")
 		if name != "" && name[0] == '/' {
-			return fmt.Errorf("name must be relative")
+			return nil, fmt.Errorf("name must be relative")
 		}
 
 		if name == "." {
@@ -812,13 +812,13 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 		var err error
 		newRoot, err = ns.recursiveLink("", name, req.NewAddr, newRoot)
 		if err != nil {
-			return err
+			return nil, err
 		}
 	}
 
 	err := ns.notifyWatchers("", oldRoot, newRoot)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if newRoot != nil {
@@ -833,7 +833,87 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest) error {
 
 	ns.root = newRoot
 	ns.serialNumber++
-	return nil
+
+	var response []*PathNodePair
+	if returnResults {
+		// Now build up the lookup results
+		seenPaths := make(map[string]bool)
+
+		// Gather all paths we need to look up
+		for _, req := range requests {
+			path := strings.TrimRight(req.Path, "/")
+
+			// Skip paths we've already processed
+			if _, exists := seenPaths[path]; exists {
+				continue
+			}
+
+			// Look up this path
+			nodes, failureParts, err := ns.resolvePath(path)
+			if err != nil {
+				return nil, err
+			}
+			if failureParts != 0 {
+				// We don't care about failureParts; it's okay for it to happen but the
+				// only way it can happen without some kind of internal error is if one
+				// part of the link overwrites an earlier part with nil. It's a litle
+				// weird, so we log a warning.
+				log.Printf("Found failureParts in MultiLink for %s", path)
+			}
+
+			if len(nodes) <= 0 {
+				log.Printf("Found <= 0 nodes in MultiLink")
+				continue // Path not found... including the root. This definitely seems wrong.
+			}
+
+			// Process all path components including parent directories
+			parts := strings.Split(path, "/")
+			partialPath := ""
+
+			// Add root if we haven't seen it
+			if _, exists := seenPaths[""]; !exists {
+				response = append(response, &PathNodePair{
+					Path: "",
+					Node: nodes[0],
+				})
+				seenPaths[""] = true
+			}
+
+			// Add each path component
+			index := 1
+			for _, part := range parts {
+				if part == "" {
+					continue
+				}
+
+				if index >= len(nodes) {
+					break
+				}
+
+				partialPath = filepath.Join(partialPath, part)
+				node := nodes[index]
+
+				if _, exists := seenPaths[partialPath]; !exists {
+					response = append(response, &PathNodePair{
+						Path: partialPath,
+						Node: node,
+					})
+					seenPaths[partialPath] = true
+				}
+
+				index++
+			}
+		}
+
+		// Take a reference to each node we're returning
+		for _, pair := range response {
+			pair.Node.Take()
+		}
+	} else {
+		response = nil
+	}
+
+	return response, nil
 }
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
