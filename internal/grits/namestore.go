@@ -40,447 +40,6 @@ import (
 // via FUSE).
 
 ////////////////////////
-// Node Types
-
-type GNodeType int
-
-const (
-	GNodeTypeFile GNodeType = iota
-	GNodeTypeDirectory
-)
-
-// MarshalJSON converts a GNodeType to a JSON string
-func (t GNodeType) MarshalJSON() ([]byte, error) {
-	switch t {
-	case GNodeTypeFile:
-		return []byte(`"blob"`), nil
-	case GNodeTypeDirectory:
-		return []byte(`"dir"`), nil
-	default:
-		return nil, fmt.Errorf("unknown GNodeType: %d", t)
-	}
-}
-
-// UnmarshalJSON converts a JSON string to a GNodeType
-func (t *GNodeType) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err != nil {
-		// Try as a number for backward compatibility
-		var i int
-		if err := json.Unmarshal(data, &i); err != nil {
-			return err
-		}
-		*t = GNodeType(i)
-		return nil
-	}
-
-	switch s {
-	case "blob":
-		*t = GNodeTypeFile
-	case "dir":
-		*t = GNodeTypeDirectory
-	default:
-		return fmt.Errorf("unknown GNodeType string: %s", s)
-	}
-	return nil
-}
-
-type GNodeMetadata struct {
-	Type        GNodeType `json:"type"`
-	Size        int64     `json:"size"`
-	ContentHash BlobAddr  `json:"contentHash"`
-	Mode        uint32    `json:"mode,omitempty"`      // File mode (permissions)
-	Timestamp   string    `json:"timestamp,omitempty"` // Last modification time (UTC ISO format)
-}
-
-type FileNode interface {
-	ExportedBlob() CachedFile
-	MetadataBlob() CachedFile
-	Metadata() *GNodeMetadata
-	Children() map[string]BlobAddr
-	AddressString() string
-	Address() *TypedFileAddr
-
-	Take()
-	Release()
-	RefCount() int
-}
-
-type TreeNode struct {
-	blob         CachedFile
-	metadataBlob CachedFile
-	metadata     *GNodeMetadata
-	ChildrenMap  map[string]BlobAddr
-	refCount     int
-	nameStore    *NameStore
-	mtx          sync.Mutex
-}
-
-type BlobNode struct {
-	blob         CachedFile
-	metadataBlob CachedFile
-	metadata     *GNodeMetadata
-	refCount     int
-	mtx          sync.Mutex
-}
-
-// Implementations for BlobNode
-
-func (bn *BlobNode) ExportedBlob() CachedFile {
-	return bn.blob
-}
-
-func (bn *BlobNode) MetadataBlob() CachedFile {
-	return bn.metadataBlob
-}
-
-func (bn *BlobNode) Metadata() *GNodeMetadata {
-	return bn.metadata
-}
-
-func (bn *BlobNode) Children() map[string]BlobAddr {
-	return nil
-}
-
-// Still maintaining TypedFileAddr compatibility for external APIs
-func (bn *BlobNode) AddressString() string {
-	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress(), bn.blob.GetSize())
-}
-
-func (bn *BlobNode) Address() *TypedFileAddr {
-	return NewTypedFileAddr(bn.blob.GetAddress(), bn.blob.GetSize(), Blob)
-}
-
-func (bn *BlobNode) Take() {
-	bn.mtx.Lock()
-	defer bn.mtx.Unlock()
-
-	if DebugRefCounts {
-		log.Printf("TAKE: %s->%s %p (count: %d)",
-			bn.metadataBlob.GetAddress(),
-			bn.AddressString(),
-			bn,
-			bn.refCount+1)
-		PrintStack()
-	}
-
-	bn.refCount++
-}
-
-func (bn *BlobNode) Release() {
-	bn.mtx.Lock()
-	defer bn.mtx.Unlock()
-
-	if DebugRefCounts {
-		log.Printf("RELEASE: %s->%s %p (count: %d)",
-			bn.metadataBlob.GetAddress(),
-			bn.AddressString(),
-			bn,
-			bn.refCount-1)
-		PrintStack()
-	}
-
-	bn.refCount--
-	if bn.refCount < 0 {
-		PrintStack()
-		log.Fatalf("Reduced ref count for %s to < 0", bn.metadataBlob.GetAddress())
-	}
-
-	// This is where we used to release the actual storage; now we're not doing that until
-	// deferred cleanup
-}
-
-// FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
-// might cause take/release of references
-func (bn *BlobNode) RefCount() int {
-	return bn.refCount
-}
-
-// Implementations for TreeNode
-
-func (tn *TreeNode) ExportedBlob() CachedFile {
-	err := tn.ensureSerialized()
-	if err != nil {
-		// FIXME -- need better handling
-		log.Printf("Error! Deserializing %p, got %v", tn, err)
-		return nil
-	}
-
-	return tn.blob
-}
-
-func (tn *TreeNode) MetadataBlob() CachedFile {
-	return tn.metadataBlob
-}
-
-func (tn *TreeNode) Metadata() *GNodeMetadata {
-	tn.ensureSerialized()
-	return tn.metadata
-}
-
-func (tn *TreeNode) Children() map[string]BlobAddr {
-	return tn.ChildrenMap
-}
-
-// Still maintaining TypedFileAddr compatibility for external APIs
-func (tn *TreeNode) Address() *TypedFileAddr {
-	tn.ensureSerialized()
-	return NewTypedFileAddr(tn.blob.GetAddress(), tn.blob.GetSize(), Tree)
-}
-
-func (tn *TreeNode) AddressString() string {
-	tn.ensureSerialized()
-	return fmt.Sprintf("tree:%s-%d", tn.blob.GetAddress(), tn.blob.GetSize())
-}
-
-func (tn *TreeNode) Take() {
-	tn.mtx.Lock()
-	defer tn.mtx.Unlock()
-
-	if DebugRefCounts {
-		log.Printf("TAKE: %s %p (count: %d)",
-			tn.metadataBlob.GetAddress(),
-			tn,
-			tn.refCount+1)
-		PrintStack()
-	}
-
-	tn.refCount++
-}
-
-func (tn *TreeNode) Release() {
-	tn.mtx.Lock()
-	defer tn.mtx.Unlock()
-
-	if DebugRefCounts {
-		log.Printf("RELEASE: %s %p (count: %d)",
-			tn.metadataBlob.GetAddress(),
-			tn,
-			tn.refCount-1)
-		PrintStack()
-	}
-
-	tn.refCount--
-	if tn.refCount < 0 {
-		log.Fatalf("Reduced ref count for %s to < 0", tn.metadataBlob.GetAddress())
-	}
-
-	// This is where we used to release the actual storage; now we do not do that.
-}
-
-// FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
-// might cause take/release of references
-func (tn *TreeNode) RefCount() int {
-	return tn.refCount
-}
-
-func (ns *NameStore) DebugPrintTree(node FileNode) {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
-
-	ns.debugPrintTree(node, "")
-}
-
-func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
-	if node == nil {
-		return
-	}
-
-	children := node.Children()
-	if children == nil {
-		return
-	}
-
-	for _, childAddr := range children {
-		childNode, err := ns.loadFileNode(childAddr, true)
-		if err != nil {
-			log.Panicf("couldn't load %s: %v", childAddr, err)
-		}
-		ns.debugPrintTree(childNode, indent+"  ")
-	}
-}
-
-////////////////////////
-// Error sentinels
-
-// Nonexistent files
-var ErrNotExist = errors.New("file does not exist")
-
-func IsNotExist(err error) bool {
-	return errors.Is(err, ErrNotExist)
-}
-
-// Assertion failures in MultiLink operations
-var ErrAssertionFailed = errors.New("assertion conditions not satisfied")
-
-func IsAssertionFailed(err error) bool {
-	return errors.Is(err, ErrAssertionFailed)
-}
-
-// Path traversal hits a non-directory component
-var ErrNotDir = errors.New("path component is not a directory")
-
-func IsNotDir(err error) bool {
-	return errors.Is(err, ErrNotDir)
-}
-
-/////
-// Watch and notification interface
-
-type FileTreeWatcher interface {
-	// OnFileTreeChange is called whenever a path in the tree changes
-	OnFileTreeChange(path string, oldValue FileNode, newValue FileNode) error
-}
-
-// RegisterWatcher adds a watcher to be notified of tree changes
-func (ns *NameStore) RegisterWatcher(watcher FileTreeWatcher) {
-	ns.wmtx.Lock()
-	defer ns.wmtx.Unlock()
-
-	for _, w := range ns.watchers {
-		if w == watcher {
-			return
-		}
-	}
-
-	ns.watchers = append(ns.watchers, watcher)
-}
-
-// UnregisterWatcher removes a watcher from notification list
-func (ns *NameStore) UnregisterWatcher(watcher FileTreeWatcher) {
-	ns.wmtx.Lock()
-	defer ns.wmtx.Unlock()
-
-	for i, w := range ns.watchers {
-		if w == watcher {
-			// Remove by replacing with last element and truncating
-			ns.watchers[i] = ns.watchers[len(ns.watchers)-1]
-			ns.watchers = ns.watchers[:len(ns.watchers)-1]
-			break
-		}
-	}
-}
-
-// notifyWatchers sends event to all registered watchers
-func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue FileNode) error {
-	ns.wmtx.RLock()
-	watchers := make([]FileTreeWatcher, len(ns.watchers))
-	copy(watchers, ns.watchers) // Copy to avoid holding lock during callbacks
-	ns.wmtx.RUnlock()
-
-	// Notify each watcher
-	for _, watcher := range watchers {
-		err := watcher.OnFileTreeChange(path, oldValue, newValue)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-/////
-// RefManagers
-
-type RefManager interface {
-	recursiveTake(ns *NameStore, fn FileNode) error
-	recursiveRelease(ns *NameStore, fn FileNode) error
-	cleanup(ns *NameStore)
-}
-
-type DenseRefManager struct {
-	path     string
-	refCount map[BlobAddr]int
-}
-
-func NewDenseRefManager(path string) *DenseRefManager {
-	return &DenseRefManager{
-		path:     path,
-		refCount: make(map[BlobAddr]int),
-	}
-}
-
-func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
-	if DebugRefCounts {
-		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[BlobAddr(fn.AddressString())])
-	}
-
-	metadataHash := fn.MetadataBlob().GetAddress()
-
-	refCount, exists := pm.refCount[metadataHash]
-
-	if exists {
-		if DebugRefCounts {
-			log.Printf("  already exists")
-		}
-		if refCount <= 0 {
-			log.Fatalf("ref count for %s is nonpositive", metadataHash)
-		}
-
-		pm.refCount[metadataHash] = refCount + 1
-		if DebugRefCounts {
-			log.Printf("Increment count! For %s, we go to %d", metadataHash, refCount+1)
-		}
-	} else {
-		if DebugRefCounts {
-			log.Printf("  doesn't exist")
-		}
-
-		fn.Take()
-		pm.refCount[metadataHash] = 1
-
-		children := fn.Children()
-		if children == nil {
-			return nil
-		}
-
-		for _, childMetadataAddr := range children {
-			childNode, err := ns.loadFileNode(childMetadataAddr, true)
-			if err != nil {
-				return err
-			}
-
-			pm.recursiveTake(ns, childNode)
-		}
-	}
-
-	return nil
-}
-
-func (pm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
-	metadataHash := fn.MetadataBlob().GetAddress()
-	if DebugRefCounts {
-		log.Printf("Recursive release on %s: count %d/%d", fn.AddressString(), fn.RefCount(), pm.refCount[metadataHash])
-	}
-
-	refCount, exists := pm.refCount[metadataHash]
-	if !exists {
-		log.Fatalf("can't find %s in ref count to release", metadataHash)
-	}
-
-	if refCount <= 0 {
-		log.Fatalf("Releasing 0-reference node")
-	} else if refCount == 1 {
-		children := fn.Children()
-		for _, childMetadataAddr := range children {
-			childNode, err := ns.loadFileNode(childMetadataAddr, true)
-			if err != nil {
-				return err
-			}
-
-			pm.recursiveRelease(ns, childNode)
-		}
-
-		fn.Release()
-		delete(pm.refCount, metadataHash)
-	} else {
-		pm.refCount[metadataHash] = refCount - 1
-	}
-
-	return nil
-}
-
-////////////////////////
 // NameStore
 
 type NameStore struct {
@@ -1823,6 +1382,451 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 // and releases their underlying storage.
 func (ns *NameStore) CleanupUnreferencedNodes() {
 	ns.refManager.cleanup(ns)
+}
+
+//////////////////////////////////////////////
+// Various non-NameStore-struct things, support structures
+//////////////////////////////////////////////
+
+////////////////////////
+// Node Types
+
+type GNodeType int
+
+const (
+	GNodeTypeFile GNodeType = iota
+	GNodeTypeDirectory
+)
+
+// MarshalJSON converts a GNodeType to a JSON string
+func (t GNodeType) MarshalJSON() ([]byte, error) {
+	switch t {
+	case GNodeTypeFile:
+		return []byte(`"blob"`), nil
+	case GNodeTypeDirectory:
+		return []byte(`"dir"`), nil
+	default:
+		return nil, fmt.Errorf("unknown GNodeType: %d", t)
+	}
+}
+
+// UnmarshalJSON converts a JSON string to a GNodeType
+func (t *GNodeType) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		// Try as a number for backward compatibility
+		var i int
+		if err := json.Unmarshal(data, &i); err != nil {
+			return err
+		}
+		*t = GNodeType(i)
+		return nil
+	}
+
+	switch s {
+	case "blob":
+		*t = GNodeTypeFile
+	case "dir":
+		*t = GNodeTypeDirectory
+	default:
+		return fmt.Errorf("unknown GNodeType string: %s", s)
+	}
+	return nil
+}
+
+type GNodeMetadata struct {
+	Type        GNodeType `json:"type"`
+	Size        int64     `json:"size"`
+	ContentHash BlobAddr  `json:"contentHash"`
+	Mode        uint32    `json:"mode,omitempty"`      // File mode (permissions)
+	Timestamp   string    `json:"timestamp,omitempty"` // Last modification time (UTC ISO format)
+}
+
+type FileNode interface {
+	ExportedBlob() CachedFile
+	MetadataBlob() CachedFile
+	Metadata() *GNodeMetadata
+	Children() map[string]BlobAddr
+	AddressString() string
+	Address() *TypedFileAddr
+
+	Take()
+	Release()
+	RefCount() int
+}
+
+type TreeNode struct {
+	blob         CachedFile
+	metadataBlob CachedFile
+	metadata     *GNodeMetadata
+	ChildrenMap  map[string]BlobAddr
+	refCount     int
+	nameStore    *NameStore
+	mtx          sync.Mutex
+}
+
+type BlobNode struct {
+	blob         CachedFile
+	metadataBlob CachedFile
+	metadata     *GNodeMetadata
+	refCount     int
+	mtx          sync.Mutex
+}
+
+// Implementations for BlobNode
+
+func (bn *BlobNode) ExportedBlob() CachedFile {
+	return bn.blob
+}
+
+func (bn *BlobNode) MetadataBlob() CachedFile {
+	return bn.metadataBlob
+}
+
+func (bn *BlobNode) Metadata() *GNodeMetadata {
+	return bn.metadata
+}
+
+func (bn *BlobNode) Children() map[string]BlobAddr {
+	return nil
+}
+
+// Still maintaining TypedFileAddr compatibility for external APIs
+func (bn *BlobNode) AddressString() string {
+	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress(), bn.blob.GetSize())
+}
+
+func (bn *BlobNode) Address() *TypedFileAddr {
+	return NewTypedFileAddr(bn.blob.GetAddress(), bn.blob.GetSize(), Blob)
+}
+
+func (bn *BlobNode) Take() {
+	bn.mtx.Lock()
+	defer bn.mtx.Unlock()
+
+	if DebugRefCounts {
+		log.Printf("TAKE: %s->%s %p (count: %d)",
+			bn.metadataBlob.GetAddress(),
+			bn.AddressString(),
+			bn,
+			bn.refCount+1)
+		PrintStack()
+	}
+
+	bn.refCount++
+}
+
+func (bn *BlobNode) Release() {
+	bn.mtx.Lock()
+	defer bn.mtx.Unlock()
+
+	if DebugRefCounts {
+		log.Printf("RELEASE: %s->%s %p (count: %d)",
+			bn.metadataBlob.GetAddress(),
+			bn.AddressString(),
+			bn,
+			bn.refCount-1)
+		PrintStack()
+	}
+
+	bn.refCount--
+	if bn.refCount < 0 {
+		PrintStack()
+		log.Fatalf("Reduced ref count for %s to < 0", bn.metadataBlob.GetAddress())
+	}
+
+	// This is where we used to release the actual storage; now we're not doing that until
+	// deferred cleanup
+}
+
+// FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
+// might cause take/release of references
+func (bn *BlobNode) RefCount() int {
+	return bn.refCount
+}
+
+// Implementations for TreeNode
+
+func (tn *TreeNode) ExportedBlob() CachedFile {
+	err := tn.ensureSerialized()
+	if err != nil {
+		// FIXME -- need better handling
+		log.Printf("Error! Deserializing %p, got %v", tn, err)
+		return nil
+	}
+
+	return tn.blob
+}
+
+func (tn *TreeNode) MetadataBlob() CachedFile {
+	return tn.metadataBlob
+}
+
+func (tn *TreeNode) Metadata() *GNodeMetadata {
+	tn.ensureSerialized()
+	return tn.metadata
+}
+
+func (tn *TreeNode) Children() map[string]BlobAddr {
+	return tn.ChildrenMap
+}
+
+// Still maintaining TypedFileAddr compatibility for external APIs
+func (tn *TreeNode) Address() *TypedFileAddr {
+	tn.ensureSerialized()
+	return NewTypedFileAddr(tn.blob.GetAddress(), tn.blob.GetSize(), Tree)
+}
+
+func (tn *TreeNode) AddressString() string {
+	tn.ensureSerialized()
+	return fmt.Sprintf("tree:%s-%d", tn.blob.GetAddress(), tn.blob.GetSize())
+}
+
+func (tn *TreeNode) Take() {
+	tn.mtx.Lock()
+	defer tn.mtx.Unlock()
+
+	if DebugRefCounts {
+		log.Printf("TAKE: %s %p (count: %d)",
+			tn.metadataBlob.GetAddress(),
+			tn,
+			tn.refCount+1)
+		PrintStack()
+	}
+
+	tn.refCount++
+}
+
+func (tn *TreeNode) Release() {
+	tn.mtx.Lock()
+	defer tn.mtx.Unlock()
+
+	if DebugRefCounts {
+		log.Printf("RELEASE: %s %p (count: %d)",
+			tn.metadataBlob.GetAddress(),
+			tn,
+			tn.refCount-1)
+		PrintStack()
+	}
+
+	tn.refCount--
+	if tn.refCount < 0 {
+		log.Fatalf("Reduced ref count for %s to < 0", tn.metadataBlob.GetAddress())
+	}
+
+	// This is where we used to release the actual storage; now we do not do that.
+}
+
+// FIXME - Maybe audit the callers of this, make sure they are synchronized WRT things that
+// might cause take/release of references
+func (tn *TreeNode) RefCount() int {
+	return tn.refCount
+}
+
+func (ns *NameStore) DebugPrintTree(node FileNode) {
+	ns.mtx.RLock()
+	defer ns.mtx.RUnlock()
+
+	ns.debugPrintTree(node, "")
+}
+
+func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
+	if node == nil {
+		return
+	}
+
+	children := node.Children()
+	if children == nil {
+		return
+	}
+
+	for _, childAddr := range children {
+		childNode, err := ns.loadFileNode(childAddr, true)
+		if err != nil {
+			log.Panicf("couldn't load %s: %v", childAddr, err)
+		}
+		ns.debugPrintTree(childNode, indent+"  ")
+	}
+}
+
+////////////////////////
+// Error sentinels
+
+// Nonexistent files
+var ErrNotExist = errors.New("file does not exist")
+
+func IsNotExist(err error) bool {
+	return errors.Is(err, ErrNotExist)
+}
+
+// Assertion failures in MultiLink operations
+var ErrAssertionFailed = errors.New("assertion conditions not satisfied")
+
+func IsAssertionFailed(err error) bool {
+	return errors.Is(err, ErrAssertionFailed)
+}
+
+// Path traversal hits a non-directory component
+var ErrNotDir = errors.New("path component is not a directory")
+
+func IsNotDir(err error) bool {
+	return errors.Is(err, ErrNotDir)
+}
+
+/////
+// Watch and notification interface
+
+type FileTreeWatcher interface {
+	// OnFileTreeChange is called whenever a path in the tree changes
+	OnFileTreeChange(path string, oldValue FileNode, newValue FileNode) error
+}
+
+// RegisterWatcher adds a watcher to be notified of tree changes
+func (ns *NameStore) RegisterWatcher(watcher FileTreeWatcher) {
+	ns.wmtx.Lock()
+	defer ns.wmtx.Unlock()
+
+	for _, w := range ns.watchers {
+		if w == watcher {
+			return
+		}
+	}
+
+	ns.watchers = append(ns.watchers, watcher)
+}
+
+// UnregisterWatcher removes a watcher from notification list
+func (ns *NameStore) UnregisterWatcher(watcher FileTreeWatcher) {
+	ns.wmtx.Lock()
+	defer ns.wmtx.Unlock()
+
+	for i, w := range ns.watchers {
+		if w == watcher {
+			// Remove by replacing with last element and truncating
+			ns.watchers[i] = ns.watchers[len(ns.watchers)-1]
+			ns.watchers = ns.watchers[:len(ns.watchers)-1]
+			break
+		}
+	}
+}
+
+// notifyWatchers sends event to all registered watchers
+func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue FileNode) error {
+	ns.wmtx.RLock()
+	watchers := make([]FileTreeWatcher, len(ns.watchers))
+	copy(watchers, ns.watchers) // Copy to avoid holding lock during callbacks
+	ns.wmtx.RUnlock()
+
+	// Notify each watcher
+	for _, watcher := range watchers {
+		err := watcher.OnFileTreeChange(path, oldValue, newValue)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+/////
+// RefManagers
+
+type RefManager interface {
+	recursiveTake(ns *NameStore, fn FileNode) error
+	recursiveRelease(ns *NameStore, fn FileNode) error
+	cleanup(ns *NameStore)
+}
+
+type DenseRefManager struct {
+	path     string
+	refCount map[BlobAddr]int
+}
+
+func NewDenseRefManager(path string) *DenseRefManager {
+	return &DenseRefManager{
+		path:     path,
+		refCount: make(map[BlobAddr]int),
+	}
+}
+
+func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
+	if DebugRefCounts {
+		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[BlobAddr(fn.AddressString())])
+	}
+
+	metadataHash := fn.MetadataBlob().GetAddress()
+
+	refCount, exists := pm.refCount[metadataHash]
+
+	if exists {
+		if DebugRefCounts {
+			log.Printf("  already exists")
+		}
+		if refCount <= 0 {
+			log.Fatalf("ref count for %s is nonpositive", metadataHash)
+		}
+
+		pm.refCount[metadataHash] = refCount + 1
+		if DebugRefCounts {
+			log.Printf("Increment count! For %s, we go to %d", metadataHash, refCount+1)
+		}
+	} else {
+		if DebugRefCounts {
+			log.Printf("  doesn't exist")
+		}
+
+		fn.Take()
+		pm.refCount[metadataHash] = 1
+
+		children := fn.Children()
+		if children == nil {
+			return nil
+		}
+
+		for _, childMetadataAddr := range children {
+			childNode, err := ns.loadFileNode(childMetadataAddr, true)
+			if err != nil {
+				return err
+			}
+
+			pm.recursiveTake(ns, childNode)
+		}
+	}
+
+	return nil
+}
+
+func (pm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
+	metadataHash := fn.MetadataBlob().GetAddress()
+	if DebugRefCounts {
+		log.Printf("Recursive release on %s: count %d/%d", fn.AddressString(), fn.RefCount(), pm.refCount[metadataHash])
+	}
+
+	refCount, exists := pm.refCount[metadataHash]
+	if !exists {
+		log.Fatalf("can't find %s in ref count to release", metadataHash)
+	}
+
+	if refCount <= 0 {
+		log.Fatalf("Releasing 0-reference node")
+	} else if refCount == 1 {
+		children := fn.Children()
+		for _, childMetadataAddr := range children {
+			childNode, err := ns.loadFileNode(childMetadataAddr, true)
+			if err != nil {
+				return err
+			}
+
+			pm.recursiveRelease(ns, childNode)
+		}
+
+		fn.Release()
+		delete(pm.refCount, metadataHash)
+	} else {
+		pm.refCount[metadataHash] = refCount - 1
+	}
+
+	return nil
 }
 
 func (rm *DenseRefManager) cleanup(ns *NameStore) {
