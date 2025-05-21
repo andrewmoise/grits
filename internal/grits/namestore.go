@@ -382,19 +382,25 @@ func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue Fil
 /////
 // RefManagers
 
-type RefManager struct {
+type RefManager interface {
+	recursiveTake(ns *NameStore, fn FileNode) error
+	recursiveRelease(ns *NameStore, fn FileNode) error
+	cleanup(ns *NameStore)
+}
+
+type DenseRefManager struct {
 	path     string
 	refCount map[BlobAddr]int
 }
 
-func NewRefManager(path string) *RefManager {
-	return &RefManager{
+func NewDenseRefManager(path string) *DenseRefManager {
+	return &DenseRefManager{
 		path:     path,
 		refCount: make(map[BlobAddr]int),
 	}
 }
 
-func (pm *RefManager) recursiveTake(ns *NameStore, fn FileNode) error {
+func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 	if DebugRefCounts {
 		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[BlobAddr(fn.AddressString())])
 	}
@@ -441,7 +447,7 @@ func (pm *RefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 	return nil
 }
 
-func (pm *RefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
+func (pm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 	metadataHash := fn.MetadataBlob().GetAddress()
 	if DebugRefCounts {
 		log.Printf("Recursive release on %s: count %d/%d", fn.AddressString(), fn.RefCount(), pm.refCount[metadataHash])
@@ -486,7 +492,7 @@ type NameStore struct {
 	watchers []FileTreeWatcher
 	wmtx     sync.RWMutex // Separate mutex for watchers list
 
-	refManager *RefManager
+	refManager RefManager
 
 	serialNumber int64 // Increments on every root change
 }
@@ -1108,7 +1114,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore:  bs,
 		fileCache:  make(map[BlobAddr]FileNode),
-		refManager: NewRefManager(""),
+		refManager: NewDenseRefManager(""),
 	}
 
 	rootNodeMap := make(map[string]BlobAddr)
@@ -1120,8 +1126,8 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	//root.Take()
 	ns.refManager.recursiveTake(ns, root)
 
-	log.Printf("Done setting up root (%s). Ref count: %d / %d",
-		root.AddressString(), root.refCount, ns.refManager.refCount[BlobAddr(root.AddressString())])
+	//log.Printf("Done setting up root (%s). Ref count: %d / %d",
+	//	root.AddressString(), root.refCount, ns.refManager.refCount[BlobAddr(root.AddressString())])
 
 	ns.serialNumber = 0
 	ns.root = root
@@ -1136,7 +1142,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr, serialNumber in
 	ns := &NameStore{
 		BlobStore:    bs,
 		fileCache:    make(map[BlobAddr]FileNode),
-		refManager:   NewRefManager(""),
+		refManager:   NewDenseRefManager(""),
 		serialNumber: serialNumber,
 	}
 
@@ -1750,13 +1756,12 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 	log.Printf("  Node type: %T\n", node)
 
 	// Print reference counts
-	nodeRefCount := node.RefCount()
-	refManagerRefCount := 0
-	if metadataHash := metadataBlob.GetAddress(); metadataHash != "" {
-		refManagerRefCount = ns.refManager.refCount[metadataHash]
-	}
-
-	log.Printf("  Reference count: %d (object) / %d (refManager)\n", nodeRefCount, refManagerRefCount)
+	//nodeRefCount := node.RefCount()
+	//refManagerRefCount := 0
+	//if metadataHash := metadataBlob.GetAddress(); metadataHash != "" {
+	//	refManagerRefCount = ns.refManager.refCount[metadataHash]
+	//}
+	//log.Printf("  Reference count: %d (object) / %d (refManager)\n", nodeRefCount, refManagerRefCount)
 
 	// Print blob hashes
 	log.Printf("  Content blob hash: %s\n", contentBlob.GetAddress())
@@ -1817,10 +1822,10 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 // CleanupUnreferencedNodes removes all zero-reference nodes from the fileCache
 // and releases their underlying storage.
 func (ns *NameStore) CleanupUnreferencedNodes() {
-	ns.refManager.Cleanup(ns)
+	ns.refManager.cleanup(ns)
 }
 
-func (rm *RefManager) Cleanup(ns *NameStore) {
+func (rm *DenseRefManager) cleanup(ns *NameStore) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -1833,7 +1838,7 @@ func (rm *RefManager) Cleanup(ns *NameStore) {
 		if node.RefCount() == 0 {
 			// Double check it's not in the RefManager structure
 			metadataHash := node.MetadataBlob().GetAddress()
-			_, exists := ns.refManager.refCount[metadataHash]
+			_, exists := rm.refCount[metadataHash]
 			if exists {
 				log.Panicf("Node %s has 0 refCount but exists in RefManager structure", metadataHash)
 				continue
