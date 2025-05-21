@@ -864,7 +864,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 		NewAddr: metadataBlob.GetAddress(),
 	}
 
-	err = gn.module.volume.MultiLink([]*grits.LinkRequest{req})
+	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false)
 	if err != nil {
 		return fs.ToErrno(err)
 	}
@@ -1216,7 +1216,7 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		Assert:   grits.AssertPrevValueMatches,
 	}
 
-	err = gn.module.volume.MultiLink([]*grits.LinkRequest{req})
+	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false)
 	if grits.IsAssertionFailed(err) {
 		return nil, syscall.EEXIST
 	} else if err != nil {
@@ -1257,7 +1257,7 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		Assert:  grits.AssertIsNonEmpty | grits.AssertIsBlob,
 	}
 
-	err := gn.module.volume.MultiLink([]*grits.LinkRequest{req})
+	_, err := gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false)
 	if err != nil {
 		log.Printf("4 NGN fail %v", err)
 		return syscall.EIO
@@ -1299,7 +1299,7 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		Assert:   grits.AssertIsTree | grits.AssertPrevValueMatches,
 	}
 
-	err = gn.module.volume.MultiLink([]*grits.LinkRequest{req})
+	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false)
 	if err != nil {
 		log.Printf("5 NGN fail %v", err)
 		return syscall.EIO
@@ -1399,7 +1399,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 			//Assert:   grits.AssertPrevValueMatches,
 		}
 
-		err = gn.module.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq})
+		_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq}, false)
 		prevNode.Release()
 		if grits.IsNotDir(err) {
 			return syscall.ENOTDIR
