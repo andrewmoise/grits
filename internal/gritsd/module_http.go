@@ -725,31 +725,18 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := volume.MultiLink(allLinkRequests, false); err != nil {
-		log.Printf("MultiLink failed: %v", err)
+	pathNodePairs, err := volume.MultiLink(allLinkRequests, true)
+	if err != nil {
+		log.Printf("HTTP API MultiLink() failed: %v", err)
 		http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// Checkpoint the volume after all links are performed
-	err := volume.Checkpoint()
+	err = volume.Checkpoint()
 	if err != nil {
 		log.Printf("Failed to checkpoint %s: %v", volume, err)
 		http.Error(w, fmt.Sprintf("Failed to checkpoint %s: %v", volume, err), http.StatusInternalServerError)
-		return
-	}
-
-	// Gather all paths that were affected by the link operations
-	paths := make([]string, len(allLinkRequests))
-	for i, data := range allLinkRequests {
-		paths[i] = data.Path
-	}
-
-	// LookupFull will automatically include all parent paths
-	pathNodePairs, _, err := volume.LookupFull(paths)
-	if err != nil {
-		log.Printf("Lookup after link failed: %v", err)
-		http.Error(w, fmt.Sprintf("Lookup after link failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -768,16 +755,11 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 			contentSize,
 		}
 
-		// Release the reference we took in LookupFull
+		// Release the reference we took in MultiLink
 		node.Release()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	// So... even if we got a partial failure from the lookup, the *link*
-	// probably actually succeeded. It's not wholly relevant whether the
-	// stuff we linked went away after we linked it, so even though it maybe
-	// is not ideal we still return success to the client in that case.
-	// Use same status code approach as lookup endpoint
 	w.WriteHeader(http.StatusOK)
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
