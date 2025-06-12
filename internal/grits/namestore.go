@@ -44,7 +44,7 @@ import (
 
 type NameStore struct {
 	BlobStore BlobStore
-	root      FileNode
+	rootAddr  BlobAddr
 	fileCache map[BlobAddr]FileNode
 	mtx       sync.RWMutex
 
@@ -57,7 +57,7 @@ type NameStore struct {
 }
 
 func (ns *NameStore) GetRoot() string {
-	return ns.root.AddressString()
+	return string(ns.rootAddr)
 }
 
 func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
@@ -204,7 +204,7 @@ func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 
 func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 	if DebugNameStore {
-		log.Printf("We resolve path %s (root %v)\n", path, ns.root)
+		log.Printf("We resolve path %s (root %s)\n", path, ns.rootAddr)
 	}
 
 	path = strings.TrimRight(path, "/")
@@ -213,7 +213,10 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 	}
 
 	parts := strings.Split(path, "/")
-	node := ns.root
+	node, err := ns.loadFileNode(ns.rootAddr, false)
+	if err != nil {
+		return nil, -1, err
+	}
 
 	if node == nil {
 		return nil, -1, fmt.Errorf("looking up in nil root")
@@ -361,8 +364,11 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 		}
 	}
 
-	oldRoot := ns.root
-	newRoot := ns.root
+	oldRoot, err := ns.loadFileNode(ns.rootAddr, false)
+	if err != nil {
+		return nil, err
+	}
+	newRoot := oldRoot
 
 	for _, req := range requests {
 		name := strings.TrimRight(req.Path, "/")
@@ -381,7 +387,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 		}
 	}
 
-	err := ns.notifyWatchers("", oldRoot, newRoot)
+	err = ns.notifyWatchers("", oldRoot, newRoot)
 	if err != nil {
 		return nil, err
 	}
@@ -391,12 +397,12 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 		ns.refManager.recursiveTake(ns, newRoot)
 	}
 
-	if ns.root != nil {
+	if oldRoot != nil {
 		//ns.root.Release()
-		ns.refManager.recursiveRelease(ns, ns.root)
+		ns.refManager.recursiveRelease(ns, oldRoot)
 	}
 
-	ns.root = newRoot
+	ns.rootAddr = newRoot.MetadataBlob().GetAddress()
 	ns.serialNumber++
 
 	var response []*PathNodePair
@@ -509,12 +515,17 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	newRoot, err := ns.recursiveLink("", name, metadataAddr, ns.root)
+	oldRoot, err := ns.loadFileNode(ns.rootAddr, false)
 	if err != nil {
 		return err
 	}
 
-	err = ns.notifyWatchers("", ns.root, newRoot)
+	newRoot, err := ns.recursiveLink("", name, metadataAddr, oldRoot)
+	if err != nil {
+		return err
+	}
+
+	err = ns.notifyWatchers("", oldRoot, newRoot)
 	if err != nil {
 		return err
 	}
@@ -522,14 +533,16 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 	if newRoot != nil {
 		//newRoot.Take()
 		ns.refManager.recursiveTake(ns, newRoot)
+		ns.rootAddr = newRoot.MetadataBlob().GetAddress()
+	} else {
+		ns.rootAddr = ""
 	}
-	if ns.root != nil {
+	if oldRoot != nil {
 		//ns.root.Release()
-		ns.refManager.recursiveRelease(ns, ns.root)
+		ns.refManager.recursiveRelease(ns, oldRoot)
 	}
 
 	ns.serialNumber++
-	ns.root = newRoot
 	return nil
 }
 
@@ -689,7 +702,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	//	root.AddressString(), root.refCount, ns.refManager.refCount[BlobAddr(root.AddressString())])
 
 	ns.serialNumber = 0
-	ns.root = root
+	ns.rootAddr = root.MetadataBlob().GetAddress()
 	return ns, nil
 }
 
@@ -697,7 +710,7 @@ func (ns *NameStore) GetSerialNumber() int64 {
 	return ns.serialNumber
 }
 
-func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr, serialNumber int64) (*NameStore, error) {
+func DeserializeNameStore(bs BlobStore, rootAddr BlobAddr, serialNumber int64) (*NameStore, error) {
 	ns := &NameStore{
 		BlobStore:    bs,
 		fileCache:    make(map[BlobAddr]FileNode),
@@ -705,13 +718,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr, serialNumber in
 		serialNumber: serialNumber,
 	}
 
-	rootCf, err := ns.typeToMetadata(rootAddr)
-	if err != nil {
-		return nil, fmt.Errorf("error loading root node: %v", err)
-	}
-	defer rootCf.Release()
-
-	root, err := ns.loadFileNode(rootCf.GetAddress(), true)
+	root, err := ns.loadFileNode(rootAddr, true)
 	if err != nil {
 		return nil, err
 	}
@@ -719,7 +726,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr *TypedFileAddr, serialNumber in
 	//root.Take()
 	ns.refManager.recursiveTake(ns, root)
 
-	ns.root = root
+	ns.rootAddr = root.MetadataBlob().GetAddress()
 	return ns, nil
 }
 
@@ -936,7 +943,7 @@ func (ns *NameStore) CreateTreeNode(children map[string]BlobAddr) (*TreeNode, er
 	return ns.createTreeNode(children, true)
 }
 
-// Same as CreateTreeNode() but with no locking
+// Same as CreateTreeNode() but with optional locking
 func (ns *NameStore) createTreeNode(children map[string]BlobAddr, takeLock bool) (*TreeNode, error) {
 	//log.Printf("Creating tree node for map with %d children", len(children))
 
@@ -1074,12 +1081,21 @@ func (ns *NameStore) DumpFileCache() error {
 }
 
 func (ns *NameStore) DumpTree() {
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
+
 	log.Printf("=== Name Store Tree Dump ===")
-	ns.dumpTreeNode("", ns.root, "(root)")
+	ns.dumpTreeNode("", ns.rootAddr, "(root)")
 	log.Printf("=== End Tree Dump ===")
 }
 
-func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
+func (ns *NameStore) dumpTreeNode(indent string, nodeAddr BlobAddr, name string) {
+	node, err := ns.loadFileNode(nodeAddr, false)
+	if err != nil {
+		log.Printf("Couldn't load %s", nodeAddr)
+		return
+	}
+
 	if node == nil {
 		log.Printf("%s%s: <nil>", indent, name)
 		return
@@ -1131,7 +1147,7 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 				continue
 			}
 
-			ns.dumpTreeNode(indent+"  ", childNode, childName)
+			ns.dumpTreeNode(indent+"  ", childNode.MetadataBlob().GetAddress(), childName)
 		}
 	}
 }
@@ -1142,8 +1158,8 @@ func (ns *NameStore) dumpTreeNode(indent string, node FileNode, name string) {
 // DebugReferenceCountsRecursive walks the entire namespace tree and prints reference count information
 // for all nodes, while also identifying orphaned blobs
 func (ns *NameStore) PrintBlobStorageDebugging() error {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
 	// Map to track which blobs we've seen
 	seenBlobs := make(map[BlobAddr]bool)
@@ -1152,7 +1168,7 @@ func (ns *NameStore) PrintBlobStorageDebugging() error {
 	log.Println("Root node:", ns.GetRoot())
 
 	// Start recursive walk from root
-	ns.debugRefCountsWalk("", ns.root, seenBlobs)
+	ns.debugRefCountsWalk("", ns.rootAddr, seenBlobs)
 
 	// Now check for orphaned blobs
 	log.Println("\n=== Orphaned Blobs ===")
@@ -1208,10 +1224,11 @@ func (ns *NameStore) PrintBlobStorageDebugging() error {
 }
 
 // Helper function to recursively walk the tree
-func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs map[BlobAddr]bool) {
+func (ns *NameStore) debugRefCountsWalk(path string, nodeAddr BlobAddr, seenBlobs map[BlobAddr]bool) {
+	node, err := ns.loadFileNode(nodeAddr, false)
 	if node == nil {
 		// ??? Can't happen
-		log.Printf("%s: <nil>\n", path)
+		log.Printf("%s: <nil> %v\n", path, err)
 		return
 	}
 
@@ -1280,32 +1297,33 @@ func (ns *NameStore) debugRefCountsWalk(path string, node FileNode, seenBlobs ma
 				childPath = childPath + "/" + childName
 			}
 
-			ns.debugRefCountsWalk(childPath, childNode, seenBlobs)
+			ns.debugRefCountsWalk(childPath, childNode.MetadataBlob().GetAddress(), seenBlobs)
 		}
 	}
 }
 
 func (ns *NameStore) DebugDumpNamespace() {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
 	log.Println("=== NAMESPACE DUMP ===")
-	log.Printf("Root node: %s (%p)\n\n", ns.GetRoot(), ns.root)
+	log.Printf("Root node: %s (%s)\n\n", ns.GetRoot(), ns.rootAddr)
 
-	if ns.root == nil {
+	if ns.rootAddr == "" {
 		log.Println("Root is nil, nothing to dump")
 		return
 	}
 
 	// Start recursive DFS from the root
-	ns.debugDumpNode("", ns.root)
+	ns.debugDumpNode("", ns.rootAddr)
 
 	log.Println("=== END NAMESPACE DUMP ===")
 }
 
-func (ns *NameStore) debugDumpNode(path string, node FileNode) {
+func (ns *NameStore) debugDumpNode(path string, nodeAddr BlobAddr) {
+	node, err := ns.loadFileNode(nodeAddr, false)
 	if node == nil {
-		log.Printf("%s: <nil>\n", path)
+		log.Printf("%s: <nil> %v\n", path, err)
 		return
 	}
 
@@ -1365,7 +1383,7 @@ func (ns *NameStore) debugDumpNode(path string, node FileNode) {
 				childPath = childPath + "/" + childName
 			}
 
-			ns.debugDumpNode(childPath, childNode)
+			ns.debugDumpNode(childPath, childNode.MetadataBlob().GetAddress())
 		}
 	} else {
 		// For BlobNodes, print a bit of content for small files
@@ -1451,7 +1469,7 @@ type FileNode interface {
 	MetadataBlob() CachedFile
 	Metadata() *GNodeMetadata
 	Children() map[string]BlobAddr
-	AddressString() string
+	//AddressString() string
 	Address() *TypedFileAddr
 
 	Take()
@@ -1496,9 +1514,9 @@ func (bn *BlobNode) Children() map[string]BlobAddr {
 }
 
 // Still maintaining TypedFileAddr compatibility for external APIs
-func (bn *BlobNode) AddressString() string {
-	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress(), bn.blob.GetSize())
-}
+//func (bn *BlobNode) AddressString() string {
+//	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress(), bn.blob.GetSize())
+//}
 
 func (bn *BlobNode) Address() *TypedFileAddr {
 	return NewTypedFileAddr(bn.blob.GetAddress(), bn.blob.GetSize(), Blob)
@@ -1511,7 +1529,7 @@ func (bn *BlobNode) Take() {
 	if DebugRefCounts {
 		log.Printf("TAKE: %s->%s %p (count: %d)",
 			bn.metadataBlob.GetAddress(),
-			bn.AddressString(),
+			bn.metadata.ContentHash,
 			bn,
 			bn.refCount+1)
 		PrintStack()
@@ -1527,7 +1545,7 @@ func (bn *BlobNode) Release() {
 	if DebugRefCounts {
 		log.Printf("RELEASE: %s->%s %p (count: %d)",
 			bn.metadataBlob.GetAddress(),
-			bn.AddressString(),
+			bn.metadata.ContentHash,
 			bn,
 			bn.refCount-1)
 		PrintStack()
@@ -1581,10 +1599,10 @@ func (tn *TreeNode) Address() *TypedFileAddr {
 	return NewTypedFileAddr(tn.blob.GetAddress(), tn.blob.GetSize(), Tree)
 }
 
-func (tn *TreeNode) AddressString() string {
-	tn.ensureSerialized()
-	return fmt.Sprintf("tree:%s-%d", tn.blob.GetAddress(), tn.blob.GetSize())
-}
+//func (tn *TreeNode) AddressString() string {
+//	tn.ensureSerialized()
+//	return fmt.Sprintf("tree:%s-%d", tn.blob.GetAddress(), tn.blob.GetSize())
+//}
 
 func (tn *TreeNode) Take() {
 	tn.mtx.Lock()
@@ -1628,8 +1646,8 @@ func (tn *TreeNode) RefCount() int {
 }
 
 func (ns *NameStore) DebugPrintTree(node FileNode) {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
 	ns.debugPrintTree(node, "")
 }
@@ -1763,7 +1781,7 @@ func NewDenseRefManager(path string) *DenseRefManager {
 
 func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 	if DebugRefCounts {
-		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[BlobAddr(fn.AddressString())])
+		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[BlobAddr(fn.MetadataBlob().GetAddress())])
 	}
 
 	metadataHash := fn.MetadataBlob().GetAddress()
@@ -1812,7 +1830,7 @@ func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 func (pm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 	metadataHash := fn.MetadataBlob().GetAddress()
 	if DebugRefCounts {
-		log.Printf("Recursive release on %s: count %d/%d", fn.AddressString(), fn.RefCount(), pm.refCount[metadataHash])
+		log.Printf("Recursive release on %s: count %d/%d", fn.MetadataBlob().GetAddress(), fn.RefCount(), pm.refCount[metadataHash])
 	}
 
 	refCount, exists := pm.refCount[metadataHash]

@@ -3,6 +3,7 @@ package gritsd
 import (
 	"grits/internal/grits"
 	"io"
+	"log"
 	"os"
 	"testing"
 )
@@ -167,11 +168,14 @@ func TestLocalVolumeOperations(t *testing.T) {
 		t.Fatalf("CreateBlobNode failed: %v", err)
 	}
 
+	log.Printf("About to create empty dir")
+
 	// Test CreateTreeNode - Create an empty directory
 	treeNode, err := localVolume.CreateTreeNode()
 	if err != nil {
 		t.Fatalf("CreateTreeNode failed: %v", err)
 	}
+	log.Printf("Created empty tree node; metadata %s, content %s", treeNode.MetadataBlob().GetAddress(), treeNode.ExportedBlob().GetAddress())
 
 	// Scenario 1: Create a node, link it, then release our reference
 	err = localVolume.LinkByMetadata("test", treeNode.MetadataBlob().GetAddress())
@@ -317,7 +321,10 @@ func TestSerialNumberPersistence(t *testing.T) {
 	vol1.save()
 
 	// Create a new volume that will load the saved state
-	vol2, _ := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false)
+	vol2, err := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false)
+	if err != nil {
+		t.Fatalf("Couldn't create local volume: %v", err)
+	}
 
 	// Verify serial number was preserved
 	if vol2.ns.GetSerialNumber() != expectedSerial {
