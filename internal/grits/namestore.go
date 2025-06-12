@@ -393,13 +393,11 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 	}
 
 	if newRoot != nil {
-		//newRoot.Take()
-		ns.refManager.notifyGainRef(ns, newRoot)
+		ns.refManager.recursiveTake(ns, newRoot)
 	}
 
 	if oldRoot != nil {
-		//ns.root.Release()
-		ns.refManager.notifyLoseRef(ns, oldRoot)
+		ns.refManager.recursiveRelease(ns, oldRoot)
 	}
 
 	ns.rootAddr = newRoot.MetadataBlob().GetAddress()
@@ -531,15 +529,13 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 	}
 
 	if newRoot != nil {
-		//newRoot.Take()
-		ns.refManager.notifyGainRef(ns, newRoot)
+		ns.refManager.recursiveTake(ns, newRoot)
 		ns.rootAddr = newRoot.MetadataBlob().GetAddress()
 	} else {
 		ns.rootAddr = ""
 	}
 	if oldRoot != nil {
-		//ns.root.Release()
-		ns.refManager.notifyLoseRef(ns, oldRoot)
+		ns.refManager.recursiveRelease(ns, oldRoot)
 	}
 
 	ns.serialNumber++
@@ -695,11 +691,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 		return nil, err
 	}
 
-	//root.Take()
-	ns.refManager.notifyGainRef(ns, root)
-
-	//log.Printf("Done setting up root (%s). Ref count: %d / %d",
-	//	root.AddressString(), root.refCount, ns.refManager.refCount[BlobAddr(root.AddressString())])
+	ns.refManager.recursiveTake(ns, root)
 
 	ns.serialNumber = 0
 	ns.rootAddr = root.MetadataBlob().GetAddress()
@@ -723,8 +715,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr BlobAddr, serialNumber int64) (
 		return nil, err
 	}
 
-	//root.Take()
-	ns.refManager.notifyGainRef(ns, root)
+	ns.refManager.recursiveTake(ns, root)
 
 	ns.rootAddr = root.MetadataBlob().GetAddress()
 	return ns, nil
@@ -815,6 +806,7 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 			metadataBlob: metadataCf,
 			metadata:     &metadata,
 			refCount:     0,
+			nameStore:    ns,
 		}
 		if printDebug && DebugFileCache {
 			log.Printf("  created blob: %p", bn)
@@ -1477,21 +1469,12 @@ type FileNode interface {
 	RefCount() int
 }
 
-type TreeNode struct {
-	blob         CachedFile
-	metadataBlob CachedFile
-	metadata     *GNodeMetadata
-	ChildrenMap  map[string]BlobAddr
-	refCount     int
-	nameStore    *NameStore
-	mtx          sync.Mutex
-}
-
 type BlobNode struct {
 	blob         CachedFile
 	metadataBlob CachedFile
 	metadata     *GNodeMetadata
 	refCount     int
+	nameStore    *NameStore
 	mtx          sync.Mutex
 }
 
@@ -1513,11 +1496,7 @@ func (bn *BlobNode) Children() map[string]BlobAddr {
 	return nil
 }
 
-// Still maintaining TypedFileAddr compatibility for external APIs
-//func (bn *BlobNode) AddressString() string {
-//	return fmt.Sprintf("blob:%s-%d", bn.blob.GetAddress(), bn.blob.GetSize())
-//}
-
+// TODO: Remove
 func (bn *BlobNode) Address() *TypedFileAddr {
 	return NewTypedFileAddr(bn.blob.GetAddress(), bn.blob.GetSize(), Blob)
 }
@@ -1533,6 +1512,13 @@ func (bn *BlobNode) Take() {
 			bn,
 			bn.refCount+1)
 		PrintStack()
+	}
+
+	if bn.refCount < 0 {
+		PrintStack()
+		log.Fatalf("Ref count for %s is < 0", bn.metadataBlob.GetAddress())
+	} else if bn.refCount == 0 {
+		bn.nameStore.refManager.flatTake(bn.nameStore, bn)
 	}
 
 	bn.refCount++
@@ -1555,6 +1541,8 @@ func (bn *BlobNode) Release() {
 	if bn.refCount < 0 {
 		PrintStack()
 		log.Fatalf("Reduced ref count for %s to < 0", bn.metadataBlob.GetAddress())
+	} else if bn.refCount == 0 {
+		bn.nameStore.refManager.flatRelease(bn.nameStore, bn)
 	}
 
 	// This is where we used to release the actual storage; now we're not doing that until
@@ -1567,7 +1555,17 @@ func (bn *BlobNode) RefCount() int {
 	return bn.refCount
 }
 
-// Implementations for TreeNode
+// Implementation for TreeNode
+
+type TreeNode struct {
+	blob         CachedFile
+	metadataBlob CachedFile
+	metadata     *GNodeMetadata
+	ChildrenMap  map[string]BlobAddr
+	refCount     int
+	nameStore    *NameStore
+	mtx          sync.Mutex
+}
 
 func (tn *TreeNode) ExportedBlob() CachedFile {
 	err := tn.ensureSerialized()
@@ -1616,6 +1614,13 @@ func (tn *TreeNode) Take() {
 		PrintStack()
 	}
 
+	if tn.refCount < 0 {
+		PrintStack()
+		log.Fatalf("Ref count for %s is < 0", tn.metadataBlob.GetAddress())
+	} else if tn.refCount == 0 {
+		tn.nameStore.refManager.flatTake(tn.nameStore, tn)
+	}
+
 	tn.refCount++
 }
 
@@ -1634,6 +1639,8 @@ func (tn *TreeNode) Release() {
 	tn.refCount--
 	if tn.refCount < 0 {
 		log.Fatalf("Reduced ref count for %s to < 0", tn.metadataBlob.GetAddress())
+	} else if tn.refCount == 0 {
+		tn.nameStore.refManager.flatRelease(tn.nameStore, tn)
 	}
 
 	// This is where we used to release the actual storage; now we do not do that.
@@ -1762,11 +1769,82 @@ func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue Fil
 // RefManagers
 
 type RefManager interface {
-	notifyGainRef(ns *NameStore, fn FileNode) error
-	notifyLoseRef(ns *NameStore, fn FileNode) error
-	notifyAccess(ns *NameStore, fn FileNode) error
+	recursiveTake(ns *NameStore, fn FileNode) error
+	recursiveRelease(ns *NameStore, fn FileNode) error
+	flatTake(ns *NameStore, fn FileNode) error
+	flatRelease(ns *NameStore, fn FileNode) error
 	cleanup(ns *NameStore)
 }
+
+type SparseRefManager struct {
+	nodeDropTimes map[BlobAddr]time.Time
+	timeout       time.Duration
+	mtx           sync.Mutex
+}
+
+func NewSparseRefManager(timeout time.Duration) *SparseRefManager {
+	return &SparseRefManager{
+		nodeDropTimes: make(map[BlobAddr]time.Time),
+		timeout:       timeout,
+	}
+}
+
+func (rm *SparseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
+	// No-op for SparseRefManager
+	return nil
+}
+
+func (rm *SparseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
+	// No-op for SparseRefManager
+	return nil
+}
+
+func (rm *SparseRefManager) flatTake(ns *NameStore, fn FileNode) error {
+	// No-op when taking a reference
+	return nil
+}
+
+func (rm *SparseRefManager) flatRelease(ns *NameStore, fn FileNode) error {
+	rm.mtx.Lock()
+	defer rm.mtx.Unlock()
+
+	metadataAddr := fn.MetadataBlob().GetAddress()
+	if fn.RefCount() == 0 {
+		rm.nodeDropTimes[metadataAddr] = time.Now()
+	}
+
+	return nil
+}
+
+func (rm *SparseRefManager) cleanup(ns *NameStore) {
+	rm.mtx.Lock()
+	defer rm.mtx.Unlock()
+
+	now := time.Now()
+
+	for metadataAddr, dropTime := range rm.nodeDropTimes {
+		if now.Sub(dropTime) > rm.timeout {
+			node := ns.fileCache[metadataAddr]
+			if node != nil {
+				contentBlob := node.ExportedBlob()
+				metadataBlob := node.MetadataBlob()
+
+				if contentBlob != nil {
+					contentBlob.Release()
+				}
+				if metadataBlob != nil {
+					metadataBlob.Release()
+				}
+
+				delete(ns.fileCache, metadataAddr)
+			}
+
+			delete(rm.nodeDropTimes, metadataAddr)
+		}
+	}
+}
+
+// Dense ref manager
 
 type DenseRefManager struct {
 	path     string
@@ -1780,7 +1858,7 @@ func NewDenseRefManager(path string) *DenseRefManager {
 	}
 }
 
-func (rm *DenseRefManager) notifyGainRef(ns *NameStore, fn FileNode) error {
+func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 	if DebugRefCounts {
 		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), rm.refCount[BlobAddr(fn.MetadataBlob().GetAddress())])
 	}
@@ -1821,14 +1899,14 @@ func (rm *DenseRefManager) notifyGainRef(ns *NameStore, fn FileNode) error {
 				return err
 			}
 
-			rm.notifyGainRef(ns, childNode)
+			rm.recursiveTake(ns, childNode)
 		}
 	}
 
 	return nil
 }
 
-func (rm *DenseRefManager) notifyLoseRef(ns *NameStore, fn FileNode) error {
+func (rm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 	metadataHash := fn.MetadataBlob().GetAddress()
 	if DebugRefCounts {
 		log.Printf("Recursive release on %s: count %d/%d", fn.MetadataBlob().GetAddress(), fn.RefCount(), rm.refCount[metadataHash])
@@ -1850,7 +1928,7 @@ func (rm *DenseRefManager) notifyLoseRef(ns *NameStore, fn FileNode) error {
 				return err
 			}
 
-			rm.notifyLoseRef(ns, childNode)
+			rm.recursiveRelease(ns, childNode)
 		}
 
 		fn.Release()
@@ -1862,7 +1940,11 @@ func (rm *DenseRefManager) notifyLoseRef(ns *NameStore, fn FileNode) error {
 	return nil
 }
 
-func (rm *DenseRefManager) notifyAccess(ns *NameStore, fn FileNode) error {
+func (rm *DenseRefManager) flatTake(ns *NameStore, fn FileNode) error {
+	return nil
+}
+
+func (rm *DenseRefManager) flatRelease(ns *NameStore, fn FileNode) error {
 	return nil
 }
 
