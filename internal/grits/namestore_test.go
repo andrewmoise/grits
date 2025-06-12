@@ -320,7 +320,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 		t.Errorf("Failed to remove the root directory: %v", err)
 	}
 
-	if nameStore.root != nil {
+	if nameStore.rootAddr != "" {
 		t.Errorf("Root directory was not cleared")
 	}
 
@@ -704,8 +704,8 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	ns.DumpFileCache()
 
 	newRoot := make(map[string]string)
-	log.Printf("Old root metadata is: %s", ns.root.MetadataBlob().GetAddress())
-	newRoot["tree"] = string(ns.root.MetadataBlob().GetAddress())
+	log.Printf("Old root metadata is: %s", ns.rootAddr)
+	newRoot["tree"] = string(ns.rootAddr)
 
 	newRootJson, err := json.Marshal(newRoot)
 	if err != nil {
@@ -751,7 +751,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	for i := 6; i < 10; i++ {
 		newRoot := make(map[string]string)
-		newRoot["prev"] = string(ns.root.MetadataBlob().GetAddress())
+		newRoot["prev"] = string(ns.rootAddr)
 
 		treeNode, err := ns.LookupNode("tree")
 		if err != nil {

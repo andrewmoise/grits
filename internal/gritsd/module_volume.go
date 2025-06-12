@@ -45,8 +45,7 @@ type LocalVolume struct {
 	ns       *grits.NameStore
 	readOnly bool
 
-	persistMtx   sync.Mutex
-	emptyDirNode grits.FileNode // Keep our reference to the empty directory node
+	persistMtx sync.Mutex
 }
 
 type LocalVolumeConfig struct {
@@ -59,26 +58,15 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool) (*
 		return nil, fmt.Errorf("failed to create NameStore: %v", err)
 	}
 
-	// Create empty directory node
-	emptyDirMap := make(map[string]grits.BlobAddr)
-	emptyDirNode, err := ns.CreateTreeNode(emptyDirMap)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create empty directory node: %v", err)
-	}
-	emptyDirNode.Take() // Take reference that we'll hold
-
 	wv := &LocalVolume{
 		name:     config.VolumeName,
 		server:   server,
 		ns:       ns,
 		readOnly: false,
-
-		emptyDirNode: emptyDirNode,
 	}
 
 	err = wv.load()
 	if err != nil {
-		emptyDirNode.Release() // Clean up if we fail
 		return nil, fmt.Errorf("failed to load LocalVolume %s: %v", wv.name, err)
 	}
 
@@ -96,12 +84,6 @@ func (wv *LocalVolume) Start() error {
 func (wv *LocalVolume) Stop() error {
 	// Ensure any final persistence operations are completed
 	result := wv.save()
-
-	// Clean up our empty dir reference when stopping
-	if wv.emptyDirNode != nil {
-		wv.emptyDirNode.Release()
-		wv.emptyDirNode = nil
-	}
 
 	return result
 	// FIXME - We do stop, whether or not we return error -- we should think about that
@@ -290,12 +272,7 @@ func (wv *LocalVolume) load() error {
 		return fmt.Errorf("failed to unmarshal volume state: %v", err)
 	}
 
-	rootAddr, err := grits.NewTypedFileAddrFromString(state.RootAddr)
-	if err != nil {
-		return fmt.Errorf("failed to parse root address: %v", err)
-	}
-
-	ns, err := grits.DeserializeNameStore(wv.server.BlobStore, rootAddr, state.SerialNumber)
+	ns, err := grits.DeserializeNameStore(wv.server.BlobStore, grits.BlobAddr(state.RootAddr), state.SerialNumber)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize name store: %v", err)
 	}
