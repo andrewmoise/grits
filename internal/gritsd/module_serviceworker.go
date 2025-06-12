@@ -322,7 +322,7 @@ func (swm *ServiceWorkerModule) getClientDirHash() grits.BlobAddr {
 	}
 	defer clientDirNode.Release()
 
-	return clientDirNode.Address().BlobAddr
+	return clientDirNode.Metadata().ContentHash
 }
 
 func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Request) {

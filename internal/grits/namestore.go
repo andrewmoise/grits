@@ -331,7 +331,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 			if DebugLinks {
 				log.Printf("  Is blob")
 			}
-			if node == nil || node.Address().Type != Blob {
+			if node == nil || node.Metadata().Type != GNodeTypeFile {
 				return nil, ErrAssertionFailed
 			}
 			if DebugLinks {
@@ -343,7 +343,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 			if DebugLinks {
 				log.Printf("  Is tree")
 			}
-			if node == nil || node.Address().Type != Tree {
+			if node == nil || node.Metadata().Type != GNodeTypeDirectory {
 				return nil, ErrAssertionFailed
 			}
 			if DebugLinks {
@@ -814,7 +814,7 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 
 		ns.fileCache[metadataAddr] = bn // Now using metadata addr as cache key
 		return bn, nil
-	} else {
+	} else if metadata.Type == GNodeTypeDirectory {
 		ns.fileCache[metadataAddr] = nil
 
 		dn := &TreeNode{
@@ -865,6 +865,8 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 		resultDn := dn
 		dn = nil // Prevent deferred cleanup + removal from file cache
 		return resultDn, nil
+	} else {
+		return nil, fmt.Errorf("unknown node type: %d", int(metadata.Type))
 	}
 }
 
@@ -1461,8 +1463,6 @@ type FileNode interface {
 	MetadataBlob() CachedFile
 	Metadata() *GNodeMetadata
 	Children() map[string]BlobAddr
-	//AddressString() string
-	Address() *TypedFileAddr
 
 	Take()
 	Release()
@@ -1494,11 +1494,6 @@ func (bn *BlobNode) Metadata() *GNodeMetadata {
 
 func (bn *BlobNode) Children() map[string]BlobAddr {
 	return nil
-}
-
-// TODO: Remove
-func (bn *BlobNode) Address() *TypedFileAddr {
-	return NewTypedFileAddr(bn.blob.GetAddress(), bn.blob.GetSize(), Blob)
 }
 
 func (bn *BlobNode) Take() {
@@ -1589,12 +1584,6 @@ func (tn *TreeNode) Metadata() *GNodeMetadata {
 
 func (tn *TreeNode) Children() map[string]BlobAddr {
 	return tn.ChildrenMap
-}
-
-// Still maintaining TypedFileAddr compatibility for external APIs
-func (tn *TreeNode) Address() *TypedFileAddr {
-	tn.ensureSerialized()
-	return NewTypedFileAddr(tn.blob.GetAddress(), tn.blob.GetSize(), Tree)
 }
 
 //func (tn *TreeNode) AddressString() string {
