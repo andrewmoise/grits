@@ -39,10 +39,11 @@ Backlog:
 * Need to worry about key expiration for the certbot keys
 * Standardize on URL format for identifying peer and mirror protocol/hostname/port
 * Clean up naming, capitalization, consistency issues
-* Make MultiLink() return path information like LookupFull()
-* Make multiple operations in a single /link call happen idempotently
 * Get rid of NameStore.Link()
 * Transition some names from what used to be the "new" approach, to just be the normal name (e.g.
   LinkByMetadata() -> Link()).
 * Make mount module able to mount a subdirectory of a volume
 * mount module needs automated testing
+* Switch some durations to use time.Duration in config files and etc
+* Get rid of FileNode.Address()
+* Make testbed keep track of errors and indicate success or failure more accurately
