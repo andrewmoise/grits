@@ -503,7 +503,7 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 		}
 		defer node.Release()
 
-		out.Size = uint64(node.Address().Size)
+		out.Size = uint64(node.Metadata().Size)
 
 		// Use metadata for mode if available
 		metadata := node.Metadata()
