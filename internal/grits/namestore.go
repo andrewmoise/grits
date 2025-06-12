@@ -394,12 +394,12 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 
 	if newRoot != nil {
 		//newRoot.Take()
-		ns.refManager.recursiveTake(ns, newRoot)
+		ns.refManager.notifyGainRef(ns, newRoot)
 	}
 
 	if oldRoot != nil {
 		//ns.root.Release()
-		ns.refManager.recursiveRelease(ns, oldRoot)
+		ns.refManager.notifyLoseRef(ns, oldRoot)
 	}
 
 	ns.rootAddr = newRoot.MetadataBlob().GetAddress()
@@ -532,14 +532,14 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 
 	if newRoot != nil {
 		//newRoot.Take()
-		ns.refManager.recursiveTake(ns, newRoot)
+		ns.refManager.notifyGainRef(ns, newRoot)
 		ns.rootAddr = newRoot.MetadataBlob().GetAddress()
 	} else {
 		ns.rootAddr = ""
 	}
 	if oldRoot != nil {
 		//ns.root.Release()
-		ns.refManager.recursiveRelease(ns, oldRoot)
+		ns.refManager.notifyLoseRef(ns, oldRoot)
 	}
 
 	ns.serialNumber++
@@ -696,7 +696,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 	}
 
 	//root.Take()
-	ns.refManager.recursiveTake(ns, root)
+	ns.refManager.notifyGainRef(ns, root)
 
 	//log.Printf("Done setting up root (%s). Ref count: %d / %d",
 	//	root.AddressString(), root.refCount, ns.refManager.refCount[BlobAddr(root.AddressString())])
@@ -724,7 +724,7 @@ func DeserializeNameStore(bs BlobStore, rootAddr BlobAddr, serialNumber int64) (
 	}
 
 	//root.Take()
-	ns.refManager.recursiveTake(ns, root)
+	ns.refManager.notifyGainRef(ns, root)
 
 	ns.rootAddr = root.MetadataBlob().GetAddress()
 	return ns, nil
@@ -1762,8 +1762,9 @@ func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue Fil
 // RefManagers
 
 type RefManager interface {
-	recursiveTake(ns *NameStore, fn FileNode) error
-	recursiveRelease(ns *NameStore, fn FileNode) error
+	notifyGainRef(ns *NameStore, fn FileNode) error
+	notifyLoseRef(ns *NameStore, fn FileNode) error
+	notifyAccess(ns *NameStore, fn FileNode) error
 	cleanup(ns *NameStore)
 }
 
@@ -1779,14 +1780,14 @@ func NewDenseRefManager(path string) *DenseRefManager {
 	}
 }
 
-func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
+func (rm *DenseRefManager) notifyGainRef(ns *NameStore, fn FileNode) error {
 	if DebugRefCounts {
-		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), pm.refCount[BlobAddr(fn.MetadataBlob().GetAddress())])
+		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), rm.refCount[BlobAddr(fn.MetadataBlob().GetAddress())])
 	}
 
 	metadataHash := fn.MetadataBlob().GetAddress()
 
-	refCount, exists := pm.refCount[metadataHash]
+	refCount, exists := rm.refCount[metadataHash]
 
 	if exists {
 		if DebugRefCounts {
@@ -1796,7 +1797,7 @@ func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 			log.Fatalf("ref count for %s is nonpositive", metadataHash)
 		}
 
-		pm.refCount[metadataHash] = refCount + 1
+		rm.refCount[metadataHash] = refCount + 1
 		if DebugRefCounts {
 			log.Printf("Increment count! For %s, we go to %d", metadataHash, refCount+1)
 		}
@@ -1806,7 +1807,7 @@ func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 		}
 
 		fn.Take()
-		pm.refCount[metadataHash] = 1
+		rm.refCount[metadataHash] = 1
 
 		children := fn.Children()
 		if children == nil {
@@ -1820,20 +1821,20 @@ func (pm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 				return err
 			}
 
-			pm.recursiveTake(ns, childNode)
+			rm.notifyGainRef(ns, childNode)
 		}
 	}
 
 	return nil
 }
 
-func (pm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
+func (rm *DenseRefManager) notifyLoseRef(ns *NameStore, fn FileNode) error {
 	metadataHash := fn.MetadataBlob().GetAddress()
 	if DebugRefCounts {
-		log.Printf("Recursive release on %s: count %d/%d", fn.MetadataBlob().GetAddress(), fn.RefCount(), pm.refCount[metadataHash])
+		log.Printf("Recursive release on %s: count %d/%d", fn.MetadataBlob().GetAddress(), fn.RefCount(), rm.refCount[metadataHash])
 	}
 
-	refCount, exists := pm.refCount[metadataHash]
+	refCount, exists := rm.refCount[metadataHash]
 	if !exists {
 		log.Fatalf("can't find %s in ref count to release", metadataHash)
 	}
@@ -1849,15 +1850,19 @@ func (pm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 				return err
 			}
 
-			pm.recursiveRelease(ns, childNode)
+			rm.notifyLoseRef(ns, childNode)
 		}
 
 		fn.Release()
-		delete(pm.refCount, metadataHash)
+		delete(rm.refCount, metadataHash)
 	} else {
-		pm.refCount[metadataHash] = refCount - 1
+		rm.refCount[metadataHash] = refCount - 1
 	}
 
+	return nil
+}
+
+func (rm *DenseRefManager) notifyAccess(ns *NameStore, fn FileNode) error {
 	return nil
 }
 
