@@ -376,25 +376,27 @@ func TestLookupFullAndMultiLinkResults(t *testing.T) {
 	vol.LinkByMetadata("dir1/dir3/file3.txt", node3.MetadataBlob().GetAddress())
 
 	// Test LookupFull with a single path
-	results, _, _ := vol.LookupFull([]string{"dir1/file1.txt"})
+	lookupResponse, _, _ := vol.LookupFull([]string{"dir1/file1.txt"})
+	results := lookupResponse.Paths
 	if len(results) != 3 {
 		t.Errorf("Expected 3 results, got %d", len(results))
 	}
-	checkPath(t, results[0], "", true)
-	checkPath(t, results[1], "dir1", true)
-	checkPath(t, results[2], "dir1/file1.txt", false)
+	checkPath(t, vol, results[0], "", true)
+	checkPath(t, vol, results[1], "dir1", true)
+	checkPath(t, vol, results[2], "dir1/file1.txt", false)
 
 	// Test LookupFull with multiple paths
-	results, _, _ = vol.LookupFull([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"})
+	lookupResponse, _, _ = vol.LookupFull([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"})
+	results = lookupResponse.Paths
 	if len(results) != 7 {
 		t.Errorf("Expected 7 results, got %d", len(results))
 	}
-	checkPath(t, results[0], "", true)
-	checkPath(t, results[len(results)-1], "dir1/dir3/file3.txt", false)
-	checkPathInResults(t, results, "dir1", true)
-	checkPathInResults(t, results, "dir2", true)
-	checkPathInResults(t, results, "dir1/file1.txt", false)
-	checkPathInResults(t, results, "dir2/file2.txt", false)
+	checkPath(t, vol, results[0], "", true)
+	checkPath(t, vol, results[len(results)-1], "dir1/dir3/file3.txt", false)
+	checkPathInResults(t, vol, results, "dir1", true)
+	checkPathInResults(t, vol, results, "dir2", true)
+	checkPathInResults(t, vol, results, "dir1/file1.txt", false)
+	checkPathInResults(t, vol, results, "dir2/file2.txt", false)
 
 	// Test MultiLink
 	linkRequests := []*grits.LinkRequest{
@@ -405,36 +407,41 @@ func TestLookupFullAndMultiLinkResults(t *testing.T) {
 		{Path: "newdir2/newfile2.txt", NewAddr: node2.MetadataBlob().GetAddress()},
 		{Path: "newdir1/newdir3/newfile3.txt", NewAddr: node3.MetadataBlob().GetAddress()},
 	}
-	linkResults, err := vol.MultiLink(linkRequests, true)
+	linkResponse, err := vol.MultiLink(linkRequests, true)
 	if err != nil {
 		t.Fatalf("Error return from link: %v", err)
 	}
 
+	linkResults := linkResponse.Paths
 	if len(linkResults) != 7 {
 		t.Errorf("Expected 7 link results, got %d", len(linkResults))
 	}
-	checkPath(t, linkResults[0], "", true)
-	checkPath(t, linkResults[len(linkResults)-1], "newdir1/newdir3/newfile3.txt", false)
-	checkPathInResults(t, linkResults, "newdir1", true)
-	checkPathInResults(t, linkResults, "newdir2", true)
-	checkPathInResults(t, linkResults, "newdir1/newfile1.txt", false)
-	checkPathInResults(t, linkResults, "newdir2/newfile2.txt", false)
+	checkPath(t, vol, linkResults[0], "", true)
+	checkPath(t, vol, linkResults[len(linkResults)-1], "newdir1/newdir3/newfile3.txt", false)
+	checkPathInResults(t, vol, linkResults, "newdir1", true)
+	checkPathInResults(t, vol, linkResults, "newdir2", true)
+	checkPathInResults(t, vol, linkResults, "newdir1/newfile1.txt", false)
+	checkPathInResults(t, vol, linkResults, "newdir2/newfile2.txt", false)
 }
 
-func checkPath(t *testing.T, pair *grits.PathNodePair, expectedPath string, expectedIsDir bool) {
+func checkPath(t *testing.T, v Volume, pair *grits.PathNodePair, expectedPath string, expectedIsDir bool) {
 	if pair.Path != expectedPath {
 		t.Errorf("Expected path %s, got %s", expectedPath, pair.Path)
 	}
-	_, isDir := pair.Node.(*grits.TreeNode)
+	node, err := v.GetFileNode(pair.Addr)
+	if err != nil {
+		t.Fatalf("Couldn't get file node for %s", pair.Path)
+	}
+	_, isDir := node.(*grits.TreeNode)
 	if isDir != expectedIsDir {
 		t.Errorf("Expected isDir %v for path %s, got %v", expectedIsDir, pair.Path, isDir)
 	}
 }
 
-func checkPathInResults(t *testing.T, results []*grits.PathNodePair, path string, isDir bool) {
+func checkPathInResults(t *testing.T, v Volume, results []*grits.PathNodePair, path string, isDir bool) {
 	for _, result := range results {
 		if result.Path == path {
-			checkPath(t, result, path, isDir)
+			checkPath(t, v, result, path, isDir)
 			return
 		}
 	}

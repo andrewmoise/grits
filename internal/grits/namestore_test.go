@@ -956,7 +956,7 @@ func TestLookupMultiplePaths(t *testing.T) {
 	}
 
 	// Call LookupFull
-	pathNodePairs, wasPartialFailure, err := nameStore.LookupFull(paths)
+	lookupResponse, wasPartialFailure, err := nameStore.LookupFull(paths)
 	if err != nil {
 		t.Fatalf("Failed to lookup paths: %v", err)
 	}
@@ -968,8 +968,11 @@ func TestLookupMultiplePaths(t *testing.T) {
 
 	// Build a map of path -> node for easier verification
 	resultsByPath := make(map[string]FileNode)
-	for _, pair := range pathNodePairs {
-		resultsByPath[pair.Path] = pair.Node
+	for _, pair := range lookupResponse.Paths {
+		resultsByPath[pair.Path], err = nameStore.GetFileNode(pair.Addr)
+		if err != nil {
+			t.Fatalf("Error trying to fetch %s: %v", pair.Addr, err)
+		}
 	}
 
 	// 1. Verify we got results for existing paths
@@ -1022,7 +1025,7 @@ func TestLookupMultiplePaths(t *testing.T) {
 	}
 
 	// Clean up - ensure all references are released
-	for _, pair := range pathNodePairs {
-		pair.Node.Release()
+	for _, node := range resultsByPath {
+		node.Release()
 	}
 }

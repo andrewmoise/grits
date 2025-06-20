@@ -101,22 +101,22 @@ func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 	return node, nil
 }
 
-// PathNodePair represents a path and its corresponding FileNode
+// PathNodePair represents a path and its corresponding address
 type PathNodePair struct {
 	Path string
-	Node FileNode
+	Addr BlobAddr
 }
 
 // LookupFull returns a list of path and node pairs for a given path or paths
 
 // Second part of the return value indicates whether we got a partial failure
 
-func (ns *NameStore) LookupFull(names []string) ([]*PathNodePair, bool, error) {
+func (ns *NameStore) LookupFull(names []string) (*LookupResponse, bool, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
 	seenPaths := make(map[string]bool)
-	var response []*PathNodePair
+	var response LookupResponse
 	wasFailure := false
 
 	for _, name := range names {
@@ -137,9 +137,9 @@ func (ns *NameStore) LookupFull(names []string) ([]*PathNodePair, bool, error) {
 		partialPath := ""
 
 		if _, exists := seenPaths[""]; !exists {
-			response = append(response, &PathNodePair{
+			response.Paths = append(response.Paths, &PathNodePair{
 				Path: "",
-				Node: nodes[0],
+				Addr: nodes[0].MetadataBlob().GetAddress(),
 			})
 			seenPaths[""] = true
 		}
@@ -159,9 +159,9 @@ func (ns *NameStore) LookupFull(names []string) ([]*PathNodePair, bool, error) {
 			node := nodes[index]
 
 			if _, exists := seenPaths[partialPath]; !exists {
-				response = append(response, &PathNodePair{
+				response.Paths = append(response.Paths, &PathNodePair{
 					Path: partialPath,
-					Node: node,
+					Addr: node.MetadataBlob().GetAddress(),
 				})
 				seenPaths[partialPath] = true
 			}
@@ -170,12 +170,9 @@ func (ns *NameStore) LookupFull(names []string) ([]*PathNodePair, bool, error) {
 		}
 	}
 
-	// Take a reference to each node we're returning
-	for _, pair := range response {
-		pair.Node.Take()
-	}
+	response.SerialNumber = ns.serialNumber
 
-	return response, wasFailure, nil
+	return &response, wasFailure, nil
 }
 
 // FIXME - Clean up this API a lot.
@@ -276,6 +273,11 @@ type LinkRequest struct {
 	Assert   uint32   `json:"assert,omitempty"`   // Optional assertion flags
 }
 
+type LookupResponse struct {
+	Paths        []*PathNodePair `json:"paths"`
+	SerialNumber int64           `json:"serialNumber"`
+}
+
 func matchesAddr(a FileNode, b BlobAddr) bool {
 	if a == nil {
 		return b == ""
@@ -284,7 +286,7 @@ func matchesAddr(a FileNode, b BlobAddr) bool {
 	}
 }
 
-func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*PathNodePair, error) {
+func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*LookupResponse, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -403,7 +405,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 	ns.rootAddr = newRoot.MetadataBlob().GetAddress()
 	ns.serialNumber++
 
-	var response []*PathNodePair
+	var response LookupResponse
 	if returnResults {
 		// Now build up the lookup results
 		seenPaths := make(map[string]bool)
@@ -441,9 +443,9 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 
 			// Add root if we haven't seen it
 			if _, exists := seenPaths[""]; !exists {
-				response = append(response, &PathNodePair{
+				response.Paths = append(response.Paths, &PathNodePair{
 					Path: "",
-					Node: nodes[0],
+					Addr: nodes[0].MetadataBlob().GetAddress(),
 				})
 				seenPaths[""] = true
 			}
@@ -463,9 +465,9 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 				node := nodes[index]
 
 				if _, exists := seenPaths[partialPath]; !exists {
-					response = append(response, &PathNodePair{
+					response.Paths = append(response.Paths, &PathNodePair{
 						Path: partialPath,
-						Node: node,
+						Addr: node.MetadataBlob().GetAddress(),
 					})
 					seenPaths[partialPath] = true
 				}
@@ -474,15 +476,12 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) ([]*
 			}
 		}
 
-		// Take a reference to each node we're returning
-		for _, pair := range response {
-			pair.Node.Take()
-		}
+		response.SerialNumber = ns.serialNumber
 	} else {
-		response = nil
+		return nil, nil
 	}
 
-	return response, nil
+	return &response, nil
 }
 
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {

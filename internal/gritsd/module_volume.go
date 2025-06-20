@@ -17,14 +17,14 @@ type Volume interface {
 	Checkpoint() error
 
 	LookupNode(path string) (grits.FileNode, error)
-	LookupFull(name []string) ([]*grits.PathNodePair, bool, error)
+	LookupFull(name []string) (*grits.LookupResponse, bool, error)
 	GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error)
 
 	CreateTreeNode() (*grits.TreeNode, error)
 	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*grits.BlobNode, error)
 
 	LinkByMetadata(path string, metadataAddr grits.BlobAddr) error
-	MultiLink([]*grits.LinkRequest, bool) ([]*grits.PathNodePair, error)
+	MultiLink([]*grits.LinkRequest, bool) (*grits.LookupResponse, error)
 
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
@@ -180,7 +180,7 @@ func (v *LocalVolume) PutBlob(file *os.File) (grits.BlobAddr, error) {
 	return cachedFile.GetAddress(), nil
 }
 
-func (wv *LocalVolume) LookupFull(paths []string) ([]*grits.PathNodePair, bool, error) {
+func (wv *LocalVolume) LookupFull(paths []string) (*grits.LookupResponse, bool, error) {
 	return wv.ns.LookupFull(paths)
 }
 
@@ -193,7 +193,7 @@ func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) 
 }
 
 // MultiLink also needs updating since it's part of the same transition
-func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) ([]*grits.PathNodePair, error) {
+func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (*grits.LookupResponse, error) {
 	return wv.ns.MultiLink(req, returnResults)
 }
 
