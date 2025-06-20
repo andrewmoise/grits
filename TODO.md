@@ -47,3 +47,5 @@ Backlog:
 * Switch some durations to use time.Duration in config files and etc
 * Get rid of FileNode.Address()
 * Make testbed keep track of errors and indicate success or failure more accurately
+* Fix testbed, doesn't seem like it passes when started from clean
+* Make HTTP API more best practices (particularly how it returns errors)
