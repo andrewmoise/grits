@@ -57,13 +57,11 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("failed to perform lookup: %v", err)
 	}
 	defer resp.Body.Close()
-
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("couldn't read response body: %v", err)
 	}
 	log.Printf("Response body: %s", string(respBody))
-
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
@@ -78,11 +76,27 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup response did not include directory metadata")
 	}
 
-	// First get the directory's content hash
-	rootContentHash, ok := lookupResponse[0][2].(string)
-	if !ok {
-		t.Fatalf("Content hash is not a string: %v", lookupResponse[0][2])
+	volume := s.FindVolumeByName("root")
+	if volume == nil {
+		t.Fatalf("Couldn't load root volume")
 	}
+
+	rootAddrStr, ok := lookupResponse[0][1].(string)
+	if !ok {
+		t.Fatalf("Expected string for metadata address, got %T", lookupResponse[0][1])
+	}
+	rootAddr := grits.BlobAddr(rootAddrStr)
+	rootNode, err := volume.GetFileNode(rootAddr)
+	if err != nil {
+		t.Fatalf("Couldn't load node for root: %v", err)
+	}
+	defer rootNode.Release()
+
+	// First get the directory's content hash
+	rootContentHash := rootNode.Metadata().ContentHash
+
+	// Will be able to also access the serial number if needed
+	//log.Printf("Volume serial number: %d", lookupResponse.SerialNumber)
 
 	// Now fetch the directory content
 	dirURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, rootContentHash)
@@ -217,11 +231,11 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup response did not include directory metadata")
 	}
 
-	// Get the updated directory content hash (index 2)
-	rootContentHash, ok = lookupResponse[0][2].(string)
+	rootContentStr, ok := lookupResponse[0][2].(string)
 	if !ok {
-		t.Fatalf("Content hash is not a string: %v", lookupResponse[0][2])
+		t.Fatalf("Expected string for content address, got %T", lookupResponse[0][1])
 	}
+	rootContentHash = grits.BlobAddr(rootContentStr)
 
 	// Get the updated directory listing
 	dirURL = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, rootContentHash)

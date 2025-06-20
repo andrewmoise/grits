@@ -649,29 +649,31 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pathNodePairs, partialResult, err := volume.LookupFull([]string{lookupPath})
+	lookupResponse, partialResult, err := volume.LookupFull([]string{lookupPath})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
 		return
 	}
 
 	// Transform to the format expected by the client
-	response := make([][]any, len(pathNodePairs))
-	for i, pair := range pathNodePairs {
-		node := pair.Node
+	pathData := make([][]any, len(lookupResponse.Paths))
+	for i, pair := range lookupResponse.Paths {
+		node, err := volume.GetFileNode(pair.Addr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
+		}
+		defer node.Release()
+
 		metadataHash := node.MetadataBlob().GetAddress()
 		contentHash := node.ExportedBlob().GetAddress()
 		contentSize := node.ExportedBlob().GetSize()
 
-		response[i] = []any{
+		pathData[i] = []any{
 			pair.Path,
 			metadataHash,
 			contentHash,
 			contentSize,
 		}
-
-		// Release the reference we took in LookupFull
-		node.Release()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -683,7 +685,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMultiStatus)
 	}
 
-	if err := json.NewEncoder(w).Encode(response); err != nil {
+	if err := json.NewEncoder(w).Encode(pathData); err != nil {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 }
@@ -725,7 +727,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pathNodePairs, err := volume.MultiLink(allLinkRequests, true)
+	linkResponse, err := volume.MultiLink(allLinkRequests, true)
 	if err != nil {
 		log.Printf("HTTP API MultiLink() failed: %v", err)
 		http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
@@ -741,9 +743,14 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Transform to the format expected by the client (same as lookup endpoint)
-	response := make([][]any, len(pathNodePairs))
-	for i, pair := range pathNodePairs {
-		node := pair.Node
+	response := make([][]any, len(linkResponse.Paths))
+	for i, pair := range linkResponse.Paths {
+		node, err := volume.GetFileNode(pair.Addr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Couldn't load node for %s: %v", pair.Path, err), http.StatusInternalServerError)
+		}
+		defer node.Release()
+
 		metadataHash := node.MetadataBlob().GetAddress()
 		contentHash := node.ExportedBlob().GetAddress()
 		contentSize := node.ExportedBlob().GetSize()
@@ -754,9 +761,6 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 			contentHash,
 			contentSize,
 		}
-
-		// Release the reference we took in MultiLink
-		node.Release()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -860,7 +864,7 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 	tracker.Step("Looking up resource in volume")
 	// Look up the resource in the volume to get its address
 
-	pathNodes, isPartial, err := volume.LookupFull([]string{path})
+	lookupResponse, isPartial, err := volume.LookupFull([]string{path})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return
@@ -869,19 +873,20 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
-	if len(pathNodes) <= 0 {
+	if len(lookupResponse.Paths) <= 0 {
 		http.Error(w, "No nodes returned", http.StatusInternalServerError)
 		return
 	}
-	defer func() {
-		for _, node := range pathNodes {
-			node.Node.Release()
-		}
-	}()
 
 	tracker.Step("Checking index.html")
-	node := pathNodes[len(pathNodes)-1].Node
-	if _, ok := node.(*grits.TreeNode); ok {
+	leafNode, err := volume.GetFileNode(lookupResponse.Paths[len(lookupResponse.Paths)-1].Addr)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Can't read leaf node: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer leafNode.Release()
+
+	if _, ok := leafNode.(*grits.TreeNode); ok {
 		// We have a directory, try index.html instead
 		// FIXME more flexible
 		indexPath := strings.TrimRight(path, "/") + "/index.html"
@@ -892,27 +897,33 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 		}
 
 		path = indexPath
-		node = indexNode
-		pathNodes = append(pathNodes, &grits.PathNodePair{Path: indexPath, Node: indexNode})
+		leafNode = indexNode
+		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{Path: indexPath, Addr: indexNode.MetadataBlob().GetAddress()})
 	}
 
 	tracker.Step("Building path metadata")
-	pathMetadata := make([]map[string]any, 0, len(pathNodes))
-	for _, pathNode := range pathNodes {
+	pathMetadata := make([]map[string]any, 0, len(lookupResponse.Paths))
+	for _, pathResponse := range lookupResponse.Paths {
 		// Extract just the component name from the full path
 		pathComponent := ""
-		if pathNode.Path != "" { // Skip this logic for root
-			pathParts := strings.Split(pathNode.Path, "/")
+		if pathResponse.Path != "" { // Skip this logic for root
+			pathParts := strings.Split(pathResponse.Path, "/")
 			if len(pathParts) > 0 {
 				pathComponent = pathParts[len(pathParts)-1]
 			}
 		}
 
+		node, err := volume.GetFileNode(pathResponse.Addr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Couldn't read %s: %v", pathComponent, err), http.StatusInternalServerError)
+		}
+		defer node.Release()
+
 		pathMetadata = append(pathMetadata, map[string]any{
 			"path":         pathComponent,
-			"metadataHash": pathNode.Node.MetadataBlob().GetAddress(),
-			"contentHash":  pathNode.Node.ExportedBlob().GetAddress(),
-			"contentSize":  pathNode.Node.ExportedBlob().GetSize(),
+			"metadataHash": node.MetadataBlob().GetAddress(),
+			"contentHash":  node.ExportedBlob().GetAddress(),
+			"contentSize":  node.ExportedBlob().GetSize(),
 		})
 	}
 
@@ -926,7 +937,7 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 	}
 
 	// Use the address hash as the ETag
-	etag := fmt.Sprintf("\"%s\"", node.MetadataBlob().GetAddress())
+	etag := fmt.Sprintf("\"%s\"", leafNode.MetadataBlob().GetAddress())
 	w.Header().Set("ETag", etag)
 
 	// Tell browsers to revalidate every time
@@ -956,7 +967,7 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 		return
 	}
 
-	reader, err := node.ExportedBlob().Reader()
+	reader, err := leafNode.ExportedBlob().Reader()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Can't read blob for %s: %v", path, err), http.StatusInternalServerError)
 		return
