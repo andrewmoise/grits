@@ -107,6 +107,12 @@ type PathNodePair struct {
 	Addr BlobAddr
 }
 
+// LookupResponse represents a full response to a lookup request
+type LookupResponse struct {
+	Paths        []*PathNodePair `json:"paths"`
+	SerialNumber int64           `json:"serialNumber"`
+}
+
 // LookupFull returns a list of path and node pairs for a given path or paths
 
 // Second part of the return value indicates whether we got a partial failure
@@ -271,11 +277,6 @@ type LinkRequest struct {
 	NewAddr  BlobAddr `json:"addr"`               // New metadata blob address
 	PrevAddr BlobAddr `json:"prevAddr,omitempty"` // Optional previous address for assertions
 	Assert   uint32   `json:"assert,omitempty"`   // Optional assertion flags
-}
-
-type LookupResponse struct {
-	Paths        []*PathNodePair `json:"paths"`
-	SerialNumber int64           `json:"serialNumber"`
 }
 
 func matchesAddr(a FileNode, b BlobAddr) bool {
