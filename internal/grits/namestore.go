@@ -103,8 +103,8 @@ func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 
 // PathNodePair represents a path and its corresponding address
 type PathNodePair struct {
-	Path string
-	Addr BlobAddr
+	Path string   `json:"path" validate:"relativePath"`
+	Addr BlobAddr `json:"addr" validate:"blobAddr"`
 }
 
 // LookupResponse represents a full response to a lookup request
