@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+/////
+// Module stuff
+/////
+
 type HTTPModuleConfig struct {
 	ThisHost string `json:"thisHost"`
 	ThisPort int    `json:"thisPort"`
@@ -218,6 +222,10 @@ func (hm *HTTPModule) Stop() error {
 	log.Println("HTTP module stopped")
 	return nil
 }
+
+/////
+// Hooks for other module tie-ins
+/////
 
 func (hm *HTTPModule) addDeploymentModule(module Module) {
 	deployment, ok := module.(*DeploymentModule)
@@ -636,10 +644,20 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
+	err := ValidatePrimitive(lookupPath, ValidateRelativePath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Invalid lookup path: %s", lookupPath), http.StatusBadRequest)
+		return
+	}
 
 	volumeName := strings.TrimPrefix(r.URL.Path, "/grits/v1/lookup/")
 	if volumeName == "" {
 		http.Error(w, "Volume name is required", http.StatusBadRequest)
+		return
+	}
+	err = ValidatePrimitive(volumeName, ValidateVolumeName)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Invalid volume name: %s", volumeName), http.StatusBadRequest)
 		return
 	}
 
@@ -703,10 +721,15 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var allLinkRequests []*grits.LinkRequest
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
 
-	if err := json.NewDecoder(r.Body).Decode(&allLinkRequests); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+	var allLinkRequests []*grits.LinkRequest
+	if err := UnmarshalAndValidate(body, &allLinkRequests); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

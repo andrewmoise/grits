@@ -151,6 +151,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	var originHttpConfig *gritsd.HTTPModuleConfig
 
 	for _, moduleRaw := range config.Modules {
+		// Note, no validation for anything in the config
 		var moduleMap map[string]any
 		if err := json.Unmarshal(moduleRaw, &moduleMap); err != nil {
 			continue // Skip modules that can't be unmarshaled
