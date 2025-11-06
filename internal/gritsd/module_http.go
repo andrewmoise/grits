@@ -649,7 +649,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lookupResponse, partialResult, err := volume.LookupFull([]string{lookupPath})
+	lookupResponse, err := volume.LookupFull([]string{lookupPath})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
 		return
@@ -677,7 +677,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if !partialResult {
+	if !lookupResponse.IsPartial {
 		// Set 200 OK status, if we found the whole path
 		w.WriteHeader(http.StatusOK)
 	} else {
@@ -864,12 +864,12 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 	tracker.Step("Looking up resource in volume")
 	// Look up the resource in the volume to get its address
 
-	lookupResponse, isPartial, err := volume.LookupFull([]string{path})
+	lookupResponse, err := volume.LookupFull([]string{path})
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return
 	}
-	if isPartial {
+	if lookupResponse.IsPartial {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
