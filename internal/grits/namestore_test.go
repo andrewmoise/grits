@@ -956,13 +956,13 @@ func TestLookupMultiplePaths(t *testing.T) {
 	}
 
 	// Call LookupFull
-	lookupResponse, wasPartialFailure, err := nameStore.LookupFull(paths)
+	lookupResponse, err := nameStore.LookupFull(paths)
 	if err != nil {
 		t.Fatalf("Failed to lookup paths: %v", err)
 	}
 
 	// We expect some paths to fail, so wasPartialFailure should be true
-	if !wasPartialFailure {
+	if !lookupResponse.IsPartial {
 		t.Error("Expected partial failure flag to be true, but it was false")
 	}
 

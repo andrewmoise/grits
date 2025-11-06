@@ -111,32 +111,31 @@ type PathNodePair struct {
 type LookupResponse struct {
 	Paths        []*PathNodePair `json:"paths"`
 	SerialNumber int64           `json:"serialNumber"`
+	IsPartial      bool            `json:"partial,omitempty"`
 }
 
 // LookupFull returns a list of path and node pairs for a given path or paths
 
-// Second part of the return value indicates whether we got a partial failure
-
-func (ns *NameStore) LookupFull(names []string) (*LookupResponse, bool, error) {
+func (ns *NameStore) LookupFull(names []string) (*LookupResponse, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
 	seenPaths := make(map[string]bool)
 	var response LookupResponse
-	wasFailure := false
+	response.IsPartial = false
 
 	for _, name := range names {
 		name = strings.TrimRight(name, "/")
 		nodes, failureParts, err := ns.resolvePath(name)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		if failureParts != 0 {
-			wasFailure = true
+			response.IsPartial = true
 		}
 		if len(nodes) <= 0 {
 			log.Printf("Can't happen! No nodes returned on lookup of %s", name)
-			return nil, false, ErrNotExist
+			return nil, ErrNotExist
 		}
 
 		parts := strings.Split(name, "/")
@@ -178,7 +177,7 @@ func (ns *NameStore) LookupFull(names []string) (*LookupResponse, bool, error) {
 
 	response.SerialNumber = ns.serialNumber
 
-	return &response, wasFailure, nil
+	return &response, nil
 }
 
 // FIXME - Clean up this API a lot.
