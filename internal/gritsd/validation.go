@@ -5,181 +5,101 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
-	"strings"
 )
 
-// UnmarshalAndValidate - centralized unmarshaling with validation
-
-// Validation patterns and types
+// Validation patterns (with length constraints embedded)
 var validationPatterns = map[string]*regexp.Regexp{
 	"blobAddr":     regexp.MustCompile(`^Qm[1-9A-HJ-NP-Za-km-z]{44}$`),
-	"relativePath": regexp.MustCompile(`^([^\x00/]([^\x00]*[^\x00/])?)?$`),
-	"volumeName":   regexp.MustCompile(`^[a-zA-Z0-9\-_]+$`),
+	"relativePath": regexp.MustCompile(`^([^\x00/]([^\x00]*[^\x00/])?)?$`), // Max 4096 checked separately for performance
+	"volumeName":   regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,254}$`), // Max 255 chars total
 	"base64":       regexp.MustCompile(`^[A-Za-z0-9+/]*={0,2}$`),
+	"hostname":     regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`), // Max 253 via DNS label rules
 }
 
-type ValidationType string
-
-const (
-	ValidateBlobAddr     ValidationType = "blobAddr"
-	ValidateRelativePath ValidationType = "relativePath"
-	ValidateVolumeName   ValidationType = "volumeName"
-	ValidateBase64       ValidationType = "base64"
-)
-
-// Validate while unmarshaling
-func UnmarshalAndValidate[T any](data []byte, result *T) error {
-	if err := json.Unmarshal(data, result); err != nil {
-		return fmt.Errorf("unmarshal failed: %v", err)
+// Validate checks if a string matches the specified validation type
+// Returns true if valid, false otherwise
+func Validate(validationType string, value string) bool {
+	// Special case: empty strings
+	if value == "" {
+		// Empty is valid for relativePath and base64, invalid for others
+		return validationType == "relativePath" || validationType == "base64"
 	}
-
-	if err := ValidateStruct(result); err != nil {
-		return fmt.Errorf("validation failed: %v", err)
+	
+	// Special cases for relative path
+	if validationType == "relativePath" {
+		if len(value) > 4096 {
+			return false
+		}
+		// We could check for .. or // here; it shouldn't matter because we're not in the filesystem, but it
+		// would be safer
 	}
-
-	return nil
-}
-
-// Validate primitive types (strings, etc.)
-func ValidatePrimitive(value interface{}, validationType ValidationType) error {
-	v := reflect.ValueOf(value)
-	if v.Kind() == reflect.Ptr {
-		v = v.Elem()
-	}
-
-	if v.Kind() != reflect.String {
-		return fmt.Errorf("primitive validation requires string type")
-	}
-
-	str := v.String()
-	pattern, exists := validationPatterns[string(validationType)]
+	
+	pattern, exists := validationPatterns[validationType]
 	if !exists {
-		return fmt.Errorf("unknown validation type: %s", validationType)
+		fmt.Printf("Warning: unknown validation type '%s'\n", validationType)
+		return false
 	}
-
-	if !pattern.MatchString(str) {
-		return fmt.Errorf("invalid format for %s", validationType)
-	}
-
-	// Additional checks for relativePath
-	if validationType == ValidateRelativePath {
-		if len(str) > 4096 {
-			return fmt.Errorf("path too long")
-		}
-
-		// Check for paths that are only periods or contain path components that are only periods
-		parts := strings.Split(str, "/")
-		for _, part := range parts {
-			if part != "" && regexp.MustCompile(`^\.+$`).MatchString(part) {
-				return fmt.Errorf("path components cannot be only periods")
-			}
-		}
-	}
-
-	return nil
+	return pattern.MatchString(value)
 }
 
-// Struct validation using tags
+// ValidateStruct validates all fields in a struct based on their validate tags
+// Returns error with details about first validation failure
 func ValidateStruct(s interface{}) error {
 	v := reflect.ValueOf(s)
 	if v.Kind() == reflect.Ptr {
 		v = v.Elem()
 	}
-
+	
 	if v.Kind() != reflect.Struct {
-		return nil // Not a struct, skip
+		return nil // Not a struct, nothing to validate
 	}
-
+	
 	t := v.Type()
 	for i := 0; i < v.NumField(); i++ {
 		field := v.Field(i)
 		fieldType := t.Field(i)
-
+		
 		validateTag := fieldType.Tag.Get("validate")
 		if validateTag == "" {
 			continue
 		}
-
-		if err := ValidateField(field, validateTag, fieldType.Name); err != nil {
-			return err
+		
+		// Only validate string fields
+		if field.Kind() != reflect.String {
+			continue
 		}
-
-		// Recursively validate nested structs
-		if field.Kind() == reflect.Struct || (field.Kind() == reflect.Ptr && field.Elem().Kind() == reflect.Struct) {
-			if err := ValidateStruct(field.Interface()); err != nil {
-				return fmt.Errorf("field %s: %v", fieldType.Name, err)
-			}
-		}
-
-		// Validate slices of structs
-		if field.Kind() == reflect.Slice {
-			for j := 0; j < field.Len(); j++ {
-				elem := field.Index(j)
-				if elem.Kind() == reflect.Struct || (elem.Kind() == reflect.Ptr && elem.Elem().Kind() == reflect.Struct) {
-					if err := ValidateStruct(elem.Interface()); err != nil {
-						return fmt.Errorf("field %s[%d]: %v", fieldType.Name, j, err)
-					}
-				}
-			}
+		
+		fieldValue := field.String()
+		if !Validate(validateTag, fieldValue) {
+			return fmt.Errorf("field %s failed %s validation: %q", fieldType.Name, validateTag, fieldValue)
 		}
 	}
-
+	
 	return nil
 }
 
-func ValidateField(field reflect.Value, validateTag, fieldName string) error {
-	rules := strings.Split(validateTag, ",")
-
-	for _, rule := range rules {
-		rule = strings.TrimSpace(rule)
-
-		// Handle special rules
-		switch rule {
-		case "optional":
-			if field.Kind() == reflect.String && field.String() == "" {
-				return nil // Skip other validations for empty optional fields
-			}
-			continue
-		case "required":
-			if field.Kind() == reflect.Slice && field.Len() == 0 {
-				return fmt.Errorf("field %s is required", fieldName)
-			}
-			if field.Kind() == reflect.String && field.String() == "" {
-				return fmt.Errorf("field %s is required", fieldName)
-			}
-			continue
-		}
-
-		// Pattern validation
-		pattern, exists := validationPatterns[rule]
-		if !exists {
-			continue // Unknown rule, skip
-		}
-
-		if field.Kind() != reflect.String {
-			return fmt.Errorf("field %s: pattern validation requires string field", fieldName)
-		}
-
-		str := field.String()
-		if str != "" && !pattern.MatchString(str) {
-			return fmt.Errorf("field %s: invalid format for %s", fieldName, rule)
-		}
-
-		// Additional checks for relativePath
-		if rule == "relativePath" {
-			if len(str) > 4096 {
-				return fmt.Errorf("field %s: path too long", fieldName)
-			}
-
-			// Check for paths that are only periods or contain path components that are only periods
-			parts := strings.Split(str, "/")
-			for _, part := range parts {
-				if part != "" && regexp.MustCompile(`^\.+$`).MatchString(part) {
-					return fmt.Errorf("field %s: path components cannot be only periods", fieldName)
-				}
-			}
-		}
+// UnmarshalAndValidate unmarshals JSON and validates the result
+func UnmarshalAndValidate(data []byte, result interface{}) error {
+	if err := json.Unmarshal(data, result); err != nil {
+		return fmt.Errorf("unmarshal failed: %v", err)
 	}
-
-	return nil
+	
+	// Handle slices - validate each element
+	v := reflect.ValueOf(result)
+	if v.Kind() == reflect.Ptr {
+		v = v.Elem()
+	}
+	
+	if v.Kind() == reflect.Slice {
+		for i := 0; i < v.Len(); i++ {
+			elem := v.Index(i)
+			if err := ValidateStruct(elem.Interface()); err != nil {
+				return fmt.Errorf("element %d: %v", i, err)
+			}
+		}
+		return nil
+	}
+	
+	// Single struct
+	return ValidateStruct(result)
 }

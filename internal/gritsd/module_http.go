@@ -17,6 +17,38 @@ import (
 )
 
 /////
+// Configuration constants
+/////
+
+const (
+	DefaultMaxUploadSize = 100 * 1024 * 1024
+)
+
+// limitedReader wraps an io.Reader with a size limit
+type limitedReader struct {
+	r         io.Reader
+	remaining int64
+}
+
+func (lr *limitedReader) Read(p []byte) (int, error) {
+	if lr.remaining <= 0 {
+		return 0, fmt.Errorf("request body too large")
+	}
+	
+	if int64(len(p)) > lr.remaining {
+		p = p[:lr.remaining]
+	}
+	
+	n, err := lr.r.Read(p)
+	lr.remaining -= int64(n)
+	return n, err
+}
+
+func newLimitedReader(r io.Reader, maxSize int64) io.Reader {
+	return &limitedReader{r: r, remaining: maxSize}
+}
+
+/////
 // Module stuff
 /////
 
@@ -40,6 +72,9 @@ type HTTPModuleConfig struct {
 	// Temporary: Use self-signed certs instead of Let's Encrypt
 	// If both AutoCertificate and UseSelfSigned are true, AutoCertificate takes precedence
 	UseSelfSigned bool `json:"useSelfSigned,omitempty"` // Use self-signed certificates
+	
+	// Size limits
+	MaxUploadSize int64 `json:"maxUploadSize,omitempty"`
 }
 
 type HTTPModule struct {
@@ -76,10 +111,25 @@ func (m *HTTPModule) GetConfig() any {
 
 // NewHTTPModule creates and initializes an HTTPModule instance based on the provided configuration.
 func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error) {
+	// Validate port
+	if config.ThisPort < 1 || config.ThisPort > 65535 {
+		return nil, fmt.Errorf("invalid port: must be between 1 and 65535")
+	}
+	
+	// Validate hostname if provided
+	if config.ThisHost != "" && !Validate("hostname", config.ThisHost) {
+		return nil, fmt.Errorf("invalid hostname: %s", config.ThisHost)
+	}
+	
 	// If ReadOnly wasn't specified, default to true
 	if config.ReadOnly == nil {
 		readOnly := true
 		config.ReadOnly = &readOnly
+	}
+	
+	// Set default max upload size if not configured
+	if config.MaxUploadSize <= 0 {
+		config.MaxUploadSize = DefaultMaxUploadSize
 	}
 
 	// Validate certificate configuration
@@ -271,6 +321,10 @@ func (hm *HTTPModule) addMirrorModule(module Module) {
 	hm.activeMirrorModule = mirror
 }
 
+/////
+// HTTP API stuff
+/////
+
 // requestMiddleware is a middleware function that adds various headers to the response.
 func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -394,7 +448,7 @@ GET to /grits/v1/content/{volume}/{path} just serves file data (mainly for debug
 
 func (s *HTTPModule) setupRoutes() {
 	// Deployment routes:
-	s.Mux.HandleFunc("/", s.requestMiddleware(s.handleDeployment))
+	s.Mux.HandleFunc("/", s.requestMiddleware(s.handleDeployedContent))
 
 	// Content routes:
 	s.Mux.HandleFunc("/grits/v1/blob", s.requestMiddleware(s.handleBlob))
@@ -455,6 +509,12 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	// Strip out the size component if present (format: hash-size)
 	if dashIndex := strings.LastIndex(addrStr, "-"); dashIndex != -1 {
 		addrStr = addrStr[:dashIndex]
+	}
+
+	// Validate blob address
+	if !Validate("blobAddr", addrStr) {
+		http.Error(w, "Invalid blob address format", http.StatusBadRequest)
+		return
 	}
 
 	fileAddr, err := grits.NewBlobAddrFromString(addrStr)
@@ -535,6 +595,12 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume is read-only", http.StatusForbidden)
 		return
 	}
+	
+	// Validate content length header if present
+	if r.ContentLength > 0 && r.ContentLength > s.Config.MaxUploadSize {
+		http.Error(w, "Upload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 
 	// Extract hash from path if present
 	blobPath := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob")
@@ -550,15 +616,9 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 			expectedHash = expectedHash[:lastDotIndex]
 		}
 
-		// Handle hash-size format
-		//if dashIndex := strings.LastIndex(expectedHash, "-"); dashIndex != -1 {
-		//	expectedHash = expectedHash[:dashIndex]
-		//}
-
 		// Validate the hash format
-		_, err := grits.NewBlobAddrFromString(expectedHash)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Invalid blob address format: %s", expectedHash), http.StatusBadRequest)
+		if !Validate("blobAddr", expectedHash) {
+			http.Error(w, "Invalid blob address format", http.StatusBadRequest)
 			return
 		}
 
@@ -584,15 +644,22 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath) // Clean up the file afterwards
 
+	// Wrap the request body with a limited reader to enforce max size
+	limitedBody := newLimitedReader(r.Body, s.Config.MaxUploadSize)
+	
 	// Read the request body and write it to the temporary file
-	_, err = io.Copy(tmpFile, r.Body)
+	_, err = io.Copy(tmpFile, limitedBody)
 	tmpFile.Close() // Close the file now that we're done writing
 	if err != nil {
 		log.Printf("Failed to read request body: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		if strings.Contains(err.Error(), "too large") {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+		}
 		return
 	}
-
+	
 	// Add the file to the blob store
 	cachedFile, err := s.Server.BlobStore.AddLocalFile(tmpPath)
 	if err != nil {
@@ -644,9 +711,10 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	err := ValidatePrimitive(lookupPath, ValidateRelativePath)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid lookup path: %s", lookupPath), http.StatusBadRequest)
+	
+	// Validate the lookup path
+	if !Validate("relativePath", lookupPath) {
+		http.Error(w, "Invalid lookup path", http.StatusBadRequest)
 		return
 	}
 
@@ -655,9 +723,10 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume name is required", http.StatusBadRequest)
 		return
 	}
-	err = ValidatePrimitive(volumeName, ValidateVolumeName)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid volume name: %s", volumeName), http.StatusBadRequest)
+	
+	// Validate volume name
+	if !Validate("volumeName", volumeName) {
+		http.Error(w, "Invalid volume name", http.StatusBadRequest)
 		return
 	}
 
@@ -720,10 +789,23 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume is read-only", http.StatusForbidden)
 		return
 	}
+	
+	// Validate content length if present
+	if r.ContentLength > 0 && r.ContentLength > s.Config.MaxUploadSize {
+		http.Error(w, "Request too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 
-	body, err := io.ReadAll(r.Body)
+	// Use limited reader for body
+	// There's not a real obvious max size, but certainly 100 MB is too large
+	limitedBody := newLimitedReader(r.Body, DefaultMaxUploadSize)
+	body, err := io.ReadAll(limitedBody)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		if strings.Contains(err.Error(), "too large") {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		}
 		return
 	}
 
@@ -738,15 +820,21 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume name is required", http.StatusBadRequest)
 		return
 	}
+	
+	// Validate volume name
+	if !Validate("volumeName", volumeName) {
+		http.Error(w, "Invalid volume name", http.StatusBadRequest)
+		return
+	}
 
 	volume := s.Server.FindVolumeByName(volumeName)
 	if volume == nil {
-		http.Error(w, fmt.Sprintf("Volume %s not found", volume), http.StatusNotFound)
+		http.Error(w, fmt.Sprintf("Volume %s not found", volumeName), http.StatusNotFound)
 		return
 	}
 
 	if volume.isReadOnly() {
-		http.Error(w, fmt.Sprintf("Volume %s is read-only", volume), http.StatusForbidden)
+		http.Error(w, fmt.Sprintf("Volume %s is read-only", volumeName), http.StatusForbidden)
 		return
 	}
 
@@ -795,9 +883,16 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *HTTPModule) handleDeployment(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Request) {
 	// Extract hostname from the request
 	hostname := r.Host
+	
+	// Validate hostname
+	if !Validate("hostname", hostname) {
+		log.Printf("Invalid hostname in request: %s", hostname)
+		http.Error(w, "Invalid hostname", http.StatusBadRequest)
+		return
+	}
 
 	// Find all matching deployments for this hostname
 	var matchingDeployments []*DeploymentModule
@@ -819,6 +914,13 @@ func (s *HTTPModule) handleDeployment(w http.ResponseWriter, r *http.Request) {
 			volume := deployment.Config.Volume
 			volumePath := strings.TrimPrefix(r.URL.Path, deployment.Config.UrlPath)
 			volumePath = path.Join(deployment.Config.VolumePath, volumePath)
+			
+			// Validate the constructed volume path
+			if !Validate("relativePath", volumePath) {
+				log.Printf("Invalid volume path: %s", volumePath)
+				http.Error(w, "Invalid path", http.StatusBadRequest)
+				return
+			}
 
 			s.handleContentRequest(volume, volumePath, w, r)
 			return
@@ -840,11 +942,29 @@ func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
 
 	volumeName := pathParts[0]
 	filePath := pathParts[1] // Remaining path
+	
+	// Validate volume name
+	if !Validate("volumeName", volumeName) {
+		http.Error(w, "Invalid volume name", http.StatusBadRequest)
+		return
+	}
+	
+	// Validate file path
+	if !Validate("relativePath", filePath) {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
 
 	s.handleContentRequest(volumeName, filePath, w, r)
 }
 
 func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.ResponseWriter, r *http.Request) {
+	// Validate inputs before proceeding
+	if !Validate("relativePath", filePath) {
+		http.Error(w, "Invalid file path", http.StatusBadRequest)
+		return
+	}
+	
 	volume := s.Server.FindVolumeByName(volumeName)
 	if volume == nil {
 		http.Error(w, fmt.Sprintf("Volume %s not found", volumeName), http.StatusNotFound)
@@ -856,13 +976,13 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		handleNamespaceGet(s.Server.BlobStore, volume, filePath, w, r)
+		handleNamespaceGet(volume, filePath, w, r)
 
 	case http.MethodPut:
 		if *s.Config.ReadOnly {
 			http.Error(w, "Volume is read-only", http.StatusForbidden)
 		} else {
-			handleNamespacePut(s.Server.BlobStore, volume, filePath, w, r)
+			handleNamespacePut(s.Server.BlobStore, volume, filePath, w, r, s.Config.MaxUploadSize)
 		}
 
 	case http.MethodDelete:
@@ -877,7 +997,7 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	}
 }
 
-func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	tracker := NewPerformanceTracker(r)
 	tracker.Start()
 	defer tracker.End()
@@ -1005,18 +1125,29 @@ func handleNamespaceGet(_ grits.BlobStore, volume Volume, path string, w http.Re
 	http.ServeContent(w, r, filepath.Base(path), time.Now(), reader)
 }
 
-func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request) {
+func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request, maxSize int64) {
 	log.Printf("Received PUT request for file: %s\n", path)
 
 	if path == "" || path == "/" {
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
 		return
 	}
+	
+	// Check content length
+	if r.ContentLength > 0 && r.ContentLength > maxSize {
+		http.Error(w, "Upload too large", http.StatusRequestEntityTooLarge)
+		return
+	}
 
-	// Read the file content from the request body
-	data, err := io.ReadAll(r.Body)
+	// Read the file content from the request body with size limit
+	limitedBody := newLimitedReader(r.Body, maxSize)
+	data, err := io.ReadAll(limitedBody)
 	if err != nil {
-		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		if strings.Contains(err.Error(), "too large") {
+			http.Error(w, "Request body too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		}
 		return
 	}
 
