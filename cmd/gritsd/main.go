@@ -85,7 +85,25 @@ func main() {
 	}
 	config.ServerDir = workingDir
 
+	// Open any ports we'll need later
 	var err error
+	if isRunningAsRoot() {
+		if config.RunAsUser == "" {
+			panic("Must specify runAsUser to run as root.")
+		}
+		
+		// Pre-open privileged ports while we're still root
+		// Pass the raw module configs before they're processed
+		if err := gritsd.PreopenPrivilegedPorts(config.Modules); err != nil {
+			log.Fatalf("Failed to pre-open privileged ports: %v", err)
+		}
+		
+		// Now drop privileges
+		if err := dropPrivileges(config.RunAsUser, config.RunAsGroup); err != nil {
+			log.Fatalf("Failed to drop privileges: %v", err)
+		}
+	}
+
 	if config.RunAsUser != "" || config.RunAsGroup != "" {
 		err = dropPrivileges(config.RunAsUser, config.RunAsGroup)
 		if err != nil {
