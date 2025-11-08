@@ -19,6 +19,10 @@ type Config struct {
 	ValidateBlobs       bool  `json:"validateBlobs"`
 	DelayedEviction     bool  `json:"delayedEviction"`
 
+	// User configuration
+	RunAsUser  string `json:"runAsUser,omitempty"`
+	RunAsGroup string `json:"runAsGroup,omitempty"`
+
 	// Modules and configs for same
 	Modules []json.RawMessage `json:"modules"`
 }
