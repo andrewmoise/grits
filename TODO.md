@@ -50,3 +50,4 @@ Backlog:
 * Fix testbed, doesn't seem like it passes when started from clean
 * Make HTTP API more best practices (particularly how it returns errors)
 * Make test cases for validation
+* Make FUSE mounts process NodeForgetter and remove stuff from the inode cache when it happens
