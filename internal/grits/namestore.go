@@ -50,6 +50,7 @@ type NameStore struct {
 
 	watchers []FileTreeWatcher
 	wmtx     sync.RWMutex // Separate mutex for watchers list
+	wgroup   sync.WaitGroup // Tracks in-flight notifications
 
 	refManager RefManager
 
@@ -1716,7 +1717,6 @@ func (ns *NameStore) RegisterWatcher(watcher FileTreeWatcher) {
 // UnregisterWatcher removes a watcher from notification list
 func (ns *NameStore) UnregisterWatcher(watcher FileTreeWatcher) {
 	ns.wmtx.Lock()
-	defer ns.wmtx.Unlock()
 
 	for i, w := range ns.watchers {
 		if w == watcher {
@@ -1726,6 +1726,9 @@ func (ns *NameStore) UnregisterWatcher(watcher FileTreeWatcher) {
 			break
 		}
 	}
+
+	ns.wmtx.Unlock()
+	ns.wgroup.Wait() // Wait until callbacks complete before returning
 }
 
 // notifyWatchers sends event to all registered watchers
@@ -1733,17 +1736,19 @@ func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue Fil
 	ns.wmtx.RLock()
 	watchers := make([]FileTreeWatcher, len(ns.watchers))
 	copy(watchers, ns.watchers) // Copy to avoid holding lock during callbacks
+	ns.wgroup.Add(len(watchers))
 	ns.wmtx.RUnlock()
 
 	// Notify each watcher
+	var result error
 	for _, watcher := range watchers {
 		err := watcher.OnFileTreeChange(path, oldValue, newValue)
 		if err != nil {
-			return err
+			result = err
 		}
+		ns.wgroup.Done()
 	}
-
-	return nil
+	return result
 }
 
 /////

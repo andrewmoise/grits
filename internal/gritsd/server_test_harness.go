@@ -114,3 +114,16 @@ func WithPeerModule(trackerUrl string, peerName string, port int) TestModuleInit
 		s.AddModule(peerModule)
 	}
 }
+
+// WithMountModule is an initializer for adding a mount module to the server.
+func WithMountModule(volumeName string, mountPoint string) TestModuleInitializer {
+	return func(t *testing.T, s *Server) {
+		mountConfig := &MountModuleConfig{
+			Volume:     volumeName,
+			MountPoint: mountPoint,
+		}
+
+		mountModule := NewMountModule(s, mountConfig)
+		s.AddModule(mountModule)
+	}
+}

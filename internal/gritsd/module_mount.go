@@ -107,11 +107,18 @@ func (mm *MountModule) Start() error {
 
 	log.Printf("Mounted on %s", mntDir)
 	log.Printf("Unmount by calling 'fusermount -u %s'", mntDir)
+
+	mm.volume.RegisterWatcher(mm)
+
 	return nil
 }
 
 func (mm *MountModule) Stop() error {
 	log.Printf("We are stopping mount module")
+
+	if mm.volume != nil {
+		mm.volume.UnregisterWatcher(mm)
+	}
 
 	if mm.fsServer != nil {
 		// First attempt to unmount
@@ -241,6 +248,45 @@ func (m *InodeManager) RemoveInode(path string) {
 	defer m.Unlock()
 
 	delete(m.inodeMap, path)
+}
+
+/////
+// Invalidation
+
+func (mm *MountModule) OnFileTreeChange(path string, oldValue grits.FileNode, newValue grits.FileNode) error {
+	mm.inodeManager.Lock()
+
+	for inodePath, inode := range mm.inodeManager.inodeMap {
+		if inodePath == path || strings.HasPrefix(inodePath, path) {
+			// FIXME - We need back pressure here, we just need to do it in a way that doesn't deadlock
+
+			var parentInode uint64
+			var hasParent bool
+			if inodePath != "" {
+				parentPath := filepath.Dir(inodePath)
+				parentInode, hasParent = mm.inodeManager.inodeMap[parentPath]
+			}
+
+			childName := filepath.Base(inodePath)
+
+			// Capture loop variables for goroutine
+			capturedInode := inode
+			capturedParentInode := parentInode
+			capturedHasParent := hasParent
+			capturedChildName := childName
+
+			go func() {
+				mm.fsServer.InodeNotify(capturedInode, 0, -1)
+				if capturedHasParent {
+					mm.fsServer.EntryNotify(capturedParentInode, capturedChildName)
+				}
+			}()
+		}
+	}
+
+	mm.inodeManager.Unlock()
+
+	return nil
 }
 
 /////
