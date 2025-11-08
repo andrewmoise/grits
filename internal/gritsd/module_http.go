@@ -8,11 +8,13 @@ import (
 	"grits/internal/grits"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -34,11 +36,11 @@ func (lr *limitedReader) Read(p []byte) (int, error) {
 	if lr.remaining <= 0 {
 		return 0, fmt.Errorf("request body too large")
 	}
-	
+
 	if int64(len(p)) > lr.remaining {
 		p = p[:lr.remaining]
 	}
-	
+
 	n, err := lr.r.Read(p)
 	lr.remaining -= int64(n)
 	return n, err
@@ -72,7 +74,7 @@ type HTTPModuleConfig struct {
 	// Temporary: Use self-signed certs instead of Let's Encrypt
 	// If both AutoCertificate and UseSelfSigned are true, AutoCertificate takes precedence
 	UseSelfSigned bool `json:"useSelfSigned,omitempty"` // Use self-signed certificates
-	
+
 	// Size limits
 	MaxUploadSize int64 `json:"maxUploadSize,omitempty"`
 }
@@ -115,18 +117,18 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 	if config.ThisPort < 1 || config.ThisPort > 65535 {
 		return nil, fmt.Errorf("invalid port: must be between 1 and 65535")
 	}
-	
+
 	// Validate hostname if provided
 	if config.ThisHost != "" && !Validate("hostname", config.ThisHost) {
 		return nil, fmt.Errorf("invalid hostname: %s", config.ThisHost)
 	}
-	
+
 	// If ReadOnly wasn't specified, default to true
 	if config.ReadOnly == nil {
 		readOnly := true
 		config.ReadOnly = &readOnly
 	}
-	
+
 	// Set default max upload size if not configured
 	if config.MaxUploadSize <= 0 {
 		config.MaxUploadSize = DefaultMaxUploadSize
@@ -241,14 +243,35 @@ func (hm *HTTPModule) Start() error {
 		}
 	}
 
-	go func() {
-		if hm.Config.EnableTls {
-			err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
-		} else {
-			err = hm.HTTPServer.ListenAndServe()
-		}
+	// Check if we have a pre-opened listener for this port
+	preopenedListenersMutex.Lock()
+	listener, hasPreopened := preopenedListeners[hm.Config.ThisPort]
+	preopenedListenersMutex.Unlock()
 
-		// FIXME - better handling
+	go func() {
+		var err error
+		
+		if hasPreopened {
+			// Use the pre-opened listener
+			log.Printf("Using pre-opened listener for port %d", hm.Config.ThisPort)
+			
+			if hm.Config.EnableTls {
+				// Wrap with TLS
+				tlsListener := tls.NewListener(listener, hm.HTTPServer.TLSConfig)
+				err = hm.HTTPServer.Serve(tlsListener)
+			} else {
+				err = hm.HTTPServer.Serve(listener)
+			}
+		} else {
+			log.Printf("No pre-opened port %d, opening new", hm.Config.ThisPort)
+			// Normal binding
+			if hm.Config.EnableTls {
+				err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
+			} else {
+				err = hm.HTTPServer.ListenAndServe()
+			}
+		}
+		
 		if err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
@@ -270,6 +293,55 @@ func (hm *HTTPModule) Stop() error {
 	}
 
 	log.Println("HTTP module stopped")
+	return nil
+}
+
+/////
+// Support for pre-opening sockets
+/////
+
+// In module_http.go
+
+// preopened sockets - global map for sockets opened before privilege drop
+var preopenedListeners = make(map[int]net.Listener)
+var preopenedListenersMutex sync.Mutex
+
+// PreopenPrivilegedPorts scans the raw module configs and opens any privileged HTTP ports
+// This should be called before dropping privileges
+func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
+	preopenedListenersMutex.Lock()
+	defer preopenedListenersMutex.Unlock()
+
+	for _, rawConfig := range rawModuleConfigs {
+		// First, check if this is an HTTP module
+		var baseConfig ModuleConfig
+		if err := json.Unmarshal(rawConfig, &baseConfig); err != nil {
+			continue
+		}
+
+		if baseConfig.Type != "http" {
+			continue
+		}
+
+		// Now unmarshal the HTTP config
+		var httpConfig HTTPModuleConfig
+		if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {
+			log.Printf("Warning: failed to parse HTTP module config: %v", err)
+			continue
+		}
+
+		log.Printf("Pre-opening port %d", httpConfig.ThisPort)
+
+		addr := fmt.Sprintf(":%d", httpConfig.ThisPort)
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to open port %d: %v", httpConfig.ThisPort, err)
+		}
+
+		preopenedListeners[httpConfig.ThisPort] = listener
+		log.Printf("Successfully pre-opened port %d", httpConfig.ThisPort)
+	}
+
 	return nil
 }
 
@@ -595,7 +667,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume is read-only", http.StatusForbidden)
 		return
 	}
-	
+
 	// Validate content length header if present
 	if r.ContentLength > 0 && r.ContentLength > s.Config.MaxUploadSize {
 		http.Error(w, "Upload too large", http.StatusRequestEntityTooLarge)
@@ -646,7 +718,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Wrap the request body with a limited reader to enforce max size
 	limitedBody := newLimitedReader(r.Body, s.Config.MaxUploadSize)
-	
+
 	// Read the request body and write it to the temporary file
 	_, err = io.Copy(tmpFile, limitedBody)
 	tmpFile.Close() // Close the file now that we're done writing
@@ -659,7 +731,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	
+
 	// Add the file to the blob store
 	cachedFile, err := s.Server.BlobStore.AddLocalFile(tmpPath)
 	if err != nil {
@@ -711,7 +783,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Validate the lookup path
 	if !Validate("relativePath", lookupPath) {
 		http.Error(w, "Invalid lookup path", http.StatusBadRequest)
@@ -723,7 +795,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume name is required", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Validate volume name
 	if !Validate("volumeName", volumeName) {
 		http.Error(w, "Invalid volume name", http.StatusBadRequest)
@@ -789,7 +861,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume is read-only", http.StatusForbidden)
 		return
 	}
-	
+
 	// Validate content length if present
 	if r.ContentLength > 0 && r.ContentLength > s.Config.MaxUploadSize {
 		http.Error(w, "Request too large", http.StatusRequestEntityTooLarge)
@@ -820,7 +892,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume name is required", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Validate volume name
 	if !Validate("volumeName", volumeName) {
 		http.Error(w, "Invalid volume name", http.StatusBadRequest)
@@ -886,7 +958,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Request) {
 	// Extract hostname from the request
 	hostname := r.Host
-	
+
 	// Validate hostname
 	if !Validate("hostname", hostname) {
 		log.Printf("Invalid hostname in request: %s", hostname)
@@ -914,7 +986,7 @@ func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Reques
 			volume := deployment.Config.Volume
 			volumePath := strings.TrimPrefix(r.URL.Path, deployment.Config.UrlPath)
 			volumePath = path.Join(deployment.Config.VolumePath, volumePath)
-			
+
 			// Validate the constructed volume path
 			if !Validate("relativePath", volumePath) {
 				log.Printf("Invalid volume path: %s", volumePath)
@@ -942,13 +1014,13 @@ func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
 
 	volumeName := pathParts[0]
 	filePath := pathParts[1] // Remaining path
-	
+
 	// Validate volume name
 	if !Validate("volumeName", volumeName) {
 		http.Error(w, "Invalid volume name", http.StatusBadRequest)
 		return
 	}
-	
+
 	// Validate file path
 	if !Validate("relativePath", filePath) {
 		http.Error(w, "Invalid file path", http.StatusBadRequest)
@@ -964,7 +1036,7 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 		http.Error(w, "Invalid file path", http.StatusBadRequest)
 		return
 	}
-	
+
 	volume := s.Server.FindVolumeByName(volumeName)
 	if volume == nil {
 		http.Error(w, fmt.Sprintf("Volume %s not found", volumeName), http.StatusNotFound)
@@ -1132,7 +1204,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
 		return
 	}
-	
+
 	// Check content length
 	if r.ContentLength > 0 && r.ContentLength > maxSize {
 		http.Error(w, "Upload too large", http.StatusRequestEntityTooLarge)
