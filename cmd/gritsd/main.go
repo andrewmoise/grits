@@ -6,12 +6,63 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"syscall"
 
 	"grits/internal/grits"
 	"grits/internal/gritsd"
 )
+
+// isRunningAsRoot returns true if the current process is running as root (UID 0)
+func isRunningAsRoot() bool {
+	return os.Geteuid() == 0
+}
+
+// dropPrivileges changes the process to run as the specified user and group
+func dropPrivileges(username, groupname string) error {
+	// Look up the user
+	targetUser, err := user.Lookup(username)
+	if err != nil {
+		return fmt.Errorf("failed to lookup user %s: %v", username, err)
+	}
+
+	uid, err := strconv.Atoi(targetUser.Uid)
+	if err != nil {
+		return fmt.Errorf("invalid UID for user %s: %v", username, err)
+	}
+
+	gid, err := strconv.Atoi(targetUser.Gid)
+	if err != nil {
+		return fmt.Errorf("invalid GID for user %s: %v", username, err)
+	}
+
+	// If a specific group is specified, use that instead
+	if groupname != "" {
+		targetGroup, err := user.LookupGroup(groupname)
+		if err != nil {
+			return fmt.Errorf("failed to lookup group %s: %v", groupname, err)
+		}
+		gid, err = strconv.Atoi(targetGroup.Gid)
+		if err != nil {
+			return fmt.Errorf("invalid GID for group %s: %v", groupname, err)
+		}
+	}
+
+	// Set the GID first (must be done before dropping root privileges)
+	if err := syscall.Setgid(gid); err != nil {
+		return fmt.Errorf("failed to set GID to %d: %v", gid, err)
+	}
+
+	// Set the UID (this drops root privileges permanently)
+	if err := syscall.Setuid(uid); err != nil {
+		return fmt.Errorf("failed to set UID to %d: %v", uid, err)
+	}
+
+	log.Printf("Successfully dropped privileges to user %s (UID %d, GID %d)", username, uid, gid)
+	return nil
+}
 
 func main() {
 	var workingDir string
@@ -26,16 +77,26 @@ func main() {
 		os.Exit(1) // Exit with an error code
 	}
 
-	// Load the configuration
+	// Load the full configuration
 	config := grits.NewConfig(workingDir)
 	if err := config.LoadFromFile(configFile); err != nil {
 		log.Printf("Failed to load configuration: %v\n", err)
-		os.Exit(1) // Exit with an error code
+		os.Exit(1)
 	}
-	config.ServerDir = workingDir // Ensure server directory is set
+	config.ServerDir = workingDir
+
+	var err error
+	if config.RunAsUser != "" || config.RunAsGroup != "" {
+		err = dropPrivileges(config.RunAsUser, config.RunAsGroup)
+		if err != nil {
+			panic(fmt.Sprintf("Cannot drop privileges: %v", err))
+		}
+	} else if isRunningAsRoot() {
+		panic("Must specify runAsUser to run as root.")
+	}
 
 	// Ensure the server directory exists
-	err := os.MkdirAll(config.ServerDir, 0755)
+	err = os.MkdirAll(config.ServerDir, 0755)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create server directory: %v", err))
 	}
