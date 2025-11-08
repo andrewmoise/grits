@@ -389,11 +389,6 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		}
 	}
 
-	err = ns.notifyWatchers("", oldRoot, newRoot)
-	if err != nil {
-		return nil, err
-	}
-
 	if newRoot != nil {
 		ns.refManager.recursiveTake(ns, newRoot)
 	}
@@ -522,11 +517,6 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 		return err
 	}
 
-	err = ns.notifyWatchers("", oldRoot, newRoot)
-	if err != nil {
-		return err
-	}
-
 	if newRoot != nil {
 		ns.refManager.recursiveTake(ns, newRoot)
 		ns.rootAddr = newRoot.MetadataBlob().GetAddress()
@@ -646,6 +636,11 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr Bl
 			}
 		}
 
+		err = ns.notifyWatchers(currPath, oldChild, newValue)
+		if err != nil {
+			return nil, err
+		}
+
 		if parts[0] == "" {
 			return newValue, nil
 		}
@@ -666,8 +661,6 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr Bl
 	} else {
 		delete(newChildren, parts[0])
 	}
-
-	ns.notifyWatchers(currPath, oldChild, newValue)
 
 	result, err := ns.createTreeNode(newChildren, false)
 	if err != nil {
