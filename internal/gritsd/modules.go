@@ -77,8 +77,6 @@ func (s *Server) AddVolume(volume Volume) {
 
 // AddModuleHook adds a new hook to be called whenever a new module is added.
 func (s *Server) AddModuleHook(hook func(Module)) {
-	log.Printf("We add module hook\n")
-
 	s.moduleHooks = append(s.moduleHooks, hook)
 	// Call the hook immediately for all existing modules
 	for _, module := range s.Modules {
