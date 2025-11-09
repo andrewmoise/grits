@@ -166,13 +166,24 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return peerModule, nil
 
-	// Configured pins are not enabled for a bit longer
+		// Configured pins are not enabled for a bit longer
 
-	//case "pin":
-	//	var pinConfig PinConfig
-	//	if err := json.Unmarshal(rawConfig, &pinConfig); err != nil {
-	//		return nil, fmt.Errorf("failed to unmarshal pin config: %v", err)
-	//	}
+		//case "pin":
+		//	var pinConfig PinConfig
+		//	if err := json.Unmarshal(rawConfig, &pinConfig); err != nil {
+		//		return nil, fmt.Errorf("failed to unmarshal pin config: %v", err)
+		//	}
+
+	case "remote":
+		var remoteConfig RemoteVolumeConfig
+		if err := json.Unmarshal(rawConfig, &remoteConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal RemoteVolume module config: %v", err)
+		}
+		remoteVolume, err := NewRemoteVolume(&remoteConfig, s)
+		if err != nil {
+			return nil, fmt.Errorf("failed to instantiate RemoteVolume: %v", err)
+		}
+		return remoteVolume, nil
 
 	case "serviceworker":
 		var swConfig ServiceWorkerModuleConfig
