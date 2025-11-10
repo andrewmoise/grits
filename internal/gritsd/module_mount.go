@@ -54,7 +54,16 @@ func (*MountModule) GetModuleName() string {
 }
 
 func (*MountModule) GetDependencies() []*Dependency {
-	return []*Dependency{}
+	return []*Dependency{
+		{
+			ModuleType: "remote",
+			Type:       DependOptional,
+		},
+		{
+			ModuleType: "volume",
+			Type:       DependOptional,
+		},
+	}
 }
 
 func (m *MountModule) GetConfig() any {
@@ -73,6 +82,11 @@ func (mm *MountModule) Start() error {
 	} else {
 		// Error
 		return fmt.Errorf("error trying to check %s: %v", mntDir, err)
+	}
+
+	log.Printf("Listing volumes:")
+	for name := range mm.gritsServer.Volumes {
+		log.Printf("Volume: %s", name)
 	}
 
 	var exists bool

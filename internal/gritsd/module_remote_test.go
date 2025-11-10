@@ -596,7 +596,7 @@ func TestRemoteVolumeProperties(t *testing.T) {
 
 	// Test volume name
 	volumeName := remoteVolume.GetVolumeName()
-	expectedName := "localhost:3005:props" // Format: host:volumename
+	expectedName := "[localhost:3005]:props" // Format: host:volumename
 	if volumeName != expectedName {
 		t.Errorf("Expected volume name %s, got %s", expectedName, volumeName)
 	}

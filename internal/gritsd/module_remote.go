@@ -6,16 +6,18 @@ import (
 	"fmt"
 	"grits/internal/grits"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
 // RemoteVolumeConfig contains configuration for accessing a remote volume
 type RemoteVolumeConfig struct {
-	VolumeName          string        `json:"volumeName"`
-	RemoteURL           string        `json:"remoteUrl"`
+	VolumeName string `json:"volumeName"`
+	RemoteURL  string `json:"remoteUrl"`
 	//FreshnessDuration   time.Duration `json:"freshnessDuration"`
 	//CacheExpirationTime time.Duration `json:"cacheExpirationTime"`
 }
@@ -26,13 +28,18 @@ type RemoteVolume struct {
 	config     *RemoteVolumeConfig
 	server     *Server
 	localCache *LocalVolume // The underlying local volume that caches data
+	volumeName string       // The name for this volume
 
 	lastFetchTime time.Time // Timestamp of the most recent fetch from remote
 	serialNumber  int64     // Track remote revision
 	//mutex         sync.RWMutex // Protects access to shared fields
 }
 
+var _ = (Volume)((*RemoteVolume)(nil))
+
 func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume, error) {
+	config.RemoteURL = strings.TrimSuffix(config.RemoteURL, "/")
+
 	// Extract host from RemoteURL
 	parsedURL, err := url.Parse(config.RemoteURL)
 	if err != nil {
@@ -40,9 +47,19 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 	}
 	host := parsedURL.Host
 
+	port := parsedURL.Port()
+	if port != "" {
+		standardPort := (parsedURL.Scheme == "http" && port == "80") ||
+			(parsedURL.Scheme == "https" && port == "443")
+
+		if !standardPort {
+			host = fmt.Sprintf("[%s:%s]", parsedURL.Hostname(), port)
+		}
+	}
+
 	// Create a LocalVolume as the cache with a name based on the remote host and volume
 	localConfig := &LocalVolumeConfig{
-		VolumeName: fmt.Sprintf("%s:%s", host, config.VolumeName),
+		VolumeName: fmt.Sprintf("%s:%s (cache)", host, config.VolumeName),
 	}
 
 	// Create the local cache with read-write permissions
@@ -55,6 +72,7 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 		config:        config,
 		server:        server,
 		localCache:    localCache,
+		volumeName:    fmt.Sprintf("%s:%s", host, config.VolumeName),
 		lastFetchTime: time.Time{},
 		serialNumber:  0,
 	}
@@ -74,7 +92,7 @@ func (rv *RemoteVolume) GetDependencies() []*Dependency {
 
 // GetVolumeName implements Volume interface
 func (rv *RemoteVolume) GetVolumeName() string {
-	return rv.localCache.GetVolumeName()
+	return rv.volumeName
 }
 
 // Start implements Volume interface
@@ -115,7 +133,11 @@ func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
 	//}
 
 	// Cache miss - fetch from remote
-	lookupResponse, err := rv.lookupFromRemote(path)
+	lookupResponse := &grits.LookupResponse{
+		Paths: make([]*grits.PathNodePair, 0),
+	}
+
+	err := rv.lookupFromRemote(path, lookupResponse)
 	if err != nil {
 		return nil, err
 	}
@@ -133,21 +155,21 @@ func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
 }
 
 // LookupFull implements Volume interface
-func (rv *RemoteVolume) LookupFull(paths []string) ([]*grits.LookupResponse, error) {
+func (rv *RemoteVolume) LookupFull(paths []string) (*grits.LookupResponse, error) {
 	// FIXME - It would be better if this was atomic, but we don't have the HTTP API for it right now
 
-	result := make([]*grits.LookupResponse, 0, len(paths))
+	lookupResponse := &grits.LookupResponse{
+		Paths: make([]*grits.PathNodePair, 0),
+	}
 
-	for _, path := range(paths) {
-		lookupResponse, err := rv.lookupFromRemote(path)
+	for _, path := range paths {
+		err := rv.lookupFromRemote(path, lookupResponse)
 		if err != nil {
 			return nil, fmt.Errorf("%v looking up %s", err, path)
 		}
-
-		result = append(result, lookupResponse)
 	}
 
-	return result, nil
+	return lookupResponse, nil
 }
 
 // GetFileNode implements Volume interface
@@ -228,7 +250,7 @@ func (rv *RemoteVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 	}
 
 	url := fmt.Sprintf("%s/grits/v1/blob/%s", rv.config.RemoteURL, addr)
-	
+
 	resp, err := rv.httpClient().Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch blob %s: %v", addr, err)
@@ -293,34 +315,40 @@ func (rv *RemoteVolume) httpClient() *http.Client {
 	}
 }
 
-func (rv *RemoteVolume) lookupFromRemote(path string) (*grits.LookupResponse, error) {
+func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.LookupResponse) error {
 	url := fmt.Sprintf("%s/grits/v1/lookup/%s", rv.config.RemoteURL, rv.config.VolumeName)
-	
+
 	// Encode the path as JSON
 	pathJSON, err := json.Marshal(path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to encode path: %v", err)
+		return fmt.Errorf("failed to encode path: %v", err)
 	}
 
 	resp, err := rv.httpClient().Post(url, "application/json", bytes.NewReader(pathJSON))
 	if err != nil {
-		return nil, fmt.Errorf("failed to lookup path %s: %v", path, err)
+		return fmt.Errorf("failed to lookup path %s: %v", path, err)
 	}
 	defer resp.Body.Close()
 
-	isPartial := resp.StatusCode == http.StatusMultiStatus
-	
+	if resp.StatusCode == http.StatusMultiStatus {
+		lookupResponse.IsPartial = true
+	}
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, grits.ErrNotExist
+		return grits.ErrNotExist
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMultiStatus {
-		return nil, fmt.Errorf("lookup failed with status %d", resp.StatusCode)
+		log.Printf("    lookup failed with status %d", resp.StatusCode)
+		body, err := io.ReadAll(resp.Body)
+		if err == nil {
+			log.Printf("    %s", body)
+		}
+		return fmt.Errorf("lookup failed with status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// The HTTP handler returns [][]any where each inner array contains:
@@ -328,36 +356,30 @@ func (rv *RemoteVolume) lookupFromRemote(path string) (*grits.LookupResponse, er
 	var pathData [][]interface{}
 	err = json.Unmarshal(body, &pathData)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode lookup response: %v", err)
+		return fmt.Errorf("failed to decode lookup response: %v", err)
 	}
 
-	// Convert to LookupResponse format
-	lookupResponse := &grits.LookupResponse{
-		Paths:     make([]*grits.PathNodePair, len(pathData)),
-		IsPartial: isPartial,
-	}
-
-	for i, entry := range pathData {
+	for _, entry := range pathData {
 		if len(entry) != 4 {
-			return nil, fmt.Errorf("malformed path entry: expected 4 elements, got %d", len(entry))
+			return fmt.Errorf("malformed path entry: expected 4 elements, got %d", len(entry))
 		}
 
 		path, ok := entry[0].(string)
 		if !ok {
-			return nil, fmt.Errorf("invalid path type in response")
+			return fmt.Errorf("invalid path type in response")
 		}
 
 		metadataAddr, ok := entry[1].(string)
 		if !ok {
-			return nil, fmt.Errorf("invalid metadata address type in response")
+			return fmt.Errorf("invalid metadata address type in response")
 		}
 
 		// We only need the path and metadata address for the PathNodePair
-		lookupResponse.Paths[i] = &grits.PathNodePair{
+		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
 			Path: path,
 			Addr: grits.BlobAddr(metadataAddr),
-		}
+		})
 	}
 
-	return lookupResponse, nil
+	return nil
 }
