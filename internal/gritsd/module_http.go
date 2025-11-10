@@ -256,8 +256,19 @@ func (hm *HTTPModule) Start() error {
 			log.Printf("Using pre-opened listener for port %d", hm.Config.ThisPort)
 			
 			if hm.Config.EnableTls {
+				// Load certificate from specified paths
+				var cert tls.Certificate
+				cert, err = tls.LoadX509KeyPair(certPath, keyPath)
+				if err != nil {
+					log.Fatalf("Failed to load certificate: %v", err)
+				}
+				
+				// Copy existing TLS config and set the certificate
+				tlsConfig := hm.HTTPServer.TLSConfig.Clone()
+				tlsConfig.Certificates = []tls.Certificate{cert}
+				
 				// Wrap with TLS
-				tlsListener := tls.NewListener(listener, hm.HTTPServer.TLSConfig)
+				tlsListener := tls.NewListener(listener, tlsConfig)
 				err = hm.HTTPServer.Serve(tlsListener)
 			} else {
 				err = hm.HTTPServer.Serve(listener)
