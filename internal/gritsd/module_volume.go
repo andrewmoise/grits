@@ -52,6 +52,8 @@ type LocalVolumeConfig struct {
 	VolumeName string `json:"volumeName"`
 }
 
+var _ = (Volume)((*LocalVolume)(nil))
+
 func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool) (*LocalVolume, error) {
 	ns, err := grits.EmptyNameStore(server.BlobStore)
 	if err != nil {
