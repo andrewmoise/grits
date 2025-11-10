@@ -51,3 +51,4 @@ Backlog:
 * Make HTTP API more best practices (particularly how it returns errors)
 * Make test cases for validation
 * Make FUSE mounts process NodeForgetter and remove stuff from the inode cache when it happens
+* More coherent error message when a dead previous FUSE mount is in the way
