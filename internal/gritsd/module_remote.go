@@ -11,16 +11,19 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
 // RemoteVolumeConfig contains configuration for accessing a remote volume
 type RemoteVolumeConfig struct {
-	VolumeName string `json:"volumeName"`
-	RemoteURL  string `json:"remoteUrl"`
-	//FreshnessDuration   time.Duration `json:"freshnessDuration"`
-	//CacheExpirationTime time.Duration `json:"cacheExpirationTime"`
+	VolumeName          string        `json:"volumeName"`
+	RemoteURL           string        `json:"remoteUrl"`
+	FreshnessDuration   time.Duration `json:"freshnessDuration"`
+	CacheExpirationTime time.Duration `json:"cacheExpirationTime"`
 }
+
+const maxPrefetchQueueSize = 128
 
 // RemoteVolume implements the Volume interface by proxying to a local cache
 // and fetching from a remote server when needed
@@ -30,9 +33,25 @@ type RemoteVolume struct {
 	localCache *LocalVolume // The underlying local volume that caches data
 	volumeName string       // The name for this volume
 
-	lastFetchTime time.Time // Timestamp of the most recent fetch from remote
-	serialNumber  int64     // Track remote revision
-	//mutex         sync.RWMutex // Protects access to shared fields
+	lastFetchTime time.Time    // Timestamp of the most recent fetch from remote
+	serialNumber  int64        // Track remote revision
+	cacheMutex    sync.RWMutex // Protects lastFetchTime and localCache root addr
+
+	// Prefetch queue and worker
+	prefetchQueue []grits.BlobAddr
+	queueMutex    sync.Mutex
+	queueCond     *sync.Cond
+	stopWorker    chan struct{}
+	workerWg      sync.WaitGroup
+
+	// Track cached blobs and their expiration
+	cachedBlobs []*cachedBlobEntry
+}
+
+// cachedBlobEntry tracks a cached blob and when to release it
+type cachedBlobEntry struct {
+	file      grits.CachedFile
+	expiresAt time.Time
 }
 
 var _ = (Volume)((*RemoteVolume)(nil))
@@ -45,8 +64,8 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 	if err != nil {
 		return nil, fmt.Errorf("invalid remote URL %s: %v", config.RemoteURL, err)
 	}
-	host := parsedURL.Host
 
+	host := parsedURL.Host
 	port := parsedURL.Port()
 	if port != "" {
 		standardPort := (parsedURL.Scheme == "http" && port == "80") ||
@@ -75,7 +94,11 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 		volumeName:    fmt.Sprintf("%s:%s", host, config.VolumeName),
 		lastFetchTime: time.Time{},
 		serialNumber:  0,
+		prefetchQueue: make([]grits.BlobAddr, 0, maxPrefetchQueueSize),
+		stopWorker:    make(chan struct{}),
+		cachedBlobs:   make([]*cachedBlobEntry, 0),
 	}
+	rv.queueCond = sync.NewCond(&rv.queueMutex)
 
 	return rv, nil
 }
@@ -97,11 +120,25 @@ func (rv *RemoteVolume) GetVolumeName() string {
 
 // Start implements Volume interface
 func (rv *RemoteVolume) Start() error {
-	return rv.localCache.Start()
+	err := rv.localCache.Start()
+	if err != nil {
+		return err
+	}
+
+	// Start the prefetch worker
+	rv.workerWg.Add(1)
+	go rv.prefetchWorker()
+
+	return nil
 }
 
 // Stop implements Volume interface
 func (rv *RemoteVolume) Stop() error {
+	// Stop the prefetch worker
+	close(rv.stopWorker)
+	rv.queueCond.Broadcast() // Wake up the worker so it can exit
+	rv.workerWg.Wait()
+
 	return rv.localCache.Stop()
 }
 
@@ -123,14 +160,18 @@ func (rv *RemoteVolume) Checkpoint() error {
 
 // LookupNode implements Volume interface
 func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
-	// Try local cache first
-	//node, err := rv.localCache.LookupNode(path)
-	//if err == nil {
-	//	return node, nil // Cache hit!
-	//}
-	//if err != grits.ErrNotInStore {
-	//	return nil, err // Real error, not just cache miss
-	//}
+	if rv.isFresh() {
+		log.Printf("  is fresh")
+	//	// Try local cache first
+		node, err := rv.localCache.LookupNode(path)
+		log.Printf("  Look up %s, err is %v", path, err)
+		if err == nil {
+			return node, nil // Cache hit!
+		}
+		if err != grits.ErrNotInStore && (err != grits.ErrNotExist || rv.lastFetchTime != time.Time{}) {
+			log.Printf("  Problem in cache looking up %s! %v", path, err)
+		}
+	}
 
 	// Cache miss - fetch from remote
 	lookupResponse := &grits.LookupResponse{
@@ -297,21 +338,119 @@ func (rv *RemoteVolume) UnregisterWatcher(watcher grits.FileTreeWatcher) {
 
 // isFresh checks if our local cache is still fresh based on configuration
 func (rv *RemoteVolume) isFresh() bool {
-	//rv.mutex.RLock()
-	//defer rv.mutex.RUnlock()
+	rv.cacheMutex.RLock()
+	defer rv.cacheMutex.RUnlock()
 
 	if rv.lastFetchTime.IsZero() {
 		return false // Never fetched before
 	}
 
-	return false // No caching yes
-	//return time.Since(rv.lastFetchTime) < rv.config.FreshnessDuration
+	return time.Since(rv.lastFetchTime) < rv.config.FreshnessDuration
 }
 
 // httpClient returns a configured HTTP client for making requests
 func (rv *RemoteVolume) httpClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
+	}
+}
+
+// enqueuePrefetch adds a blob address to the prefetch queue
+// If the queue is full, it drops the oldest entries to make room
+func (rv *RemoteVolume) enqueuePrefetch(addr grits.BlobAddr) {
+	rv.queueMutex.Lock()
+	defer rv.queueMutex.Unlock()
+
+	// Add the new entry
+	rv.prefetchQueue = append(rv.prefetchQueue, addr)
+
+	// If we exceed the max size, drop oldest entries from the front
+	if len(rv.prefetchQueue) > maxPrefetchQueueSize {
+		// Drop the oldest entries
+		dropCount := len(rv.prefetchQueue) - maxPrefetchQueueSize
+		rv.prefetchQueue = rv.prefetchQueue[dropCount:]
+	}
+
+	// Signal the worker that there's work available
+	rv.queueCond.Signal()
+}
+
+// prefetchWorker runs in a goroutine and processes the prefetch queue
+func (rv *RemoteVolume) prefetchWorker() {
+	defer rv.workerWg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		// Get the next entry from the queue
+		rv.queueMutex.Lock()
+		for len(rv.prefetchQueue) == 0 {
+			// Check if we should stop
+			select {
+			case <-rv.stopWorker:
+				rv.queueMutex.Unlock()
+				rv.cleanupExpiredCache(true)
+				return
+			default:
+			}
+
+			// Queue is empty, wait for work or shutdown
+			rv.queueCond.Wait()
+		}
+
+		// Pop the first (oldest) entry from the queue
+		entry := rv.prefetchQueue[0]
+		rv.prefetchQueue = rv.prefetchQueue[1:]
+		rv.queueMutex.Unlock()
+
+		// Check for shutdown before processing
+		select {
+		case <-rv.stopWorker:
+			rv.cleanupExpiredCache(true)
+			return
+		default:
+		}
+
+		// Try to fetch and cache the blob
+		cf, err := rv.GetBlob(entry)
+		if err != nil {
+			// Failed to fetch, just continue
+			log.Printf("prefetch failed for %s: %v", entry, err)
+			continue
+		}
+
+		// Store in our cache map with expiration time
+		expiresAt := time.Now().Add(rv.config.CacheExpirationTime)
+		rv.cachedBlobs = append(rv.cachedBlobs, &cachedBlobEntry{
+			file:      cf,
+			expiresAt: expiresAt,
+		})
+
+		// Periodically clean up expired cache entries
+		select {
+		case <-ticker.C:
+			rv.cleanupExpiredCache(false)
+		default:
+		}
+	}
+}
+
+// cleanupExpiredCache removes expired entries from the cache
+func (rv *RemoteVolume) cleanupExpiredCache(doAll bool) {
+	now := time.Now()
+
+	expiredCount := 0
+	for _, entry := range rv.cachedBlobs {
+		if now.After(entry.expiresAt) || doAll {
+			entry.file.Release()
+			expiredCount++
+		} else {
+			break
+		}
+	}
+	if expiredCount > 0 {
+		rv.cachedBlobs = rv.cachedBlobs[expiredCount:]
 	}
 }
 
@@ -359,7 +498,7 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 		return fmt.Errorf("failed to decode lookup response: %v", err)
 	}
 
-	for _, entry := range pathData {
+	for i, entry := range pathData {
 		if len(entry) != 4 {
 			return fmt.Errorf("malformed path entry: expected 4 elements, got %d", len(entry))
 		}
@@ -372,6 +511,43 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 		metadataAddr, ok := entry[1].(string)
 		if !ok {
 			return fmt.Errorf("invalid metadata address type in response")
+		}
+
+		contentAddr, ok := entry[2].(string)
+		if !ok {
+			return fmt.Errorf("invalid content address type in response")
+		}
+
+		// Update the root of the local cache, when we hit it here
+		// FIXME - this will break change notifications, we need to be more clever and handle them with
+		// a complex lookup here, if there's going to be someone who cares
+		// FIXME - we need to validate the stuff we're getting back, and handle errors
+		// FIXME - we need to handle serial numbers, not do stuff out of order if we get out or order responses, really the
+		// whole of the HTTP/in memory APIs need to be unified for this
+		if i == 0 {
+			if path != "" {
+				log.Printf("  malformed response 1")
+				return fmt.Errorf("malformed lookup response, path[0] is %s instead of empty", path)
+			}
+		
+			rv.cacheMutex.Lock()
+			//err = rv.localCache.LinkByMetadata("", grits.BlobAddr(metadataAddr))
+			if err != nil {
+				rv.cacheMutex.Unlock()
+				log.Printf("  couldn't link: %v", err)
+				return err
+			} else {
+				//rv.lastFetchTime = time.Now()
+				rv.cacheMutex.Unlock()
+			}
+		}
+
+		// Enqueue metadata and content hashes for prefetching
+		// Skip the content hash of the last entry (the target file/dir content)
+		rv.enqueuePrefetch(grits.BlobAddr(metadataAddr))
+		if i < len(pathData)-1 {
+			// This is an intermediate directory, prefetch its content too
+			rv.enqueuePrefetch(grits.BlobAddr(contentAddr))
 		}
 
 		// We only need the path and metadata address for the PathNodePair
