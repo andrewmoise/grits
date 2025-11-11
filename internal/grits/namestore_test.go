@@ -25,7 +25,7 @@ func setupNameStoreTestEnv(t *testing.T) (*NameStore, *LocalBlobStore, func()) {
 	config := NewConfig(tempDir)
 	blobStore := NewLocalBlobStore(config)
 
-	nameStore, err := EmptyNameStore(blobStore)
+	nameStore, err := EmptyNameStore(blobStore, false)
 	if err != nil {
 		t.Fatalf("Failed to initialize NameStore: %v", err)
 	}

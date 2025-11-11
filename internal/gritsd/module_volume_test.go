@@ -15,7 +15,7 @@ func TestLocalVolumePersistenceDirect(t *testing.T) {
 
 	volumeName := "testlocal"
 	localConfig := &LocalVolumeConfig{VolumeName: volumeName}
-	localVolume, err := NewLocalVolume(localConfig, server, false)
+	localVolume, err := NewLocalVolume(localConfig, server, false, false, true)
 	if err != nil {
 		t.Fatalf("Failed to create local volume: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestLocalVolumePersistenceDirect(t *testing.T) {
 	}
 
 	// Reload the local volume to simulate reading from disk after a restart.
-	localVolumeReloaded, err := NewLocalVolume(localConfig, server, false)
+	localVolumeReloaded, err := NewLocalVolume(localConfig, server, false, false, true)
 	if err != nil {
 		t.Fatalf("Failed to reload local volume: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 
 	volumeName := "testops"
 	localConfig := &LocalVolumeConfig{VolumeName: volumeName}
-	localVolume, err := NewLocalVolume(localConfig, server, false)
+	localVolume, err := NewLocalVolume(localConfig, server, false, false, false)
 	if err != nil {
 		t.Fatalf("Failed to create local volume: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestSerialNumberPersistence(t *testing.T) {
 	defer cleanup()
 
 	// Create and populate a volume
-	vol1, _ := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false)
+	vol1, _ := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false, false, true)
 
 	// Make changes to increment serial number
 	content, _ := server.BlobStore.AddDataBlock([]byte("test content"))
@@ -321,7 +321,7 @@ func TestSerialNumberPersistence(t *testing.T) {
 	vol1.save()
 
 	// Create a new volume that will load the saved state
-	vol2, err := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false)
+	vol2, err := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false, false, true)
 	if err != nil {
 		t.Fatalf("Couldn't create local volume: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestLookupFullAndMultiLinkResults(t *testing.T) {
 	defer cleanup()
 
 	// Create and populate a volume
-	vol, _ := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false)
+	vol, _ := NewLocalVolume(&LocalVolumeConfig{VolumeName: "test"}, server, false, false, false)
 
 	// Create some test files
 	file1, _ := server.BlobStore.AddDataBlock([]byte("file1 content"))
