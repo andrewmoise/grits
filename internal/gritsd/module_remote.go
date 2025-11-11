@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -28,10 +29,11 @@ const maxPrefetchQueueSize = 128
 // RemoteVolume implements the Volume interface by proxying to a local cache
 // and fetching from a remote server when needed
 type RemoteVolume struct {
-	config     *RemoteVolumeConfig
-	server     *Server
-	localCache *LocalVolume // The underlying local volume that caches data
-	volumeName string       // The name for this volume
+	config        *RemoteVolumeConfig
+	server        *Server
+	localCache    *LocalVolume   // The underlying local volume that caches data
+	localRootAddr grits.BlobAddr // Current root for the local cache
+	volumeName    string         // The name for this volume
 
 	lastFetchTime time.Time    // Timestamp of the most recent fetch from remote
 	serialNumber  int64        // Track remote revision
@@ -160,25 +162,38 @@ func (rv *RemoteVolume) Checkpoint() error {
 
 // LookupNode implements Volume interface
 func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
+	log.Printf("  looking up %s", path)
+
+	var err error
 	if rv.isFresh() {
 		log.Printf("  is fresh")
-	//	// Try local cache first
-		node, err := rv.localCache.LookupNode(path)
-		log.Printf("  Look up %s, err is %v", path, err)
+
+		// Try local cache first
+		rv.cacheMutex.Lock()
+		if rv.localCache.ns.GetRoot() != string(rv.localRootAddr) {
+			log.Printf("  linking")
+			// Need to link to the new root. Depending on prefetch progress, this might fail.
+			err = rv.localCache.LinkByMetadata("", rv.localRootAddr)
+		}
+		rv.cacheMutex.Unlock()
 		if err == nil {
-			return node, nil // Cache hit!
+			// Who knows, maybe we've prefetched enough by now to do the read locally
+			log.Printf("  looking up")
+			node, err := rv.localCache.LookupNode(path)
+			if err == nil {
+				return node, nil // Cache hit!
+			}
 		}
-		if err != grits.ErrNotInStore && (err != grits.ErrNotExist || rv.lastFetchTime != time.Time{}) {
-			log.Printf("  Problem in cache looking up %s! %v", path, err)
-		}
+
+		log.Printf("  Cache miss looking up %s, err is %v", path, err)
 	}
 
-	// Cache miss - fetch from remote
+	// If we get here, then it was a cache miss. Fine, fetch from remote.
 	lookupResponse := &grits.LookupResponse{
 		Paths: make([]*grits.PathNodePair, 0),
 	}
 
-	err := rv.lookupFromRemote(path, lookupResponse)
+	err = rv.lookupFromRemote(path, lookupResponse)
 	if err != nil {
 		return nil, err
 	}
@@ -358,6 +373,8 @@ func (rv *RemoteVolume) httpClient() *http.Client {
 // enqueuePrefetch adds a blob address to the prefetch queue
 // If the queue is full, it drops the oldest entries to make room
 func (rv *RemoteVolume) enqueuePrefetch(addr grits.BlobAddr) {
+	log.Printf("Enqueueing prefetch for %s", addr)
+
 	rv.queueMutex.Lock()
 	defer rv.queueMutex.Unlock()
 
@@ -377,6 +394,8 @@ func (rv *RemoteVolume) enqueuePrefetch(addr grits.BlobAddr) {
 
 // prefetchWorker runs in a goroutine and processes the prefetch queue
 func (rv *RemoteVolume) prefetchWorker() {
+	log.Printf("Start prefetch")
+
 	defer rv.workerWg.Done()
 
 	ticker := time.NewTicker(30 * time.Second)
@@ -403,6 +422,8 @@ func (rv *RemoteVolume) prefetchWorker() {
 		entry := rv.prefetchQueue[0]
 		rv.prefetchQueue = rv.prefetchQueue[1:]
 		rv.queueMutex.Unlock()
+
+		log.Printf("  prefetching %s", entry)
 
 		// Check for shutdown before processing
 		select {
@@ -529,17 +550,11 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 				log.Printf("  malformed response 1")
 				return fmt.Errorf("malformed lookup response, path[0] is %s instead of empty", path)
 			}
-		
+
 			rv.cacheMutex.Lock()
-			//err = rv.localCache.LinkByMetadata("", grits.BlobAddr(metadataAddr))
-			if err != nil {
-				rv.cacheMutex.Unlock()
-				log.Printf("  couldn't link: %v", err)
-				return err
-			} else {
-				//rv.lastFetchTime = time.Now()
-				rv.cacheMutex.Unlock()
-			}
+			rv.localRootAddr = grits.BlobAddr(metadataAddr)
+			rv.lastFetchTime = time.Now()
+			rv.cacheMutex.Unlock()
 		}
 
 		// Enqueue metadata and content hashes for prefetching
@@ -555,6 +570,56 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 			Path: path,
 			Addr: grits.BlobAddr(metadataAddr),
 		})
+	}
+
+	return nil
+}
+
+// Some silliness for parsing durations
+func (c *RemoteVolumeConfig) UnmarshalJSON(data []byte) error {
+	// First unmarshal into a map to get raw values
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	// Use reflection to iterate over struct fields
+	v := reflect.ValueOf(c).Elem()
+	t := v.Type()
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		jsonTag := field.Tag.Get("json")
+
+		// Parse the json tag (handle "name,omitempty" format)
+		jsonName := strings.Split(jsonTag, ",")[0]
+		if jsonName == "" || jsonName == "-" {
+			continue
+		}
+
+		// Get the raw value from JSON
+		rawValue, ok := raw[jsonName]
+		if !ok {
+			continue
+		}
+
+		fieldValue := v.Field(i)
+
+		// Special handling for duration fields
+		if field.Type == reflect.TypeOf(time.Duration(0)) {
+			if str, ok := rawValue.(string); ok {
+				duration, err := time.ParseDuration(str)
+				if err != nil {
+					return fmt.Errorf("invalid %s: %v", jsonName, err)
+				}
+				fieldValue.Set(reflect.ValueOf(duration))
+			}
+		} else if fieldValue.Kind() == reflect.String {
+			if str, ok := rawValue.(string); ok {
+				fieldValue.SetString(str)
+			}
+		}
+		// Add more type handling as needed
 	}
 
 	return nil
