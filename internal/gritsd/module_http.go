@@ -89,6 +89,8 @@ type HTTPModule struct {
 	deployments         []*DeploymentModule
 	serviceWorkerModule *ServiceWorkerModule
 	activeMirrorModule  *MirrorModule
+
+	refHolder *ReferenceHolder
 }
 
 func (*HTTPModule) GetModuleName() string {
@@ -168,7 +170,7 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 	}
 
 	if grits.DebugHttp {
-	log.Printf("HTTP listening on %s\n", HTTPServer.Addr)
+		log.Printf("HTTP listening on %s\n", HTTPServer.Addr)
 	}
 
 	httpModule := &HTTPModule{
@@ -179,6 +181,8 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 		Mux:        mux,
 
 		deployments: make([]*DeploymentModule, 0),
+
+		refHolder: NewReferenceHolder(45 * time.Second),
 	}
 
 	// Set up routes within the constructor or an initialization method
@@ -192,6 +196,10 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 }
 
 func (hm *HTTPModule) Start() error {
+	// Start reference holder
+	hm.refHolder.Start()
+
+	// Deal with TLS certificates
 	var err error
 	var certPath, keyPath string
 
@@ -313,13 +321,14 @@ func (hm *HTTPModule) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	if err := hm.HTTPServer.Shutdown(ctx); err != nil {
-		log.Printf("HTTP module shutdown error: %v", err)
-		return err
+	err := hm.HTTPServer.Shutdown(ctx)
+	if err != nil {
+		log.Printf("HTTP module shutdown error! %v", err)
 	}
 
-	log.Println("HTTP module stopped")
-	return nil
+	hm.refHolder.Stop()
+
+	return err
 }
 
 /////
@@ -797,16 +806,11 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Instead of immediately releasing the reference, hold it and set up
 	// a delayed release after 5 minutes
-	go func(file grits.CachedFile) {
-		time.Sleep(5 * time.Minute)
-		// Then release it, allowing GC to potentially clean it up if no other references exist
-		file.Release()
-		log.Printf("Released temporary reference to %s", file.GetAddress())
-	}(cachedFile)
+	s.refHolder.Hold(cachedFile, 5 * time.Minute)
 
 	// Log that we're holding a temporary reference
 	if grits.DebugHttp {
-	log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress())
+		log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress())
 	}
 
 	// Return the hash of the uploaded blob
@@ -875,6 +879,9 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 			contentHash,
 			contentSize,
 		}
+
+		s.refHolder.Hold(node.MetadataBlob(), 45 * time.Second)
+		s.refHolder.Hold(node.ExportedBlob(), 45 * time.Second)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
