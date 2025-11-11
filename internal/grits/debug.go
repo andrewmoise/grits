@@ -45,7 +45,7 @@ func DebugLogWithTime(flag bool, tag string, format string, v ...any) {
 			displayTag = tag[len(tag)-5:]
 		}
 
-		prefix := fmt.Sprintf("%.5s %03d.%03d ", displayTag, secs, millis)
+		prefix := fmt.Sprintf("%.5s %02d.%03d ", displayTag, secs, millis)
 		log.Printf(prefix+format, v...)
 	}
 }
