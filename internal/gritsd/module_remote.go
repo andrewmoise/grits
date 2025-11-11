@@ -166,25 +166,26 @@ func (rv *RemoteVolume) Checkpoint() error {
 
 // LookupNode implements Volume interface
 func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Blob fetch start\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode()")
 
 	var err error
 	if rv.isFresh() {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  is fresh\n")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  is fresh")
 
 		// Try local cache first
 		rv.cacheMutex.Lock()
 		if rv.localCache.ns.GetRoot() != string(rv.localRootAddr) {
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  linking\n")
+			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  linking")
 			// Need to link to the new root. Depending on prefetch progress, this might fail.
 			err = rv.localCache.LinkByMetadata("", rv.localRootAddr)
 		}
 		rv.cacheMutex.Unlock()
 		if err == nil {
 			// Who knows, maybe we've prefetched enough by now to do the read locally
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  looking up\n")
+			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  looking up")
 			node, err := rv.localCache.LookupNode(path)
 			if err == nil {
+				grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  cache hit!")
 				return node, nil // Cache hit!
 			}
 		}
