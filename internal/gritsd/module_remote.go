@@ -39,6 +39,9 @@ type RemoteVolume struct {
 	serialNumber  int64        // Track remote revision
 	cacheMutex    sync.RWMutex // Protects lastFetchTime and localCache root addr
 
+	// HTTP stuff
+	httpClient	*http.Client
+
 	// Prefetch queue and worker
 	prefetchQueue []grits.BlobAddr
 	queueMutex    sync.Mutex
@@ -364,9 +367,16 @@ func (rv *RemoteVolume) isFresh() bool {
 }
 
 // httpClient returns a configured HTTP client for making requests
-func (rv *RemoteVolume) httpClient() *http.Client {
+func httpClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,              // Max idle connections total
+			MaxIdleConnsPerHost: 10,               // Max idle per host (most important)
+			MaxConnsPerHost:     0,                // 0 = unlimited active connections
+			IdleConnTimeout:     90 * time.Second, // How long to keep idle connections
+			DisableKeepAlives:   false,            // Ensure keepalive is enabled (default)
+		},
 	}
 }
 
@@ -484,7 +494,7 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 		return fmt.Errorf("failed to encode path: %v", err)
 	}
 
-	resp, err := rv.httpClient().Post(url, "application/json", bytes.NewReader(pathJSON))
+	resp, err := rv.httpClient.Post(url, "application/json", bytes.NewReader(pathJSON))
 	if err != nil {
 		return fmt.Errorf("failed to lookup path %s: %v", path, err)
 	}
