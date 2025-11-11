@@ -1017,6 +1017,10 @@ func (gn *gritsNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uin
 var _ = (fs.NodeCreater)((*gritsNode)(nil))
 
 func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (*fs.Inode, fs.FileHandle, uint32, syscall.Errno) {
+	if gn.module.volume.isReadOnly() {
+		return nil, nil, 0, syscall.EROFS
+	}
+
 	fullPath := filepath.Join(gn.path, name)
 	//log.Printf("Create(%s)", fullPath)
 	if flags&uint32(os.O_EXCL) != 0 {
@@ -1098,6 +1102,10 @@ func (gn *gritsNode) Read(ctx context.Context, f fs.FileHandle, dest []byte, off
 var _ = (fs.NodeWriter)((*gritsNode)(nil))
 
 func (gn *gritsNode) Write(ctx context.Context, f fs.FileHandle, data []byte, off int64) (uint32, syscall.Errno) {
+	if gn.module.volume.isReadOnly() {
+		return 0, syscall.EROFS
+	}
+
 	handle, ok := f.(*FileHandle)
 	if !ok {
 		return 0, syscall.EBADF
@@ -1264,6 +1272,10 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 
 	// FIXME - Empty dirs need timestamps, too
 
+	if gn.module.volume.isReadOnly() {
+		return nil, syscall.EROFS
+	}
+
 	fullPath := filepath.Join(gn.path, name)
 	emptyNode, err := gn.module.volume.CreateTreeNode()
 	if err != nil {
@@ -1303,6 +1315,10 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 var _ = (fs.NodeUnlinker)((*gritsNode)(nil))
 
 func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	if gn.module.volume.isReadOnly() {
+		return syscall.EROFS
+	}
+
 	gn.mtx.Lock()
 	defer gn.mtx.Unlock()
 
@@ -1337,6 +1353,10 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 var _ = (fs.NodeRmdirer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
+	if gn.module.volume.isReadOnly() {
+		return syscall.EROFS
+	}
+
 	// FIXME - Need to lock?
 
 	fullPath := filepath.Join(gn.path, name)
@@ -1380,6 +1400,10 @@ var _ = (fs.NodeRenamer)((*gritsNode)(nil))
 func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbedder, newName string, flags uint32) syscall.Errno {
 	if grits.DebugFuse {
 		log.Printf("Rename (in %s): %s to %s", gn.path, name, newName)
+	}
+
+	if gn.module.volume.isReadOnly() {
+		return syscall.EROFS
 	}
 
 	fullPath := filepath.Join(gn.path, name)
