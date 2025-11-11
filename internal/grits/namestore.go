@@ -81,9 +81,7 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 }
 
 func (ns *NameStore) LookupNode(path string) (FileNode, error) {
-	if DebugNameStore {
-		log.Printf("LookupNode(%s)", path)
-	}
+	DebugLog(DebugNameStore, "LookupNode(%s)", path)
 
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
@@ -206,9 +204,7 @@ func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 // return value will be nonzero.
 
 func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
-	if DebugNameStore {
-		log.Printf("We resolve path %s (root %s)\n", path, ns.rootAddr)
-	}
+	DebugLog(DebugNameStore, "We resolve path %s (root %s)\n", path, ns.rootAddr)
 
 	path = strings.TrimRight(path, "/")
 	if path != "" && path[0] == '/' {
@@ -231,7 +227,7 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 	expectedResponseLen := len(parts) + 1
 
 	for _, part := range parts {
-		//log.Printf("  part %s\n", part)
+		DebugLog(DebugNameStore, "  part %s\n", part)
 
 		if part == "" {
 			expectedResponseLen -= 1 // Highly unlikely that this is relevant...
@@ -292,9 +288,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 	defer ns.mtx.Unlock()
 
 	for _, req := range requests {
-		if DebugLinks {
-			log.Printf("Checking assertion: %d", req.Assert)
-		}
+		DebugLog(DebugLinks, "Checking assertion: %d", req.Assert)
 
 		if req.Assert == 0 {
 			continue
@@ -319,51 +313,35 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		}
 
 		if req.Assert&AssertPrevValueMatches != 0 {
-			if DebugLinks {
-				log.Printf("  Prev value matches")
-			}
+			DebugLog(DebugLinks, "  Prev value matches")
 			if !matchesAddr(node, req.PrevAddr) {
 				return nil, ErrAssertionFailed
 			}
-			if DebugLinks {
-				log.Printf("  pass")
-			}
+			DebugLog(DebugLinks, "  pass")
 		}
 
 		if req.Assert&AssertIsBlob != 0 {
-			if DebugLinks {
-				log.Printf("  Is blob")
-			}
+			DebugLog(DebugLinks, "  Is blob")
 			if node == nil || node.Metadata().Type != GNodeTypeFile {
 				return nil, ErrAssertionFailed
 			}
-			if DebugLinks {
-				log.Printf("  pass")
-			}
+			DebugLog(DebugLinks, "  pass")
 		}
 
 		if req.Assert&AssertIsTree != 0 {
-			if DebugLinks {
-				log.Printf("  Is tree")
-			}
+			DebugLog(DebugLinks, "  Is tree")
 			if node == nil || node.Metadata().Type != GNodeTypeDirectory {
 				return nil, ErrAssertionFailed
 			}
-			if DebugLinks {
-				log.Printf("  pass")
-			}
+			DebugLog(DebugLinks, "  pass")
 		}
 
 		if req.Assert&AssertIsNonEmpty != 0 {
-			if DebugLinks {
-				log.Printf("  Is nonempty")
-			}
+			DebugLog(DebugLinks, "  Is nonempty")
 			if node == nil {
 				return nil, ErrAssertionFailed
 			}
-			if DebugLinks {
-				log.Printf("  pass")
-			}
+			DebugLog(DebugLinks, "  pass")
 		}
 	}
 
@@ -585,12 +563,10 @@ func (ns *NameStore) linkTree(name string, addr BlobAddr) error {
 
 // Core link function helper
 func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr BlobAddr, oldParent FileNode) (FileNode, error) {
-	if DebugNameStore {
-		if metadataAddr != "" {
-			log.Printf("We're trying to link %s under path %s /// %s\n", metadataAddr, prevPath, name)
-		} else {
-			log.Printf("We're trying to link nil under path %s /// %s\n", prevPath, name)
-		}
+	if metadataAddr != "" {
+		DebugLog(DebugNameStore, "We're trying to link %s under path %s /// %s\n", metadataAddr, prevPath, name)
+	} else {
+		DebugLog(DebugNameStore, "We're trying to link nil under path %s /// %s\n", prevPath, name)
 	}
 
 	parts := strings.SplitN(name, "/", 2)
@@ -754,15 +730,11 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 // Get a file node, return it (same as GetFileNode(), but no reference or lock taken)
 
 func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileNode, error) {
-	if printDebug && DebugFileCache {
-		log.Printf("We try to chase down %s\n", metadataAddr)
-	}
+	DebugLog(DebugFileCache && printDebug, "We try to chase down %s\n", metadataAddr)
 
 	cachedNode, exists := ns.fileCache[metadataAddr]
 	if exists {
-		if printDebug && DebugFileCache {
-			log.Printf("  found: %p", cachedNode)
-		}
+		DebugLog(DebugNameStore && printDebug, "  found: %p", cachedNode)
 		return cachedNode, nil
 	}
 
@@ -795,7 +767,7 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 		return nil, ErrNotInStore
 	}
 
-	//log.Printf("We got it. The content addr is %s\n", contentHash)
+	DebugLog(DebugNameStore, "We got it. The content addr is %s\n", contentHash)
 
 	if metadata.Type == GNodeTypeFile {
 		bn := &BlobNode{
@@ -805,9 +777,7 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 			refCount:     0,
 			nameStore:    ns,
 		}
-		if printDebug && DebugFileCache {
-			log.Printf("  created blob: %p", bn)
-		}
+		DebugLog(DebugFileCache && printDebug, "  created blob: %p", bn)
 
 		ns.fileCache[metadataAddr] = bn // Now using metadata addr as cache key
 		return bn, nil
@@ -822,14 +792,10 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 			nameStore:    ns,
 		}
 
-		if printDebug && DebugFileCache {
-			log.Printf("  created tree: %p", dn)
-		}
+		DebugLog(DebugFileCache && printDebug, "  created tree: %p", dn)
 
 		if DebugRefCounts {
-			if printDebug {
-				log.Printf("loadFile() creating tree node %p", dn)
-			}
+			DebugLog(DebugRefCounts && printDebug, "loadFile() creating tree node %p", dn)
 			PrintStack()
 		}
 
@@ -844,7 +810,7 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 			return nil, fmt.Errorf("error reading directory data: %v", err)
 		}
 
-		//log.Printf("We check contents of %s: %s\n", contentHash, string(dirData))
+		DebugLog(DebugFileCache, "We check contents of %s: %s\n", contentHash, string(dirData))
 
 		dirMap := make(map[string]string)
 		if err := json.Unmarshal(dirData, &dirMap); err != nil {
@@ -856,9 +822,7 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 		}
 
 		ns.fileCache[metadataAddr] = dn
-		if printDebug && DebugFileCache {
-			log.Printf("  putting in file cache at %s", metadataAddr)
-		}
+		DebugLog(DebugFileCache && printDebug, "  putting in file cache at %s", metadataAddr)
 		resultDn := dn
 		dn = nil // Prevent deferred cleanup + removal from file cache
 		return resultDn, nil
@@ -936,7 +900,7 @@ func (ns *NameStore) CreateTreeNode(children map[string]BlobAddr) (*TreeNode, er
 
 // Same as CreateTreeNode() but with optional locking
 func (ns *NameStore) createTreeNode(children map[string]BlobAddr, takeLock bool) (*TreeNode, error) {
-	//log.Printf("Creating tree node for map with %d children", len(children))
+	DebugLog(DebugNameStore, "Creating tree node for map with %d children", len(children))
 
 	//ns.BlobStore.DumpStats()
 
@@ -946,7 +910,7 @@ func (ns *NameStore) createTreeNode(children map[string]BlobAddr, takeLock bool)
 	}
 
 	if DebugRefCounts {
-		log.Printf("createTreeNode() Creating tree node %p", tn)
+		DebugLog(DebugRefCounts, "createTreeNode() Creating tree node %p", tn)
 		PrintStack()
 	}
 
@@ -972,7 +936,7 @@ func (ns *NameStore) createTreeNode(children map[string]BlobAddr, takeLock bool)
 		return nil, fmt.Errorf("error creating metadata: %v", err)
 	}
 
-	//log.Printf("Added metadata blob, addr %s, rc %d", metadataBlob.GetAddress(), metadataBlob.GetRefCount())
+	DebugLog(DebugNameStore, "Added metadata blob, addr %s, rc %d", metadataBlob.GetAddress(), metadataBlob.GetRefCount())
 
 	tn.blob = contentBlob
 	tn.metadata = metadata
@@ -1849,30 +1813,22 @@ func NewDenseRefManager(path string) *DenseRefManager {
 }
 
 func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
-	if DebugRefCounts {
-		log.Printf("Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), rm.refCount[BlobAddr(fn.MetadataBlob().GetAddress())])
-	}
+	DebugLog(DebugRefCounts, "Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), rm.refCount[BlobAddr(fn.MetadataBlob().GetAddress())])
 
 	metadataHash := fn.MetadataBlob().GetAddress()
 
 	refCount, exists := rm.refCount[metadataHash]
 
 	if exists {
-		if DebugRefCounts {
-			log.Printf("  already exists")
-		}
+		DebugLog(DebugRefCounts, "  already exists")
 		if refCount <= 0 {
 			log.Fatalf("ref count for %s is nonpositive", metadataHash)
 		}
 
 		rm.refCount[metadataHash] = refCount + 1
-		if DebugRefCounts {
-			log.Printf("Increment count! For %s, we go to %d", metadataHash, refCount+1)
-		}
+		DebugLog(DebugRefCounts, "Increment count! For %s, we go to %d", metadataHash, refCount+1)
 	} else {
-		if DebugRefCounts {
-			log.Printf("  doesn't exist")
-		}
+		DebugLog(DebugRefCounts, "  doesn't exist")
 
 		fn.Take()
 		rm.refCount[metadataHash] = 1
@@ -1898,9 +1854,7 @@ func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 
 func (rm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 	metadataHash := fn.MetadataBlob().GetAddress()
-	if DebugRefCounts {
-		log.Printf("Recursive release on %s: count %d/%d", fn.MetadataBlob().GetAddress(), fn.RefCount(), rm.refCount[metadataHash])
-	}
+	DebugLog(DebugRefCounts, "Recursive release on %s: count %d/%d", fn.MetadataBlob().GetAddress(), fn.RefCount(), rm.refCount[metadataHash])
 
 	refCount, exists := rm.refCount[metadataHash]
 	if !exists {
@@ -1982,9 +1936,7 @@ func (rm *DenseRefManager) cleanup(ns *NameStore) {
 		delete(ns.fileCache, metadataAddr)
 	}
 
-	if DebugBlobStorage {
-		log.Printf("NS cleanup complete. Removed %d unreferenced nodes", len(nodesToRemove))
-	}
+	DebugLog(DebugBlobStorage, "NS cleanup complete. Removed %d unreferenced nodes", len(nodesToRemove))
 }
 
 ////////////////////////
