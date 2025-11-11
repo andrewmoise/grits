@@ -60,7 +60,9 @@ func dropPrivileges(username, groupname string) error {
 		return fmt.Errorf("failed to set UID to %d: %v", uid, err)
 	}
 
-	log.Printf("Successfully dropped privileges to user %s (UID %d, GID %d)", username, uid, gid)
+	if grits.DebugServerLifecycle {
+		log.Printf("Successfully dropped privileges to user %s (UID %d, GID %d)", username, uid, gid)
+	}
 	return nil
 }
 

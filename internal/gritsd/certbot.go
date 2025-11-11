@@ -73,7 +73,9 @@ func EnsureTLSCertificates(serverConfig *grits.Config, certConfig *CertbotConfig
 
 	// Check if certificates already exist
 	if fileExists(certPath) && fileExists(keyPath) {
-		log.Printf("Using existing certificates for %s", certConfig.Domain)
+		if grits.DebugHttp {
+			log.Printf("Using existing certificates for %s", certConfig.Domain)
+		}
 		return certPath, keyPath, nil
 	}
 
@@ -114,7 +116,9 @@ func GenerateSelfCert(serverConfig *grits.Config) error {
 
 	// Check if the key already exists
 	if fileExists(privateKeyPath) && fileExists(certPath) {
-		log.Printf("Self-signed certificate already exists")
+		if grits.DebugHttp {
+			log.Printf("Self-signed certificate already exists")
+		}
 		return nil
 	}
 
@@ -123,7 +127,9 @@ func GenerateSelfCert(serverConfig *grits.Config) error {
 		return fmt.Errorf("failed to create certificate directory for self: %v", err)
 	}
 
-	log.Printf("Generating new self-signed certificate for self using elliptic curve")
+	if grits.DebugHttp {
+		log.Printf("Generating new self-signed certificate for self using elliptic curve")
+	}
 
 	// Step 1: Generate the EC private key using OpenSSL
 	ecKeyCmd := exec.Command("openssl", "ecparam",

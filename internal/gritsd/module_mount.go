@@ -84,9 +84,11 @@ func (mm *MountModule) Start() error {
 		return fmt.Errorf("error trying to check %s: %v", mntDir, err)
 	}
 
+	if grits.DebugServerLifecycle {
 	log.Printf("Listing volumes:")
 	for name := range mm.gritsServer.Volumes {
 		log.Printf("Volume: %s", name)
+	}
 	}
 
 	var exists bool
@@ -119,8 +121,7 @@ func (mm *MountModule) Start() error {
 		return err
 	}
 
-	log.Printf("Mounted on %s", mntDir)
-	log.Printf("Unmount by calling 'fusermount -u %s'", mntDir)
+	log.Printf("FUSE mount active on %s", mntDir)
 
 	mm.volume.RegisterWatcher(mm)
 
@@ -128,7 +129,9 @@ func (mm *MountModule) Start() error {
 }
 
 func (mm *MountModule) Stop() error {
+	if grits.DebugServerLifecycle {
 	log.Printf("We are stopping mount module")
+	}
 
 	if mm.volume != nil {
 		mm.volume.UnregisterWatcher(mm)
@@ -143,7 +146,9 @@ func (mm *MountModule) Stop() error {
 			log.Printf("Please close open files, and unmount by hand.")
 			log.Printf("==========")
 		} else {
+			if grits.DebugServerLifecycle {
 			log.Printf("Successfully unmounted %s", mm.config.MountPoint)
+		}
 		}
 
 		// Wait until unmount completes
@@ -487,10 +492,8 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 
 	node, err := gn.module.volume.LookupNode(fullPath)
 	if grits.IsNotExist(err) {
-		//log.Printf("---   lookup Not found")
 		return nil, syscall.ENOENT
 	} else if err != nil {
-		//log.Printf("---   lookup Error! %v\n", err)
 		return nil, syscall.EIO
 	}
 	defer node.Release()

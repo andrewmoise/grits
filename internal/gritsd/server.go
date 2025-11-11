@@ -100,16 +100,20 @@ func (s *Server) Start() error {
 			// Shutdown in reverse order
 			for i := len(orderedModules) - 1; i >= 0; i-- {
 				module := orderedModules[i]
+				if grits.DebugServerLifecycle {
 				log.Printf("Stopping module %s\n", module.GetModuleName())
 				if err := module.Stop(); err != nil {
 					log.Printf("Error stopping %s module: %v", module.GetModuleName(), err)
 				}
 			}
 		}
+		}
 	}()
 
 	for _, module := range orderedModules {
+		if grits.DebugServerLifecycle {
 		log.Printf("Starting module %s\n", module.GetModuleName())
+		}
 		if err := module.Start(); err != nil {
 			return fmt.Errorf("failed to start %s module: %v", module.GetModuleName(), err)
 		}
@@ -133,13 +137,17 @@ func (s *Server) Start() error {
 
 		for i := len(s.Modules) - 1; i >= 0; i-- {
 			module := s.Modules[i]
+			if grits.DebugServerLifecycle {
 			log.Printf("Stopping module %s\n", module.GetModuleName())
+			}
 			if err := module.Stop(); err != nil {
 				log.Printf("Error stopping %s module: %v", module.GetModuleName(), err)
 			}
 		}
 
+		if grits.DebugServerLifecycle {
 		log.Printf("Shutting down blob store.")
+		}
 		err := s.BlobStore.Close()
 		if err != nil {
 			log.Printf("Error closing blob store: %v", err)
