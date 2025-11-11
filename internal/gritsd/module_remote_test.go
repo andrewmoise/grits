@@ -152,6 +152,8 @@ func setupRemoteServer(t *testing.T, remoteURL string, volumeName string) (*Serv
 	remoteConfig := &RemoteVolumeConfig{
 		VolumeName: volumeName,
 		RemoteURL:  remoteURL,
+		FreshnessDuration: 10 * time.Second,
+		CacheExpirationTime: 10 * time.Minute,
 	}
 
 	remoteVolume, err := NewRemoteVolume(remoteConfig, server)
