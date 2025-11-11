@@ -25,6 +25,9 @@ type Config struct {
 
 	// Modules and configs for same
 	Modules []json.RawMessage `json:"modules"`
+
+	// Logging
+	DoLogging bool `json:"doLogging,omitempty"`
 }
 
 // NewConfig creates a new configuration instance with default values.
