@@ -52,3 +52,4 @@ Backlog:
 * Make test cases for validation
 * Make FUSE mounts process NodeForgetter and remove stuff from the inode cache when it happens
 * More coherent error message when a dead previous FUSE mount is in the way
+* Fix port 8080 on ACME challenge
