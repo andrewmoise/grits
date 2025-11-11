@@ -279,7 +279,7 @@ func (wv *LocalVolume) load() error {
 		return fmt.Errorf("failed to unmarshal volume state: %v", err)
 	}
 
-	wv.ns.DeserializeNameStore(grits.BlobAddr(state.RootAddr), state.SerialNumber)
+	err = wv.ns.DeserializeNameStore(grits.BlobAddr(state.RootAddr), state.SerialNumber)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize name store: %v", err)
 	}

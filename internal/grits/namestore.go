@@ -705,19 +705,19 @@ func (ns *NameStore) GetSerialNumber() int64 {
 	return ns.serialNumber
 }
 
-func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64) (*NameStore, error) {
+func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64) error {
 	ns.serialNumber = serialNumber
 
 	root, err := ns.loadFileNode(rootAddr, true)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	//ns.refManager.recursiveRelease might be nice here...
 	ns.refManager.recursiveTake(ns, root)
 
 	ns.rootAddr = root.MetadataBlob().GetAddress()
-	return ns, nil
+	return nil
 }
 
 // Getting file nodes from a NameStore
