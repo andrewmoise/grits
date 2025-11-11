@@ -136,8 +136,8 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 }
 
 func (bs *LocalBlobStore) ReadFile(blobAddr BlobAddr) (CachedFile, error) {
-	bs.mtx.RLock()
-	defer bs.mtx.RUnlock()
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
 
 	cachedFile, ok := bs.files[blobAddr]
 	if !ok {
