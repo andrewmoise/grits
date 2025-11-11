@@ -450,9 +450,7 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 			log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
 		}
 
-		if grits.DebugHttpPerformance {
-			logWithTime(r.URL.Path, "Request start\n")
-		}
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Request start\n")
 
 		// CORS - Allow requests from origin server and our own origin
 		thisScheme := "http"
@@ -490,9 +488,7 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 		// If it's an OPTIONS request, respond with OK status and return
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
-			if grits.DebugHttpPerformance {
-				logWithTime(r.URL.Path, "OPTIONS complete\n")
-			}
+			grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "OPTIONS complete\n")
 			return
 		}
 
@@ -503,14 +499,11 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 			w.Header().Set("X-Grits-Service-Worker-Hash", string(clientDirHash))
 		}
 
-		if grits.DebugHttpPerformance {
-			logWithTime(r.URL.Path, "Calling handler\n")
-		}
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Calling handler\n")
+
 		next(w, r)
 
-		if grits.DebugHttpPerformance {
-			logWithTime(r.URL.Path, "Request complete\n")
-		}
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Request complete\n")
 	}
 }
 
@@ -607,16 +600,12 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(string(fileAddr), "Blob fetch start\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Blob fetch start\n")
 
 	var cachedFile grits.CachedFile
 
 	if s.activeMirrorModule != nil {
-		if grits.DebugHttpPerformance {
-			logWithTime(string(fileAddr), "Getting from mirror cache\n")
-		}
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Getting from mirror cache\n")
 		// This is fine whether the blob is local or remote; it'll muck up the mirror stats
 		// a bit in some cases if it's local, but it's basically fine.
 		cachedFile, err = s.activeMirrorModule.blobCache.Get(fileAddr)
@@ -625,9 +614,7 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if grits.DebugHttpPerformance {
-			logWithTime(string(fileAddr), "Getting from local store\n")
-		}
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Getting from local store\n")
 		// No mirror, just get it from the local store
 		cachedFile, err = s.Server.BlobStore.ReadFile(fileAddr)
 		if err != nil {
@@ -637,9 +624,7 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cachedFile.Release()
 
-	if grits.DebugHttpPerformance {
-		logWithTime(string(fileAddr), "Got cached file\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Got cached file\n")
 
 	// Set content type based on extension if provided
 	if extension != "" {
@@ -660,17 +645,13 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	if grits.DebugHttpPerformance {
-		logWithTime(string(fileAddr), "Serving content\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Serving content\n")
 
 	// Serve the content
 	http.ServeContent(w, r, filepath.Base(string(fileAddr)), time.Now(), reader)
 	cachedFile.Touch()
 
-	if grits.DebugHttpPerformance {
-		logWithTime(string(fileAddr), "Blob fetch complete\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Blob fetch complete\n")
 }
 
 // Helper to get content type from extension
@@ -728,9 +709,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if grits.DebugHttpPerformance {
-			logWithTime(expectedHash, "Upload start (checking if exists)\n")
-		}
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, expectedHash, "Upload start (checking if exists)\n")
 
 		// Early optimization: Check if we already have this blob
 		existingCf, _ := s.Server.BlobStore.ReadFile(grits.BlobAddr(expectedHash))
@@ -740,9 +719,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 			if grits.DebugHttp {
 				log.Printf("Blob %s already exists, skipping upload", expectedHash)
 			}
-			if grits.DebugHttpPerformance {
-				logWithTime(expectedHash, "Upload skipped (already exists)\n")
-			}
+			grits.DebugLogWithTime(grits.DebugHttpPerformance, expectedHash, "Upload skipped (already exists)\n")
 			w.WriteHeader(http.StatusNoContent)
 			json.NewEncoder(w).Encode(expectedHash)
 			return
@@ -754,7 +731,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		if tag == "" {
 			tag = "upload"
 		}
-		logWithTime(tag, "Creating temp file\n")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, tag, "Creating temp file\n")
 	}
 
 	// Create a temporary file for the upload
@@ -775,7 +752,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		if tag == "" {
 			tag = "upload"
 		}
-		logWithTime(tag, "Reading body\n")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, tag, "Reading body\n")
 	}
 
 	// Read the request body and write it to the temporary file
@@ -796,7 +773,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		if tag == "" {
 			tag = "upload"
 		}
-		logWithTime(tag, "Adding to blob store\n")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, tag, "Adding to blob store\n")
 	}
 
 	// Add the file to the blob store
@@ -831,9 +808,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress())
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(string(actualHash), "Upload complete\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(actualHash), "Upload complete\n")
 
 	// Return the hash of the uploaded blob
 	w.WriteHeader(http.StatusOK)
@@ -853,9 +828,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(lookupPath, "Lookup start\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Lookup start\n")
 
 	// Validate the lookup path
 	if !Validate("relativePath", lookupPath) {
@@ -881,9 +854,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(lookupPath, "Calling LookupFull\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Calling LookupFull\n")
 
 	lookupResponse, err := volume.LookupFull([]string{lookupPath})
 	if err != nil {
@@ -891,9 +862,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(lookupPath, "Building response\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Building response\n")
 
 	// Transform to the format expected by the client
 	pathData := make([][]any, len(lookupResponse.Paths))
@@ -932,9 +901,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(lookupPath, "Lookup complete\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Lookup complete\n")
 }
 
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
@@ -1000,9 +967,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(volumeName, "Link start\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Link start\n")
 
 	linkResponse, err := volume.MultiLink(allLinkRequests, true)
 	if err != nil {
@@ -1011,10 +976,8 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(volumeName, "Checkpointing\n")
-	}
-
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Checkpointing\n")
+	
 	// Checkpoint the volume after all links are performed
 	err = volume.Checkpoint()
 	if err != nil {
@@ -1023,9 +986,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(volumeName, "Building response\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Building response\n")
 
 	// Transform to the format expected by the client (same as lookup endpoint)
 	response := make([][]any, len(linkResponse.Paths))
@@ -1056,9 +1017,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(volumeName, "Link complete\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Link complete\n")
 }
 
 func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Request) {
@@ -1184,13 +1143,8 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		log.Printf("Received %s request for file: %s\n", r.Method, path)
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(path, "Namespace GET start\n")
-	}
-
-	if grits.DebugHttpPerformance {
-		logWithTime(path, "Looking up in volume\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET start\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Looking up in volume\n")
 	// Look up the resource in the volume to get its address
 
 	lookupResponse, err := volume.LookupFull([]string{path})
@@ -1207,9 +1161,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(path, "Getting leaf node\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Getting leaf node\n")
 
 	leafNode, err := volume.GetFileNode(lookupResponse.Paths[len(lookupResponse.Paths)-1].Addr)
 	if err != nil {
@@ -1233,9 +1185,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{Path: indexPath, Addr: indexNode.MetadataBlob().GetAddress()})
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(path, "Building path metadata\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Building path metadata\n")
 
 	pathMetadata := make([]map[string]any, 0, len(lookupResponse.Paths))
 	for _, pathResponse := range lookupResponse.Paths {
@@ -1282,9 +1232,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
 		// Resource hasn't changed, return 304 Not Modified
 		w.WriteHeader(http.StatusNotModified)
-		if grits.DebugHttpPerformance {
-			logWithTime(path, "Returning 304 Not Modified\n")
-		}
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Returning 304 Not Modified\n")
 		return
 	}
 
@@ -1304,9 +1252,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		return
 	}
 
-	if grits.DebugHttpPerformance {
-		logWithTime(path, "Getting reader\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Getting reader\n")
 
 	reader, err := leafNode.ExportedBlob().Reader()
 	if err != nil {
@@ -1320,15 +1266,11 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		}
 	}()
 
-	if grits.DebugHttpPerformance {
-		logWithTime(path, "Serving content\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Serving content\n")
 
 	http.ServeContent(w, r, filepath.Base(path), time.Now(), reader)
 
-	if grits.DebugHttpPerformance {
-		logWithTime(path, "Namespace GET complete\n")
-	}
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET complete\n")
 }
 
 func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request, maxSize int64) {
@@ -1468,22 +1410,4 @@ func CreateAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUr
 	}
 
 	return uploadedMetadataHash, nil
-}
-
-// More helpers, for performance analysis
-
-func logWithTime(tag string, format string, v ...any) {
-    now := time.Now()
-    // Get last 3 digits of seconds (0-999) and milliseconds (0-999)
-    secs := now.Second() % 1000  // This just gives 0-59, but keeping your request
-    millis := now.Nanosecond() / 1000000
-    
-	// Get last 5 characters of tag
-	displayTag := tag
-	if len(tag) > 5 {
-		displayTag = tag[len(tag)-5:]
-	}
-    
-    prefix := fmt.Sprintf("%.5s %03d.%03d ", displayTag, secs, millis)
-    log.Printf(prefix + format, v...)
 }
