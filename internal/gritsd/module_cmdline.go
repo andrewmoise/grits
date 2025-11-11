@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+
+	"grits/internal/grits"
 )
 
 // CommandLineModuleConfig represents the configuration for the command line module
@@ -49,8 +51,10 @@ func NewCommandLineModule(server *Server, config *CommandLineModuleConfig) (*Com
 }
 
 func (cm *CommandLineModule) Start() error {
-	log.Printf("Starting CommandLineModule with socket at %s", cm.Config.SocketPath)
-
+	if grits.DebugServerLifecycle {
+		log.Printf("Starting CommandLineModule with socket at %s", cm.Config.SocketPath)
+	}
+	
 	// Create directory if needed
 	if err := os.MkdirAll(filepath.Dir(cm.Config.SocketPath), 0755); err != nil {
 		return fmt.Errorf("failed to create socket directory: %v", err)
@@ -123,7 +127,9 @@ func (cm *CommandLineModule) Stop() error {
 		return nil
 	}
 
-	log.Printf("Stopping CommandLineModule")
+	if grits.DebugServerLifecycle {
+		log.Printf("Stopping CommandLineModule")
+	}
 	cm.running = false
 
 	// Close the listener

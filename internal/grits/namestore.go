@@ -674,10 +674,8 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr Bl
 func EmptyNameStore(bs BlobStore, sparse bool) (*NameStore, error) {
 	var refManager RefManager
 	if sparse {
-		log.Printf("Make sparse ref manager")
 		refManager = NewSparseRefManager(time.Second * 60) // FIXME
 	} else {
-		log.Printf("Make dense ref manager")
 		refManager = NewDenseRefManager("")
 	}
 
@@ -713,7 +711,7 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64)
 		return err
 	}
 
-	//ns.refManager.recursiveRelease might be nice here...
+	//ns.refManager.recursiveRelease might be nice here, in case the thing was non-empty when we started
 	ns.refManager.recursiveTake(ns, root)
 
 	ns.rootAddr = root.MetadataBlob().GetAddress()

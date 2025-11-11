@@ -167,7 +167,9 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 		}
 	}
 
+	if grits.DebugHttp {
 	log.Printf("HTTP listening on %s\n", HTTPServer.Addr)
+	}
 
 	httpModule := &HTTPModule{
 		Config: config,
@@ -207,7 +209,9 @@ func (hm *HTTPModule) Start() error {
 				return fmt.Errorf("let's encrypt certificate error: %v", err)
 			}
 
+			if grits.DebugHttp {
 			log.Printf("Using Let's Encrypt certificates for %s", hm.Config.ThisHost)
+			}
 		} else if hm.Config.UseSelfSigned {
 			// For self-signed certificates, generate them if they don't exist
 			err := GenerateSelfCert(hm.Server.Config)
@@ -217,7 +221,9 @@ func (hm *HTTPModule) Start() error {
 
 			// Get paths to the self-signed certificates
 			certPath, keyPath = GetCertificateFiles(hm.Server.Config, SelfSignedCert, hm.Config.ThisHost)
+			if grits.DebugHttp {
 			log.Printf("Using self-signed certificates for %s", hm.Config.ThisHost)
+			}
 		} else {
 			// Using manually specified certificate paths
 			// If manual certificate paths are provided, check if they're absolute paths
@@ -239,7 +245,9 @@ func (hm *HTTPModule) Start() error {
 				return fmt.Errorf("certificate files not found at %s and %s", certPath, keyPath)
 			}
 
+			if grits.DebugHttp {
 			log.Printf("Using manual certificate paths: cert=%s, key=%s", certPath, keyPath)
+			}
 		}
 	}
 
@@ -253,7 +261,9 @@ func (hm *HTTPModule) Start() error {
 		
 		if hasPreopened {
 			// Use the pre-opened listener
+			if grits.DebugHttp {
 			log.Printf("Using pre-opened listener for port %d", hm.Config.ThisPort)
+			}
 			
 			if hm.Config.EnableTls {
 				// Load certificate from specified paths
@@ -274,7 +284,10 @@ func (hm *HTTPModule) Start() error {
 				err = hm.HTTPServer.Serve(listener)
 			}
 		} else {
+			if grits.DebugHttp {
 			log.Printf("No pre-opened port %d, opening new", hm.Config.ThisPort)
+			}
+
 			// Normal binding
 			if hm.Config.EnableTls {
 				err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
@@ -289,7 +302,9 @@ func (hm *HTTPModule) Start() error {
 	}()
 	time.Sleep(250 * time.Millisecond)
 
+	if grits.DebugHttp {
 	log.Printf("HTTP module started on %s (TLS enabled: %t)\n", hm.HTTPServer.Addr, hm.Config.EnableTls)
+	}
 	return nil
 }
 
@@ -341,7 +356,9 @@ func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
 			continue
 		}
 
+		if grits.DebugHttp {
 		log.Printf("Pre-opening port %d", httpConfig.ThisPort)
+		}
 
 		addr := fmt.Sprintf(":%d", httpConfig.ThisPort)
 		listener, err := net.Listen("tcp", addr)
@@ -350,7 +367,9 @@ func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
 		}
 
 		preopenedListeners[httpConfig.ThisPort] = listener
+		if grits.DebugHttp {
 		log.Printf("Successfully pre-opened port %d", httpConfig.ThisPort)
+		}
 	}
 
 	return nil
@@ -380,7 +399,9 @@ func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 		log.Fatalf("Only one ServiceWorkerModule can be registered")
 	}
 
+	if grits.DebugHttp {
 	log.Printf("Registering ServiceWorkerModule in HTTP module")
+	}
 
 	// Store the service worker module
 	hm.serviceWorkerModule = swModule
@@ -411,11 +432,17 @@ func (hm *HTTPModule) addMirrorModule(module Module) {
 // requestMiddleware is a middleware function that adds various headers to the response.
 func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if grits.DebugHttp {
+			log.Printf("Incoming request: %s %s (Proto: %s)", r.Method, r.URL.Path, r.Proto)
+		}
+
 		tracker := NewPerformanceTracker(r)
 		tracker.Start()
 
 		// Basic request logging
+		if grits.DebugHttp {
 		log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
+		}
 
 		tracker.Step("Setting CORS headers")
 
@@ -710,7 +737,9 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		if existingCf != nil {
 			existingCf.Release()
 			// We already have this blob, no need to upload again
+			if grits.DebugHttp {
 			log.Printf("Blob %s already exists, skipping upload", expectedHash)
+			}
 			w.WriteHeader(http.StatusNoContent)
 			json.NewEncoder(w).Encode(expectedHash)
 			return
@@ -776,7 +805,9 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	}(cachedFile)
 
 	// Log that we're holding a temporary reference
+	if grits.DebugHttp {
 	log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress())
+	}
 
 	// Return the hash of the uploaded blob
 	w.WriteHeader(http.StatusOK)
@@ -861,7 +892,9 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
+	if grits.DebugHttp {
 	log.Printf("Handling link request\n")
+	}
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
@@ -980,7 +1013,9 @@ func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Reques
 	// Find all matching deployments for this hostname
 	var matchingDeployments []*DeploymentModule
 	for _, deployment := range s.deployments {
+		if grits.DebugHttp {
 		log.Printf("Compare %s %s", deployment.Config.HostName, hostname)
+		}
 		if deployment.Config.HostName == hostname {
 			matchingDeployments = append(matchingDeployments, deployment)
 		}
@@ -1054,8 +1089,10 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 		return
 	}
 
+	if grits.DebugHttp {
 	log.Printf("Received request for file: %s\n", filePath)
 	log.Printf("Method is %s\n", r.Method)
+	}
 
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
@@ -1085,7 +1122,9 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	tracker.Start()
 	defer tracker.End()
 
+	if grits.DebugHttp {
 	log.Printf("Received %s request for file: %s\n", r.Method, path)
+	}
 
 	tracker.Step("Looking up resource in volume")
 	// Look up the resource in the volume to get its address
@@ -1209,7 +1248,9 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 }
 
 func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request, maxSize int64) {
+	if grits.DebugHttp {
 	log.Printf("Received PUT request for file: %s\n", path)
+	}
 
 	if path == "" || path == "/" {
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
@@ -1251,7 +1292,10 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 	defer metadataNode.Release()
 
 	// Link using the metadata address
+	if grits.DebugHttp {
 	log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
+	}
+	
 	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
@@ -1263,7 +1307,9 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 }
 
 func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
+	if grits.DebugHttp {
 	log.Printf("Received DELETE request for file: %s\n", path)
+	}
 
 	if path == "" || path == "/" {
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
