@@ -20,7 +20,7 @@ var DebugFileCache = false          // Debug NameStore file cache
 var DebugLinks = false              // Debug calls to Link()
 var DebugFuse = false               // Debug FUSE mounting
 var DebugHttp = false               // Debug HTTP API
-var DebugHttpPerformance = true     // Debug HTTP performance
+var DebugHttpPerformance = false     // Debug HTTP performance
 var DebugBlobCache = false          // Debug pass-through LRU blob cache
 var DebugServerLifecycle = false    // Debug major server / module events
 
