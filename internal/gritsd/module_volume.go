@@ -46,6 +46,7 @@ type LocalVolume struct {
 	readOnly bool
 
 	persistMtx sync.Mutex
+	doPersist bool
 }
 
 type LocalVolumeConfig struct {
@@ -54,8 +55,8 @@ type LocalVolumeConfig struct {
 
 var _ = (Volume)((*LocalVolume)(nil))
 
-func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool) (*LocalVolume, error) {
-	ns, err := grits.EmptyNameStore(server.BlobStore)
+func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool, sparse bool, persist bool) (*LocalVolume, error) {
+	ns, err := grits.EmptyNameStore(server.BlobStore, sparse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NameStore: %v", err)
 	}
@@ -65,11 +66,14 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool) (*
 		server:   server,
 		ns:       ns,
 		readOnly: false,
+		doPersist: persist,
 	}
 
-	err = wv.load()
-	if err != nil {
-		return nil, fmt.Errorf("failed to load LocalVolume %s: %v", wv.name, err)
+	if persist {
+		err = wv.load()
+		if err != nil {
+			return nil, fmt.Errorf("failed to load LocalVolume %s: %v", wv.name, err)
+		}
 	}
 
 	return wv, nil
@@ -85,9 +89,12 @@ func (wv *LocalVolume) Start() error {
 
 func (wv *LocalVolume) Stop() error {
 	// Ensure any final persistence operations are completed
-	result := wv.save()
+	if wv.doPersist {
+		return wv.save()
+	} else {
+		return nil
+	}
 
-	return result
 	// FIXME - We do stop, whether or not we return error -- we should think about that
 }
 
@@ -96,7 +103,11 @@ func (wv *LocalVolume) isReadOnly() bool {
 }
 
 func (wv *LocalVolume) Checkpoint() error {
-	return wv.save()
+	if wv.doPersist {
+		return wv.save()
+	} else {
+		return nil
+	}
 }
 
 func (wv *LocalVolume) GetModuleName() string {
@@ -245,25 +256,19 @@ type RootState struct {
 
 // load retrieves the volume's NameStore root from persistent storage.
 func (wv *LocalVolume) load() error {
+	wv.persistMtx.Lock()
+	defer wv.persistMtx.Unlock()
+
 	err := os.MkdirAll(wv.server.Config.ServerPath("var/localroots"), 0755)
 	if err != nil {
 		return fmt.Errorf("can't make localroot directory: %v", err)
 	}
-
-	wv.persistMtx.Lock()
-	defer wv.persistMtx.Unlock()
 
 	filename := wv.server.Config.ServerPath("var/localroots/" + wv.name + ".json")
 	data, err := os.ReadFile(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// It's fine if the file doesn't exist yet
-			ns, err := grits.EmptyNameStore(wv.server.BlobStore)
-			if err != nil {
-				return fmt.Errorf("cannot init empty name store: %v", err)
-			}
-
-			wv.ns = ns
 			return nil
 		}
 		return err
@@ -274,12 +279,11 @@ func (wv *LocalVolume) load() error {
 		return fmt.Errorf("failed to unmarshal volume state: %v", err)
 	}
 
-	ns, err := grits.DeserializeNameStore(wv.server.BlobStore, grits.BlobAddr(state.RootAddr), state.SerialNumber)
+	wv.ns.DeserializeNameStore(grits.BlobAddr(state.RootAddr), state.SerialNumber)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize name store: %v", err)
 	}
 
-	wv.ns = ns
 	return nil
 }
 

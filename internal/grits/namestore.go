@@ -671,11 +671,20 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr Bl
 	return result, nil
 }
 
-func EmptyNameStore(bs BlobStore) (*NameStore, error) {
+func EmptyNameStore(bs BlobStore, sparse bool) (*NameStore, error) {
+	var refManager RefManager
+	if sparse {
+		log.Printf("Make sparse ref manager")
+		refManager = NewSparseRefManager(time.Second * 60) // FIXME
+	} else {
+		log.Printf("Make dense ref manager")
+		refManager = NewDenseRefManager("")
+	}
+
 	ns := &NameStore{
 		BlobStore:  bs,
 		fileCache:  make(map[BlobAddr]FileNode),
-		refManager: NewDenseRefManager(""),
+		refManager: refManager,
 	}
 
 	rootNodeMap := make(map[string]BlobAddr)
@@ -684,6 +693,7 @@ func EmptyNameStore(bs BlobStore) (*NameStore, error) {
 		return nil, err
 	}
 
+	// No-op if sparse
 	ns.refManager.recursiveTake(ns, root)
 
 	ns.serialNumber = 0
@@ -695,19 +705,15 @@ func (ns *NameStore) GetSerialNumber() int64 {
 	return ns.serialNumber
 }
 
-func DeserializeNameStore(bs BlobStore, rootAddr BlobAddr, serialNumber int64) (*NameStore, error) {
-	ns := &NameStore{
-		BlobStore:    bs,
-		fileCache:    make(map[BlobAddr]FileNode),
-		refManager:   NewDenseRefManager(""),
-		serialNumber: serialNumber,
-	}
+func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64) (*NameStore, error) {
+	ns.serialNumber = serialNumber
 
 	root, err := ns.loadFileNode(rootAddr, true)
 	if err != nil {
 		return nil, err
 	}
 
+	//ns.refManager.recursiveRelease might be nice here...
 	ns.refManager.recursiveTake(ns, root)
 
 	ns.rootAddr = root.MetadataBlob().GetAddress()

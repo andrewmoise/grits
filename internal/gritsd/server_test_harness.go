@@ -59,7 +59,7 @@ func WithLocalVolume(volumeName string) TestModuleInitializer {
 			VolumeName: volumeName,
 		}
 
-		localVolume, err := NewLocalVolume(localConfig, s, false)
+		localVolume, err := NewLocalVolume(localConfig, s, false, false, true)
 		if err != nil {
 			t.Fatalf("Can't create %s volume: %v", volumeName, err)
 		}

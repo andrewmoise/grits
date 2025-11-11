@@ -63,7 +63,7 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 	}
 
 	// Create the local cache with read-write permissions
-	localCache, err := NewLocalVolume(localConfig, server, false)
+	localCache, err := NewLocalVolume(localConfig, server, false, true, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create local cache: %v", err)
 	}
