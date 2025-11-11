@@ -85,10 +85,10 @@ func (mm *MountModule) Start() error {
 	}
 
 	if grits.DebugServerLifecycle {
-	log.Printf("Listing volumes:")
-	for name := range mm.gritsServer.Volumes {
-		log.Printf("Volume: %s", name)
-	}
+		log.Printf("Listing volumes:")
+		for name := range mm.gritsServer.Volumes {
+			log.Printf("Volume: %s", name)
+		}
 	}
 
 	var exists bool
@@ -130,7 +130,7 @@ func (mm *MountModule) Start() error {
 
 func (mm *MountModule) Stop() error {
 	if grits.DebugServerLifecycle {
-	log.Printf("We are stopping mount module")
+		log.Printf("We are stopping mount module")
 	}
 
 	if mm.volume != nil {
@@ -147,8 +147,8 @@ func (mm *MountModule) Stop() error {
 			log.Printf("==========")
 		} else {
 			if grits.DebugServerLifecycle {
-			log.Printf("Successfully unmounted %s", mm.config.MountPoint)
-		}
+				log.Printf("Successfully unmounted %s", mm.config.MountPoint)
+			}
 		}
 
 		// Wait until unmount completes

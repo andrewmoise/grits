@@ -218,7 +218,7 @@ func (hm *HTTPModule) Start() error {
 			}
 
 			if grits.DebugHttp {
-			log.Printf("Using Let's Encrypt certificates for %s", hm.Config.ThisHost)
+				log.Printf("Using Let's Encrypt certificates for %s", hm.Config.ThisHost)
 			}
 		} else if hm.Config.UseSelfSigned {
 			// For self-signed certificates, generate them if they don't exist
@@ -230,7 +230,7 @@ func (hm *HTTPModule) Start() error {
 			// Get paths to the self-signed certificates
 			certPath, keyPath = GetCertificateFiles(hm.Server.Config, SelfSignedCert, hm.Config.ThisHost)
 			if grits.DebugHttp {
-			log.Printf("Using self-signed certificates for %s", hm.Config.ThisHost)
+				log.Printf("Using self-signed certificates for %s", hm.Config.ThisHost)
 			}
 		} else {
 			// Using manually specified certificate paths
@@ -254,7 +254,7 @@ func (hm *HTTPModule) Start() error {
 			}
 
 			if grits.DebugHttp {
-			log.Printf("Using manual certificate paths: cert=%s, key=%s", certPath, keyPath)
+				log.Printf("Using manual certificate paths: cert=%s, key=%s", certPath, keyPath)
 			}
 		}
 	}
@@ -270,9 +270,9 @@ func (hm *HTTPModule) Start() error {
 		if hasPreopened {
 			// Use the pre-opened listener
 			if grits.DebugHttp {
-			log.Printf("Using pre-opened listener for port %d", hm.Config.ThisPort)
+				log.Printf("Using pre-opened listener for port %d", hm.Config.ThisPort)
 			}
-			
+
 			if hm.Config.EnableTls {
 				// Load certificate from specified paths
 				var cert tls.Certificate
@@ -293,7 +293,7 @@ func (hm *HTTPModule) Start() error {
 			}
 		} else {
 			if grits.DebugHttp {
-			log.Printf("No pre-opened port %d, opening new", hm.Config.ThisPort)
+				log.Printf("No pre-opened port %d, opening new", hm.Config.ThisPort)
 			}
 
 			// Normal binding
@@ -311,7 +311,7 @@ func (hm *HTTPModule) Start() error {
 	time.Sleep(250 * time.Millisecond)
 
 	if grits.DebugHttp {
-	log.Printf("HTTP module started on %s (TLS enabled: %t)\n", hm.HTTPServer.Addr, hm.Config.EnableTls)
+		log.Printf("HTTP module started on %s (TLS enabled: %t)\n", hm.HTTPServer.Addr, hm.Config.EnableTls)
 	}
 	return nil
 }
@@ -366,7 +366,7 @@ func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
 		}
 
 		if grits.DebugHttp {
-		log.Printf("Pre-opening port %d", httpConfig.ThisPort)
+			log.Printf("Pre-opening port %d", httpConfig.ThisPort)
 		}
 
 		addr := fmt.Sprintf(":%d", httpConfig.ThisPort)
@@ -377,7 +377,7 @@ func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
 
 		preopenedListeners[httpConfig.ThisPort] = listener
 		if grits.DebugHttp {
-		log.Printf("Successfully pre-opened port %d", httpConfig.ThisPort)
+			log.Printf("Successfully pre-opened port %d", httpConfig.ThisPort)
 		}
 	}
 
@@ -409,7 +409,7 @@ func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 	}
 
 	if grits.DebugHttp {
-	log.Printf("Registering ServiceWorkerModule in HTTP module")
+		log.Printf("Registering ServiceWorkerModule in HTTP module")
 	}
 
 	// Store the service worker module
@@ -450,7 +450,7 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 
 		// Basic request logging
 		if grits.DebugHttp {
-		log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
+			log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
 		}
 
 		tracker.Step("Setting CORS headers")
@@ -747,7 +747,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 			existingCf.Release()
 			// We already have this blob, no need to upload again
 			if grits.DebugHttp {
-			log.Printf("Blob %s already exists, skipping upload", expectedHash)
+				log.Printf("Blob %s already exists, skipping upload", expectedHash)
 			}
 			w.WriteHeader(http.StatusNoContent)
 			json.NewEncoder(w).Encode(expectedHash)
@@ -820,6 +820,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
+		log.Printf("  lookup failure! only POST is supported")
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
 	}
@@ -900,7 +901,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	if grits.DebugHttp {
-	log.Printf("Handling link request\n")
+		log.Printf("Handling link request\n")
 	}
 
 	if r.Method != http.MethodPost {
@@ -1021,7 +1022,7 @@ func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Reques
 	var matchingDeployments []*DeploymentModule
 	for _, deployment := range s.deployments {
 		if grits.DebugHttp {
-		log.Printf("Compare %s %s", deployment.Config.HostName, hostname)
+			log.Printf("Compare %s %s", deployment.Config.HostName, hostname)
 		}
 		if deployment.Config.HostName == hostname {
 			matchingDeployments = append(matchingDeployments, deployment)
@@ -1097,8 +1098,8 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	}
 
 	if grits.DebugHttp {
-	log.Printf("Received request for file: %s\n", filePath)
-	log.Printf("Method is %s\n", r.Method)
+		log.Printf("Received request for file: %s\n", filePath)
+		log.Printf("Method is %s\n", r.Method)
 	}
 
 	switch r.Method {
@@ -1130,7 +1131,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	defer tracker.End()
 
 	if grits.DebugHttp {
-	log.Printf("Received %s request for file: %s\n", r.Method, path)
+		log.Printf("Received %s request for file: %s\n", r.Method, path)
 	}
 
 	tracker.Step("Looking up resource in volume")
@@ -1256,7 +1257,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 
 func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request, maxSize int64) {
 	if grits.DebugHttp {
-	log.Printf("Received PUT request for file: %s\n", path)
+		log.Printf("Received PUT request for file: %s\n", path)
 	}
 
 	if path == "" || path == "/" {
@@ -1300,7 +1301,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 
 	// Link using the metadata address
 	if grits.DebugHttp {
-	log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
+		log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
 	}
 	
 	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress())
@@ -1315,7 +1316,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 
 func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 	if grits.DebugHttp {
-	log.Printf("Received DELETE request for file: %s\n", path)
+		log.Printf("Received DELETE request for file: %s\n", path)
 	}
 
 	if path == "" || path == "/" {

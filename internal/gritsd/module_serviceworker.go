@@ -53,7 +53,7 @@ func (swm *ServiceWorkerModule) addDeploymentModule(module Module) {
 	swm.pathMappings = append(swm.pathMappings, &mapping)
 
 	if grits.DebugHttp {
-	log.Printf("About to update service worker config")
+		log.Printf("About to update service worker config")
 	}
 
 	// Update the service worker configuration JSON
@@ -95,7 +95,7 @@ func (swm *ServiceWorkerModule) loadClientFiles(wv *LocalVolume) error {
 	// Process each template file
 	for _, templatePath := range templateFiles {
 		if grits.DebugHttp {
-		log.Printf("Loading template file: %s", templatePath)
+			log.Printf("Loading template file: %s", templatePath)
 		}
 		templateCf, err := wv.AddBlob(templatePath)
 		if err != nil {
@@ -141,7 +141,7 @@ func (swm *ServiceWorkerModule) loadClientFiles(wv *LocalVolume) error {
 			defer contentNode.Release()
 
 			if grits.DebugHttp {
-			log.Printf("Linking generated file: %s", filename)
+				log.Printf("Linking generated file: %s", filename)
 			}
 			err = wv.LinkByMetadata(filename, contentNode.MetadataBlob().GetAddress())
 			if err != nil {
@@ -153,7 +153,7 @@ func (swm *ServiceWorkerModule) loadClientFiles(wv *LocalVolume) error {
 	// Load static files
 	for _, filename := range staticFiles {
 		if grits.DebugHttp {
-		log.Printf("Loading static file: client/%s", filename)
+			log.Printf("Loading static file: client/%s", filename)
 		}
 
 		fileCf, err := wv.AddBlob(fmt.Sprintf("client/%s", filename))
@@ -169,7 +169,7 @@ func (swm *ServiceWorkerModule) loadClientFiles(wv *LocalVolume) error {
 		defer blobNode.Release()
 
 		if grits.DebugHttp {
-		log.Printf("Linking static file: %s", filename)
+			log.Printf("Linking static file: %s", filename)
 		}
 		err = wv.ns.LinkByMetadata(filename, blobNode.MetadataBlob().GetAddress())
 		if err != nil {
@@ -245,9 +245,9 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 	}
 
 	if grits.DebugHttp {
-	log.Printf("Creating client volume")
+		log.Printf("Creating client volume")
 	}
-
+	
 	wvc := &LocalVolumeConfig{
 		VolumeName: "client",
 	}
@@ -320,7 +320,7 @@ func (swm *ServiceWorkerModule) updateServiceWorkerConfig() error {
 	}
 
 	if grits.DebugHttp {
-	log.Printf("New service worker config all linked up")
+		log.Printf("New service worker config all linked up")
 	}
 
 	return nil
@@ -400,7 +400,7 @@ func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Req
 
 func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Request) {
 	if grits.DebugHttp {
-	log.Printf("Serve config")
+		log.Printf("Serve config")
 	}
 
 	// Get the hash from query parameter
@@ -411,7 +411,7 @@ func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Reque
 	}
 
 	if grits.DebugHttp {
-	log.Printf("  got hash")
+		log.Printf("  got hash")
 	}
 
 	// Eh, whatever... this is maybe worth worrying about in the long run
@@ -449,7 +449,7 @@ func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Reque
 	}
 
 	if grits.DebugHttp {
-	log.Printf("  ready to copy")
+		log.Printf("  ready to copy")
 	}
 
 	_, err = io.Copy(w, configReader)
