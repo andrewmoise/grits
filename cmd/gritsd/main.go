@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"grits/internal/grits"
 	"grits/internal/gritsd"
@@ -66,6 +68,24 @@ func dropPrivileges(username, groupname string) error {
 	return nil
 }
 
+func setupLogging(dir string) *os.File {
+	err := os.MkdirAll(dir, 0755)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create log directory: %v", err))
+	}
+
+	logFileName := fmt.Sprintf(dir + "/grits-%s.log", time.Now().Format("2006-01-02"))
+	f, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0755)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+
+	mw := io.MultiWriter(os.Stderr, f)
+	log.SetOutput(mw)
+
+	return f
+}
+
 func main() {
 	var workingDir string
 	flag.StringVar(&workingDir, "d", ".", "Working directory for server")
@@ -93,13 +113,13 @@ func main() {
 		if config.RunAsUser == "" {
 			panic("Must specify runAsUser to run as root.")
 		}
-		
+
 		// Pre-open privileged ports while we're still root
 		// Pass the raw module configs before they're processed
 		if err := gritsd.PreopenPrivilegedPorts(config.Modules); err != nil {
 			log.Fatalf("Failed to pre-open privileged ports: %v", err)
 		}
-		
+
 		// Now drop privileges
 		if err := dropPrivileges(config.RunAsUser, config.RunAsGroup); err != nil {
 			log.Fatalf("Failed to drop privileges: %v", err)
@@ -116,9 +136,15 @@ func main() {
 	}
 
 	// Ensure the server directory exists
-	err = os.MkdirAll(config.ServerDir, 0755)
+	err = os.MkdirAll(config.ServerDir, 0700)
 	if err != nil {
 		panic(fmt.Sprintf("Failed to create server directory: %v", err))
+	}
+
+	// Set up logging if we're doing it
+	if config.DoLogging {
+		logFile := setupLogging(config.ServerPath("var/log"))
+		defer logFile.Close()
 	}
 
 	srv, err := gritsd.NewServer(config)
