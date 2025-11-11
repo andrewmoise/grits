@@ -1396,7 +1396,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 	if grits.DebugFuse {
 		log.Printf("  dirty nodes lock")
 		log.Printf("  look for %s in:", fullPath)
-		for path, _ := range gn.module.dirtyNodesMap {
+		for path := range gn.module.dirtyNodesMap {
 			log.Printf("    %s", path)
 		}
 	}
