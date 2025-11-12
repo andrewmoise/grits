@@ -190,13 +190,12 @@ func TestRemoteVolumeLookup(t *testing.T) {
 		defer node.Release()
 
 		// Verify we got the right node type
-		blobNode, ok := node.(*grits.BlobNode)
-		if !ok {
+		if node.Metadata().Type != grits.GNodeTypeFile {
 			t.Fatalf("Expected BlobNode, got %T", node)
 		}
 
 		// Verify content
-		cf, err := blobNode.ExportedBlob().Reader()
+		cf, err := node.ExportedBlob().Reader()
 		if err != nil {
 			t.Fatalf("Failed to get reader: %v", err)
 		}
@@ -222,13 +221,12 @@ func TestRemoteVolumeLookup(t *testing.T) {
 		defer node.Release()
 
 		// Verify we got a tree node
-		treeNode, ok := node.(*grits.TreeNode)
-		if !ok {
+		if node.Metadata().Type != grits.GNodeTypeDirectory {
 			t.Fatalf("Expected TreeNode, got %T", node)
 		}
 
 		// Check children
-		children := treeNode.Children()
+		children := node.Children()
 		if len(children) != 3 { // file1.txt, file2.txt, subdir
 			t.Errorf("Expected 3 children, got %d", len(children))
 		}
