@@ -381,7 +381,12 @@ func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Req
 	}
 	defer templateNode.Release()
 
-	templateCf := templateNode.ExportedBlob()
+	templateCf, err := templateNode.ExportedBlob()
+	if err != nil {
+		http.Error(w, "Error loading content for template", http.StatusInternalServerError)
+		return
+	}
+
 	templateData, err := templateCf.Read(0, templateCf.GetSize())
 	if err != nil {
 		http.Error(w, "Error loading template file", http.StatusInternalServerError)
@@ -442,11 +447,18 @@ func (swm *ServiceWorkerModule) serveConfig(w http.ResponseWriter, r *http.Reque
 	}
 	defer currentConfig.Release()
 
-	configReader, err := currentConfig.ExportedBlob().Reader()
+	configBlob, err := currentConfig.ExportedBlob()
+	if err != nil {
+		http.Error(w, "Can't load content", http.StatusInternalServerError)
+		return
+	}
+
+	configReader, err := configBlob.Reader()
 	if err != nil {
 		http.Error(w, "Can't read config", http.StatusInternalServerError)
 		return
 	}
+	defer configReader.Close()
 
 	if grits.DebugHttp {
 		log.Printf("  ready to copy")

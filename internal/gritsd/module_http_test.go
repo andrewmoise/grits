@@ -22,7 +22,10 @@ func setupEmptyDir(volume Volume, remoteUrl string) (grits.BlobAddr, error) {
 	defer emptyDir.Release()
 
 	// Upload the content blob
-	contentBlob := emptyDir.ExportedBlob()
+	contentBlob, err := emptyDir.ExportedBlob()
+	if err != nil {
+		return "", fmt.Errorf("couldn't load content for empty dir: %v", err)
+	}
 	contentReader, err := contentBlob.Reader()
 	if err != nil {
 		return "", fmt.Errorf("couldn't create reader for empty dir content blob: %v", err)

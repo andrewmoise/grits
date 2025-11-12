@@ -425,7 +425,13 @@ func (ns *NameStore) lookupNodeByContent(contentHash BlobAddr) FileNode {
 	defer ns.mtx.RUnlock()
 
 	for _, node := range ns.fileCache {
-		if node != nil && node.ExportedBlob().GetAddress() == contentHash {
+		blob, err := node.ExportedBlob()
+		if err != nil {
+			// FIXME
+			log.Printf("Can't lookup node %s! %v", contentHash, err)
+			return nil
+		}
+		if node != nil && blob.GetAddress() == contentHash {
 			return node
 		}
 	}
@@ -984,7 +990,13 @@ func TestLookupMultiplePaths(t *testing.T) {
 		}
 
 		// Verify content matches what we expect
-		contentReader, err := node.ExportedBlob().Reader()
+		contentBlob, err := node.ExportedBlob()
+		if err != nil {
+			t.Errorf("Failed to open content for %s: %v", path, err)
+			continue
+		}
+
+		contentReader, err := contentBlob.Reader()
 		if err != nil {
 			t.Errorf("Failed to get reader for %s: %v", path, err)
 			continue
