@@ -25,6 +25,8 @@ type RemoteVolumeConfig struct {
 }
 
 const maxPrefetchQueueSize = 128
+const numPrefetchWorkers = 32
+const numHttpConnections = 32
 
 // RemoteVolume implements the Volume interface by proxying to a local cache
 // and fetching from a remote server when needed
@@ -131,21 +133,32 @@ func (rv *RemoteVolume) Start() error {
 		return err
 	}
 
-	// Start the prefetch worker
+	// Start the prefetch workers
+	for i := 0; i < numPrefetchWorkers; i++ {
+		rv.workerWg.Add(1)
+		go rv.prefetchWorker(i)
+	}
+	
+	// Start the cleanup worker
 	rv.workerWg.Add(1)
-	go rv.prefetchWorker()
+	go rv.cleanupWorker()
 
 	return nil
 }
 
 // Stop implements Volume interface
 func (rv *RemoteVolume) Stop() error {
-	// Stop the prefetch worker
+	// Stop all workers
 	close(rv.stopWorker)
-	rv.queueCond.Broadcast() // Wake up the worker so it can exit
+	rv.queueCond.Broadcast() // Wake up all workers so they can exit
 	rv.workerWg.Wait()
 
-	return rv.localCache.Stop()
+	err := rv.localCache.Stop()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // isReadOnly implements Volume interface
@@ -170,27 +183,34 @@ func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
 
 	var err error
 	if rv.isFresh() {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  is fresh")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode():  is fresh")
 
 		// Try local cache first
 		rv.cacheMutex.Lock()
 		if rv.localCache.ns.GetRoot() != string(rv.localRootAddr) {
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  linking")
+			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode():  linking")
 			// Need to link to the new root. Depending on prefetch progress, this might fail.
 			err = rv.localCache.LinkByMetadata("", rv.localRootAddr)
 		}
 		rv.cacheMutex.Unlock()
 		if err == nil {
 			// Who knows, maybe we've prefetched enough by now to do the read locally
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  looking up")
+			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode():  looking up")
 			node, err := rv.localCache.LookupNode(path)
 			if err == nil {
-				grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  cache hit!")
-				return node, nil // Cache hit!
+				// Cache hit!
+				grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode():  cache hit!")
+			
+				for _, childAddr := range node.Children() {
+					rv.enqueuePrefetch(childAddr)
+				}
+				grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode():  enqueued children")
+
+				return node, nil
 			}
 		}
 
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  cache miss looking up %s, err is %v", path, err)
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode():  cache miss looking up %s, err is %v", path, err)
 	}
 
 	// If we get here, then it was a cache miss. Fine, fetch from remote.
@@ -203,7 +223,7 @@ func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
 		return nil, err
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  looked up from remote\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode():  looked up from remote\n")
 
 	if lookupResponse.IsPartial {
 		return nil, grits.ErrNotExist
@@ -214,7 +234,7 @@ func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
 
 	metadataAddr := lookupResponse.Paths[len(lookupResponse.Paths)-1].Addr
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  returning from cache miss\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode():  returning from cache miss\n")
 
 	return rv.GetFileNode(metadataAddr)
 }
@@ -249,7 +269,7 @@ func (rv *RemoteVolume) GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode
 	}
 	defer metadataBlobFile.Release()
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "  got blob\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "GetFileNode():  got blob\n")
 
 	metadataReader, err := metadataBlobFile.Reader()
 	if err != nil {
@@ -264,7 +284,7 @@ func (rv *RemoteVolume) GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode
 		return nil, fmt.Errorf("couldn't decode metadata: %v", err)
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "  all decoded\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "GetFileNode():  all decoded\n")
 
 	contentBlobFile, err := rv.GetBlob(metadata.ContentHash)
 	if err != nil {
@@ -272,25 +292,25 @@ func (rv *RemoteVolume) GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode
 	}
 	defer contentBlobFile.Release()
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "  getting file node\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "GetFileNode():  getting file node\n")
 
 	fileNode, err := rv.localCache.GetFileNode(metadataAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "  all done\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "GetFileNode():  all done\n")
 
 	return fileNode, nil
 }
 
 // CreateTreeNode implements Volume interface
-func (rv *RemoteVolume) CreateTreeNode() (*grits.TreeNode, error) {
+func (rv *RemoteVolume) CreateTreeNode() (grits.FileNode, error) {
 	return rv.localCache.CreateTreeNode()
 }
 
 // CreateBlobNode implements Volume interface
-func (rv *RemoteVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*grits.BlobNode, error) {
+func (rv *RemoteVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (grits.FileNode, error) {
 	return rv.localCache.CreateBlobNode(contentAddr, size)
 }
 
@@ -325,13 +345,13 @@ func (rv *RemoteVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 
 	cf, _ := rv.server.BlobStore.ReadFile(addr)
 	if cf != nil {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "  cache hit, all done\n")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob():  cache hit, all done\n")
 		return cf, nil
 	}
 
 	url := fmt.Sprintf("%s/grits/v1/blob/%s", rv.config.RemoteURL, addr)
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "  doing client get\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob():  doing client get\n")
 
 	resp, err := rv.httpClient.Get(url)
 	if err != nil {
@@ -343,7 +363,7 @@ func (rv *RemoteVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 		return nil, fmt.Errorf("failed to fetch blob %s: status %d", addr, resp.StatusCode)
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "  reading\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob():  reading\n")
 
 	cf, err = rv.server.BlobStore.AddReader(resp.Body)
 	if err != nil {
@@ -354,7 +374,7 @@ func (rv *RemoteVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 		return nil, fmt.Errorf("mismatch of blob addr! %s != %s", cf.GetAddress(), addr)
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "  all done with cache miss\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob():  all done with cache miss\n")
 
 	return cf, nil
 }
@@ -398,14 +418,17 @@ func httpClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			MaxIdleConns:        100,              // Max idle connections total
-			MaxIdleConnsPerHost: 10,               // Max idle per host (most important)
+			MaxIdleConns:        numHttpConnections,              // Max idle connections total
+			MaxIdleConnsPerHost: numHttpConnections,               // Max idle per host (most important)
 			MaxConnsPerHost:     0,                // 0 = unlimited active connections
 			IdleConnTimeout:     90 * time.Second, // How long to keep idle connections
 			DisableKeepAlives:   false,            // Ensure keepalive is enabled (default)
 		},
 	}
 }
+
+/////
+// Prefetch functionality
 
 // enqueuePrefetch adds a blob address to the prefetch queue
 // If the queue is full, it drops the oldest entries to make room
@@ -420,7 +443,7 @@ func (rv *RemoteVolume) enqueuePrefetch(addr grits.BlobAddr) {
 
 	// If we exceed the max size, drop oldest entries from the front
 	if len(rv.prefetchQueue) > maxPrefetchQueueSize {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "  dropping entries\n")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "enqueuePrefetch():  dropping entries\n")
 
 		// Drop the oldest entries
 		dropCount := len(rv.prefetchQueue) - maxPrefetchQueueSize
@@ -429,17 +452,11 @@ func (rv *RemoteVolume) enqueuePrefetch(addr grits.BlobAddr) {
 
 	// Signal the worker that there's work available
 	rv.queueCond.Signal()
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "  all done\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "enqueuePrefetch():  all done\n")
 }
 
-// prefetchWorker runs in a goroutine and processes the prefetch queue
-func (rv *RemoteVolume) prefetchWorker() {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, "prefetch", "prefetchWorker() starting up\n")
-
+func (rv *RemoteVolume) prefetchWorker(id int) {
 	defer rv.workerWg.Done()
-
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
 
 	for {
 		// Get the next entry from the queue
@@ -449,14 +466,28 @@ func (rv *RemoteVolume) prefetchWorker() {
 			select {
 			case <-rv.stopWorker:
 				rv.queueMutex.Unlock()
-				rv.cleanupExpiredCache(true)
-				grits.DebugLogWithTime(grits.DebugHttpPerformance, "prefetch", "  all done\n")
 				return
 			default:
 			}
 
 			// Queue is empty, wait for work or shutdown
 			rv.queueCond.Wait()
+			
+			// Check again after waking up
+			select {
+			case <-rv.stopWorker:
+				rv.queueMutex.Unlock()
+				return
+			default:
+			}
+		}
+
+		// Check again before processing
+		select {
+		case <-rv.stopWorker:
+			rv.queueMutex.Unlock()
+			return
+		default:
 		}
 
 		// Pop the first (oldest) entry from the queue
@@ -464,56 +495,58 @@ func (rv *RemoteVolume) prefetchWorker() {
 		rv.prefetchQueue = rv.prefetchQueue[1:]
 		rv.queueMutex.Unlock()
 
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetching blob")
-
-		// Check for shutdown before processing
-		select {
-		case <-rv.stopWorker:
-			rv.cleanupExpiredCache(true)
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, "prefetch", "  all done\n")
-			return
-		default:
-		}
-
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Doing prefetch")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetching")
 
 		// Try to fetch and cache the blob
 		cf, err := rv.GetBlob(entry)
 		if err != nil {
-			// Failed to fetch, just continue
-			log.Printf("prefetch failed for %s: %v", entry, err)
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "  failed to fetch")
+			log.Printf("prefetch worker %d failed for %s: %v", id, entry, err)
 			continue
 		}
 
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "  fetched")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: Got blob")
 
 		// Store in our cache map with expiration time
 		expiresAt := time.Now().Add(rv.config.CacheExpirationTime)
+		
+		// Need to lock when appending to cachedBlobs since multiple workers access it
+		rv.queueMutex.Lock()
 		rv.cachedBlobs = append(rv.cachedBlobs, &cachedBlobEntry{
 			file:      cf,
 			expiresAt: expiresAt,
 		})
+		rv.queueMutex.Unlock()
 
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "  added to expiry cache")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: Held reference")
+	}
+}
 
-		// Periodically clean up expired cache entries
+// cleanupWorker periodically cleans up expired cache entries
+func (rv *RemoteVolume) cleanupWorker() {
+	defer rv.workerWg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
 		select {
+		case <-rv.stopWorker:
+			rv.cleanupExpiredCache(true)
+			return
 		case <-ticker.C:
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, "prefetch", "  cleanup\n")
 			rv.cleanupExpiredCache(false)
-		default:
 		}
 	}
 }
 
 // cleanupExpiredCache removes expired entries from the cache
 func (rv *RemoteVolume) cleanupExpiredCache(doAll bool) {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, "prefetch", "Cleaning up: %v", doAll)
+	rv.queueMutex.Lock()
+	defer rv.queueMutex.Unlock()
 
 	now := time.Now()
-
 	expiredCount := 0
+	
 	for _, entry := range rv.cachedBlobs {
 		if now.After(entry.expiresAt) || doAll {
 			entry.file.Release()
@@ -522,10 +555,14 @@ func (rv *RemoteVolume) cleanupExpiredCache(doAll bool) {
 			break
 		}
 	}
+	
 	if expiredCount > 0 {
 		rv.cachedBlobs = rv.cachedBlobs[expiredCount:]
 	}
 }
+
+/////
+// Network fetch functions
 
 func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.LookupResponse) error {
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup")
@@ -544,7 +581,7 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 	}
 	defer resp.Body.Close()
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  posted")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  posted")
 
 	if resp.StatusCode == http.StatusMultiStatus {
 		lookupResponse.IsPartial = true
@@ -562,13 +599,13 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 		return fmt.Errorf("lookup failed with status %d", resp.StatusCode)
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  about to read")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  about to read")
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return err
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  decoding")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  decoding")
 
 	// The HTTP handler returns [][]any where each inner array contains:
 	// [path (string), metadataHash (BlobAddr), contentHash (BlobAddr), contentSize (int64)]
@@ -610,7 +647,7 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 				return fmt.Errorf("malformed lookup response, path[0] is %s instead of empty", path)
 			}
 
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  updating root: %s", metadataAddr)
+			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  updating root: %s", metadataAddr)
 			rv.cacheMutex.Lock()
 			rv.localRootAddr = grits.BlobAddr(metadataAddr)
 			rv.lastFetchTime = time.Now()
@@ -619,11 +656,11 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 
 		// Enqueue metadata and content hashes for prefetching
 		// Skip the content hash of the last entry (the target file/dir content)
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  enqueueing metadata prefetch: %s", metadataAddr)
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  enqueueing metadata prefetch: %s", metadataAddr)
 		rv.enqueuePrefetch(grits.BlobAddr(metadataAddr))
 		if i < len(pathData)-1 {
 			// This is an intermediate directory, prefetch its content too
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  enqueueing content prefetch: %s", contentAddr)
+			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  enqueueing content prefetch: %s", contentAddr)
 			rv.enqueuePrefetch(grits.BlobAddr(contentAddr))
 		}
 
@@ -632,10 +669,10 @@ func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.Look
 			Path: path,
 			Addr: grits.BlobAddr(metadataAddr),
 		})
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  done, looping")
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  done, looping")
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  all done")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  all done")
 
 	return nil
 }
