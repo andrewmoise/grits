@@ -1170,7 +1170,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	}
 	defer leafNode.Release()
 
-	if _, ok := leafNode.(*grits.TreeNode); ok {
+	if leafNode.Metadata().Type == grits.GNodeTypeDirectory {
 		// We have a directory, try index.html instead
 		// FIXME more flexible
 		indexPath := strings.TrimRight(path, "/") + "/index.html"

@@ -20,8 +20,8 @@ type Volume interface {
 	LookupFull(name []string) (*grits.LookupResponse, error)
 	GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error)
 
-	CreateTreeNode() (*grits.TreeNode, error)
-	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*grits.BlobNode, error)
+	CreateTreeNode() (grits.FileNode, error)
+	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (grits.FileNode, error)
 
 	LinkByMetadata(path string, metadataAddr grits.BlobAddr) error
 	MultiLink([]*grits.LinkRequest, bool) (*grits.LookupResponse, error)
@@ -136,7 +136,7 @@ func (wv *LocalVolume) GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode,
 
 // CreateTreeNode creates a new empty directory node
 // The returned node has an additional reference taken which the caller must release when done
-func (v *LocalVolume) CreateTreeNode() (*grits.TreeNode, error) {
+func (v *LocalVolume) CreateTreeNode() (grits.FileNode, error) {
 	emptyChildren := make(map[string]grits.BlobAddr)
 	treeNode, err := v.ns.CreateTreeNode(emptyChildren)
 	if err != nil {
@@ -150,7 +150,7 @@ func (v *LocalVolume) CreateTreeNode() (*grits.TreeNode, error) {
 
 // CreateBlobNode creates a metadata node that points to the given content blob
 // The returned node has an additional reference taken which the caller must release when done
-func (v *LocalVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*grits.BlobNode, error) {
+func (v *LocalVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (grits.FileNode, error) {
 	// Create the metadata for this blob
 	_, metadataBlob, err := v.ns.CreateMetadataBlob(contentAddr, size, false, 0)
 	if err != nil {
@@ -166,14 +166,13 @@ func (v *LocalVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (*g
 	defer node.Release()
 
 	// Convert to BlobNode (this should always succeed since we created it as such)
-	blobNode, ok := node.(*grits.BlobNode)
-	if !ok {
+	if node.Metadata().Type != grits.GNodeTypeFile {
 		return nil, fmt.Errorf("created node is not a BlobNode")
 	}
 
 	// Take an extra reference for the caller
-	blobNode.Take()
-	return blobNode, nil
+	node.Take()
+	return node, nil
 }
 
 // GetBlob retrieves a blob from the blobstore by its address
