@@ -512,7 +512,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		return nil, syscall.EIO
 	}
 
-	out.Size = uint64(node.ExportedBlob().GetSize())
+	out.Size = uint64(node.Metadata().Size)
 	out.Mode = mode
 	out.Owner.Uid = ownerUid
 	out.Owner.Gid = ownerGid
@@ -725,7 +725,11 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 		}
 		defer fileNode.Release()
 
-		gn.cachedFile = fileNode.ExportedBlob()
+		gn.cachedFile, err = fileNode.ExportedBlob()
+		if err != nil {
+			log.Printf("Can't open cached file %s: %v", gn.path, err)
+			return syscall.EIO
+		}
 		gn.cachedFile.Take()
 
 		gn.cachedMetadata = fileNode.Metadata()

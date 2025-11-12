@@ -175,7 +175,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTreeNode failed: %v", err)
 	}
-	log.Printf("Created empty tree node; metadata %s, content %s", treeNode.MetadataBlob().GetAddress(), treeNode.ExportedBlob().GetAddress())
+	log.Printf("Created empty tree node; metadata %s, content %s", treeNode.MetadataBlob().GetAddress(), treeNode.Metadata().ContentHash)
 
 	// Scenario 1: Create a node, link it, then release our reference
 	err = localVolume.LinkByMetadata("test", treeNode.MetadataBlob().GetAddress())
@@ -223,7 +223,12 @@ func TestLocalVolumeOperations(t *testing.T) {
 	defer retrievedBlobNode.Release() // Make sure to release after lookup
 
 	// Verify content matches
-	retrievedContent, err := retrievedBlobNode.ExportedBlob().Reader()
+	retrievedCf, err := retrievedBlobNode.ExportedBlob()
+	if err != nil {
+		t.Fatalf("Couldn't load content: %v", err)
+	}
+
+	retrievedContent, err := retrievedCf.Reader()
 	if err != nil {
 		t.Fatalf("Failed to get reader for retrieved blob: %v", err)
 	}
@@ -276,7 +281,12 @@ func TestLocalVolumeOperations(t *testing.T) {
 	defer retrievedChild.Release() // Make sure to release after lookup
 
 	// Verify content matches
-	childContent, err := retrievedChild.ExportedBlob().Reader()
+	childCf, err := retrievedChild.ExportedBlob()
+	if err != nil {
+		t.Fatalf("Couldn't load content: %v", err)
+	}
+
+	childContent, err := childCf.Reader()
 	if err != nil {
 		t.Fatalf("Failed to get reader for child content: %v", err)
 	}

@@ -874,18 +874,31 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		defer node.Release()
 
 		metadataHash := node.MetadataBlob().GetAddress()
-		contentHash := node.ExportedBlob().GetAddress()
-		contentSize := node.ExportedBlob().GetSize()
-
+		
 		pathData[i] = []any{
 			pair.Path,
 			metadataHash,
-			contentHash,
-			contentSize,
+			node.Metadata().ContentHash,
+			node.Metadata().Size,
 		}
 
 		s.refHolder.Hold(node.MetadataBlob(), 45 * time.Second)
-		s.refHolder.Hold(node.ExportedBlob(), 45 * time.Second)
+		if i != len(lookupResponse.Paths)-1 {
+			// We DO want to hold tree node contents for a short
+			// time, otherwise they might get GCed and then this client
+			// might ask about them and we wouldn't have them
+
+			// But we DON'T want to hold the contents of a blob node,
+			// because it might not even be on this server and we don't
+			// want to force a load if not.
+			contentBlob, err := node.ExportedBlob()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			s.refHolder.Hold(contentBlob, 45 * time.Second)
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -994,18 +1007,36 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		node, err := volume.GetFileNode(pair.Addr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Couldn't load node for %s: %v", pair.Path, err), http.StatusInternalServerError)
+			return
 		}
 		defer node.Release()
 
 		metadataHash := node.MetadataBlob().GetAddress()
-		contentHash := node.ExportedBlob().GetAddress()
-		contentSize := node.ExportedBlob().GetSize()
 
 		response[i] = []any{
 			pair.Path,
 			metadataHash,
-			contentHash,
-			contentSize,
+			node.Metadata().ContentHash,
+			node.Metadata().Size,
+		}
+
+		s.refHolder.Hold(node.MetadataBlob(), 45 * time.Second)
+
+		if i != len(linkResponse.Paths)-1 {
+			// We DO want to hold tree node contents for a short
+			// time, otherwise they might get GCed and then this client
+			// might ask about them and we wouldn't have them
+
+			// But we DON'T want to hold the contents of a blob node,
+			// because it might not even be on this server and we don't
+			// want to force a load if not.
+			contentBlob, err := node.ExportedBlob()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			s.refHolder.Hold(contentBlob, 45 * time.Second)
 		}
 	}
 
@@ -1201,14 +1232,15 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		node, err := volume.GetFileNode(pathResponse.Addr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Couldn't read %s: %v", pathComponent, err), http.StatusInternalServerError)
+			return
 		}
 		defer node.Release()
 
 		pathMetadata = append(pathMetadata, map[string]any{
 			"path":         pathComponent,
 			"metadataHash": node.MetadataBlob().GetAddress(),
-			"contentHash":  node.ExportedBlob().GetAddress(),
-			"contentSize":  node.ExportedBlob().GetSize(),
+			"contentHash":  node.Metadata().ContentHash,
+			"contentSize":  node.Metadata().Size,
 		})
 	}
 
@@ -1254,7 +1286,13 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Getting reader\n")
 
-	reader, err := leafNode.ExportedBlob().Reader()
+	blobContent, err := leafNode.ExportedBlob()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Can't read content for %s: %v", path, err), http.StatusInternalServerError)
+		return
+	}
+
+	reader, err := blobContent.Reader()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Can't read blob for %s: %v", path, err), http.StatusInternalServerError)
 		return

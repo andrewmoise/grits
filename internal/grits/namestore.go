@@ -75,7 +75,11 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 
 	node := nodes[len(nodes)-1]
 
-	cf := node.ExportedBlob()
+	cf, err := node.ExportedBlob()
+	if err != nil {
+		return nil, err
+	}
+
 	cf.Take()
 	return cf, nil
 }
@@ -1005,9 +1009,9 @@ func (ns *NameStore) DumpFileCache() error {
 		}
 
 		// Get the content blob
-		blob := node.ExportedBlob()
-		if blob == nil {
-			log.Printf("  Value: <no blob>")
+		blob, err := node.ExportedBlob()
+		if err != nil {
+			log.Printf("  Error! %v", err)
 			continue
 		}
 
@@ -1056,7 +1060,11 @@ func (ns *NameStore) dumpTreeNode(indent string, nodeAddr BlobAddr, name string)
 		return
 	}
 
-	contentBlob := node.ExportedBlob()
+	contentBlob, err := node.ExportedBlob()
+	if err != nil {
+		log.Printf("Couldn't load content for %s: %v", nodeAddr, err)
+		return
+	}
 	metadataBlob := node.MetadataBlob()
 
 	contentLcf, _ := contentBlob.(*LocalCachedFile)
@@ -1187,7 +1195,11 @@ func (ns *NameStore) debugRefCountsWalk(path string, nodeAddr BlobAddr, seenBlob
 		return
 	}
 
-	contentBlob := node.ExportedBlob()
+	contentBlob, err := node.ExportedBlob()
+	if err != nil {
+		log.Printf("Can't read content for %s: %v", nodeAddr, err)
+		return
+	}
 	metadataBlob := node.MetadataBlob()
 
 	// Mark these blobs as seen
@@ -1283,7 +1295,11 @@ func (ns *NameStore) debugDumpNode(path string, nodeAddr BlobAddr) {
 	}
 
 	// Get blobs and metadata
-	contentBlob := node.ExportedBlob()
+	contentBlob, err := node.ExportedBlob()
+	if err != nil {
+		log.Printf("Can't load content for %s: %v", nodeAddr, err)
+		return
+	}
 	metadataBlob := node.MetadataBlob()
 
 	// Print node details
@@ -1420,7 +1436,7 @@ type GNodeMetadata struct {
 }
 
 type FileNode interface {
-	ExportedBlob() CachedFile
+	ExportedBlob() (CachedFile, error)
 	MetadataBlob() CachedFile
 	Metadata() *GNodeMetadata
 	Children() map[string]BlobAddr
@@ -1439,10 +1455,12 @@ type BlobNode struct {
 	mtx          sync.Mutex
 }
 
+var _ = (FileNode)((*BlobNode)(nil))
+
 // Implementations for BlobNode
 
-func (bn *BlobNode) ExportedBlob() CachedFile {
-	return bn.blob
+func (bn *BlobNode) ExportedBlob() (CachedFile, error) {
+	return bn.blob, nil
 }
 
 func (bn *BlobNode) MetadataBlob() CachedFile {
@@ -1523,15 +1541,16 @@ type TreeNode struct {
 	mtx          sync.Mutex
 }
 
-func (tn *TreeNode) ExportedBlob() CachedFile {
+var _ = (FileNode)((*TreeNode)(nil))
+
+func (tn *TreeNode) ExportedBlob() (CachedFile, error) {
 	err := tn.ensureSerialized()
 	if err != nil {
-		// FIXME -- need better handling
 		log.Printf("Error! Deserializing %p, got %v", tn, err)
-		return nil
+		return nil, err
 	}
 
-	return tn.blob
+	return tn.blob, nil
 }
 
 func (tn *TreeNode) MetadataBlob() CachedFile {
@@ -1780,14 +1799,16 @@ func (rm *SparseRefManager) cleanup(ns *NameStore) {
 		if now.Sub(dropTime) > rm.timeout {
 			node := ns.fileCache[metadataAddr]
 			if node != nil {
-				contentBlob := node.ExportedBlob()
 				metadataBlob := node.MetadataBlob()
-
-				if contentBlob != nil {
-					contentBlob.Release()
-				}
 				if metadataBlob != nil {
 					metadataBlob.Release()
+				}
+
+				contentBlob, err := node.ExportedBlob()
+				if err != nil {
+					log.Printf("Problem cleaning up %s: %v", metadataAddr, err)
+				} else if contentBlob != nil {
+					contentBlob.Release()
 				}
 
 				delete(ns.fileCache, metadataAddr)
@@ -1918,18 +1939,17 @@ func (rm *DenseRefManager) cleanup(ns *NameStore) {
 	// Now remove the nodes and release their storage
 	for _, metadataAddr := range nodesToRemove {
 		node := ns.fileCache[metadataAddr]
-		//log.Printf("Removing unreferenced node %p with metadata %s", node, metadataAddr)
 
-		// Release the underlying storage
-		contentBlob := node.ExportedBlob()
 		metadataBlob := node.MetadataBlob()
-
-		if contentBlob != nil {
-			contentBlob.Release()
-		}
-
 		if metadataBlob != nil {
 			metadataBlob.Release()
+		}
+
+		contentBlob, err := node.ExportedBlob()
+		if err != nil {
+			log.Printf("Couldn't load content for %s: %v", metadataAddr, err)
+		} else if contentBlob != nil {
+			contentBlob.Release()
 		}
 
 		// Remove from cache

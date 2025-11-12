@@ -194,8 +194,13 @@ func TestRemoteVolumeLookup(t *testing.T) {
 			t.Fatalf("Expected BlobNode, got %T", node)
 		}
 
+		contentBlob, err := node.ExportedBlob()
+		if err != nil {
+			t.Fatalf("Failed to load content: %v", err)
+		}
+
 		// Verify content
-		cf, err := node.ExportedBlob().Reader()
+		cf, err := contentBlob.Reader()
 		if err != nil {
 			t.Fatalf("Failed to get reader: %v", err)
 		}
@@ -248,8 +253,13 @@ func TestRemoteVolumeLookup(t *testing.T) {
 		}
 		defer node.Release()
 
+		contentBlob, err := node.ExportedBlob()
+		if err != nil {
+			t.Fatalf("Failed to load content: %v", err)
+		}
+
 		// Verify content
-		cf, err := node.ExportedBlob().Reader()
+		cf, err := contentBlob.Reader()
 		if err != nil {
 			t.Fatalf("Failed to get reader: %v", err)
 		}
@@ -282,7 +292,13 @@ func TestRemoteVolumeLookup(t *testing.T) {
 		}
 		defer node.Release()
 
-		cf, err := node.ExportedBlob().Reader()
+		contentBlob, err := node.ExportedBlob()
+		if err != nil {
+			t.Fatalf("Failed to load content: %v", err)
+		}
+
+		// Verify content
+		cf, err := contentBlob.Reader()
 		if err != nil {
 			t.Fatalf("Failed to get reader: %v", err)
 		}
@@ -345,7 +361,13 @@ func TestRemoteVolumeLookup(t *testing.T) {
 		defer node2.Release()
 
 		// Verify content
-		cf, err := node2.ExportedBlob().Reader()
+		contentBlob, err := node.ExportedBlob()
+		if err != nil {
+			t.Fatalf("Failed to load content: %v", err)
+		}
+
+		// Verify content
+		cf, err := contentBlob.Reader()
 		if err != nil {
 			t.Fatalf("Failed to get reader: %v", err)
 		}
@@ -404,7 +426,13 @@ func TestRemoteVolumeLocalOperations(t *testing.T) {
 		defer blobNode.Release()
 
 		// Verify we can read the content back
-		reader, err := blobNode.ExportedBlob().Reader()
+		contentBlob, err := blobNode.ExportedBlob()
+		if err != nil {
+			t.Fatalf("Failed to load content: %v", err)
+		}
+
+		// Verify content
+		reader, err := contentBlob.Reader()
 		if err != nil {
 			t.Fatalf("Failed to get reader: %v", err)
 		}
@@ -535,7 +563,13 @@ func TestRemoteVolumeMultipleFiles(t *testing.T) {
 			continue
 		}
 
-		cf, err := node.ExportedBlob().Reader()
+		contentBlob, err := node.ExportedBlob()
+		if err != nil {
+			t.Fatalf("Failed to load content: %v", err)
+		}
+
+		// Verify content
+		cf, err := contentBlob.Reader()
 		if err != nil {
 			node.Release()
 			t.Errorf("Failed to get reader for %s: %v", path, err)
