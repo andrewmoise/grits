@@ -822,7 +822,10 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 		}
 
 		for name, childMetadataCID := range dirMap {
-			dn.ChildrenMap[name] = BlobAddr(childMetadataCID)
+			dn.ChildrenMap[name], err = NewBlobAddrFromString(childMetadataCID)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		ns.fileCache[metadataAddr] = dn
