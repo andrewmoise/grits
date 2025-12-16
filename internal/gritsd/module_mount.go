@@ -335,7 +335,11 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	}
 	defer node.Release()
 
-	children := node.Children()
+	children, err := node.Children()
+	if err != nil {
+		log.Printf("Couldn't load children: %v", err)
+		return nil, fs.ToErrno(err)
+	}
 	if children == nil {
 		return nil, syscall.ENOTDIR
 	}

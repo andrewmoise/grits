@@ -252,7 +252,10 @@ func TestLocalVolumeOperations(t *testing.T) {
 	defer retrievedTreeNode.Release() // Make sure to release after lookup
 
 	// Verify it's empty as expected
-	children := retrievedTreeNode.Children()
+	children, err := retrievedTreeNode.Children()
+	if err != nil {
+		t.Fatalf("Error loading children: %v", err)
+	}
 	if len(children) != 0 {
 		t.Errorf("Expected empty tree node, but found %d children", len(children))
 	}

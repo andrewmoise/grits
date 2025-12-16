@@ -231,7 +231,10 @@ func TestRemoteVolumeLookup(t *testing.T) {
 		}
 
 		// Check children
-		children := node.Children()
+		children, err := node.Children()
+		if err != nil {
+			t.Errorf("Got error loading children: %v", err)
+		}
 		if len(children) != 3 { // file1.txt, file2.txt, subdir
 			t.Errorf("Expected 3 children, got %d", len(children))
 		}
@@ -403,7 +406,10 @@ func TestRemoteVolumeLocalOperations(t *testing.T) {
 		defer treeNode.Release()
 
 		// Verify it's a valid tree node
-		children := treeNode.Children()
+		children, err := treeNode.Children()
+		if err != nil {
+			t.Errorf("Got error loading children: %v", err)
+		}
 		if len(children) != 0 {
 			t.Errorf("Expected empty tree node, got %d children", len(children))
 		}
