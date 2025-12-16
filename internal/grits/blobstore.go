@@ -25,6 +25,10 @@ type LocalBlobStore struct {
 	mtx        sync.RWMutex
 	storageDir string
 	lock       *FileLock
+
+	// Add fetcher support
+	fetchers   []BlobFetcher
+	fetcherMtx sync.RWMutex
 }
 
 // Ensure that LocalBlobStore implements BlobStore
@@ -137,16 +141,32 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 
 func (bs *LocalBlobStore) ReadFile(blobAddr BlobAddr) (CachedFile, error) {
 	bs.mtx.Lock()
-	defer bs.mtx.Unlock()
-
 	cachedFile, ok := bs.files[blobAddr]
-	if !ok {
-		return nil, fmt.Errorf("file with address %s not found in cache", blobAddr)
+	bs.mtx.Unlock()
+
+	if ok {
+		cachedFile.Take()
+		return cachedFile, nil
 	}
 
-	// Increment RefCount to reserve the file and protect it from cleanup
-	cachedFile.RefCount++
-	return cachedFile, nil
+	bs.fetcherMtx.RLock()
+	fetchers := bs.fetchers
+	bs.fetcherMtx.RUnlock()
+
+	var lastErr error
+	for _, fetcher := range fetchers {
+		var fetchedFile CachedFile
+		fetchedFile, lastErr = fetcher.FetchBlob(blobAddr) // TODO: Figure out errors a little better
+		if fetchedFile != nil {
+			return fetchedFile, nil
+		}
+	}
+
+	if lastErr == nil {
+		lastErr = fmt.Errorf("couldn't find %v in store", blobAddr)
+	}
+
+	return nil, lastErr
 }
 
 func (bs *LocalBlobStore) AddLocalFile(srcPath string) (CachedFile, error) {
@@ -362,6 +382,28 @@ func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 	}
 
 	bs.mtx.Unlock()
+}
+
+/////
+// Fetcher stuff
+
+func (bs *LocalBlobStore) RegisterFetcher(fetcher BlobFetcher) {
+	bs.fetcherMtx.Lock()
+	defer bs.fetcherMtx.Unlock()
+	bs.fetchers = append(bs.fetchers, fetcher)
+}
+
+func (bs *LocalBlobStore) UnregisterFetcher(fetcher BlobFetcher) {
+	bs.fetcherMtx.Lock()
+	defer bs.fetcherMtx.Unlock()
+
+	for i, f := range bs.fetchers {
+		if f == fetcher {
+			bs.fetchers[i] = bs.fetchers[len(bs.fetchers)-1]
+			bs.fetchers = bs.fetchers[:len(bs.fetchers)-1]
+			break
+		}
+	}
 }
 
 // BlobStoreStat represents statistics for a specific reference count
