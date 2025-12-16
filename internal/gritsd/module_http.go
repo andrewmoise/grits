@@ -266,7 +266,7 @@ func (hm *HTTPModule) Start() error {
 
 	go func() {
 		var err error
-		
+
 		if hasPreopened {
 			// Use the pre-opened listener
 			if grits.DebugHttp {
@@ -280,11 +280,11 @@ func (hm *HTTPModule) Start() error {
 				if err != nil {
 					log.Fatalf("Failed to load certificate: %v", err)
 				}
-				
+
 				// Copy existing TLS config and set the certificate
 				tlsConfig := hm.HTTPServer.TLSConfig.Clone()
 				tlsConfig.Certificates = []tls.Certificate{cert}
-				
+
 				// Wrap with TLS
 				tlsListener := tls.NewListener(listener, tlsConfig)
 				err = hm.HTTPServer.Serve(tlsListener)
@@ -303,7 +303,7 @@ func (hm *HTTPModule) Start() error {
 				err = hm.HTTPServer.ListenAndServe()
 			}
 		}
-		
+
 		if err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
@@ -801,7 +801,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Instead of immediately releasing the reference, hold it and set up
 	// a delayed release after 5 minutes
-	s.refHolder.Hold(cachedFile, 5 * time.Minute)
+	s.refHolder.Hold(cachedFile, 5*time.Minute)
 
 	// Log that we're holding a temporary reference
 	if grits.DebugHttp {
@@ -874,7 +874,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		defer node.Release()
 
 		metadataHash := node.MetadataBlob().GetAddress()
-		
+
 		pathData[i] = []any{
 			pair.Path,
 			metadataHash,
@@ -882,7 +882,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 			node.Metadata().Size,
 		}
 
-		s.refHolder.Hold(node.MetadataBlob(), 45 * time.Second)
+		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
 		if i != len(lookupResponse.Paths)-1 {
 			// We DO want to hold tree node contents for a short
 			// time, otherwise they might get GCed and then this client
@@ -897,7 +897,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			s.refHolder.Hold(contentBlob, 45 * time.Second)
+			s.refHolder.Hold(contentBlob, 45*time.Second)
 		}
 	}
 
@@ -990,7 +990,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Checkpointing\n")
-	
+
 	// Checkpoint the volume after all links are performed
 	err = volume.Checkpoint()
 	if err != nil {
@@ -1020,7 +1020,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 			node.Metadata().Size,
 		}
 
-		s.refHolder.Hold(node.MetadataBlob(), 45 * time.Second)
+		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
 
 		if i != len(linkResponse.Paths)-1 {
 			// We DO want to hold tree node contents for a short
@@ -1036,7 +1036,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			s.refHolder.Hold(contentBlob, 45 * time.Second)
+			s.refHolder.Hold(contentBlob, 45*time.Second)
 		}
 	}
 
@@ -1359,7 +1359,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 	if grits.DebugHttp {
 		log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
 	}
-	
+
 	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
