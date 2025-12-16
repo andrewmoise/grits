@@ -244,7 +244,12 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 			return nil, -1, ErrNotDir
 		}
 
-		childAddr, exists := treeNode.ChildrenMap[part]
+		children, err := treeNode.Children()
+		if err != nil {
+			return nil, -1, err // TODO: We should probably return the partial response from all of these
+		}
+
+		childAddr, exists := children[part]
 		if !exists {
 			// Oop. Early return.
 			return response, expectedResponseLen - len(response), nil
@@ -252,7 +257,7 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 
 		childNode, err := ns.loadFileNode(childAddr, true)
 		if err != nil {
-			return nil, expectedResponseLen - len(response), err
+			return nil, -1, err
 		}
 
 		node = childNode // Move to the next node in the path
@@ -584,7 +589,11 @@ func (ns *NameStore) recursiveLink(prevPath string, name string, metadataAddr Bl
 
 	var oldChildren map[string]BlobAddr
 	if oldParent != nil {
-		oldChildren = oldParent.Children()
+		var err error
+		oldChildren, err = oldParent.Children()
+		if err != nil {
+			return nil, err
+		}
 		if oldChildren == nil {
 			return nil, ErrNotDir
 		}
@@ -1093,7 +1102,12 @@ func (ns *NameStore) dumpTreeNode(indent string, nodeAddr BlobAddr, name string)
 		contentStr)
 
 	// If this is a tree node, recursively print children
-	if children := node.Children(); children != nil {
+	children, err := node.Children()
+	if err != nil {
+		log.Printf("Error trying to load children: %v", err)
+		return
+	}
+	if children != nil {
 		// Sort children names for consistent output
 		names := make([]string, 0, len(children))
 		for name := range children {
@@ -1244,7 +1258,12 @@ func (ns *NameStore) debugRefCountsWalk(path string, nodeAddr BlobAddr, seenBlob
 	}
 
 	// Recursively process children if this is a directory
-	if children := node.Children(); children != nil {
+	children, err := node.Children()
+	if err != nil {
+		log.Printf("Error trying to get children: %v", err)
+		return
+	}
+	if children != nil {
 		// Sort children names for consistent output
 		names := make([]string, 0, len(children))
 		for name := range children {
@@ -1323,7 +1342,12 @@ func (ns *NameStore) debugDumpNode(path string, nodeAddr BlobAddr) {
 	log.Printf("  Metadata blob hash: %s\n", metadataBlob.GetAddress())
 
 	// For TreeNodes, print child count
-	if children := node.Children(); children != nil {
+	children, err := node.Children()
+	if err != nil {
+		log.Printf("Couldn't load children: %v", err)
+		return
+	}
+	if children != nil {
 		log.Printf("  Child count: %d\n", len(children))
 
 		// Sort children names for consistent output
@@ -1442,7 +1466,7 @@ type FileNode interface {
 	ExportedBlob() (CachedFile, error)
 	MetadataBlob() CachedFile
 	Metadata() *GNodeMetadata
-	Children() map[string]BlobAddr
+	Children() (map[string]BlobAddr, error)
 
 	Take()
 	Release()
@@ -1474,8 +1498,8 @@ func (bn *BlobNode) Metadata() *GNodeMetadata {
 	return bn.metadata
 }
 
-func (bn *BlobNode) Children() map[string]BlobAddr {
-	return nil
+func (bn *BlobNode) Children() (map[string]BlobAddr, error) {
+	return nil, nil
 }
 
 func (bn *BlobNode) Take() {
@@ -1636,7 +1660,11 @@ func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 		return
 	}
 
-	children := node.Children()
+	children, err := node.Children()
+	if err != nil {
+		log.Printf("Error fetching children: %v")
+		return
+	}
 	if children == nil {
 		return
 	}
@@ -1857,7 +1885,11 @@ func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 		fn.Take()
 		rm.refCount[metadataHash] = 1
 
-		children := fn.Children()
+		children, err := fn.Children()
+		if err != nil {
+			fn.Release() // FIXME probably we need more than this
+			return err
+		}
 		if children == nil {
 			return nil
 		}
@@ -1869,7 +1901,11 @@ func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 				return err
 			}
 
-			rm.recursiveTake(ns, childNode)
+			err = rm.recursiveTake(ns, childNode)
+			if err != nil {
+				fn.Release()
+				return err
+			}
 		}
 	}
 
@@ -1888,7 +1924,10 @@ func (rm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 	if refCount <= 0 {
 		log.Fatalf("Releasing 0-reference node")
 	} else if refCount == 1 {
-		children := fn.Children()
+		children, err := fn.Children()
+		if err != nil {
+			return err
+		}
 		for _, childMetadataAddr := range children {
 			childNode, err := ns.loadFileNode(childMetadataAddr, true)
 			if err != nil {
@@ -1896,7 +1935,10 @@ func (rm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
 				return err
 			}
 
-			rm.recursiveRelease(ns, childNode)
+			err = rm.recursiveRelease(ns, childNode)
+			if err != nil {
+				return err
+			}
 		}
 
 		fn.Release()
