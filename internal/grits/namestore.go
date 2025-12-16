@@ -40,7 +40,7 @@ import (
 // via FUSE).
 
 ////////////////////////
-// NameStore
+// Interface stuff
 
 type NameStore struct {
 	BlobStore BlobStore
@@ -49,12 +49,26 @@ type NameStore struct {
 	mtx       sync.RWMutex
 
 	watchers []FileTreeWatcher
-	wmtx     sync.RWMutex // Separate mutex for watchers list
+	wmtx     sync.RWMutex   // Separate mutex for watchers list
 	wgroup   sync.WaitGroup // Tracks in-flight notifications
 
 	refManager RefManager
 
 	serialNumber int64 // Increments on every root change
+
+	fetchers   []BlobFetcher
+	fetcherMtx sync.RWMutex
+	forceFetch bool
+}
+
+// BlobFetcher provides on-demand fetching of blobs not available locally
+type BlobFetcher interface {
+	// FetchBlob retrieves a single blob by address
+	FetchBlob(addr BlobAddr) (CachedFile, error)
+
+	// FetchPath retrieves path lookup information and all intermediate nodes
+	// Returns the lookup response which includes all nodes along the path
+	FetchPath(path string) (*LookupResponse, error)
 }
 
 func (ns *NameStore) GetRoot() string {
@@ -114,7 +128,7 @@ type PathNodePair struct {
 type LookupResponse struct {
 	Paths        []*PathNodePair `json:"paths"`
 	SerialNumber int64           `json:"serialNumber"`
-	IsPartial      bool            `json:"partial,omitempty"`
+	IsPartial    bool            `json:"partial,omitempty"`
 }
 
 // LookupFull returns a list of path and node pairs for a given path or paths
@@ -209,6 +223,10 @@ func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 
 func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 	DebugLog(DebugNameStore, "We resolve path %s (root %s)\n", path, ns.rootAddr)
+
+	if ns.forceFetch {
+		return ns.resolveFromFetchers(path)
+	}
 
 	path = strings.TrimRight(path, "/")
 	if path != "" && path[0] == '/' {
@@ -467,6 +485,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 	return &response, nil
 }
 
+// FIXME - Remove this
 func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
 	if addr == nil {
 		return ns.LinkByMetadata(name, "")
@@ -1662,7 +1681,7 @@ func (ns *NameStore) debugPrintTree(node FileNode, indent string) {
 
 	children, err := node.Children()
 	if err != nil {
-		log.Printf("Error fetching children: %v")
+		log.Printf("Error fetching children")
 		return
 	}
 	if children == nil {
@@ -1767,6 +1786,92 @@ func (ns *NameStore) notifyWatchers(path string, oldValue FileNode, newValue Fil
 		ns.wgroup.Done()
 	}
 	return result
+}
+
+/////
+// Fetchers
+
+// RegisterFetcher adds a fetcher to be tried when blobs are not found locally
+func (ns *NameStore) RegisterFetcher(fetcher BlobFetcher) {
+	ns.fetcherMtx.Lock()
+	defer ns.fetcherMtx.Unlock()
+
+	ns.fetchers = append(ns.fetchers, fetcher)
+}
+
+// UnregisterFetcher removes a fetcher from the list
+func (ns *NameStore) UnregisterFetcher(fetcher BlobFetcher) {
+	ns.fetcherMtx.Lock()
+	defer ns.fetcherMtx.Unlock()
+
+	for i, f := range ns.fetchers {
+		if f == fetcher {
+			ns.fetchers[i] = ns.fetchers[len(ns.fetchers)-1]
+			ns.fetchers = ns.fetchers[:len(ns.fetchers)-1]
+			break
+		}
+	}
+}
+
+func (ns *NameStore) SetForceFetch(force bool) {
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
+	ns.forceFetch = force
+}
+
+// resolveFromFetchers uses registered fetchers to resolve a path
+func (ns *NameStore) resolveFromFetchers(path string) ([]FileNode, int, error) {
+	DebugLog(DebugNameStore, "resolveFromFetchers(%s)\n", path)
+
+	ns.fetcherMtx.RLock()
+	fetchers := ns.fetchers
+	ns.fetcherMtx.RUnlock()
+
+	if len(fetchers) == 0 {
+		return nil, -1, fmt.Errorf("no fetchers available")
+	}
+
+	// Try each fetcher
+	var lastErr error
+	for _, fetcher := range fetchers {
+		// Check if this fetcher supports FetchPath
+		pathFetcher, ok := fetcher.(interface {
+			FetchPath(path string) (*LookupResponse, error)
+		})
+
+		if !ok {
+			continue // This fetcher doesn't support path fetching
+		}
+
+		lookupResp, err := pathFetcher.FetchPath(path)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		if lookupResp == nil || len(lookupResp.Paths) == 0 {
+			lastErr = fmt.Errorf("empty lookup response")
+			continue
+		}
+
+		// Update our root with the fetched data
+		// The first entry should always be the root (path "")
+		rootAddr := lookupResp.Paths[0].Addr
+		err = ns.LinkByMetadata("", rootAddr)
+		if err != nil {
+			lastErr = fmt.Errorf("failed to update root: %v", err)
+			continue
+		}
+
+		// Now that we've updated the tree, do a normal local resolve
+		return ns.resolvePath(path)
+	}
+
+	if lastErr != nil {
+		return nil, -1, fmt.Errorf("all fetchers failed: %w", lastErr)
+	}
+
+	return nil, -1, fmt.Errorf("no fetchers support path lookup")
 }
 
 /////

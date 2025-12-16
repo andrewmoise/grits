@@ -123,10 +123,14 @@ func NewTypedFileAddrFromString(s string) (*TypedFileAddr, error) {
 type BlobStore interface {
 	ReadFile(blobAddr BlobAddr) (CachedFile, error)
 	AddLocalFile(srcPath string) (CachedFile, error)
-	AddReader(file io.Reader) (CachedFile, error)
+	AddReader(reader io.Reader) (CachedFile, error)
 	AddDataBlock(data []byte) (CachedFile, error)
+
 	DumpStats()
 	Close() error
+
+	RegisterFetcher(fetcher BlobFetcher)
+	UnregisterFetcher(fetcher BlobFetcher)
 }
 
 // CachedFile defines the interface for interacting with a cached file.
