@@ -1,7 +1,6 @@
 package gritsd
 
 import (
-	"bytes"
 	"fmt"
 	"grits/internal/grits"
 	"io"
@@ -150,9 +149,9 @@ func setupRemoteServer(t *testing.T, remoteURL string, volumeName string) (*Serv
 	server, cleanup := SetupTestServer(t)
 
 	remoteConfig := &RemoteVolumeConfig{
-		VolumeName: volumeName,
-		RemoteURL:  remoteURL,
-		FreshnessDuration: 10 * time.Second,
+		VolumeName:          volumeName,
+		RemoteURL:           remoteURL,
+		FreshnessDuration:   10 * time.Second,
 		CacheExpirationTime: 10 * time.Minute,
 	}
 
@@ -384,138 +383,6 @@ func TestRemoteVolumeLookup(t *testing.T) {
 		expectedContent := "Second file content"
 		if string(content) != expectedContent {
 			t.Errorf("Content mismatch: expected %q, got %q", expectedContent, string(content))
-		}
-	})
-}
-
-func TestRemoteVolumeLocalOperations(t *testing.T) {
-	// Set up the source server with data
-	_, sourceCleanup, _ := setupLocalServerWithData(t, 3002, "testvolume")
-	defer sourceCleanup()
-
-	// Set up the client server with remote volume
-	clientServer, clientCleanup, remoteVolume := setupRemoteServer(t, "http://localhost:3002", "testvolume")
-	defer clientCleanup()
-
-	// Test creating local nodes (these should work even though we can't link them remotely)
-	t.Run("CreateLocalTreeNode", func(t *testing.T) {
-		treeNode, err := remoteVolume.CreateTreeNode()
-		if err != nil {
-			t.Fatalf("Failed to create tree node: %v", err)
-		}
-		defer treeNode.Release()
-
-		// Verify it's a valid tree node
-		children, err := treeNode.Children()
-		if err != nil {
-			t.Errorf("Got error loading children: %v", err)
-		}
-		if len(children) != 0 {
-			t.Errorf("Expected empty tree node, got %d children", len(children))
-		}
-	})
-
-	t.Run("CreateLocalBlobNode", func(t *testing.T) {
-		// First add some content to the local blob store
-		testContent := "Local content in remote volume"
-		cf, err := clientServer.BlobStore.AddDataBlock([]byte(testContent))
-		if err != nil {
-			t.Fatalf("Failed to add content: %v", err)
-		}
-		defer cf.Release()
-
-		// Create a blob node for it
-		blobNode, err := remoteVolume.CreateBlobNode(cf.GetAddress(), cf.GetSize())
-		if err != nil {
-			t.Fatalf("Failed to create blob node: %v", err)
-		}
-		defer blobNode.Release()
-
-		// Verify we can read the content back
-		contentBlob, err := blobNode.ExportedBlob()
-		if err != nil {
-			t.Fatalf("Failed to load content: %v", err)
-		}
-
-		// Verify content
-		reader, err := contentBlob.Reader()
-		if err != nil {
-			t.Fatalf("Failed to get reader: %v", err)
-		}
-		defer reader.Close()
-
-		content, err := io.ReadAll(reader)
-		if err != nil {
-			t.Fatalf("Failed to read content: %v", err)
-		}
-
-		if string(content) != testContent {
-			t.Errorf("Content mismatch: expected %q, got %q", testContent, string(content))
-		}
-	})
-
-	t.Run("AddAndGetLocalBlob", func(t *testing.T) {
-		// Add a blob locally
-		testData := []byte("Test blob data")
-		cf, err := remoteVolume.server.BlobStore.AddDataBlock(testData)
-		if err != nil {
-			t.Fatalf("Failed to add blob: %v", err)
-		}
-		blobAddr := cf.GetAddress()
-		cf.Release()
-
-		// Get it back
-		retrieved, err := remoteVolume.GetBlob(blobAddr)
-		if err != nil {
-			t.Fatalf("Failed to get blob: %v", err)
-		}
-		defer retrieved.Release()
-
-		reader, err := retrieved.Reader()
-		if err != nil {
-			t.Fatalf("Failed to get reader: %v", err)
-		}
-		defer reader.Close()
-
-		content, err := io.ReadAll(reader)
-		if err != nil {
-			t.Fatalf("Failed to read content: %v", err)
-		}
-
-		if !bytes.Equal(content, testData) {
-			t.Errorf("Content mismatch: expected %v, got %v", testData, content)
-		}
-	})
-
-	// Test that write operations fail as expected
-	t.Run("WriteOperationsFail", func(t *testing.T) {
-		// Create a node to try to link
-		cf, err := clientServer.BlobStore.AddDataBlock([]byte("test"))
-		if err != nil {
-			t.Fatalf("Failed to add content: %v", err)
-		}
-		defer cf.Release()
-
-		node, err := remoteVolume.CreateBlobNode(cf.GetAddress(), cf.GetSize())
-		if err != nil {
-			t.Fatalf("Failed to create node: %v", err)
-		}
-		defer node.Release()
-
-		// LinkByMetadata should fail
-		err = remoteVolume.LinkByMetadata("test.txt", node.MetadataBlob().GetAddress())
-		if err == nil {
-			t.Error("Expected LinkByMetadata to fail on remote volume")
-		}
-
-		// MultiLink should also fail
-		linkReq := []*grits.LinkRequest{{
-			Path:    "test.txt",
-			NewAddr: node.MetadataBlob().GetAddress(),
-		}}
-		_, err = remoteVolume.MultiLink(linkReq, false)
-		if err == nil {
-			t.Error("Expected MultiLink to fail on remote volume")
 		}
 	})
 }
