@@ -41,27 +41,20 @@ type RemoteVolume struct {
 	server     *Server
 	volumeName string // Fully qualified name, {remote server}:{volume}
 
-	lastFetchTime time.Time // Timestamp of the most recent fetch from remote
-	serialNumber  int64     // Serial number of fetch
+	localCache *LocalVolume // The actual volume that does the heavy lifting
 
 	httpClient *http.Client
 
-	// Prefetch queue and worker
+	// Prefetch queue and worker (currently disabled)
 	prefetchQueue []grits.BlobAddr
 	queueMutex    sync.Mutex
 	queueCond     *sync.Cond
 	stopWorker    chan struct{}
 	workerWg      sync.WaitGroup
 
-	// Track cached blobs and their expiration
+	// Track cached blobs and their expiration (currently disabled)
 	blobCacheMtx sync.Mutex
 	cachedBlobs  []*cachedBlobEntry
-
-	// Track cached FileNodes and their relation to the namespace
-	localRootAddr     grits.BlobAddr // Current root for the local cache
-	localSerialNumber int64
-	nodeCache         map[string]*RemoteFileNode
-	nodeCacheMtx      sync.Mutex // Protects both of the above
 }
 
 // cachedBlobEntry tracks a cached blob and when to release it
@@ -71,6 +64,7 @@ type cachedBlobEntry struct {
 }
 
 var _ = (Volume)((*RemoteVolume)(nil))
+var _ = (grits.BlobFetcher)((*RemoteVolume)(nil))
 
 func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume, error) {
 	config.RemoteURL = strings.TrimSuffix(config.RemoteURL, "/")
@@ -92,22 +86,38 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 		}
 	}
 
+	// Create a local volume to handle the actual tree/namespace management
+	localConfig := &LocalVolumeConfig{
+		VolumeName: config.VolumeName,
+	}
+	localCache, err := NewLocalVolume(localConfig, server, true, true, false) // readOnly=true, sparse=true, persist=false
+	if err != nil {
+		return nil, err
+	}
+
 	rv := &RemoteVolume{
 		config:        config,
 		server:        server,
 		volumeName:    fmt.Sprintf("%s:%s", host, config.VolumeName),
-		lastFetchTime: time.Time{},
-		serialNumber:  0,
+		localCache:    localCache,
 		httpClient:    httpClient(),
 		prefetchQueue: make([]grits.BlobAddr, 0, maxPrefetchQueueSize),
 		stopWorker:    make(chan struct{}),
 		cachedBlobs:   make([]*cachedBlobEntry, 0),
-		nodeCache:     make(map[string]*RemoteFileNode),
 	}
 	rv.queueCond = sync.NewCond(&rv.queueMutex)
 
+	localCache.ns.RegisterFetcher(rv)
+	localCache.ns.SetForceFetch(true)
+
+	// NOTE: We need to be more idempotent than this... really, this is a little awkward
+	localCache.ns.BlobStore.RegisterFetcher(rv)
+
 	return rv, nil
 }
+
+/////
+// Module interface
 
 // GetModuleName implements Module interface
 func (rv *RemoteVolume) GetModuleName() string {
@@ -119,6 +129,14 @@ func (rv *RemoteVolume) GetDependencies() []*Dependency {
 	return []*Dependency{}
 }
 
+// GetConfig implements Module interface
+func (rv *RemoteVolume) GetConfig() any {
+	return rv.config
+}
+
+/////
+// Volume interface - all proxied to localCache
+
 // GetVolumeName implements Volume interface
 func (rv *RemoteVolume) GetVolumeName() string {
 	return rv.volumeName
@@ -126,305 +144,106 @@ func (rv *RemoteVolume) GetVolumeName() string {
 
 // Start implements Volume interface
 func (rv *RemoteVolume) Start() error {
-	// Start the prefetch workers
-	for i := 0; i < numPrefetchWorkers; i++ {
-		rv.workerWg.Add(1)
-		go rv.prefetchWorker(i)
+	// Start the local cache
+	err := rv.localCache.Start()
+	if err != nil {
+		return err
 	}
 
-	// Start the cleanup worker
-	rv.workerWg.Add(1)
-	go rv.cleanupWorker()
+	// Prefetch workers disabled for now
+	// Uncomment to enable:
+	// for i := 0; i < numPrefetchWorkers; i++ {
+	// 	rv.workerWg.Add(1)
+	// 	go rv.prefetchWorker(i)
+	// }
+	// rv.workerWg.Add(1)
+	// go rv.cleanupWorker()
 
 	return nil
 }
 
 // Stop implements Volume interface
 func (rv *RemoteVolume) Stop() error {
-	// Stop all workers
-	close(rv.stopWorker)
-	rv.queueCond.Broadcast() // Wake up all workers so they can exit
-	rv.workerWg.Wait()
+	// Stop prefetch workers if they're running
+	// Uncomment when prefetch is enabled:
+	// close(rv.stopWorker)
+	// rv.queueCond.Broadcast()
+	// rv.workerWg.Wait()
 
-	return nil
+	// Unregister ourselves as a fetcher
+	rv.localCache.ns.UnregisterFetcher(rv)
+
+	return rv.localCache.Stop()
 }
 
 // isReadOnly implements Volume interface
 func (rv *RemoteVolume) isReadOnly() bool {
-	// Remote volumes are read-only locally for now
-	return true
-}
-
-// GetConfig implements Module interface
-func (rv *RemoteVolume) GetConfig() any {
-	return rv.config
+	return true // Remote volumes are read-only
 }
 
 // Checkpoint implements Volume interface
 func (rv *RemoteVolume) Checkpoint() error {
-	return nil
+	return rv.localCache.Checkpoint()
 }
 
 // LookupNode implements Volume interface
 func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "LookupNode()")
-
-	rv.nodeCacheMtx.Lock()
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  got lock")
-
-	lookupRequest := make([]string, 1)
-	lookupResponse := grits.LookupResponse{
-		Paths: make([]*grits.PathNodePair, 0, 1),
-	}
-
-	err := rv.lookupFromNodeCache(path, &lookupResponse)
-	rv.nodeCacheMtx.Unlock()
-	if err == nil && !lookupResponse.IsPartial {
-		// Successful return
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  all done, success")
-		return rv.GetBlob(lookupResponse.Paths[0].Addr), nil
-	} else if err != nil && !grits.IsCacheMiss(err) {
-		// Genuine error
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  error: %v", err)
-		return nil, err
-	}
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  cache miss")
-
-	lookupResponse.Paths = lookupResponse.Paths[:0]
-	lookupResponse.IsPartial = false
-
-	err = rv.lookupFromRemote(path, &lookupResponse)
-	if err != nil {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  error on remote lookup: %v", err)
-		return nil, err
-	}
-	if lookupResponse.IsPartial || len(lookupResponse.Paths) != 1 {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "  bad return on remote lookup")
-		return nil, fmt.Errorf("bad return on remote lookup - %v, %d", lookupResponse.IsPartial, len(lookupResponse.Paths))
-	}
-
-	return rv.NewRemoteFileNode(lookupResponse.Paths[0].Addr)
+	return rv.localCache.LookupNode(path)
 }
 
 // LookupFull implements Volume interface
 func (rv *RemoteVolume) LookupFull(paths []string) (*grits.LookupResponse, error) {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, paths[0], "LookupFull()\n")
-
-	rv.nodeCacheMtx.Lock()
-	defer rv.nodeCacheMtx.Unlock()
-
-	lookupResponse := &grits.LookupResponse{
-		Paths: make([]*grits.PathNodePair, 0),
-	}
-
-	var err error
-	if rv.isFresh() {
-		for _, path := range paths {
-			err = rv.lookupFromNodeCache(path, lookupResponse)
-			if err != nil {
-				break // FIXME - slight problem on multiple paths with early error
-			}
-		}
-
-		if err == nil {
-			// Cache hit
-			return lookupResponse, nil
-		} else if !grits.IsCacheMiss(err) {
-			// Real error
-			return nil, err
-		} // Else, is cache miss, so we continue and do a remote lookup
-	}
-
-	lookupResponse.Paths = lookupResponse.Paths[:0]
-	lookupResponse.IsPartial = false
-
-	// Do remote lookup
-	for _, path := range paths {
-		err := rv.lookupFromRemote(path, lookupResponse)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return lookupResponse, nil
-}
-
-func (rv *RemoteVolume) lookupFromNodeCache(path string, lookupResponse *grits.LookupResponse) error {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "lookupSingle()\n")
-
-	if !rv.isFresh() {
-		return grits.ErrCacheMiss
-	}
-
-	rightParent := rv.localRootAddr
-	partialPath := ""
-	pathParts := strings.Split(strings.Trim(path, "/"), "/")
-
-	// First, walk down the directories making sure it's all still fresh.
-
-	for _, part := range pathParts {
-		if partialPath != "" {
-			partialPath += "/"
-		}
-		partialPath += part
-
-		node, exists := rv.nodeCache[partialPath]
-		if !exists {
-			return grits.ErrCacheMiss
-		}
-		if node.parentAddr != rightParent {
-			// FIXME - We should also try deserializing + rechecking here, this will give some false misses
-			return grits.ErrCacheMiss
-		}
-
-		rightParent = node.metadataBlob.GetAddress()
-	}
-
-	// Okay, all still fresh. Construct the result + return.
-	partialPath = ""
-	lookupResponse.SerialNumber = rv.localSerialNumber
-	lookupResponse.IsPartial = false
-	lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{ // FIXME deduplicate
-		Path: "",
-		Addr: rv.localRootAddr,
-	})
-
-	for _, part := range pathParts {
-		if partialPath != "" {
-			partialPath += "/"
-		}
-		partialPath += part
-
-		node, exists := rv.nodeCache[partialPath]
-		if !exists {
-			return fmt.Errorf("Can't happen, failed to find %s on second walk", partialPath)
-		}
-
-		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
-			Path: partialPath,
-			Addr: node.metadataBlob().GetAddress(),
-		})
-	}
-
-	return nil
+	return rv.localCache.LookupFull(paths)
 }
 
 // GetFileNode implements Volume interface
 func (rv *RemoteVolume) GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error) {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "GetFileNode()\n")
-
-	metadataBlobFile, err := rv.GetBlob(metadataAddr)
-	if err != nil {
-		return nil, err
-	}
-	defer metadataBlobFile.Release()
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "GetFileNode():  got blob\n")
-
-	metadataReader, err := metadataBlobFile.Reader()
-	if err != nil {
-		return nil, err
-	}
-	defer metadataReader.Close()
-
-	var metadata grits.GNodeMetadata
-	decoder := json.NewDecoder(metadataReader)
-	err = decoder.Decode(&metadata)
-	if err != nil {
-		return nil, fmt.Errorf("couldn't decode metadata: %v", err)
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "GetFileNode():  getting file node\n")
-
-	fileNode, err := rv.NewRemoteFileNode(metadataAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(metadataAddr), "GetFileNode():  all done\n")
-
-	return fileNode, nil
+	return rv.localCache.GetFileNode(metadataAddr)
 }
 
 // CreateTreeNode implements Volume interface
 func (rv *RemoteVolume) CreateTreeNode() (grits.FileNode, error) {
-	return rv.localCache.CreateTreeNode()
+	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
 // CreateBlobNode implements Volume interface
 func (rv *RemoteVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (grits.FileNode, error) {
-	return rv.localCache.CreateBlobNode(contentAddr, size)
+	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
 // LinkByMetadata implements Volume interface
 func (rv *RemoteVolume) LinkByMetadata(_ string, _ grits.BlobAddr) error {
-	return fmt.Errorf("cannot write to remote volume yet")
+	return fmt.Errorf("cannot write to remote volume")
 }
 
 // MultiLink implements Volume interface
 func (rv *RemoteVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (*grits.LookupResponse, error) {
-	return nil, fmt.Errorf("cannot write to remote volume yet")
+	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
 // AddBlob implements Volume interface
 func (rv *RemoteVolume) AddBlob(path string) (grits.CachedFile, error) {
-	return rv.localCache.AddBlob(path)
+	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
 // AddOpenBlob implements Volume interface
 func (rv *RemoteVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
-	return rv.localCache.AddOpenBlob(file)
+	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
 // AddMetadataBlob implements Volume interface
 func (rv *RemoteVolume) AddMetadataBlob(metadata *grits.GNodeMetadata) (grits.CachedFile, error) {
-	return rv.localCache.AddMetadataBlob(metadata)
+	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
 // GetBlob implements Volume interface
 func (rv *RemoteVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob()\n")
-
-	cf, _ := rv.server.BlobStore.ReadFile(addr)
-	if cf != nil {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob():  cache hit, all done\n")
-		return cf, nil
-	}
-
-	url := fmt.Sprintf("%s/grits/v1/blob/%s", rv.config.RemoteURL, addr)
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob():  doing client get\n")
-
-	resp, err := rv.httpClient.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch blob %s: %v", addr, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("failed to fetch blob %s: status %d", addr, resp.StatusCode)
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob():  reading\n")
-
-	cf, err = rv.server.BlobStore.AddReader(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if cf.GetAddress() != addr {
-		cf.Release()
-		return nil, fmt.Errorf("mismatch of blob addr! %s != %s", cf.GetAddress(), addr)
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "GetBlob():  all done with cache miss\n")
-
-	return cf, nil
+	return rv.localCache.GetBlob(addr)
 }
 
 // PutBlob implements Volume interface
 func (rv *RemoteVolume) PutBlob(file *os.File) (grits.BlobAddr, error) {
-	return rv.localCache.PutBlob(file)
+	return "", fmt.Errorf("cannot write to remote volume")
 }
 
 // Cleanup implements Volume interface
@@ -443,270 +262,155 @@ func (rv *RemoteVolume) UnregisterWatcher(watcher grits.FileTreeWatcher) {
 }
 
 /////
-// Helper methods
+// BlobFetcher interface
 
-// isFresh checks if our local cache is still fresh based on configuration
-func (rv *RemoteVolume) isFresh() bool {
-	rv.cacheMutex.RLock()
-	defer rv.cacheMutex.RUnlock()
+// FetchBlob retrieves a single blob by address from the remote server
+func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "FetchBlob()")
 
-	if rv.lastFetchTime.IsZero() {
-		return false // Never fetched before
+	url := fmt.Sprintf("%s/grits/v1/blob/%s", rv.config.RemoteURL, addr)
+
+	resp, err := rv.httpClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch blob %s: %v", addr, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to fetch blob %s: status %d", addr, resp.StatusCode)
 	}
 
-	return time.Since(rv.lastFetchTime) < rv.config.FreshnessDuration
+	cf, err := rv.server.BlobStore.AddReader(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if cf.GetAddress() != addr {
+		cf.Release()
+		return nil, fmt.Errorf("mismatch of blob addr! %s != %s", cf.GetAddress(), addr)
+	}
+
+	// Prefetch disabled for now
+	// Uncomment to enable:
+	// rv.enqueuePrefetch(addr)
+
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "FetchBlob(): done")
+
+	return cf, nil
 }
+
+// FetchPath retrieves path lookup information from the remote server
+// This is currently not used, but could be used for optimized bulk fetching
+func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "FetchPath()")
+
+	url := fmt.Sprintf("%s/grits/v1/lookup/%s", rv.config.RemoteURL, rv.config.VolumeName)
+
+	// Encode the path as JSON
+	pathJSON, err := json.Marshal(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode path: %v", err)
+	}
+
+	resp, err := rv.httpClient.Post(url, "application/json", bytes.NewReader(pathJSON))
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup path %s: %v", path, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, grits.ErrNotExist
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMultiStatus {
+		body, err := io.ReadAll(resp.Body)
+		if err == nil {
+			log.Printf("lookup failed with status %d: %s", resp.StatusCode, body)
+		}
+		return nil, fmt.Errorf("lookup failed with status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// The HTTP handler returns [][]any where each inner array contains:
+	// [path (string), metadataHash (BlobAddr), contentHash (BlobAddr), contentSize (int64)]
+	var pathData [][]interface{}
+	err = json.Unmarshal(body, &pathData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode lookup response: %v", err)
+	}
+	if len(pathData) == 0 {
+		return nil, fmt.Errorf("empty lookup response for %s", path)
+	}
+
+	lookupResponse := &grits.LookupResponse{
+		Paths:     make([]*grits.PathNodePair, 0, len(pathData)),
+		IsPartial: resp.StatusCode == http.StatusMultiStatus,
+	}
+
+	for i, entry := range pathData {
+		if len(entry) != 4 {
+			return nil, fmt.Errorf("malformed path entry: expected 4 elements, got %d", len(entry))
+		}
+
+		entryPath, ok := entry[0].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid path type in response")
+		}
+
+		metadataAddr, ok := entry[1].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid metadata address type in response")
+		}
+
+		contentAddr, ok := entry[2].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid content address type in response")
+		}
+
+		// Prefetch disabled for now
+		// Uncomment to enable:
+		// rv.enqueuePrefetch(grits.BlobAddr(metadataAddr))
+		// if i < len(pathData)-1 {
+		// 	rv.enqueuePrefetch(grits.BlobAddr(contentAddr))
+		// }
+
+		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
+			Path: entryPath,
+			Addr: grits.BlobAddr(metadataAddr),
+		})
+
+		_ = i           // Suppress unused warning until prefetch is enabled
+		_ = contentAddr // Suppress unused warning until prefetch is enabled
+	}
+
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "FetchPath(): done")
+
+	return lookupResponse, nil
+}
+
+/////
+// Helper methods
 
 // httpClient returns a configured HTTP client for making requests
 func httpClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			MaxIdleConns:        numHttpConnections, // Max idle connections total
-			MaxIdleConnsPerHost: numHttpConnections, // Max idle per host (most important)
-			MaxConnsPerHost:     0,                  // 0 = unlimited active connections
-			IdleConnTimeout:     90 * time.Second,   // How long to keep idle connections
-			DisableKeepAlives:   false,              // Ensure keepalive is enabled (default)
+			MaxIdleConns:        numHttpConnections,
+			MaxIdleConnsPerHost: numHttpConnections,
+			MaxConnsPerHost:     0,
+			IdleConnTimeout:     90 * time.Second,
+			DisableKeepAlives:   false,
 		},
 	}
 }
 
 /////
-// Proxy FileNodes
-
-type RemoteFileNode struct {
-	metadataAddr grits.BlobAddr
-
-	metadataBlob grits.CachedFile
-	metadataErr  error
-	metadata     *grits.GNodeMetadata
-	metadataMtx  sync.Mutex
-
-	contentBlob grits.CachedFile // May be nil
-	contentErr  error
-	children    map[string]grits.BlobAddr
-	contentMtx  sync.Mutex
-
-	// nodeCache stuff:
-	parentAddr grits.BlobAddr // same
-	timestamp  time.Time      // Time of most recent access (note, it's only relevant if the refCount is 0)
-
-	refCount int
-	refMtx   sync.Mutex
-
-	rv *RemoteVolume
-}
-
-var _ = (grits.FileNode)((*RemoteFileNode)(nil))
-
-// Implementations for BlobNode
-
-func (rv *RemoteVolume) NewRemoteFileNode(parentAddr grits.BlobAddr, addr grits.BlobAddr) (*RemoteFileNode, error) {
-	return &RemoteFileNode{
-		metadataAddr: addr,
-		parentAddr:   parentAddr,
-		refCount:     1,
-		rv:           rv,
-	}, nil
-}
-
-func loadChildrenForLater() {
-	if metadata.Type == grits.GNodeTypeDirectory {
-		// Load the children map too. We could do this one on-demand also, except that Children() has no
-		// error return so we need to make sure ahead of time that it succeeds.
-
-		contentBlob, err := result.exportedBlob()
-		if err != nil {
-			return nil, err
-		}
-
-		contentReader, err := contentBlob.Reader()
-		if err != nil {
-			return nil, err
-		}
-		defer contentReader.Close()
-
-		contentBytes, err := io.ReadAll(contentReader)
-		if err != nil {
-			return nil, err
-		}
-
-		dirMap := make(map[string]string)
-		if err := json.Unmarshal(contentBytes, &dirMap); err != nil {
-			return nil, fmt.Errorf("error parsing directory: %v", err)
-		}
-		result.children = make(map[string]grits.BlobAddr)
-		for name, childMetadataCID := range dirMap {
-			result.children[name], err = grits.NewBlobAddrFromString(childMetadataCID)
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	result.Take()
-	return result, nil
-}
-
-func (bn *RemoteFileNode) exportedBlob() (grits.CachedFile, error) {
-	bn.contentMtx.Lock()
-	defer bn.contentMtx.Unlock()
-
-	// TODO: Handle transient errors better - currently we cache errors forever
-	if bn.contentBlob != nil || bn.contentErr != nil {
-		return bn.contentBlob, bn.contentErr
-	}
-
-	metadata, err := bn.Metadata()
-	if err != nil {
-		bn.contentErr = err
-		return nil, err
-	}
-
-	bn.contentBlob, bn.contentErr = bn.rv.GetBlob(metadata.ContentHash)
-	return bn.contentBlob, bn.contentErr
-}
-
-func (bn *RemoteFileNode) metadataBlob() (grits.CachedFile, error) {
-	bn.metadataMtx.Lock()
-	bn.metadataMtx.Unlock()
-
-	if bn.metadataBlob == nil && bn.metadataErr == nil {
-		bn.metadataBlob, nb.bn.metadataErr = bn.rv.GetBlob(bn.metadataAddr)
-	}
-
-	return bn.metadataBlob, bn.metadataErr
-}
-
-func (bn *RemoteFileNode) Metadata() (*grits.GNodeMetadata, error) {
-	bn.metadataMtx.Lock()
-	defer bn.metadataMtx.Unlock()
-
-	// TODO: Handle transient errors better - currently we cache errors forever
-	if bn.metadata != nil || bn.metadataErr != nil {
-		return bn.metadata, bn.metadataErr
-	}
-
-	if bn.metadataBlob == nil {
-		bn.metadataBlob, bn.metadataErr = bn.rv.GetBlob(bn.metadataAddr)
-		if bn.metadataErr != nil {
-			return nil, bn.metadataErr
-		}
-	}
-
-	metadataReader, err := bn.metadataBlob.Reader()
-	if err != nil {
-		bn.metadataErr = err
-		return nil, err
-	}
-	defer metadataReader.Close()
-
-	var metadata grits.GNodeMetadata
-	decoder := json.NewDecoder(metadataReader)
-	err = decoder.Decode(&metadata)
-	if err != nil {
-		bn.metadataErr = fmt.Errorf("couldn't decode metadata: %v", err)
-		return nil, bn.metadataErr
-	}
-
-	bn.metadata = &metadata
-	return bn.metadata, nil
-}
-
-func (bn *RemoteFileNode) Children() (map[string]grits.BlobAddr, error) {
-	bn.contentMtx.Lock()
-	defer bn.contentMtx.Unlock()
-
-	// TODO: Handle transient errors better - currently we cache errors forever
-	if bn.children != nil || bn.contentErr != nil {
-		return bn.children, bn.contentErr
-	}
-
-	// Get the content blob (lazy load if needed)
-	if bn.contentBlob == nil {
-		bn.contentMtx.Unlock()
-		_, err := bn.exportedBlob()
-		bn.contentMtx.Lock()
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Parse directory structure
-	contentReader, err := bn.contentBlob.Reader()
-	if err != nil {
-		bn.contentErr = err
-		return nil, err
-	}
-	defer contentReader.Close()
-
-	contentBytes, err := io.ReadAll(contentReader)
-	if err != nil {
-		bn.contentErr = err
-		return nil, err
-	}
-
-	dirMap := make(map[string]string)
-	if err := json.Unmarshal(contentBytes, &dirMap); err != nil {
-		bn.contentErr = fmt.Errorf("error parsing directory: %v", err)
-		return nil, bn.contentErr
-	}
-
-	bn.children = make(map[string]grits.BlobAddr)
-	for name, childMetadataCID := range dirMap {
-		bn.children[name], err = grits.NewBlobAddrFromString(childMetadataCID)
-		if err != nil {
-			bn.contentErr = err
-			return nil, err
-		}
-	}
-
-	return bn.children, nil
-}
-
-func (bn *RemoteFileNode) Take() {
-	bn.refMtx.Lock()
-	defer bn.refMtx.Unlock()
-
-	if bn.refCount < 0 {
-		grits.PrintStack()
-		log.Fatalf("Ref count for %s is < 0", bn.metadataBlob.GetAddress())
-	}
-
-	bn.refCount++
-}
-
-func (bn *RemoteFileNode) Release() {
-	bn.refMtx.Lock()
-	defer bn.refMtx.Unlock()
-
-	bn.refCount--
-	if bn.refCount < 0 {
-		grits.PrintStack()
-		log.Fatalf("Reduced ref count for %s to < 0", bn.metadataBlob.GetAddress())
-	} else if bn.refCount == 0 {
-		bn.metadataBlob.Release()
-		bn.metadataBlob = nil
-
-		bn.contentMtx.Lock()
-		defer bn.contentMtx.Unlock()
-
-		if bn.contentBlob != nil {
-			bn.contentBlob.Release()
-			bn.contentBlob = nil
-		}
-	}
-}
-
-func (bn *RemoteFileNode) RefCount() int {
-	bn.refMtx.Lock()
-	defer bn.refMtx.Unlock()
-
-	return bn.refCount
-}
-
-/////
-// Prefetch functionality
+// Prefetch functionality (currently disabled)
 
 // enqueuePrefetch adds a blob address to the prefetch queue
 // If the queue is full, it drops the oldest entries to make room
@@ -776,7 +480,7 @@ func (rv *RemoteVolume) prefetchWorker(id int) {
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetching")
 
 		// Try to fetch and cache the blob
-		cf, err := rv.GetBlob(entry)
+		cf, err := rv.FetchBlob(entry) // Use FetchBlob instead of GetBlob to avoid BlobStore cache check
 		if err != nil {
 			log.Printf("prefetch worker %d failed for %s: %v", id, entry, err)
 			continue
@@ -788,12 +492,12 @@ func (rv *RemoteVolume) prefetchWorker(id int) {
 		expiresAt := time.Now().Add(rv.config.CacheExpirationTime)
 
 		// Need to lock when appending to cachedBlobs since multiple workers access it
-		rv.queueMutex.Lock()
+		rv.blobCacheMtx.Lock()
 		rv.cachedBlobs = append(rv.cachedBlobs, &cachedBlobEntry{
 			file:      cf,
 			expiresAt: expiresAt,
 		})
-		rv.queueMutex.Unlock()
+		rv.blobCacheMtx.Unlock()
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: Held reference")
 	}
@@ -819,8 +523,8 @@ func (rv *RemoteVolume) cleanupWorker() {
 
 // cleanupExpiredCache removes expired entries from the cache
 func (rv *RemoteVolume) cleanupExpiredCache(doAll bool) {
-	rv.queueMutex.Lock()
-	defer rv.queueMutex.Unlock()
+	rv.blobCacheMtx.Lock()
+	defer rv.blobCacheMtx.Unlock()
 
 	now := time.Now()
 	expiredCount := 0
@@ -840,120 +544,7 @@ func (rv *RemoteVolume) cleanupExpiredCache(doAll bool) {
 }
 
 /////
-// Network fetch functions
-
-func (rv *RemoteVolume) lookupFromRemote(path string, lookupResponse *grits.LookupResponse) error {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup")
-
-	url := fmt.Sprintf("%s/grits/v1/lookup/%s", rv.config.RemoteURL, rv.config.VolumeName)
-
-	// Encode the path as JSON
-	pathJSON, err := json.Marshal(path)
-	if err != nil {
-		return fmt.Errorf("failed to encode path: %v", err)
-	}
-
-	resp, err := rv.httpClient.Post(url, "application/json", bytes.NewReader(pathJSON))
-	if err != nil {
-		return fmt.Errorf("failed to lookup path %s: %v", path, err)
-	}
-	defer resp.Body.Close()
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  posted")
-
-	if resp.StatusCode == http.StatusMultiStatus {
-		lookupResponse.IsPartial = true
-	}
-	if resp.StatusCode == http.StatusNotFound {
-		return grits.ErrNotExist
-	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusMultiStatus {
-		log.Printf("    lookup failed with status %d", resp.StatusCode)
-		body, err := io.ReadAll(resp.Body)
-		if err == nil {
-			log.Printf("    %s", body)
-		}
-		return fmt.Errorf("lookup failed with status %d", resp.StatusCode)
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  about to read")
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  decoding")
-
-	// The HTTP handler returns [][]any where each inner array contains:
-	// [path (string), metadataHash (BlobAddr), contentHash (BlobAddr), contentSize (int64)]
-	var pathData [][]interface{}
-	err = json.Unmarshal(body, &pathData)
-	if err != nil {
-		return fmt.Errorf("failed to decode lookup response: %v", err)
-	}
-
-	for i, entry := range pathData {
-		if len(entry) != 4 {
-			return fmt.Errorf("malformed path entry: expected 4 elements, got %d", len(entry))
-		}
-
-		path, ok := entry[0].(string)
-		if !ok {
-			return fmt.Errorf("invalid path type in response")
-		}
-
-		metadataAddr, ok := entry[1].(string)
-		if !ok {
-			return fmt.Errorf("invalid metadata address type in response")
-		}
-
-		contentAddr, ok := entry[2].(string)
-		if !ok {
-			return fmt.Errorf("invalid content address type in response")
-		}
-
-		// Update the root of the local cache, when we hit it here
-		// FIXME - this will break change notifications, we need to be more clever and handle them with
-		// a complex lookup here, if there's going to be someone who cares
-		// FIXME - we need to validate the stuff we're getting back, and handle errors
-		// FIXME - we need to handle serial numbers, not do stuff out of order if we get out or order responses, really the
-		// whole of the HTTP/in memory APIs need to be unified for this
-		if i == 0 {
-			if path != "" {
-				log.Printf("  malformed response 1")
-				return fmt.Errorf("malformed lookup response, path[0] is %s instead of empty", path)
-			}
-
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  updating root: %s", metadataAddr)
-			rv.cacheMutex.Lock()
-			rv.localRootAddr = grits.BlobAddr(metadataAddr)
-			rv.lastFetchTime = time.Now()
-			rv.cacheMutex.Unlock()
-		}
-
-		// Enqueue metadata and content hashes for prefetching
-		// Skip the content hash of the last entry (the target file/dir content)
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  enqueueing metadata prefetch: %s", metadataAddr)
-		rv.enqueuePrefetch(grits.BlobAddr(metadataAddr))
-		if i < len(pathData)-1 {
-			// This is an intermediate directory, prefetch its content too
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  enqueueing content prefetch: %s", contentAddr)
-			rv.enqueuePrefetch(grits.BlobAddr(contentAddr))
-		}
-
-		// We only need the path and metadata address for the PathNodePair
-		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
-			Path: path,
-			Addr: grits.BlobAddr(metadataAddr),
-		})
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  done, looping")
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Remote lookup:  all done")
-
-	return nil
-}
+// Config unmarshaling
 
 // Some silliness for parsing durations
 func (c *RemoteVolumeConfig) UnmarshalJSON(data []byte) error {
