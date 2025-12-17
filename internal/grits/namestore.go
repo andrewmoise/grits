@@ -79,15 +79,22 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	nodes, failureParts, err := ns.resolvePath(name)
+	lookupResp, err := ns.resolvePath(name)
 	if err != nil {
 		return nil, err
 	}
-	if failureParts != 0 {
+	if lookupResp.IsPartial {
+		return nil, ErrNotExist
+	}
+	if len(lookupResp.Paths) == 0 {
 		return nil, ErrNotExist
 	}
 
-	node := nodes[len(nodes)-1]
+	finalAddr := lookupResp.Paths[len(lookupResp.Paths)-1].Addr
+	node, err := ns.loadFileNode(finalAddr, true)
+	if err != nil {
+		return nil, err
+	}
 
 	cf, err := node.ExportedBlob()
 	if err != nil {
@@ -104,15 +111,22 @@ func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
-	nodes, failureParts, err := ns.resolvePath(path)
+	lookupResp, err := ns.resolvePath(path)
 	if err != nil {
 		return nil, err
 	}
-	if failureParts != 0 {
+	if lookupResp.IsPartial {
+		return nil, ErrNotExist
+	}
+	if len(lookupResp.Paths) == 0 {
 		return nil, ErrNotExist
 	}
 
-	node := nodes[len(nodes)-1]
+	finalAddr := lookupResp.Paths[len(lookupResp.Paths)-1].Addr
+	node, err := ns.loadFileNode(finalAddr, true)
+	if err != nil {
+		return nil, err
+	}
 
 	node.Take()
 	return node, nil
@@ -132,69 +146,37 @@ type LookupResponse struct {
 }
 
 // LookupFull returns a list of path and node pairs for a given path or paths
-
 func (ns *NameStore) LookupFull(names []string) (*LookupResponse, error) {
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
 	seenPaths := make(map[string]bool)
-	var response LookupResponse
-	response.IsPartial = false
+	response := &LookupResponse{
+		Paths:        make([]*PathNodePair, 0),
+		SerialNumber: ns.serialNumber,
+		IsPartial:    false,
+	}
 
 	for _, name := range names {
 		name = strings.TrimRight(name, "/")
-		nodes, failureParts, err := ns.resolvePath(name)
+		lookupResp, err := ns.resolvePath(name)
 		if err != nil {
 			return nil, err
 		}
-		if failureParts != 0 {
+		if lookupResp.IsPartial {
 			response.IsPartial = true
 		}
-		if len(nodes) <= 0 {
-			log.Printf("Can't happen! No nodes returned on lookup of %s", name)
-			return nil, ErrNotExist
-		}
 
-		parts := strings.Split(name, "/")
-		partialPath := ""
-
-		if _, exists := seenPaths[""]; !exists {
-			response.Paths = append(response.Paths, &PathNodePair{
-				Path: "",
-				Addr: nodes[0].MetadataBlob().GetAddress(),
-			})
-			seenPaths[""] = true
-		}
-
-		// Add each path component and its corresponding node
-		index := 1
-		for _, part := range parts {
-			if part == "" {
-				continue
+		// Add all paths from this lookup that we haven't seen yet
+		for _, pair := range lookupResp.Paths {
+			if _, exists := seenPaths[pair.Path]; !exists {
+				response.Paths = append(response.Paths, pair)
+				seenPaths[pair.Path] = true
 			}
-
-			if index >= len(nodes) {
-				break // Safeguard against potential out-of-bounds
-			}
-
-			partialPath = filepath.Join(partialPath, part)
-			node := nodes[index]
-
-			if _, exists := seenPaths[partialPath]; !exists {
-				response.Paths = append(response.Paths, &PathNodePair{
-					Path: partialPath,
-					Addr: node.MetadataBlob().GetAddress(),
-				})
-				seenPaths[partialPath] = true
-			}
-
-			index++
 		}
 	}
 
-	response.SerialNumber = ns.serialNumber
-
-	return &response, nil
+	return response, nil
 }
 
 // FIXME - Clean up this API a lot.
@@ -215,13 +197,9 @@ func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 }
 
 // Core lookup helper function.
-
-// Result is (all FileNodes along path, number of unresolved entries at end, error)
-
-// We can fail early, but still return the partial results. In that case the second part of the
-// return value will be nonzero.
-
-func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
+// Returns a LookupResponse with all PathNodePairs along the path.
+// If the path cannot be fully resolved, IsPartial will be true.
+func (ns *NameStore) resolvePath(path string) (*LookupResponse, error) {
 	DebugLog(DebugNameStore, "We resolve path %s (root %s)\n", path, ns.rootAddr)
 
 	if ns.forceFetch {
@@ -230,59 +208,85 @@ func (ns *NameStore) resolvePath(path string) ([]FileNode, int, error) {
 
 	path = strings.TrimRight(path, "/")
 	if path != "" && path[0] == '/' {
-		return nil, -1, fmt.Errorf("paths must be relative")
+		return nil, fmt.Errorf("paths must be relative")
 	}
 
 	parts := strings.Split(path, "/")
 	node, err := ns.loadFileNode(ns.rootAddr, false)
 	if err != nil {
-		return nil, -1, err
+		DebugLog(DebugNameStore, "  couldn't load root node")
+		return nil, err
 	}
-
 	if node == nil {
-		return nil, -1, fmt.Errorf("looking up in nil root")
+		DebugLog(DebugNameStore, "  nil root")
+		return nil, fmt.Errorf("looking up in nil root")
 	}
 
-	response := make([]FileNode, 0, len(parts)+1) // +1 for the root
-	response = append(response, node)
+	response := &LookupResponse{
+		Paths:        make([]*PathNodePair, 0, len(parts)+1),
+		SerialNumber: ns.serialNumber,
+		IsPartial:    false,
+	}
 
-	expectedResponseLen := len(parts) + 1
+	// Add root
+	response.Paths = append(response.Paths, &PathNodePair{
+		Path: "",
+		Addr: ns.rootAddr,
+	})
 
+	currentPath := ""
 	for _, part := range parts {
 		DebugLog(DebugNameStore, "  part %s\n", part)
 
 		if part == "" {
-			expectedResponseLen -= 1 // Highly unlikely that this is relevant...
 			continue
 		}
 
 		// Only TreeNodes have children to traverse
 		treeNode, isTreeNode := node.(*TreeNode)
 		if !isTreeNode {
-			return nil, -1, ErrNotDir
+			DebugLog(DebugNameStore, "    isn't tree!")
+			return nil, ErrNotDir
 		}
 
 		children, err := treeNode.Children()
 		if err != nil {
-			return nil, -1, err // TODO: We should probably return the partial response from all of these
+			DebugLog(DebugNameStore, "    error children!")
+			return nil, err
 		}
 
 		childAddr, exists := children[part]
 		if !exists {
-			// Oop. Early return.
-			return response, expectedResponseLen - len(response), nil
+			// Path not found - mark as partial and return what we have
+			DebugLog(DebugNameStore, "    partial return")
+			response.IsPartial = true
+			return response, nil
 		}
 
 		childNode, err := ns.loadFileNode(childAddr, true)
 		if err != nil {
-			return nil, -1, err
+			DebugLog(DebugNameStore, "    can't load node!")
+			return nil, err
 		}
 
+		// Update current path
+		if currentPath == "" {
+			currentPath = part
+		} else {
+			currentPath = filepath.Join(currentPath, part)
+		}
+
+		response.Paths = append(response.Paths, &PathNodePair{
+			Path: currentPath,
+			Addr: childAddr,
+		})
+
 		node = childNode // Move to the next node in the path
-		response = append(response, node)
 	}
 
-	return response, 0, nil
+	DebugLog(DebugNameStore, "  all done")
+
+	return response, nil
 }
 
 /////
@@ -311,6 +315,8 @@ func matchesAddr(a FileNode, b BlobAddr) bool {
 }
 
 func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*LookupResponse, error) {
+	DebugLog(DebugLinks, "MultiLink - %d elements", len(requests))
+
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
@@ -322,53 +328,80 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		}
 
 		var node FileNode
-		nodes, failureParts, err := ns.resolvePath(req.Path)
+		lookupResp, err := ns.resolvePath(req.Path)
 		if err != nil {
+			DebugLog(DebugLinks, "  error resolving path: %v", err)
 			return nil, err
-		} else if failureParts > 1 {
-			// We failed before we got to the dir we're trying to link into
-			return nil, ErrNotExist
-		} else if failureParts == 1 {
-			// We found the parent, but not the requested file, so create it
-			node = nil
-		} else if failureParts == 0 {
-			// We found a previous value, so replace it
-			node = nodes[len(nodes)-1]
+		}
+		if len(lookupResp.Paths) <= 0 {
+			return nil, fmt.Errorf("empty return from resolvePath()")
+		}
+
+		if lookupResp.IsPartial {
+			// We didn't find the exact value we were looking for... might be fine if
+			// we're asserting nil
+
+			// FIXME - Some duplication here, not ideal
+			name := strings.TrimRight(req.Path, "/")
+			var pathParts []string
+			if name == "" {
+				pathParts = []string{}
+			} else {
+				pathParts = strings.Split(name, "/")
+			}
+			expectedPaths := len(pathParts) + 1 // +1 for root
+
+			if len(lookupResp.Paths) < expectedPaths - 1 {
+				// We failed before we got to the dir we're trying to link into
+				return nil, ErrNotExist
+			} else if len(lookupResp.Paths) == expectedPaths - 1 {
+				// We found the parent, but not the requested file
+				node = nil
+			} else {
+				return nil, fmt.Errorf("can't happen")
+			}
 		} else {
-			// Can't happen
-			log.Panicf("Weird failure on lookup of %s: %d, %v", req.Path, failureParts, err)
+			// We found a previous value
+			if len(lookupResp.Paths) == 0 {
+				return nil, fmt.Errorf("empty lookup response")
+			}
+			finalAddr := lookupResp.Paths[len(lookupResp.Paths)-1].Addr
+			node, err = ns.loadFileNode(finalAddr, true)
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		if req.Assert&AssertPrevValueMatches != 0 {
-			DebugLog(DebugLinks, "  Prev value matches")
+			DebugLog(DebugLinks, "  prev value matches")
 			if !matchesAddr(node, req.PrevAddr) {
 				return nil, ErrAssertionFailed
 			}
-			DebugLog(DebugLinks, "  pass")
+			DebugLog(DebugLinks, "    pass")
 		}
 
 		if req.Assert&AssertIsBlob != 0 {
-			DebugLog(DebugLinks, "  Is blob")
+			DebugLog(DebugLinks, "  is blob")
 			if node == nil || node.Metadata().Type != GNodeTypeFile {
 				return nil, ErrAssertionFailed
 			}
-			DebugLog(DebugLinks, "  pass")
+			DebugLog(DebugLinks, "    pass")
 		}
 
 		if req.Assert&AssertIsTree != 0 {
-			DebugLog(DebugLinks, "  Is tree")
+			DebugLog(DebugLinks, "  is tree")
 			if node == nil || node.Metadata().Type != GNodeTypeDirectory {
 				return nil, ErrAssertionFailed
 			}
-			DebugLog(DebugLinks, "  pass")
+			DebugLog(DebugLinks, "    pass")
 		}
 
 		if req.Assert&AssertIsNonEmpty != 0 {
-			DebugLog(DebugLinks, "  Is nonempty")
+			DebugLog(DebugLinks, "  is nonempty")
 			if node == nil {
 				return nil, ErrAssertionFailed
 			}
-			DebugLog(DebugLinks, "  pass")
+			DebugLog(DebugLinks, "    pass")
 		}
 	}
 
@@ -396,93 +429,60 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 	}
 
 	if newRoot != nil {
-		ns.refManager.recursiveTake(ns, newRoot)
+		ns.refManager.recursiveTake(ns, newRoot) // FIXME check error
 	}
 
 	if oldRoot != nil {
-		ns.refManager.recursiveRelease(ns, oldRoot)
+		ns.refManager.recursiveRelease(ns, oldRoot) // FIXME check error
 	}
 
 	ns.rootAddr = newRoot.MetadataBlob().GetAddress()
 	ns.serialNumber++
 
-	var response LookupResponse
-	if returnResults {
-		// Now build up the lookup results
-		seenPaths := make(map[string]bool)
-
-		// Gather all paths we need to look up
-		for _, req := range requests {
-			path := strings.TrimRight(req.Path, "/")
-
-			// Skip paths we've already processed
-			if _, exists := seenPaths[path]; exists {
-				continue
-			}
-
-			// Look up this path
-			nodes, failureParts, err := ns.resolvePath(path)
-			if err != nil {
-				return nil, err
-			}
-			if failureParts != 0 {
-				// We don't care about failureParts; it's okay for it to happen but the
-				// only way it can happen without some kind of internal error is if one
-				// part of the link overwrites an earlier part with nil. It's a litle
-				// weird, so we log a warning.
-				log.Printf("Found failureParts in MultiLink for %s", path)
-			}
-
-			if len(nodes) <= 0 {
-				log.Printf("Found <= 0 nodes in MultiLink")
-				continue // Path not found... including the root. This definitely seems wrong.
-			}
-
-			// Process all path components including parent directories
-			parts := strings.Split(path, "/")
-			partialPath := ""
-
-			// Add root if we haven't seen it
-			if _, exists := seenPaths[""]; !exists {
-				response.Paths = append(response.Paths, &PathNodePair{
-					Path: "",
-					Addr: nodes[0].MetadataBlob().GetAddress(),
-				})
-				seenPaths[""] = true
-			}
-
-			// Add each path component
-			index := 1
-			for _, part := range parts {
-				if part == "" {
-					continue
-				}
-
-				if index >= len(nodes) {
-					break
-				}
-
-				partialPath = filepath.Join(partialPath, part)
-				node := nodes[index]
-
-				if _, exists := seenPaths[partialPath]; !exists {
-					response.Paths = append(response.Paths, &PathNodePair{
-						Path: partialPath,
-						Addr: node.MetadataBlob().GetAddress(),
-					})
-					seenPaths[partialPath] = true
-				}
-
-				index++
-			}
-		}
-
-		response.SerialNumber = ns.serialNumber
-	} else {
+	if !returnResults {
 		return nil, nil
 	}
 
-	return &response, nil
+	// Build up the lookup results
+	seenPaths := make(map[string]bool)
+	response := &LookupResponse{
+		Paths:        make([]*PathNodePair, 0),
+		SerialNumber: ns.serialNumber,
+		IsPartial:    false,
+	}
+
+	// Gather all paths we need to look up
+	for _, req := range requests {
+		path := strings.TrimRight(req.Path, "/")
+
+		// Skip paths we've already processed
+		if _, exists := seenPaths[path]; exists {
+			continue
+		}
+
+		// Look up this path
+		lookupResp, err := ns.resolvePath(path)
+		if err != nil {
+			return nil, err
+		}
+		if lookupResp.IsPartial {
+			// We don't care about IsPartial; it's okay for it to happen but the
+			// only way it can happen without some kind of internal error is if one
+			// part of the link overwrites an earlier part with nil. It's a little
+			// weird, so we log a warning.
+			log.Printf("Found partial lookup in MultiLink for %s", path)
+		}
+
+		// Add all paths from this lookup that we haven't seen yet
+		for _, pair := range lookupResp.Paths {
+			if _, exists := seenPaths[pair.Path]; !exists {
+				response.Paths = append(response.Paths, pair)
+				seenPaths[pair.Path] = true
+			}
+		}
+	}
+
+	return response, nil
 }
 
 // FIXME - Remove this
@@ -770,13 +770,9 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 		return cachedNode, nil
 	}
 
-	// If not, we have to load it. First load and parse the metadata.
-
-	// FIXME: In a perfect world, we would make sure it's actually a "file not found" error
-	// before we report ErrNotInStore
 	metadataCf, err := ns.BlobStore.ReadFile(metadataAddr)
 	if err != nil {
-		return nil, ErrNotInStore
+		return nil, err
 	}
 
 	metadataData, err := metadataCf.Read(0, metadataCf.GetSize())
@@ -1817,7 +1813,7 @@ func (ns *NameStore) SetForceFetch(force bool) {
 }
 
 // resolveFromFetchers uses registered fetchers to resolve a path
-func (ns *NameStore) resolveFromFetchers(path string) ([]FileNode, int, error) {
+func (ns *NameStore) resolveFromFetchers(path string) (*LookupResponse, error) {
 	DebugLog(DebugNameStore, "resolveFromFetchers(%s)\n", path)
 
 	ns.fetcherMtx.RLock()
@@ -1825,22 +1821,13 @@ func (ns *NameStore) resolveFromFetchers(path string) ([]FileNode, int, error) {
 	ns.fetcherMtx.RUnlock()
 
 	if len(fetchers) == 0 {
-		return nil, -1, fmt.Errorf("no fetchers available")
+		return nil, fmt.Errorf("no fetchers available")
 	}
 
 	// Try each fetcher
 	var lastErr error
 	for _, fetcher := range fetchers {
-		// Check if this fetcher supports FetchPath
-		pathFetcher, ok := fetcher.(interface {
-			FetchPath(path string) (*LookupResponse, error)
-		})
-
-		if !ok {
-			continue // This fetcher doesn't support path fetching
-		}
-
-		lookupResp, err := pathFetcher.FetchPath(path)
+		lookupResp, err := fetcher.FetchPath(path)
 		if err != nil {
 			lastErr = err
 			continue
@@ -1851,24 +1838,43 @@ func (ns *NameStore) resolveFromFetchers(path string) ([]FileNode, int, error) {
 			continue
 		}
 
-		// Update our root with the fetched data
 		// The first entry should always be the root (path "")
-		rootAddr := lookupResp.Paths[0].Addr
-		err = ns.LinkByMetadata("", rootAddr)
-		if err != nil {
-			lastErr = fmt.Errorf("failed to update root: %v", err)
-			continue
+		if lookupResp.Paths[0].Path != "" {
+			return nil, fmt.Errorf("0 path entry is for %s, not root", lookupResp.Paths[0].Path)
 		}
 
-		// Now that we've updated the tree, do a normal local resolve
-		return ns.resolvePath(path)
+		// Update our root with the fetched data
+		newRoot, err := ns.loadFileNode(lookupResp.Paths[0].Addr, false)
+		if err != nil {
+			return nil, err
+		}
+
+		var oldRoot FileNode
+		if ns.rootAddr != "" {
+			oldRoot, err = ns.loadFileNode(ns.rootAddr, false)
+			if err != nil {
+				return nil, err
+			}
+			defer ns.refManager.recursiveRelease(ns, oldRoot) // FIXME check error
+		}
+
+		ns.rootAddr = lookupResp.Paths[0].Addr
+		ns.serialNumber = lookupResp.SerialNumber
+
+		ns.refManager.recursiveTake(ns, newRoot) // FIXME check error
+
+		// Update the serial number to match what the fetcher returned
+		lookupResp.SerialNumber = ns.serialNumber
+
+		// Return the lookup response directly
+		return lookupResp, nil
 	}
 
 	if lastErr != nil {
-		return nil, -1, fmt.Errorf("all fetchers failed: %w", lastErr)
+		return nil, fmt.Errorf("all fetchers failed: %w", lastErr)
 	}
 
-	return nil, -1, fmt.Errorf("no fetchers support path lookup")
+	return nil, fmt.Errorf("no fetchers support path lookup")
 }
 
 /////
