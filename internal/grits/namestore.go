@@ -351,10 +351,10 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 			}
 			expectedPaths := len(pathParts) + 1 // +1 for root
 
-			if len(lookupResp.Paths) < expectedPaths - 1 {
+			if len(lookupResp.Paths) < expectedPaths-1 {
 				// We failed before we got to the dir we're trying to link into
 				return nil, ErrNotExist
-			} else if len(lookupResp.Paths) == expectedPaths - 1 {
+			} else if len(lookupResp.Paths) == expectedPaths-1 {
 				// We found the parent, but not the requested file
 				node = nil
 			} else {
@@ -428,12 +428,20 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		}
 	}
 
-	if newRoot != nil {
-		ns.refManager.recursiveTake(ns, newRoot) // FIXME check error
+	err = ns.refManager.recursiveTake(ns, newRoot)
+	if err != nil {
+		return nil, err
 	}
 
-	if oldRoot != nil {
-		ns.refManager.recursiveRelease(ns, oldRoot) // FIXME check error
+	err = ns.refManager.recursiveRelease(ns, oldRoot)
+	if err != nil {
+		if newRoot != nil {
+			err2 := ns.refManager.recursiveRelease(ns, newRoot)
+			if err2 != nil {
+				log.Fatalf("Can't re-release new root when cancelling: %v (original error: %v)", err2, err)
+			}
+		}
+		return nil, err
 	}
 
 	ns.rootAddr = newRoot.MetadataBlob().GetAddress()
@@ -524,14 +532,20 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 		return err
 	}
 
+	err = ns.refManager.recursiveTake(ns, newRoot)
+	if err != nil {
+		return err
+	}
+
 	if newRoot != nil {
-		ns.refManager.recursiveTake(ns, newRoot)
 		ns.rootAddr = newRoot.MetadataBlob().GetAddress()
 	} else {
 		ns.rootAddr = ""
 	}
-	if oldRoot != nil {
-		ns.refManager.recursiveRelease(ns, oldRoot)
+
+	err = ns.refManager.recursiveRelease(ns, oldRoot)
+	if err != nil {
+		log.Printf("ERROR! Can't release %v, leaking references", oldRoot)
 	}
 
 	ns.serialNumber++
@@ -699,8 +713,10 @@ func EmptyNameStore(bs BlobStore, sparse bool) (*NameStore, error) {
 		return nil, err
 	}
 
-	// No-op if sparse
-	ns.refManager.recursiveTake(ns, root)
+	err = ns.refManager.recursiveTake(ns, root)
+	if err != nil {
+		return nil, err
+	}
 
 	ns.serialNumber = 0
 	ns.rootAddr = root.MetadataBlob().GetAddress()
@@ -720,7 +736,11 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64)
 	}
 
 	//ns.refManager.recursiveRelease might be nice here, in case the thing was non-empty when we started
-	ns.refManager.recursiveTake(ns, root)
+
+	err = ns.refManager.recursiveTake(ns, root)
+	if err != nil {
+		return err
+	}
 
 	ns.rootAddr = root.MetadataBlob().GetAddress()
 	return nil
@@ -1838,6 +1858,13 @@ func (ns *NameStore) resolveFromFetchers(path string) (*LookupResponse, error) {
 			continue
 		}
 
+		if lookupResp.SerialNumber < ns.serialNumber {
+			log.Printf("Warning! Out of order lookup response")
+			// So don't update, but still return, since we wouldn't have got here if we had the info
+			// locally. Hopefully the out-of-order data isn't a problem for the caller.
+			return lookupResp, nil
+		}
+
 		// The first entry should always be the root (path "")
 		if lookupResp.Paths[0].Path != "" {
 			return nil, fmt.Errorf("0 path entry is for %s, not root", lookupResp.Paths[0].Path)
@@ -1849,22 +1876,28 @@ func (ns *NameStore) resolveFromFetchers(path string) (*LookupResponse, error) {
 			return nil, err
 		}
 
-		var oldRoot FileNode
+		err = ns.refManager.recursiveTake(ns, newRoot)
+		if err != nil {
+			// We could still return the lookup response, but probably we want to make as obvious an error
+			// as possible if that happens instead of masking the problem
+			log.Printf("Can't update with new data! Looking up %s", path)
+			return nil, err
+		}
+
 		if ns.rootAddr != "" {
-			oldRoot, err = ns.loadFileNode(ns.rootAddr, false)
+			oldRoot, err := ns.loadFileNode(ns.rootAddr, false)
 			if err != nil {
-				return nil, err
+				log.Printf("Can't load old root addr! Leaking refs")
 			}
-			defer ns.refManager.recursiveRelease(ns, oldRoot) // FIXME check error
+
+			err = ns.refManager.recursiveRelease(ns, oldRoot)
+			if err != nil {
+				log.Printf("Can't release ref after looking up %s! We will leak refs", path)
+			}
 		}
 
 		ns.rootAddr = lookupResp.Paths[0].Addr
 		ns.serialNumber = lookupResp.SerialNumber
-
-		ns.refManager.recursiveTake(ns, newRoot) // FIXME check error
-
-		// Update the serial number to match what the fetcher returned
-		lookupResp.SerialNumber = ns.serialNumber
 
 		// Return the lookup response directly
 		return lookupResp, nil
@@ -1973,6 +2006,11 @@ func NewDenseRefManager(path string) *DenseRefManager {
 }
 
 func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
+	if fn == nil {
+		DebugLog(DebugRefCounts, "Recursive take on nil")
+		return nil
+	}
+
 	DebugLog(DebugRefCounts, "Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), rm.refCount[BlobAddr(fn.MetadataBlob().GetAddress())])
 
 	metadataHash := fn.MetadataBlob().GetAddress()
@@ -1990,18 +2028,10 @@ func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 	} else {
 		DebugLog(DebugRefCounts, "  doesn't exist")
 
-		fn.Take()
-		rm.refCount[metadataHash] = 1
-
 		children, err := fn.Children()
 		if err != nil {
-			fn.Release() // FIXME probably we need more than this
 			return err
 		}
-		if children == nil {
-			return nil
-		}
-
 		for _, childMetadataAddr := range children {
 			childNode, err := ns.loadFileNode(childMetadataAddr, true)
 			if err != nil {
@@ -2011,16 +2041,23 @@ func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
 
 			err = rm.recursiveTake(ns, childNode)
 			if err != nil {
-				fn.Release()
 				return err
 			}
 		}
+
+		rm.refCount[metadataHash] = 1
+		fn.Take()
 	}
 
 	return nil
 }
 
 func (rm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
+	if fn == nil {
+		DebugLog(DebugRefCounts, "Recursive release on nil")
+		return nil
+	}
+
 	metadataHash := fn.MetadataBlob().GetAddress()
 	DebugLog(DebugRefCounts, "Recursive release on %s: count %d/%d", fn.MetadataBlob().GetAddress(), fn.RefCount(), rm.refCount[metadataHash])
 
