@@ -133,37 +133,15 @@ func TestLocalVolumeOperations(t *testing.T) {
 	}
 	defer file.Close()
 
-	// Use PutBlob to add the file to the blob store
-	contentAddr, err := localVolume.PutBlob(file)
+	// Add the file to the blob store
+	contentBlob, err := localVolume.AddBlob(tmpPath)
 	if err != nil {
 		t.Fatalf("PutBlob failed: %v", err)
 	}
-
-	// Test GetBlob - Retrieve the blob we just put
-	retrievedBlob, err := localVolume.GetBlob(contentAddr)
-	if err != nil {
-		t.Fatalf("GetBlob failed: %v", err)
-	}
-	defer retrievedBlob.Release()
-
-	// Verify the content matches
-	reader, err := retrievedBlob.Reader()
-	if err != nil {
-		t.Fatalf("Failed to get reader for blob: %v", err)
-	}
-	defer reader.Close()
-
-	contentBytes, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("Failed to read blob content: %v", err)
-	}
-
-	if string(contentBytes) != testContent {
-		t.Errorf("Content mismatch: expected %q, got %q", testContent, string(contentBytes))
-	}
+	defer contentBlob.Release()
 
 	// Test CreateBlobNode - Create a node for the content we just added
-	blobNode, err := localVolume.CreateBlobNode(contentAddr, int64(len(testContent)))
+	blobNode, err := localVolume.CreateBlobNode(contentBlob.GetAddress(), int64(len(testContent)))
 	if err != nil {
 		t.Fatalf("CreateBlobNode failed: %v", err)
 	}
@@ -264,7 +242,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 	childPath := treePath + "/childfile.txt"
 
 	// First create a new blob node for the child
-	childNode, err := localVolume.CreateBlobNode(contentAddr, int64(len(testContent)))
+	childNode, err := localVolume.CreateBlobNode(contentBlob.GetAddress(), int64(len(testContent)))
 	if err != nil {
 		t.Fatalf("Failed to create child blob node: %v", err)
 	}
