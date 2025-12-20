@@ -31,7 +31,6 @@ type Volume interface {
 	AddMetadataBlob(*grits.GNodeMetadata) (grits.CachedFile, error)
 
 	GetBlob(addr grits.BlobAddr) (grits.CachedFile, error)
-	PutBlob(file *os.File) (grits.BlobAddr, error)
 
 	Cleanup() error
 
@@ -46,7 +45,7 @@ type LocalVolume struct {
 	readOnly bool
 
 	persistMtx sync.Mutex
-	doPersist bool
+	doPersist  bool
 }
 
 type LocalVolumeConfig struct {
@@ -62,10 +61,10 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool, sp
 	}
 
 	wv := &LocalVolume{
-		name:     config.VolumeName,
-		server:   server,
-		ns:       ns,
-		readOnly: false,
+		name:      config.VolumeName,
+		server:    server,
+		ns:        ns,
+		readOnly:  false,
 		doPersist: persist,
 	}
 
@@ -178,18 +177,6 @@ func (v *LocalVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (gr
 // GetBlob retrieves a blob from the blobstore by its address
 func (v *LocalVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 	return v.ns.BlobStore.ReadFile(addr)
-}
-
-// PutBlob adds a file to the blob store and returns its address
-func (v *LocalVolume) PutBlob(file *os.File) (grits.BlobAddr, error) {
-	cachedFile, err := v.ns.BlobStore.AddReader(file)
-	if err != nil {
-		return "", err
-	}
-	defer cachedFile.Release() // We don't need to maintain this reference
-
-	// Return a copy of the address
-	return cachedFile.GetAddress(), nil
 }
 
 func (wv *LocalVolume) LookupFull(paths []string) (*grits.LookupResponse, error) {
