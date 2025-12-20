@@ -421,18 +421,18 @@ func TestConcurrentAccess(t *testing.T) {
 
 // Helper to find a FileNode by its content blob address
 func (ns *NameStore) lookupNodeByContent(contentHash BlobAddr) FileNode {
-	ns.mtx.RLock()
-	defer ns.mtx.RUnlock()
+	ns.mtx.Lock()
+	defer ns.mtx.Unlock()
 
-	for _, node := range ns.fileCache {
-		blob, err := node.ExportedBlob()
+	for _, entry := range ns.fileCache {
+		blob, err := entry.node.ExportedBlob()
 		if err != nil {
 			// FIXME
 			log.Printf("Can't lookup node %s! %v", contentHash, err)
 			return nil
 		}
-		if node != nil && blob.GetAddress() == contentHash {
-			return node
+		if entry.node != nil && blob.GetAddress() == contentHash {
+			return entry.node
 		}
 	}
 	return nil
