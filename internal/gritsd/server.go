@@ -38,14 +38,14 @@ type Server struct {
 
 // NewServer initializes and returns a new Server instance.
 func NewServer(config *grits.Config) (*Server, error) {
-	bs := grits.NewLocalBlobStore(config)
-	if bs == nil {
-		return nil, fmt.Errorf("failed to initialize blob store")
-	}
-
 	err := os.MkdirAll(filepath.Join(config.ServerDir, "var"), 0755)
 	if err != nil {
 		return nil, fmt.Errorf("cannot create var directory in %s", config.ServerDir)
+	}
+
+	bs := grits.NewLocalBlobStore(config)
+	if bs == nil {
+		return nil, fmt.Errorf("failed to initialize blob store")
 	}
 
 	srv := &Server{
@@ -61,7 +61,6 @@ func NewServer(config *grits.Config) (*Server, error) {
 }
 
 func (s *Server) BlobMaintenance() error {
-	// Type assertion to access the enhanced methods we added
 	for _, volume := range s.Volumes {
 		err := volume.Cleanup()
 		if err != nil {
@@ -69,17 +68,16 @@ func (s *Server) BlobMaintenance() error {
 		}
 	}
 
-	if localBS, ok := s.BlobStore.(*grits.LocalBlobStore); ok {
-		//log.Println("Running scheduled blob store maintenance...")
-		localBS.EvictOldFiles()
-	} else {
-		log.Println("Blob store doesn't support periodic maintenance")
-	}
-
 	return nil
 }
 
 func (s *Server) Start() error {
+	// Start blob store
+	err := s.BlobStore.Start()
+	if err != nil {
+		return err
+	}
+
 	// Load modules from config
 	if err := s.LoadModules(s.Config.Modules); err != nil {
 		return fmt.Errorf("failed to load modules: %v", err)
@@ -123,6 +121,7 @@ func (s *Server) Start() error {
 
 	s.AddPeriodicTask(5*time.Second, s.ReportJobs)
 
+	// FIXME - Do we need this?
 	s.AddPeriodicTask(15*time.Second, s.BlobMaintenance)
 
 	log.Printf("Grits server started...")
@@ -164,6 +163,11 @@ func (s *Server) Stop() {
 
 	// Wait for all shutdown tasks to complete
 	s.shutdownDoneWg.Wait()
+
+	err := s.BlobStore.Stop()
+	if err != nil {
+		log.Printf("Couldn't shut down blob store: %v", err)
+	}
 }
 
 func (s *Server) Shutdown() {

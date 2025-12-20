@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -29,6 +30,10 @@ type LocalBlobStore struct {
 	// Add fetcher support
 	fetchers   []BlobFetcher
 	fetcherMtx sync.RWMutex
+
+	// Eviction worker
+	stopWorker chan struct{}
+	workerWg   sync.WaitGroup
 }
 
 // Ensure that LocalBlobStore implements BlobStore
@@ -46,9 +51,10 @@ func NewLocalBlobStore(config *Config) *LocalBlobStore {
 	}
 
 	bs := &LocalBlobStore{
-		config: config,
-		files:  make(map[BlobAddr]*LocalCachedFile),
-		lock:   lock,
+		config:     config,
+		files:      make(map[BlobAddr]*LocalCachedFile),
+		lock:       lock,
+		stopWorker: make(chan struct{}),
 	}
 
 	bs.storageDir = config.ServerPath("var/blobs")
@@ -76,6 +82,20 @@ func (bs *LocalBlobStore) Close() error {
 	if bs.lock != nil {
 		return bs.lock.Release()
 	}
+	return nil
+}
+
+// Start begins the background eviction worker
+func (bs *LocalBlobStore) Start() error {
+	bs.workerWg.Add(1)
+	go bs.evictionWorker()
+	return nil
+}
+
+// Stop halts the background eviction worker
+func (bs *LocalBlobStore) Stop() error {
+	close(bs.stopWorker)
+	bs.workerWg.Wait()
 	return nil
 }
 
@@ -327,12 +347,23 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 	return cachedFile, nil
 }
 
-func (bs *LocalBlobStore) Touch(cf *LocalCachedFile) {
+// Touch updates the expiration time for a blob by setting the file's modification time
+// duration specifies how long to keep the blob cached (from now)
+func (bs *LocalBlobStore) Touch(cf *LocalCachedFile, duration time.Duration) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
-	cf.LastTouched = time.Now()
-	os.Chtimes(cf.Path, time.Now(), time.Now())
+	now := time.Now()
+	expiresAt := now.Add(duration)
+
+	cf.LastTouched = now
+
+	// Set the file's modification time to the expiration time
+	// This way we can check the mtime on disk to determine if a file is expired
+	err := os.Chtimes(cf.Path, now, expiresAt)
+	if err != nil {
+		log.Printf("Warning: couldn't update timestamps for %s: %v", cf.Path, err)
+	}
 }
 
 func (bs *LocalBlobStore) Take(cachedFile *LocalCachedFile) {
@@ -367,17 +398,39 @@ func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 		log.Fatalf("Reduced ref count for %s to < 0", cachedFile.GetAddress())
 	}
 
-	// Delete file, if we're done with it
-	if !bs.config.DelayedEviction && cachedFile.RefCount == 0 {
-		// Remove from the files map
-		delete(bs.files, cachedFile.Address)
-
-		// Delete the file from disk (without the lock, in case of slowness)
+	// Delete file immediately if ref count is 0 AND no future expiration is set
+	if cachedFile.RefCount == 0 {
 		bs.mtx.Unlock()
-		err := os.Remove(cachedFile.Path)
+
+		// Check the file's modification time (which we use as expiration time)
+		fileInfo, err := os.Stat(cachedFile.Path)
 		if err != nil {
-			log.Printf("Warning: couldn't delete file %s from cache: %v", cachedFile.Path, err)
+			log.Printf("Warning: couldn't stat file %s: %v", cachedFile.Path, err)
+			// If we can't stat it, try to delete it anyway
+			bs.mtx.Lock()
+			delete(bs.files, cachedFile.Address)
+			bs.mtx.Unlock()
+			os.Remove(cachedFile.Path)
+			return
 		}
+
+		expiresAt := fileInfo.ModTime()
+
+		// If expiration time is in the past (or very close to now), delete immediately
+		if time.Now().After(expiresAt) {
+			bs.mtx.Lock()
+			delete(bs.files, cachedFile.Address)
+			bs.mtx.Unlock()
+
+			log.Printf("We're deleting %s", cachedFile.Path)
+
+			err := os.Remove(cachedFile.Path)
+			if err != nil {
+				log.Printf("Warning: couldn't delete file %s from cache: %v", cachedFile.Path, err)
+			}
+			return
+		}
+		// Otherwise, keep it until expiration - the worker will clean it up
 		return
 	}
 
@@ -469,70 +522,109 @@ func (bs *LocalBlobStore) printStats(currentSize int64) {
 	log.Printf("=== End BlobStore Statistics ===")
 }
 
+// EvictOldFiles scans all files on disk and evicts those that are expired
 func (bs *LocalBlobStore) EvictOldFiles() {
-	bs.mtx.Lock()
-	defer bs.mtx.Unlock()
-
-	var currentSize int64
-	for _, file := range bs.files {
-		if !file.IsHardLink {
-			currentSize += file.Size
-		}
-	}
-
-	if DebugBlobStorage {
-		log.Printf("Check stats:")
-		bs.printStats(currentSize)
-	}
-
-	if !bs.config.DelayedEviction {
-		// Nothing to do, we do it on demand
-		return
-	}
-
-	if currentSize <= bs.config.StorageSize {
-		log.Printf("Storage usage (%d bytes) within capacity (%d bytes), no eviction needed",
-			currentSize, bs.config.StorageSize)
-		return
-	}
-
-	// Collect files with zero reference count
-	var evictionCandidates []*LocalCachedFile
-	for _, file := range bs.files {
-		if file.RefCount <= 0 {
-			evictionCandidates = append(evictionCandidates, file)
-		}
-	}
-
-	// Sort files by last touched time (oldest first)
-	sort.Slice(evictionCandidates, func(i, j int) bool {
-		return evictionCandidates[i].LastTouched.Before(evictionCandidates[j].LastTouched)
-	})
-
-	// Track eviction statistics
+	now := time.Now()
 	var evictedCount int
 	var evictedBytes int64
 
-	// Evict files until we're under the target free size
-	for _, file := range evictionCandidates {
-		if currentSize-evictedBytes <= bs.config.StorageFreeSize {
-			break
-		}
-
-		if !file.IsHardLink {
-			evictedBytes += file.Size
-		}
-
-		delete(bs.files, file.Address)
-		evictedCount++
-
-		err := os.Remove(file.Path)
-		if err != nil {
-			log.Printf("Warning: couldn't delete expired file %s from cache: %v", file.Path, err)
-		}
+	if !strings.Contains(bs.storageDir, "var/blobs") {
+		log.Printf("cannot do blob cleanup! directory %s looks unsafe", bs.storageDir)
+		return
 	}
 
-	log.Printf("Evicted %d files, freed %d bytes, %d total now used", evictedCount, evictedBytes, currentSize-evictedBytes)
+	// Walk through all files in the storage directory
+	err := filepath.Walk(bs.storageDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		// Get the blob address from the file path
+		relativePath, err := filepath.Rel(bs.storageDir, path)
+		if err != nil {
+			log.Printf("Can't relativize %s", path)
+			return nil // Skip this file
+		}
+
+		blobAddr, err := NewBlobAddrFromString(relativePath)
+		if err != nil {
+			log.Printf("Found strange blob %s during cleanup", path)
+			return nil // Not a valid blob, skip
+		}
+
+		// Check if this blob is in our in-memory map
+		bs.mtx.Lock()
+		cachedFile, exists := bs.files[blobAddr]
+		if exists {
+			// If it has active references, never delete it
+			if cachedFile.RefCount > 0 {
+				bs.mtx.Unlock()
+				return nil
+			}
+		}
+		bs.mtx.Unlock()
+
+		// Check the file's modification time (our expiration time)
+		expiresAt := info.ModTime()
+
+		// If the expiration time has passed, delete it
+		if now.After(expiresAt) {
+			bs.mtx.Lock()
+			if exists {
+				delete(bs.files, blobAddr)
+			}
+			bs.mtx.Unlock()
+
+			// Track stats
+			if info.Sys() != nil {
+				if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+					isHardLink := stat.Nlink > 1
+					if !isHardLink {
+						evictedBytes += info.Size()
+					}
+				}
+			}
+			evictedCount++
+
+			// Delete the file
+			err := os.Remove(path)
+			if err != nil {
+				log.Printf("Warning: couldn't delete expired file %s: %v", path, err)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("Warning: error during eviction scan: %v", err)
+	}
+
+	if evictedCount > 0 {
+		log.Printf("Evicted %d expired blobs, freed %d bytes", evictedCount, evictedBytes)
+	}
+}
+
+// evictionWorker runs periodically to clean up expired blobs
+func (bs *LocalBlobStore) evictionWorker() {
+	defer bs.workerWg.Done()
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-bs.stopWorker:
+			// Do a final cleanup on shutdown
+			bs.EvictOldFiles()
+			return
+		case <-ticker.C:
+			bs.EvictOldFiles()
+		}
+	}
 }
 
 /////
@@ -563,11 +655,10 @@ func (c *LocalCachedFile) GetPath() string {
 	return c.Path
 }
 
-func (c *LocalCachedFile) Touch() {
-	c.blobStore.mtx.Lock()
-	defer c.blobStore.mtx.Unlock()
-
-	c.LastTouched = time.Now()
+// Touch sets the expiration time for this blob
+// duration specifies how long to keep the blob cached (from now)
+func (c *LocalCachedFile) Touch(duration time.Duration) {
+	c.blobStore.Touch(c, duration)
 }
 
 func (c *LocalCachedFile) Reader() (io.ReadSeekCloser, error) {

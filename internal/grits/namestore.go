@@ -809,10 +809,22 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 
 	DebugLog(DebugNameStore, "Creating node for metadata %s (content will be lazy-loaded)\n", metadataAddr)
 
+	var blob CachedFile
+	var blobErr error
+
+	// We force an actual load, if we're in a dense NameStore
+	// Otherwise, we might wind up GCing the content blob because
+	// nothing has a reference to it.
+
+	// FIXME this is a bit of a hack
+	if _, ok := ns.refManager.(*DenseRefManager); ok {
+		blob, blobErr = ns.BlobStore.ReadFile(metadata.ContentHash)
+	}
+
 	if metadata.Type == GNodeTypeFile {
 		bn := &BlobNode{
-			blob:         nil, // Lazy load later
-			blobErr:      nil,
+			blob:         blob,
+			blobErr:      blobErr,
 			metadataBlob: metadataCf,
 			metadata:     &metadata,
 			refCount:     0,
@@ -825,8 +837,8 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 
 	} else if metadata.Type == GNodeTypeDirectory {
 		dn := &TreeNode{
-			blob:         nil, // Lazy load later
-			blobErr:      nil,
+			blob:         blob,
+			blobErr:      blobErr,
 			metadataBlob: metadataCf,
 			metadata:     &metadata,
 			ChildrenMap:  nil, // Will be loaded when blob is loaded
@@ -2104,6 +2116,8 @@ func (rm *DenseRefManager) flatRelease(ns *NameStore, fn FileNode) error {
 }
 
 func (rm *DenseRefManager) cleanup(ns *NameStore) {
+	log.Printf("DRM cleanup")
+
 	ns.mtx.Lock()
 	defer ns.mtx.Unlock()
 
