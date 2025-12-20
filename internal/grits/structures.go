@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 ////////////////////////
@@ -127,6 +128,9 @@ type BlobStore interface {
 	AddDataBlock(data []byte) (CachedFile, error)
 
 	DumpStats()
+
+	Start() error
+	Stop() error
 	Close() error
 
 	RegisterFetcher(fetcher BlobFetcher)
@@ -138,7 +142,7 @@ type CachedFile interface {
 	GetAddress() BlobAddr
 	GetSize() int64
 
-	Touch()
+	Touch(expiry time.Duration)
 
 	Read(offset int64, length int64) ([]byte, error)
 	Reader() (io.ReadSeekCloser, error)

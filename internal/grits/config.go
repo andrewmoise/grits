@@ -17,7 +17,6 @@ type Config struct {
 	NamespaceSavePeriod int   `json:"namespaceSavePeriod"`
 	HardLinkBlobs       bool  `json:"hardLinkBlobs"`
 	ValidateBlobs       bool  `json:"validateBlobs"`
-	DelayedEviction     bool  `json:"delayedEviction"`
 
 	// User configuration
 	RunAsUser  string `json:"runAsUser,omitempty"`
@@ -40,7 +39,6 @@ func NewConfig(serverDir string) *Config {
 		NamespaceSavePeriod: 30,                // # of seconds between namespace checkpoints
 		HardLinkBlobs:       false,
 		ValidateBlobs:       false,
-		DelayedEviction:     true,
 	}
 }
 

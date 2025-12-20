@@ -649,7 +649,6 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 
 	// Serve the content
 	http.ServeContent(w, r, filepath.Base(string(fileAddr)), time.Now(), reader)
-	cachedFile.Touch()
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Blob fetch complete\n")
 }
