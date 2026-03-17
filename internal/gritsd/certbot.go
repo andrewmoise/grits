@@ -1,17 +1,20 @@
 package gritsd
 
 import (
-	"context"
-	"errors"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"grits/internal/grits"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"time"
 )
+
+/////
+// Certificate types and paths
+/////
 
 // CertificateType indicates the source/purpose of a certificate
 type CertificateType string
@@ -27,18 +30,6 @@ const (
 	LetsEncryptCert CertificateType = "letsencrypt"
 )
 
-// CertbotConfig holds configuration for certificate operations
-type CertbotConfig struct {
-	// Domain name for the certificate
-	Domain string
-
-	// Email address for Let's Encrypt notifications
-	Email string
-
-	// The root certificate directory (will be combined with ServerPath)
-	CertsBaseDir string
-}
-
 // GetCertPath returns the path where certificates for a particular entity should be stored
 func GetCertPath(config *grits.Config, certType CertificateType, entityName string) string {
 	return config.ServerPath(fmt.Sprintf("var/certs/%s/%s", certType, entityName))
@@ -47,74 +38,160 @@ func GetCertPath(config *grits.Config, certType CertificateType, entityName stri
 // GetCertificateFiles returns the paths to the certificate and key files for an entity
 func GetCertificateFiles(config *grits.Config, certType CertificateType, entityName string) (certPath, keyPath string) {
 	basePath := GetCertPath(config, certType, entityName)
-	certPath = filepath.Join(basePath, "fullchain.pem") // Using consistent naming with certbot
+	err := os.MkdirAll(basePath, 0700)
+	if err != nil {
+		log.Printf("Couldn't create cert path! %v", err)
+	}
+
+	certPath = filepath.Join(basePath, "fullchain.pem")
 	keyPath = filepath.Join(basePath, "privkey.pem")
 	return certPath, keyPath
 }
 
-// EnsureTLSCertificates generates keys and acquires certificates if needed
-// Returns paths to fullchain.pem and privkey.pem for use with HTTP server
-func EnsureTLSCertificates(serverConfig *grits.Config, certConfig *CertbotConfig, autoCertificate bool) (certPath, keyPath string, err error) {
-	if certConfig.Domain == "" {
-		return "", "", errors.New("domain name is required")
+// GetLetsEncryptCertFiles returns the paths to the Let's Encrypt cert and key for a domain.
+// These are nested inside the certbot config directory structure.
+func GetLetsEncryptCertFiles(config *grits.Config, domain string) (certPath, keyPath string) {
+	certsDir := GetCertPath(config, LetsEncryptCert, domain)
+	configDir := filepath.Join(certsDir, "config")
+	certPath = filepath.Join(configDir, "live", domain, "fullchain.pem")
+	keyPath = filepath.Join(configDir, "live", domain, "privkey.pem")
+	return certPath, keyPath
+}
+
+// CertExpiresWithin returns true if the certificate at certPath will expire within d,
+// or if it cannot be read/parsed.
+func CertExpiresWithin(certPath string, d time.Duration) bool {
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return true
 	}
 
-	// Update the certificate directory to use our new structure
-	certsDir := GetCertPath(serverConfig, LetsEncryptCert, certConfig.Domain)
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return true
+	}
 
-	// Set up certbot directory structure
-	configDir := filepath.Join(certsDir, "config")
-	workDir := filepath.Join(certsDir, "work")
-	logsDir := filepath.Join(certsDir, "logs")
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return true
+	}
 
-	// Define paths where certbot will store certificates
-	certPath = filepath.Join(configDir, "live", certConfig.Domain, "fullchain.pem")
-	keyPath = filepath.Join(configDir, "live", certConfig.Domain, "privkey.pem")
+	return time.Until(cert.NotAfter) < d
+}
 
-	// Check if certificates already exist
-	if fileExists(certPath) && fileExists(keyPath) {
+// EnsureCertificate checks whether a valid Let's Encrypt certificate exists for domain,
+// and runs the certbot helper to acquire one if not (or if expiring within 7 days).
+// Returns the cert and key paths on success.
+func EnsureCertificate(serverConfig *grits.Config, domain, email string) (certPath, keyPath string, err error) {
+	certPath, keyPath = GetLetsEncryptCertFiles(serverConfig, domain)
+
+	needsCert := !fileExists(certPath) || !fileExists(keyPath) || CertExpiresWithin(certPath, 7*24*time.Hour)
+	if !needsCert {
 		if grits.DebugHttp {
-			log.Printf("Using existing certificates for %s", certConfig.Domain)
+			log.Printf("Certificate for %s is valid and not expiring soon", domain)
 		}
 		return certPath, keyPath, nil
 	}
 
-	// If auto-certificate is disabled, return an error
-	if !autoCertificate {
-		return "", "", fmt.Errorf("certificates for %s not found and auto-certificate is disabled", certConfig.Domain)
+	log.Printf("Acquiring/renewing certificate for %s", domain)
+	if err := runCertbotHelper(serverConfig, domain, email); err != nil {
+		return "", "", fmt.Errorf("certbot helper failed for %s: %v", domain, err)
 	}
 
-	// If email is missing, we can't proceed with Let's Encrypt
-	if certConfig.Email == "" {
-		return "", "", errors.New("email address is required for Let's Encrypt")
-	}
-
-	// At this point we need to request new certificates
-	log.Printf("Acquiring new certificates for %s", certConfig.Domain)
-	if err := obtainCertificate(certConfig, configDir, workDir, logsDir); err != nil {
-		return "", "", fmt.Errorf("failed to obtain certificate: %w", err)
-	}
-
-	// Double-check that the certificates were created
 	if !fileExists(certPath) || !fileExists(keyPath) {
-		err := errors.New("certificates not found after successful certbot run")
-		return "", "", err
+		return "", "", fmt.Errorf("certbot helper succeeded but cert files not found for %s", domain)
 	}
 
 	return certPath, keyPath, nil
 }
 
-// GenerateSelfCert creates a self-signed certificate for a peer using certbot
-// This implements the two-stage generation process:
-// 1. Generate self-signed certificates using elliptic curve keys
-// 2. These can later be replaced with Let's Encrypt certificates if needed
+// runCertbotHelper invokes the setuid certbot helper binary.
+func runCertbotHelper(serverConfig *grits.Config, domain, email string) error {
+	helperPath := serverConfig.ServerPath("bin/certbot-helper")
+
+	if _, err := os.Stat(helperPath); err != nil {
+		return fmt.Errorf("certbot helper not found at %s", helperPath)
+	}
+
+	certDir := GetCertPath(serverConfig, LetsEncryptCert, domain)
+
+	cmd := exec.Command(helperPath,
+		"--domain", domain,
+		"--email", email,
+		"--cert-dir", certDir)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
+// StartCertRenewalWatcher starts a goroutine that watches for certificate expiry
+// and renews via the certbot helper when within 7 days of expiry.
+// On failure it retries once per day. stopCh signals shutdown.
+func StartCertRenewalWatcher(serverConfig *grits.Config, domain, email string, stopCh <-chan struct{}) {
+	go func() {
+		for {
+			certPath, _ := GetLetsEncryptCertFiles(serverConfig, domain)
+
+			// Figure out how long to sleep until 7 days before expiry
+			sleepDur := certRenewalSleep(certPath)
+
+			select {
+			case <-time.After(sleepDur):
+				// Try to renew
+				log.Printf("Attempting certificate renewal for %s", domain)
+				if err := runCertbotHelper(serverConfig, domain, email); err != nil {
+					log.Printf("Certificate renewal failed for %s: %v — will retry in 24 hours", domain, err)
+					select {
+					case <-time.After(24 * time.Hour):
+					case <-stopCh:
+						return
+					}
+				} else {
+					log.Printf("Certificate renewed successfully for %s", domain)
+				}
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+}
+
+// certRenewalSleep returns how long to sleep before attempting renewal.
+// We target waking up when 7 days remain before expiry.
+// If the cert can't be read or is already within 7 days, returns 0.
+func certRenewalSleep(certPath string) time.Duration {
+	data, err := os.ReadFile(certPath)
+	if err != nil {
+		return 0
+	}
+
+	block, _ := pem.Decode(data)
+	if block == nil {
+		return 0
+	}
+
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return 0
+	}
+
+	// Wake up when 7 days remain
+	renewAt := cert.NotAfter.Add(-7 * 24 * time.Hour)
+	sleepDur := time.Until(renewAt)
+	if sleepDur < 0 {
+		return 0
+	}
+	return sleepDur
+}
+
+// GenerateSelfCert creates a self-signed certificate for peer authentication using
+// elliptic curve keys. Does nothing if the certificate already exists.
 func GenerateSelfCert(serverConfig *grits.Config) error {
-	// Use the new directory structure
 	selfCertDir := GetCertPath(serverConfig, SelfSignedCert, "current")
 	privateKeyPath := filepath.Join(selfCertDir, "privkey.pem")
 	certPath := filepath.Join(selfCertDir, "fullchain.pem")
 
-	// Check if the key already exists
 	if fileExists(privateKeyPath) && fileExists(certPath) {
 		if grits.DebugHttp {
 			log.Printf("Self-signed certificate already exists")
@@ -122,36 +199,31 @@ func GenerateSelfCert(serverConfig *grits.Config) error {
 		return nil
 	}
 
-	// Create the directory if it doesn't exist
 	if err := os.MkdirAll(selfCertDir, 0700); err != nil {
-		return fmt.Errorf("failed to create certificate directory for self: %v", err)
+		return fmt.Errorf("failed to create certificate directory: %v", err)
 	}
 
 	if grits.DebugHttp {
-		log.Printf("Generating new self-signed certificate for self using elliptic curve")
+		log.Printf("Generating new self-signed certificate using elliptic curve")
 	}
 
-	// Step 1: Generate the EC private key using OpenSSL
 	ecKeyCmd := exec.Command("openssl", "ecparam",
-		"-name", "prime256v1", // Use P-256 curve (compatible with certbot)
+		"-name", "prime256v1",
 		"-genkey", "-noout",
 		"-out", privateKeyPath)
 
-	output, err := ecKeyCmd.CombinedOutput()
-	if err != nil {
+	if output, err := ecKeyCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to generate EC key: %v\nOutput: %s", err, output)
 	}
 
-	// Step 2: Generate a self-signed certificate for the key
 	selfSignCmd := exec.Command("openssl", "req",
 		"-new", "-x509",
 		"-key", privateKeyPath,
 		"-out", certPath,
-		"-subj", fmt.Sprintf("/CN=%s", "localhost"),
+		"-subj", "/CN=localhost",
 		"-days", "90")
 
-	output, err = selfSignCmd.CombinedOutput()
-	if err != nil {
+	if output, err := selfSignCmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to generate self-signed cert: %v\nOutput: %s", err, output)
 	}
 
@@ -159,123 +231,106 @@ func GenerateSelfCert(serverConfig *grits.Config) error {
 	return nil
 }
 
-// UpgradeToCertbot replaces self-signed certificates with Let's Encrypt certificates
-// This represents the second stage of the certificate process
-func UpgradeToCertbot(config *grits.Config, fqdn string, certbotConfig *CertbotConfig) error {
-	// First check if we already have self-signed certs
-	selfCertDir := GetCertPath(config, SelfSignedCert, "current")
-	selfKeyPath := filepath.Join(selfCertDir, "privkey.pem")
-	selfCertPath := filepath.Join(selfCertDir, "fullchain.pem")
+/////
+// Pre-opening ports and certs before privilege drop
+/////
 
-	if !fileExists(selfKeyPath) || !fileExists(selfCertPath) {
-		return fmt.Errorf("cannot upgrade to certbot: self-signed certificates for %s not found", fqdn)
-	}
+// preopened sockets - global map for sockets opened before privilege drop
+var preopenedListeners = make(map[int]net.Listener)
+var preopenedListenersMutex sync.Mutex
 
-	// Set the domain to the peer's domain in the certbot config
-	if certbotConfig.Domain == "" {
-		// If no domain is specified, we could construct one based on the peer name and subdomain
-		// This would typically come from the tracker module
-		return fmt.Errorf("domain name is required for certbot upgrade")
-	}
+// preopened TLS certificates - loaded before privilege drop
+var preopenedCerts = make(map[int]*tls.Certificate)
 
-	log.Printf("Upgrading %s from self-signed certificate to Let's Encrypt certificate", fqdn)
+// PreopenPrivilegedPorts scans the raw module configs and opens any privileged HTTP ports,
+// and also pre-loads any TLS certificates while still root.
+// This should be called before dropping privileges.
+func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
+	preopenedListenersMutex.Lock()
+	defer preopenedListenersMutex.Unlock()
 
-	// Request the certificate from Let's Encrypt
-	//leCertPath, leKeyPath, err := EnsureTLSCertificates(config, certbotConfig, true)
-	//if err != nil {
-	//	return fmt.Errorf("failed to obtain Let's Encrypt certificate: %v", err)
-	//}
-
-	// Now we have both self-signed and Let's Encrypt certificates
-	// The system can use either one depending on the context
-	log.Printf("Successfully upgraded %s to Let's Encrypt certificate", fqdn)
-
-	return nil
-}
-
-// ServeAcmeChallengeDir starts a temporary HTTP server that serves ACME challenge files from a directory
-func ServeAcmeChallengeDir(challengeDir string, done chan struct{}) error {
-	// Create directory if it doesn't exist
-	if err := os.MkdirAll(filepath.Join(challengeDir, ".well-known", "acme-challenge"), 0755); err != nil {
-		return fmt.Errorf("failed to create challenge directory: %v", err)
-	}
-
-	// Create file server for the challenge directory
-	fileServer := http.FileServer(http.Dir(challengeDir))
-
-	// Create server
-	server := &http.Server{
-		Addr:              ":8080",
-		Handler:           fileServer,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
-	log.Printf("Starting ACME challenge server on port 8080 serving from %s", challengeDir)
-
-	// Start server in goroutine
-	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			log.Printf("ACME challenge server error: %v", err)
+	for _, rawConfig := range rawModuleConfigs {
+		var baseConfig ModuleConfig
+		if err := json.Unmarshal(rawConfig, &baseConfig); err != nil {
+			continue
 		}
-	}()
 
-	// Wait for signal to shutdown
-	<-done
-
-	// Graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	return server.Shutdown(ctx)
-}
-
-// obtainCertificate gets a signed certificate from Let's Encrypt using certbot
-func obtainCertificate(cfg *CertbotConfig, configDir, workDir, logsDir string) error {
-	// Create temporary webroot for ACME challenge
-	webRootPath := filepath.Join(workDir, "webroot")
-
-	// Start the challenge server
-	done := make(chan struct{})
-	go func() {
-		if err := ServeAcmeChallengeDir(webRootPath, done); err != nil {
-			log.Printf("Error with ACME challenge server: %v", err)
+		if baseConfig.Type != "http" {
+			continue
 		}
-	}()
 
-	// Make sure to signal shutdown when we're done
-	defer close(done)
+		var httpConfig HTTPModuleConfig
+		if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {
+			log.Printf("Warning: failed to parse HTTP module config: %v", err)
+			continue
+		}
 
-	// Run certbot with webroot authentication
-	args := []string{
-		"certonly",
-		"--webroot",
-		"--webroot-path", webRootPath,
-		"--email", cfg.Email,
-		"--agree-tos",
-		"--no-eff-email",
-		"--domain", cfg.Domain,
-		"--key-type", "ecdsa",
-		"--config-dir", configDir,
-		"--work-dir", workDir,
-		"--logs-dir", logsDir,
-		"--non-interactive",
-	}
+		if grits.DebugHttp {
+			log.Printf("Pre-opening port %d", httpConfig.ThisPort)
+		}
 
-	log.Printf("Ready to serve from %s", webRootPath)
+		addr := fmt.Sprintf(":%d", httpConfig.ThisPort)
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to open port %d: %v", httpConfig.ThisPort, err)
+		}
+		preopenedListeners[httpConfig.ThisPort] = listener
 
-	cmd := exec.Command("certbot", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+		if grits.DebugHttp {
+			log.Printf("Successfully pre-opened port %d", httpConfig.ThisPort)
+		}
 
-	// Run certbot
-	err := cmd.Run()
-	if err != nil {
-		return fmt.Errorf("certbot failed: %w", err)
+		if httpConfig.EnableTls {
+			certPath, keyPath, err := resolveCertPaths(&httpConfig)
+			if err != nil {
+				return fmt.Errorf("failed to resolve cert paths for port %d: %v", httpConfig.ThisPort, err)
+			}
+
+			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				return fmt.Errorf("failed to load certificate for port %d: %v", httpConfig.ThisPort, err)
+			}
+			preopenedCerts[httpConfig.ThisPort] = &cert
+
+			if grits.DebugHttp {
+				log.Printf("Pre-loaded TLS certificate for port %d from %s", httpConfig.ThisPort, certPath)
+			}
+		}
 	}
 
 	return nil
 }
 
-// Helper function to check if a file exists
+// resolveCertPaths returns absolute paths to the cert and key files from explicit config.
+func resolveCertPaths(config *HTTPModuleConfig) (certPath, keyPath string, err error) {
+	if config.CertPath == "" || config.KeyPath == "" {
+		return "", "", fmt.Errorf("certPath and keyPath are required when enableTLS is true and autoCertificate is false")
+	}
+
+	certPath = config.CertPath
+	if !filepath.IsAbs(certPath) {
+		certPath, err = filepath.Abs(certPath)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to resolve certPath: %v", err)
+		}
+	}
+
+	keyPath = config.KeyPath
+	if !filepath.IsAbs(keyPath) {
+		keyPath, err = filepath.Abs(keyPath)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to resolve keyPath: %v", err)
+		}
+	}
+
+	if !fileExists(certPath) || !fileExists(keyPath) {
+		return "", "", fmt.Errorf("certificate files not found at %s and %s", certPath, keyPath)
+	}
+
+	return certPath, keyPath, nil
+}
+
+// fileExists returns true if the path exists on disk.
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil

@@ -64,17 +64,16 @@ type HTTPModuleConfig struct {
 
 	// For TLS certificates, two options:
 
-	// 1. Auto config:
-	AutoCertificate bool   `json:"autoCertificate,omitempty"` // Enable automatic certificate acquisition
-	CertbotEmail    string `json:"certbotEmail,omitempty"`    // Email for Let's Encrypt registration
+	// 1. Auto config: acquire and renew via the certbot helper binary.
+	//    The helper must be installed at bin/certbot-helper relative to the server directory.
+	AutoCertificate bool   `json:"autoCertificate,omitempty"`
+	CertbotEmail    string `json:"certbotEmail,omitempty"`
 
-	// 2. Manual config:
+	// 2. Manual config: provide paths to existing cert and key files.
+	//    The daemon user must be able to read these files.
+	//    Restart the server to pick up renewed certificates.
 	CertPath string `json:"certPath,omitempty"` // Path to fullchain.pem
 	KeyPath  string `json:"keyPath,omitempty"`  // Path to privkey.pem
-
-	// Temporary: Use self-signed certs instead of Let's Encrypt
-	// If both AutoCertificate and UseSelfSigned are true, AutoCertificate takes precedence
-	UseSelfSigned bool `json:"useSelfSigned,omitempty"` // Use self-signed certificates
 
 	// Size limits
 	MaxUploadSize int64 `json:"maxUploadSize,omitempty"`
@@ -92,6 +91,8 @@ type HTTPModule struct {
 	activeMirrorModule  *MirrorModule
 
 	refHolder *ReferenceHolder
+
+	stopCh chan struct{} // For cert renewal watcher
 }
 
 func (*HTTPModule) GetModuleName() string {
@@ -103,9 +104,8 @@ func (*HTTPModule) GetDependencies() []*Dependency {
 		{
 			ModuleType: "peer",
 			Type:       DependOptional,
-
-			// Ordering only - we need to load up the peer first, to
-			// get DNS working, if we're a mirror that needs certbot for TLS
+			// Ordering only — if a peer module is present, it must start first so that
+			// it can acquire a certificate for our FQDN before we try to load it.
 		},
 	}
 }
@@ -139,20 +139,17 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 
 	// Validate certificate configuration
 	if config.EnableTls {
-		// If auto certificate is enabled, email is required
-		if config.AutoCertificate && config.CertbotEmail == "" {
-			return nil, fmt.Errorf("certbotEmail is required when autoCertificate is enabled")
-		}
-
-		// If manual paths are provided, check that both cert and key are provided
-		if !config.AutoCertificate && !config.UseSelfSigned &&
-			(config.CertPath == "" || config.KeyPath == "") {
-			return nil, fmt.Errorf("certPath and keyPath are required when not using automatic certificates")
-		}
-
-		// If hostname is empty, can't use Let's Encrypt
-		if config.AutoCertificate && config.ThisHost == "" {
-			return nil, fmt.Errorf("thisHost is required for Let's Encrypt certificates")
+		if config.AutoCertificate {
+			if config.CertbotEmail == "" {
+				return nil, fmt.Errorf("certbotEmail is required when autoCertificate is enabled")
+			}
+			if config.ThisHost == "" {
+				return nil, fmt.Errorf("thisHost is required when autoCertificate is enabled")
+			}
+		} else {
+			if config.CertPath == "" || config.KeyPath == "" {
+				return nil, fmt.Errorf("certPath and keyPath are required when enableTLS is true and autoCertificate is false")
+			}
 		}
 	}
 
@@ -175,15 +172,13 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 	}
 
 	httpModule := &HTTPModule{
-		Config: config,
-		Server: server,
-
-		HTTPServer: HTTPServer,
-		Mux:        mux,
-
+		Config:      config,
+		Server:      server,
+		HTTPServer:  HTTPServer,
+		Mux:         mux,
 		deployments: make([]*DeploymentModule, 0),
-
-		refHolder: NewReferenceHolder(45 * time.Second),
+		refHolder:   NewReferenceHolder(45 * time.Second),
+		stopCh:      make(chan struct{}),
 	}
 
 	// Set up routes within the constructor or an initialization method
@@ -200,58 +195,30 @@ func (hm *HTTPModule) Start() error {
 	// Start reference holder
 	hm.refHolder.Start()
 
-	// Deal with TLS certificates
-	var err error
+	// Resolve cert paths, acquiring via certbot helper if needed
 	var certPath, keyPath string
 
 	if hm.Config.EnableTls {
 		if hm.Config.AutoCertificate {
-			// Create certificate config for Let's Encrypt
-			certbotConfig := &CertbotConfig{
-				Domain: hm.Config.ThisHost,
-				Email:  hm.Config.CertbotEmail,
+			// Acquire or renew certificate via helper if needed
+			var err error
+			certPath, keyPath, err = EnsureCertificate(hm.Server.Config, hm.Config.ThisHost, hm.Config.CertbotEmail)
+			if err != nil {
+				return fmt.Errorf("failed to ensure TLS certificate for %s: %v", hm.Config.ThisHost, err)
 			}
 
-			// Use the new certificate management structure for Let's Encrypt certificates
-			certPath, keyPath, err = EnsureTLSCertificates(hm.Server.Config, certbotConfig, true)
-			if err != nil {
-				return fmt.Errorf("let's encrypt certificate error: %v", err)
-			}
+			// Start renewal watcher
+			StartCertRenewalWatcher(hm.Server.Config, hm.Config.ThisHost, hm.Config.CertbotEmail, hm.stopCh)
 
 			if grits.DebugHttp {
-				log.Printf("Using Let's Encrypt certificates for %s", hm.Config.ThisHost)
-			}
-		} else if hm.Config.UseSelfSigned {
-			// For self-signed certificates, generate them if they don't exist
-			err := GenerateSelfCert(hm.Server.Config)
-			if err != nil {
-				return fmt.Errorf("self-signed certificate generation error: %v", err)
-			}
-
-			// Get paths to the self-signed certificates
-			certPath, keyPath = GetCertificateFiles(hm.Server.Config, SelfSignedCert, hm.Config.ThisHost)
-			if grits.DebugHttp {
-				log.Printf("Using self-signed certificates for %s", hm.Config.ThisHost)
+				log.Printf("Using auto-managed certificate for %s", hm.Config.ThisHost)
 			}
 		} else {
-			// Using manually specified certificate paths
-			// If manual certificate paths are provided, check if they're absolute paths
-			// or paths relative to the server configuration
-			if !filepath.IsAbs(hm.Config.CertPath) {
-				certPath = hm.Server.Config.ServerPath(hm.Config.CertPath)
-			} else {
-				certPath = hm.Config.CertPath
-			}
-
-			if !filepath.IsAbs(hm.Config.KeyPath) {
-				keyPath = hm.Server.Config.ServerPath(hm.Config.KeyPath)
-			} else {
-				keyPath = hm.Config.KeyPath
-			}
-
-			// Verify that the certificate files exist
-			if !fileExists(certPath) || !fileExists(keyPath) {
-				return fmt.Errorf("certificate files not found at %s and %s", certPath, keyPath)
+			// Use explicitly configured cert paths
+			var err error
+			certPath, keyPath, err = resolveCertPaths(hm.Config)
+			if err != nil {
+				return fmt.Errorf("failed to resolve certificate paths: %v", err)
 			}
 
 			if grits.DebugHttp {
@@ -263,23 +230,28 @@ func (hm *HTTPModule) Start() error {
 	// Check if we have a pre-opened listener for this port
 	preopenedListenersMutex.Lock()
 	listener, hasPreopened := preopenedListeners[hm.Config.ThisPort]
+	cert, hasCert := preopenedCerts[hm.Config.ThisPort]
 	preopenedListenersMutex.Unlock()
 
 	go func() {
 		var err error
 
 		if hasPreopened {
-			// Use the pre-opened listener
 			if grits.DebugHttp {
 				log.Printf("Using pre-opened listener for port %d", hm.Config.ThisPort)
 			}
 
 			if hm.Config.EnableTls {
-				// Load certificate from specified paths
-				var cert tls.Certificate
-				cert, err = tls.LoadX509KeyPair(certPath, keyPath)
-				if err != nil {
-					log.Fatalf("Failed to load certificate: %v", err)
+				// For auto-cert, load from the paths we just resolved.
+				// For manual cert, use pre-loaded cert if available, otherwise load now.
+				var tlsCert tls.Certificate
+				if hm.Config.AutoCertificate || !hasCert {
+					tlsCert, err = tls.LoadX509KeyPair(certPath, keyPath)
+					if err != nil {
+						log.Fatalf("Failed to load certificate: %v", err)
+					}
+				} else {
+					tlsCert = *cert
 				}
 
 				// Copy existing TLS config and set the certificate
@@ -299,16 +271,30 @@ func (hm *HTTPModule) Start() error {
 
 			// Normal binding
 			if hm.Config.EnableTls {
-				err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
+				if hasCert && !hm.Config.AutoCertificate {
+					// Use pre-loaded cert
+					tlsConfig := hm.HTTPServer.TLSConfig.Clone()
+					tlsConfig.Certificates = []tls.Certificate{*cert}
+					ln, listenErr := net.Listen("tcp", hm.HTTPServer.Addr)
+					if listenErr != nil {
+						log.Fatalf("Failed to listen on %s: %v", hm.HTTPServer.Addr, listenErr)
+					}
+					tlsListener := tls.NewListener(ln, tlsConfig)
+					err = hm.HTTPServer.Serve(tlsListener)
+				} else {
+					// Load cert from disk (either auto-acquired above or manual)
+					err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
+				}
 			} else {
 				err = hm.HTTPServer.ListenAndServe()
 			}
 		}
 
-		if err != http.ErrServerClosed {
+		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server error: %v", err)
 		}
 	}()
+
 	time.Sleep(250 * time.Millisecond)
 
 	if grits.DebugHttp {
@@ -319,6 +305,9 @@ func (hm *HTTPModule) Start() error {
 
 // Stop gracefully shuts down the HTTP server.
 func (hm *HTTPModule) Stop() error {
+	// Signal cert renewal watcher to stop
+	close(hm.stopCh)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
@@ -333,7 +322,7 @@ func (hm *HTTPModule) Stop() error {
 }
 
 /////
-// Support for pre-opening sockets
+// Pre-opening ports and certs before privilege drop
 /////
 
 // In module_http.go
@@ -342,8 +331,12 @@ func (hm *HTTPModule) Stop() error {
 var preopenedListeners = make(map[int]net.Listener)
 var preopenedListenersMutex sync.Mutex
 
-// PreopenPrivilegedPorts scans the raw module configs and opens any privileged HTTP ports
-// This should be called before dropping privileges
+// preopened TLS certificates - loaded before privilege drop
+var preopenedCerts = make(map[int]*tls.Certificate)
+
+// PreopenPrivilegedPorts scans the raw module configs and opens any privileged HTTP ports,
+// and also pre-loads any TLS certificates while still root.
+// This should be called before dropping privileges.
 func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
 	preopenedListenersMutex.Lock()
 	defer preopenedListenersMutex.Unlock()
@@ -375,10 +368,30 @@ func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
 		if err != nil {
 			return fmt.Errorf("failed to open port %d: %v", httpConfig.ThisPort, err)
 		}
-
 		preopenedListeners[httpConfig.ThisPort] = listener
+
 		if grits.DebugHttp {
 			log.Printf("Successfully pre-opened port %d", httpConfig.ThisPort)
+		}
+
+		// Pre-load TLS certificate if configured.
+		// Note: if autoCertificate is set, we don't pre-load here — the cert may not
+		// exist yet and will be acquired during Start().
+		if httpConfig.EnableTls && !httpConfig.AutoCertificate {
+			certPath, keyPath, err := resolveCertPaths(&httpConfig)
+			if err != nil {
+				return fmt.Errorf("failed to resolve cert paths for port %d: %v", httpConfig.ThisPort, err)
+			}
+
+			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				return fmt.Errorf("failed to load certificate for port %d: %v", httpConfig.ThisPort, err)
+			}
+			preopenedCerts[httpConfig.ThisPort] = &cert
+
+			if grits.DebugHttp {
+				log.Printf("Pre-loaded TLS certificate for port %d from %s", httpConfig.ThisPort, certPath)
+			}
 		}
 	}
 
