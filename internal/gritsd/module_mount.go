@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -72,16 +73,29 @@ func (m *MountModule) GetConfig() any {
 
 func (mm *MountModule) Start() error {
 	mntDir := mm.config.MountPoint
+
 	if _, err := os.Stat(mntDir); os.IsNotExist(err) {
-		// Mount point doesn't exist
+		// Mount point doesn't exist, create it
 		os.Mkdir(mntDir, 0755)
 		mm.mountPointExisted = false
-	} else if err == nil {
-		// Mount point does exist
+	} else if err != nil {
+		// Could be a stale FUSE mount ("transport endpoint is not connected") or
+		// some other error. Either way, try to unmount and see if that clears it.
+		log.Printf("Mount point %s is inaccessible (%v), attempting to unmount...", mntDir, err)
+
+		cmd := exec.Command("umount", mntDir)
+		if umountErr := cmd.Run(); umountErr != nil {
+			return fmt.Errorf("mount point %s is inaccessible and unmount failed: stat error: %v, unmount error: %v", mntDir, err, umountErr)
+		}
+
+		// Confirm it's accessible now
+		if _, err := os.Stat(mntDir); err != nil {
+			return fmt.Errorf("mount point %s still inaccessible after unmount: %v", mntDir, err)
+		}
+
 		mm.mountPointExisted = true
 	} else {
-		// Error
-		return fmt.Errorf("error trying to check %s: %v", mntDir, err)
+		mm.mountPointExisted = true
 	}
 
 	if grits.DebugServerLifecycle {
@@ -118,7 +132,27 @@ func (mm *MountModule) Start() error {
 		},
 	})
 	if err != nil {
-		return err
+		// Mount failed — try to unmount any stale mount and retry once
+		log.Printf("Mount failed on %s (%v), attempting to unmount and retry...", mntDir, err)
+
+		if umountErr := syscall.Unmount(mntDir, 0); umountErr != nil {
+			return fmt.Errorf("mount failed and unmount also failed on %s: mount error: %v, unmount error: %v", mntDir, err, umountErr)
+		}
+
+		mm.fsServer, err = fs.Mount(mntDir, root, &fs.Options{
+			MountOptions: fuse.MountOptions{
+				Debug:                    grits.DebugFuse,
+				Name:                     "grits",
+				DisableXAttrs:            true,
+				ExplicitDataCacheControl: true,
+				//AllowOther:               true,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("mount failed on %s even after unmounting: %v", mntDir, err)
+		}
+
+		log.Printf("Successfully remounted %s after clearing stale mount", mntDir)
 	}
 
 	log.Printf("FUSE mount active on %s", mntDir)
@@ -939,6 +973,17 @@ func (gn *gritsNode) flush() syscall.Errno {
 	if err != nil {
 		return fs.ToErrno(err)
 	}
+
+	//fn, err := gn.module.volume.GetFileNode(metadataBlob.GetAddress())
+	//if err != nil {
+	//	return fs.ToErrno(err)
+	//}
+	//defer fn.Release()
+
+	//_, err = fn.ExportedBlob()
+	//if err != nil {
+	//	return fs.ToErrno(err)
+	//}
 
 	gn.cachedFile = contentBlob
 	gn.cachedFile.Take()
