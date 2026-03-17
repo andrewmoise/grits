@@ -51,10 +51,18 @@ func GetCertificateFiles(config *grits.Config, certType CertificateType, entityN
 // GetLetsEncryptCertFiles returns the paths to the Let's Encrypt cert and key for a domain.
 // These are nested inside the certbot config directory structure.
 func GetLetsEncryptCertFiles(config *grits.Config, domain string) (certPath, keyPath string) {
-	certsDir := GetCertPath(config, LetsEncryptCert, domain)
-	configDir := filepath.Join(certsDir, "config")
-	certPath = filepath.Join(configDir, "live", domain, "fullchain.pem")
-	keyPath = filepath.Join(configDir, "live", domain, "privkey.pem")
+	configDir := config.ServerPath(fmt.Sprintf("var/certs/letsencrypt/%s/config", domain))
+
+	certPath, err := filepath.Abs(filepath.Join(configDir, "live", domain, "fullchain.pem"))
+	if err != nil {
+		certPath = filepath.Join(configDir, "live", domain, "fullchain.pem")
+	}
+
+	keyPath, err = filepath.Abs(filepath.Join(configDir, "live", domain, "privkey.pem"))
+	if err != nil {
+		keyPath = filepath.Join(configDir, "live", domain, "privkey.pem")
+	}
+
 	return certPath, keyPath
 }
 
@@ -85,6 +93,8 @@ func CertExpiresWithin(certPath string, d time.Duration) bool {
 func EnsureCertificate(serverConfig *grits.Config, domain, email string) (certPath, keyPath string, err error) {
 	certPath, keyPath = GetLetsEncryptCertFiles(serverConfig, domain)
 
+	log.Printf("EnsureCertificate: checking certPath=%s keyPath=%s", certPath, keyPath)
+
 	needsCert := !fileExists(certPath) || !fileExists(keyPath) || CertExpiresWithin(certPath, 7*24*time.Hour)
 	if !needsCert {
 		if grits.DebugHttp {
@@ -93,10 +103,13 @@ func EnsureCertificate(serverConfig *grits.Config, domain, email string) (certPa
 		return certPath, keyPath, nil
 	}
 
-	log.Printf("Acquiring/renewing certificate for %s", domain)
+	log.Printf("EnsureCertificate: acquiring certificate, certExists=%v keyExists=%v", fileExists(certPath), fileExists(keyPath))
+
 	if err := runCertbotHelper(serverConfig, domain, email); err != nil {
 		return "", "", fmt.Errorf("certbot helper failed for %s: %v", domain, err)
 	}
+
+	log.Printf("EnsureCertificate: after helper, certExists=%v keyExists=%v", fileExists(certPath), fileExists(keyPath))
 
 	if !fileExists(certPath) || !fileExists(keyPath) {
 		return "", "", fmt.Errorf("certbot helper succeeded but cert files not found for %s", domain)
