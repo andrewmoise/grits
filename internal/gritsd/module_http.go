@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1052,7 +1053,23 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Request) {
 	// Extract hostname from the request
-	hostname := r.Host
+	fullHost := r.Host
+
+	// Strip port if present
+	hostname, port, err := net.SplitHostPort(fullHost)
+	if err != nil {
+		// If there's an error, it likely means there's no port
+		// (SplitHostPort requires a port to be present)
+		// So just use the full host as the hostname
+		hostname = fullHost
+	} else if port != "" {
+		// Validate that port is numeric
+		if _, err := strconv.Atoi(port); err != nil {
+			log.Printf("Invalid port in request: %s", port)
+			http.Error(w, "Invalid port", http.StatusBadRequest)
+			return
+		}
+	}
 
 	// Validate hostname
 	if !Validate("hostname", hostname) {
@@ -1067,7 +1084,7 @@ func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Reques
 		if grits.DebugHttp {
 			log.Printf("Compare %s %s", deployment.Config.HostName, hostname)
 		}
-		if deployment.Config.HostName == hostname {
+		if deployment.Config.HostName == fullHost {
 			matchingDeployments = append(matchingDeployments, deployment)
 		}
 	}
