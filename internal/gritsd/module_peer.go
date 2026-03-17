@@ -15,19 +15,23 @@ import (
 
 // PeerModuleConfig defines configuration for peer functionality
 type PeerModuleConfig struct {
-	TrackerUrl string `json:"trackerUrl"` // Host of the tracker to connect to
-	PeerName   string `json:"peerName"`   // Name this peer identifies as
+	TrackerUrl   string `json:"trackerUrl"`   // Host of the tracker to connect to
+	PeerName     string `json:"peerName"`     // Name this peer identifies as
+	CertbotEmail string `json:"certbotEmail"` // Email for Let's Encrypt registration
 }
 
 type PeerModule struct {
-	Config     *PeerModuleConfig
-	Server     *Server
-	httpModule *HTTPModule // Reference to the detected HTTP module
+	Config *PeerModuleConfig
+	Server *Server
 
 	// Registration status
 	registered   bool
 	fqdn         string
 	heartbeatSec int
+
+	// Cert paths, set after successful registration and cert acquisition
+	CertPath string
+	KeyPath  string
 
 	// For heartbeat management
 	heartbeatTicker *time.Ticker
@@ -52,9 +56,6 @@ func NewPeerModule(server *Server, config *PeerModuleConfig) (*PeerModule, error
 		stoppedCh: make(chan struct{}),
 	}
 
-	// Set up module hook to find HTTP modules when they're added
-	server.AddModuleHook(pm.onModuleAdded)
-
 	return pm, nil
 }
 
@@ -62,17 +63,36 @@ func (pm *PeerModule) Start() error {
 	log.Printf("Starting PeerModule with name %s connecting to tracker %s",
 		pm.Config.PeerName, pm.Config.TrackerUrl)
 
-	// First, ensure we have self-signed certificates in the new location
+	// Ensure we have self-signed certificates for authenticating with the tracker
 	err := GenerateSelfCert(pm.Server.Config)
 	if err != nil {
 		return fmt.Errorf("failed to generate self-certificates: %v", err)
 	}
 
-	// Attempt initial registration
+	// Attempt initial registration — this gives us our FQDN
 	err = pm.registerWithTracker()
 	if err != nil {
 		return fmt.Errorf("failed to register with tracker: %v", err)
 	}
+
+	// Now that we have our FQDN, acquire a certificate for it if needed.
+	// If the cert is expired at startup and we can't acquire one, fail hard.
+	if pm.Config.CertbotEmail == "" {
+		return fmt.Errorf("email is required for certificate acquisition")
+	}
+
+	certPath, keyPath, err := EnsureCertificate(pm.Server.Config, pm.fqdn, pm.Config.CertbotEmail)
+	if err != nil {
+		return fmt.Errorf("failed to acquire TLS certificate for %s: %v", pm.fqdn, err)
+	}
+
+	pm.CertPath = certPath
+	pm.KeyPath = keyPath
+
+	log.Printf("Certificate acquired for %s", pm.fqdn)
+
+	// Start cert renewal watcher
+	StartCertRenewalWatcher(pm.Server.Config, pm.fqdn, pm.Config.CertbotEmail, pm.stopCh)
 
 	// Start heartbeat loop
 	go pm.heartbeatLoop()
@@ -108,24 +128,13 @@ func (pm *PeerModule) heartbeatLoop() {
 func (pm *PeerModule) registerWithTracker() error {
 	log.Printf("Registering peer with tracker: %s", pm.Config.PeerName)
 
-	var thisPort int
-
-	// Check if we have an HTTP module
-	if pm.httpModule == nil {
-		log.Printf("No HTTP module for peer.")
-		thisPort = -1
-		//return nil
-	} else {
-		thisPort = pm.httpModule.Config.ThisPort
-	}
-
 	// Prepare request payload
 	payload := struct {
 		PeerName string `json:"peerName"`
 		Port     int    `json:"port"`
 	}{
 		PeerName: pm.Config.PeerName,
-		Port:     thisPort,
+		Port:     -1, // Port is determined by the HTTP module; peer module doesn't know it
 	}
 
 	// Convert to JSON
@@ -151,15 +160,7 @@ func (pm *PeerModule) registerWithTracker() error {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	// Create HTTP client with TLS certificate
-	var client *http.Client
-
-	// Use client certificate for authentication
-	err = GenerateSelfCert(pm.Server.Config)
-	if err != nil {
-		return fmt.Errorf("couldn't generate self certificates: %v", err)
-	}
-
+	// Use our self-signed client certificate for authentication with the tracker
 	certPath, keyPath := GetCertificateFiles(pm.Server.Config, SelfSignedCert, "current")
 	log.Printf("Using certificate files: cert=%s, key=%s", certPath, keyPath)
 
@@ -176,12 +177,12 @@ func (pm *PeerModule) registerWithTracker() error {
 		return fmt.Errorf("failed to load client certificate: %v", err)
 	}
 
-	// Create TLS config with our certificate and skip verification for self-signed server cert
+	// Create TLS config with our certificate
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 	}
 
-	client = &http.Client{
+	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: tlsConfig,
 		},
@@ -265,21 +266,4 @@ func (*PeerModule) GetDependencies() []*Dependency {
 
 func (pm *PeerModule) GetConfig() any {
 	return pm.Config
-}
-
-// onModuleAdded is called whenever a new module is added to the server
-func (pm *PeerModule) onModuleAdded(module Module) {
-	// Check if it's an HTTP module
-	httpModule, ok := module.(*HTTPModule)
-	if !ok {
-		return
-	}
-
-	// We found an HTTP module - check if we already found one before
-	if pm.httpModule != nil {
-		log.Fatalf("Multiple HTTP modules found.")
-	}
-
-	pm.httpModule = httpModule
-	log.Printf("PeerModule: Using HTTP module port %d", httpModule.Config.ThisPort)
 }
