@@ -1,0 +1,849 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>shell</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:          #0e0f11;
+    --bg2:         #13151a;
+    --bg3:         #1a1d24;
+    --border:      #2a2d36;
+    --border-hi:   #3d4150;
+    --accent:      #5b8dd9;
+    --accent-dim:  #3a5a8a;
+    --text:        #c8cdd8;
+    --text-dim:    #6b7080;
+    --text-hi:     #e8ecf4;
+    --danger:      #c45a5a;
+    --strip-w:     52px;
+    --title-h:     28px;
+    --divider-w:   5px;
+    --divider-h:   5px;
+    --strip-divider-y: 160px;
+  }
+
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13px;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* ── ROOT LAYOUT ─────────────────────────────────── */
+  #root {
+    display: flex;
+    width: 100%; height: 100%;
+  }
+
+  /* ── WORKSPACE (master + stack) ──────────────────── */
+  #workspace {
+    flex: 1 1 0;
+    display: flex;
+    min-width: 0;
+    position: relative;
+  }
+
+  /* ── MASTER PANE ─────────────────────────────────── */
+  #master {
+    flex: 0 0 auto;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+  }
+
+  #master-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-dim);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    opacity: 0.4;
+  }
+
+  /* ── MASTER/STACK DIVIDER ────────────────────────── */
+  #ms-divider {
+    width: var(--divider-w);
+    background: var(--border);
+    cursor: col-resize;
+    flex: 0 0 var(--divider-w);
+    position: relative;
+    transition: background 0.15s;
+    z-index: 10;
+  }
+  #ms-divider:hover, #ms-divider.dragging { background: var(--accent-dim); }
+  #ms-divider::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 1px; height: 32px;
+    background: var(--border-hi);
+    border-radius: 1px;
+  }
+
+  /* ── STACK PANE ──────────────────────────────────── */
+  #stack {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    position: relative;
+  }
+
+  /* ── ICON STRIP ──────────────────────────────────── */
+  #strip {
+    width: var(--strip-w);
+    flex: 0 0 var(--strip-w);
+    background: var(--bg2);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 0;
+    gap: 4px;
+    position: relative;
+    z-index: 20;
+  }
+
+  .strip-launcher {
+    width: 36px; height: 36px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    position: relative;
+  }
+  .strip-launcher:hover {
+    background: var(--bg3);
+    border-color: var(--border);
+    color: var(--text-hi);
+  }
+  .strip-launcher:active { background: var(--border); }
+  .strip-launcher svg { width: 18px; height: 18px; }
+  .strip-launcher .tip {
+    display: none;
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 50%; transform: translateY(-50%);
+    background: var(--bg3);
+    border: 1px solid var(--border-hi);
+    color: var(--text-hi);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .strip-launcher:hover .tip { display: block; }
+
+  #strip-divider-line {
+    width: 28px;
+    height: 1px;
+    background: var(--border);
+    margin: 4px 0;
+    flex-shrink: 0;
+  }
+
+  #minimized-section {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-bottom: 8px;
+  }
+  #minimized-section::-webkit-scrollbar { width: 0; }
+
+  /* ── SCROLLBARS ──────────────────────────────────── */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-hi);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  * { scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
+
+  .min-thumb {
+    width: 36px; height: 36px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg3);
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color 0.12s, color 0.12s, background 0.12s;
+    position: relative;
+    font-size: 10px;
+    letter-spacing: 0;
+  }
+  .min-thumb:hover { border-color: var(--accent-dim); color: var(--text-hi); background: var(--bg); }
+  .min-thumb svg { width: 16px; height: 16px; }
+  .min-thumb .tip {
+    display: none;
+    position: absolute;
+    right: calc(100% + 8px);
+    top: 50%; transform: translateY(-50%);
+    background: var(--bg3);
+    border: 1px solid var(--border-hi);
+    color: var(--text-hi);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 100;
+  }
+  .min-thumb:hover .tip { display: block; }
+
+  /* ── WIDGET ──────────────────────────────────────── */
+  .widget {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
+    min-height: 0;
+  }
+
+  .widget.in-master {
+    flex: 1;
+    border-top: none; border-left: none; border-bottom: none; border-right: none;
+    border-right: none;
+  }
+
+  .widget.in-stack {
+    /* height set by layout engine via flex */
+  }
+
+  /* title bar */
+  .widget-title {
+    height: var(--title-h);
+    background: var(--bg3);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 6px 0 10px;
+    gap: 6px;
+    flex-shrink: 0;
+    cursor: grab;
+  }
+  .widget-title:active { cursor: grabbing; }
+
+  .widget-name {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .widget-btn {
+    width: 20px; height: 20px;
+    border-radius: 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0;
+    transition: background 0.1s, color 0.1s;
+    flex-shrink: 0;
+  }
+  .widget-btn:hover { background: var(--border); color: var(--text-hi); }
+  .widget-btn.danger:hover { background: var(--danger); color: #fff; }
+  .widget-btn svg { width: 12px; height: 12px; }
+
+  .widget-body {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+    padding: 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  /* stack-internal dividers */
+  .stack-divider {
+    height: var(--divider-h);
+    background: var(--border);
+    cursor: row-resize;
+    flex: 0 0 var(--divider-h);
+    position: relative;
+    transition: background 0.15s;
+    z-index: 5;
+  }
+  .stack-divider:hover, .stack-divider.dragging { background: var(--accent-dim); }
+  .stack-divider::after {
+    content: '';
+    position: absolute;
+    left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    height: 1px; width: 32px;
+    background: var(--border-hi);
+    border-radius: 1px;
+  }
+
+  /* drag ghost */
+  #drag-ghost {
+    position: fixed;
+    pointer-events: none;
+    z-index: 9999;
+    background: var(--bg3);
+    border: 1px solid var(--accent-dim);
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 11px;
+    color: var(--accent);
+    opacity: 0.85;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="root">
+  <div id="workspace">
+    <div id="master"></div>
+    <div id="ms-divider"></div>
+    <div id="stack"></div>
+  </div>
+  <div id="strip">
+    <!-- launchers injected here -->
+    <div id="strip-divider-line"></div>
+    <div id="minimized-section"></div>
+  </div>
+</div>
+<div id="drag-ghost"></div>
+
+<script>
+// ─────────────────────────────────────────────────────────
+// SVG ICON LIBRARY
+// ─────────────────────────────────────────────────────────
+const ICONS = {
+  terminal: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+  files:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
+  editor:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>`,
+  search:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+  settings: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`,
+  // title bar controls
+  minimize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  maximize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`,
+  promote:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
+  close:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  move:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 9 2 12 5 15"/><polyline points="9 5 12 2 15 5"/><polyline points="15 19 12 22 9 19"/><polyline points="19 9 22 12 19 15"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="12" y1="2" x2="12" y2="22"/></svg>`,
+  demote:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="10" y1="14" x2="21" y2="3"/><line x1="3" y1="21" x2="14" y2="10"/></svg>`,
+};
+
+// ─────────────────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────────────────
+let widgetSeq = 0;
+const widgets = new Map(); // id → { id, name, icon, zone, masterHistory, stackOrder, flexRatio }
+// zone: 'master' | 'stack' | 'minimized'
+// masterHistory: timestamp of last time in master (or 0)
+// stackOrder: index among stack widgets (for ordering)
+// flexRatio: proportion of stack height (0..1)
+
+// Launcher registry
+const LAUNCHERS = [
+  { id: 'terminal', name: 'Terminal',     icon: 'terminal', defaultZone: 'stack' },
+  { id: 'files',    name: 'File Browser', icon: 'files',    defaultZone: 'master' },
+  { id: 'editor',   name: 'Editor',       icon: 'editor',   defaultZone: 'master' },
+  { id: 'search',   name: 'Search',       icon: 'search',   defaultZone: 'stack' },
+  { id: 'settings', name: 'Settings',     icon: 'settings', defaultZone: 'stack' },
+];
+
+// Master/stack split (fraction of workspace for master)
+let masterFrac = 0.62;
+
+// ─────────────────────────────────────────────────────────
+// DOM HELPERS
+// ─────────────────────────────────────────────────────────
+const el = (tag, cls, html) => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html) e.innerHTML = html;
+  return e;
+};
+const $ = id => document.getElementById(id);
+
+// ─────────────────────────────────────────────────────────
+// LAYOUT ENGINE
+// ─────────────────────────────────────────────────────────
+function render() {
+  const masterEl = $('master');
+  const stackEl  = $('stack');
+  const minEl    = $('minimized-section');
+  const ws       = $('workspace');
+  const msd      = $('ms-divider');
+
+  // Partition widgets
+  const master    = [...widgets.values()].filter(w => w.zone === 'master');
+  const stack     = [...widgets.values()].filter(w => w.zone === 'stack')
+                      .sort((a,b) => a.stackOrder - b.stackOrder);
+  const minimized = [...widgets.values()].filter(w => w.zone === 'minimized');
+
+  const hasStack  = stack.length > 0;
+  const hasMaster = master.length > 0;
+
+  // Show/hide master-stack divider
+  msd.style.display = (hasMaster && hasStack) ? '' : 'none';
+
+  // Set master width
+  if (hasMaster && hasStack) {
+    masterEl.style.width = (masterFrac * 100) + '%';
+  } else if (hasMaster) {
+    masterEl.style.width = '100%';
+  } else {
+    masterEl.style.width = hasStack ? '0' : '100%';
+  }
+
+  // ── MASTER ──
+  masterEl.innerHTML = '';
+  if (hasMaster) {
+    masterEl.appendChild(buildWidget(master[0], 'master'));
+  } else {
+    const emp = el('div', null, '');
+    emp.id = 'master-empty';
+    emp.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:11px;letter-spacing:0.1em;opacity:0.35;';
+    emp.textContent = 'no master window';
+    masterEl.appendChild(emp);
+  }
+
+  // ── STACK ──
+  stackEl.innerHTML = '';
+  if (stack.length > 0) {
+    // Normalise flex ratios
+    const total = stack.reduce((s,w) => s + (w.flexRatio || 1), 0);
+    stack.forEach(w => w.flexRatio = (w.flexRatio || 1) / total);
+
+    stack.forEach((w, i) => {
+      const wEl = buildWidget(w, 'stack');
+      wEl.style.flex = `${w.flexRatio} 1 0`;
+      wEl.style.minHeight = '48px';
+      stackEl.appendChild(wEl);
+      if (i < stack.length - 1) {
+        const div = el('div', 'stack-divider');
+        div.dataset.above = w.id;
+        div.dataset.below = stack[i+1].id;
+        stackEl.appendChild(div);
+        bindStackDivider(div);
+      }
+    });
+  }
+
+  // ── MINIMIZED ──
+  minEl.innerHTML = '';
+  minimized.forEach(w => {
+    const thumb = el('div', 'min-thumb');
+    thumb.innerHTML = ICONS[w.icon] + `<span class="tip">${w.name}</span>`;
+    thumb.title = '';
+    thumb.addEventListener('click', () => restoreWidget(w.id));
+    minEl.appendChild(thumb);
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// WIDGET BUILDER
+// ─────────────────────────────────────────────────────────
+function buildWidget(w, zone) {
+  const wrap = el('div', `widget in-${zone}`);
+  wrap.dataset.id = w.id;
+
+  // title bar
+  const title = el('div', 'widget-title');
+
+  const nameEl = el('span', 'widget-name', w.name);
+  title.appendChild(nameEl);
+
+  // Buttons depend on zone
+  const btns = [];
+
+  if (zone === 'stack') {
+    // Promote to master
+    btns.push({ icon: 'promote', label: 'send to master', action: () => promoteWidget(w.id) });
+  } else if (zone === 'master') {
+    // Demote back to stack
+    const stackWidgets = [...widgets.values()].filter(x => x.zone === 'stack');
+    if (stackWidgets.length > 0) {
+      btns.push({ icon: 'demote', label: 'send to stack', action: () => demoteWidget(w.id) });
+    }
+  }
+
+  // Maximize (send others to minimized)
+  btns.push({ icon: 'maximize', label: 'maximize', action: () => maximizeWidget(w.id) });
+  // Minimize
+  btns.push({ icon: 'minimize', label: 'minimize', action: () => minimizeWidget(w.id) });
+  // Close
+  btns.push({ icon: 'close',   label: 'close',    action: () => closeWidget(w.id), danger: true });
+
+  btns.forEach(b => {
+    const btn = el('button', `widget-btn${b.danger ? ' danger' : ''}`, ICONS[b.icon]);
+    btn.title = b.label;
+    btn.addEventListener('click', e => { e.stopPropagation(); b.action(); });
+    title.appendChild(btn);
+  });
+
+  // Title bar drag-to-move
+  bindTitleDrag(title, w);
+
+  wrap.appendChild(title);
+
+  // body
+  const body = el('div', 'widget-body');
+  body.innerHTML = demoContent(w);
+  wrap.appendChild(body);
+
+  return wrap;
+}
+
+function demoContent(w) {
+  const palettes = {
+    terminal: `<span style="color:var(--accent)">user@shell</span><span style="color:var(--text-dim)">:</span><span style="color:#7ec8a0">~</span><span style="color:var(--text-dim)"> $ </span>ls -la<br>
+<span style="color:var(--text-dim)">total 12</span><br>
+drwxr-xr-x  bin/<br>
+drwxr-xr-x  etc/<br>
+-rw-r--r--  readme.md<br>
+<span style="color:var(--accent)">user@shell</span><span style="color:var(--text-dim)">:</span><span style="color:#7ec8a0">~</span><span style="color:var(--text-dim)"> $ </span><span style="border-left:2px solid var(--text);animation:blink 1s step-end infinite">&nbsp;</span>`,
+    files: `<div style="display:flex;flex-direction:column;gap:3px;">
+${['📁 bin','📁 etc','📁 usr','📄 readme.md','📄 config.json'].map(f=>`<div style="padding:2px 4px;border-radius:3px;cursor:pointer;transition:background 0.1s" onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">${f}</div>`).join('')}</div>`,
+    editor: `<span style="color:var(--text-dim);font-size:11px">// shell.js</span><br>
+<span style="color:#c792ea">const</span> <span style="color:#82aaff">vfs</span> = <span style="color:#c792ea">new</span> <span style="color:#ffcb6b">VFS</span>();<br>
+<span style="color:#c792ea">await</span> vfs.<span style="color:#82aaff">mount</span>(<span style="color:#c3e88d">'/remote'</span>, remoteBackend);<br>
+<span style="color:#c792ea">await</span> vfs.<span style="color:#82aaff">mount</span>(<span style="color:#c3e88d">'/local'</span>,  localBackend);<br>`,
+    search: `<input style="background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:inherit;font-size:12px;padding:6px 10px;border-radius:4px;width:100%;outline:none;margin-bottom:8px" placeholder="search files..." /><div style="color:var(--text-dim);font-size:11px">no results</div>`,
+    settings: `<div style="display:flex;flex-direction:column;gap:10px;font-size:12px">
+<div style="color:var(--text-dim)">theme</div>
+<div style="display:flex;gap:8px"><span style="background:var(--bg3);padding:3px 10px;border-radius:4px;border:1px solid var(--accent-dim)">dark</span><span style="padding:3px 10px;border-radius:4px;border:1px solid var(--border);cursor:pointer">light</span></div>
+</div>`,
+  };
+  return palettes[w.icon] || `<span style="color:var(--text-dim)">${w.name}</span>`;
+}
+
+// ─────────────────────────────────────────────────────────
+// WINDOW OPERATIONS
+// ─────────────────────────────────────────────────────────
+function openWidget(launcherId) {
+  const launcher = LAUNCHERS.find(l => l.id === launcherId);
+  if (!launcher) return;
+
+  const id = ++widgetSeq;
+  const targetZone = launcher.defaultZone;
+  const now = Date.now();
+
+  // If opening as master, evict current master to stack
+  if (targetZone === 'master') {
+    const cur = [...widgets.values()].find(w => w.zone === 'master');
+    if (cur) {
+      cur.zone = 'stack';
+      cur.stackOrder = stackMaxOrder() + 1;
+    }
+  }
+
+  const stackOrder = targetZone === 'stack' ? stackMaxOrder() + 1 : 0;
+
+  // New stack widget gets equal share: existing widgets scale to n/(n+1), new one gets 1/(n+1) of total
+  let newRatio = 1;
+  if (targetZone === 'stack') {
+    const existing = [...widgets.values()].filter(w => w.zone === 'stack');
+    const n = existing.length;
+    if (n > 0) {
+      const totalRatio = existing.reduce((s, w) => s + (w.flexRatio || 1), 0);
+      existing.forEach(w => w.flexRatio = (w.flexRatio || 1) * n / (n + 1));
+      newRatio = totalRatio / (n + 1);
+    }
+  }
+
+  widgets.set(id, {
+    id,
+    name: launcher.name,
+    icon: launcher.id,
+    zone: targetZone,
+    masterHistory: targetZone === 'master' ? now : 0,
+    stackOrder,
+    flexRatio: newRatio,
+  });
+
+  render();
+}
+
+function closeWidget(id) {
+  const w = widgets.get(id);
+  if (!w) return;
+  const wasMaster = w.zone === 'master';
+  widgets.delete(id);
+  if (wasMaster) electNewMaster();
+  normalizeStackOrder();
+  render();
+}
+
+function minimizeWidget(id) {
+  const w = widgets.get(id);
+  if (!w) return;
+  const wasMaster = w.zone === 'master';
+  w.zone = 'minimized';
+  if (wasMaster) electNewMaster();
+  normalizeStackOrder();
+  render();
+}
+
+function maximizeWidget(id) {
+  // Send everything else that's visible to minimized
+  widgets.forEach((w, wid) => {
+    if (wid !== id && (w.zone === 'master' || w.zone === 'stack')) {
+      w.zone = 'minimized';
+    }
+  });
+  const w = widgets.get(id);
+  w.zone = 'master';
+  w.masterHistory = Date.now();
+  normalizeStackOrder();
+  render();
+}
+
+function promoteWidget(id) {
+  // Move from stack to master, evict current master to stack
+  const w = widgets.get(id);
+  if (!w) return;
+  const cur = [...widgets.values()].find(x => x.zone === 'master');
+  if (cur) {
+    cur.zone = 'stack';
+    cur.stackOrder = stackMaxOrder() + 1;
+  }
+  w.zone = 'master';
+  w.masterHistory = Date.now();
+  normalizeStackOrder();
+  render();
+}
+
+function demoteWidget(id) {
+  const w = widgets.get(id);
+  if (!w) return;
+  w.zone = 'stack';
+  w.stackOrder = stackMaxOrder() + 1;
+  electNewMaster();
+  normalizeStackOrder();
+  render();
+}
+
+function restoreWidget(id) {
+  const w = widgets.get(id);
+  if (!w) return;
+  // Restore to its preferred zone; if master is occupied, go to stack
+  const masterOccupied = [...widgets.values()].some(x => x.zone === 'master');
+  if (!masterOccupied && w.masterHistory > 0) {
+    w.zone = 'master';
+    w.masterHistory = Date.now();
+  } else {
+    w.zone = 'stack';
+    w.stackOrder = stackMaxOrder() + 1;
+  }
+  normalizeStackOrder();
+  render();
+}
+
+function electNewMaster() {
+  // Find stack widget with highest masterHistory; if none ever was master, leave empty
+  const candidates = [...widgets.values()]
+    .filter(w => w.zone === 'stack' && w.masterHistory > 0)
+    .sort((a,b) => b.masterHistory - a.masterHistory);
+  if (candidates.length > 0) {
+    const next = candidates[0];
+    next.zone = 'master';
+    next.masterHistory = Date.now();
+  }
+}
+
+function stackMaxOrder() {
+  const orders = [...widgets.values()].filter(w => w.zone === 'stack').map(w => w.stackOrder);
+  return orders.length ? Math.max(...orders) : 0;
+}
+
+function normalizeStackOrder() {
+  const stack = [...widgets.values()].filter(w => w.zone === 'stack')
+    .sort((a,b) => a.stackOrder - b.stackOrder);
+  stack.forEach((w,i) => w.stackOrder = i);
+}
+
+// ─────────────────────────────────────────────────────────
+// DIVIDER DRAG — master/stack split
+// ─────────────────────────────────────────────────────────
+(function() {
+  const div = $('ms-divider');
+  let dragging = false, startX, startFrac;
+
+  div.addEventListener('mousedown', e => {
+    dragging = true; startX = e.clientX; startFrac = masterFrac;
+    div.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const ws = $('workspace').getBoundingClientRect();
+    const stripW = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--strip-w'));
+    const totalW = ws.width - stripW - 5; // minus divider itself
+    const dx = e.clientX - startX;
+    masterFrac = Math.max(0.15, Math.min(0.85, startFrac + dx / totalW));
+    $('master').style.width = (masterFrac * 100) + '%';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    div.classList.remove('dragging');
+  });
+})();
+
+// ─────────────────────────────────────────────────────────
+// DIVIDER DRAG — stack internal
+// ─────────────────────────────────────────────────────────
+function bindStackDivider(divEl) {
+  let dragging = false, startY, aboveW, belowW, totalH;
+
+  divEl.addEventListener('mousedown', e => {
+    dragging = true;
+    startY = e.clientY;
+    const above = widgets.get(parseInt(divEl.dataset.above));
+    const below = widgets.get(parseInt(divEl.dataset.below));
+    aboveW = above; belowW = below;
+
+    const stack = [...widgets.values()].filter(w => w.zone === 'stack');
+    totalH = stack.reduce((s,w) => s + w.flexRatio, 0);
+
+    divEl.classList.add('dragging');
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const stackEl = $('stack');
+    const rect = stackEl.getBoundingClientRect();
+    // pixels per flex unit
+    const stackH = rect.height;
+    const stackWidgets = [...widgets.values()].filter(w => w.zone === 'stack');
+    const totalRatio = stackWidgets.reduce((s,w) => s + w.flexRatio, 0);
+    const pixPerUnit = stackH / totalRatio;
+
+    const dy = e.clientY - startY;
+    const delta = dy / pixPerUnit;
+    const newAbove = Math.max(0.05, aboveW.flexRatio + delta);
+    const newBelow = Math.max(0.05, belowW.flexRatio - delta);
+    aboveW.flexRatio = newAbove;
+    belowW.flexRatio = newBelow;
+    startY = e.clientY;
+    render();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    divEl.classList.remove('dragging');
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// TITLE BAR DRAG — move between zones
+// ─────────────────────────────────────────────────────────
+function bindTitleDrag(titleEl, w) {
+  let dragging = false, ghost;
+
+  titleEl.addEventListener('mousedown', e => {
+    // Only trigger on the title text area, not the buttons
+    if (e.target.closest('.widget-btn')) return;
+    dragging = true;
+    ghost = $('drag-ghost');
+    ghost.textContent = `↳ ${w.name}`;
+    ghost.style.display = 'block';
+    moveghost(e);
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    moveghost(e);
+  });
+
+  document.addEventListener('mouseup', e => {
+    if (!dragging) return;
+    dragging = false;
+    ghost.style.display = 'none';
+
+    // Determine drop zone from mouse position
+    const masterRect = $('master').getBoundingClientRect();
+    const stackRect  = $('stack').getBoundingClientRect();
+
+    const inMaster = e.clientX >= masterRect.left && e.clientX <= masterRect.right &&
+                     e.clientY >= masterRect.top  && e.clientY <= masterRect.bottom;
+    const inStack  = e.clientX >= stackRect.left  && e.clientX <= stackRect.right &&
+                     e.clientY >= stackRect.top   && e.clientY <= stackRect.bottom;
+
+    if (inMaster && w.zone !== 'master') {
+      promoteWidget(w.id);
+    } else if (inStack && w.zone !== 'stack') {
+      demoteWidget(w.id);
+    }
+    // else: no-op, stays where it is
+  });
+
+  function moveghost(e) {
+    ghost.style.left = (e.clientX + 14) + 'px';
+    ghost.style.top  = (e.clientY + 10) + 'px';
+  }
+}
+
+// ─────────────────────────────────────────────────────────
+// STRIP LAUNCHERS
+// ─────────────────────────────────────────────────────────
+function buildStrip() {
+  const strip = $('strip');
+  const divLine = $('strip-divider-line');
+  LAUNCHERS.forEach(l => {
+    const btn = el('div', 'strip-launcher');
+    btn.innerHTML = ICONS[l.icon] + `<span class="tip">${l.name}</span>`;
+    btn.addEventListener('click', () => openWidget(l.id));
+    strip.insertBefore(btn, divLine);
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// BLINK CURSOR CSS
+// ─────────────────────────────────────────────────────────
+const style = document.createElement('style');
+style.textContent = `@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }`;
+document.head.appendChild(style);
+
+// ─────────────────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────────────────
+buildStrip();
+// Open a default file browser in master and terminal in stack
+openWidget('files');
+openWidget('terminal');
+render();
+</script>
+</body>
+</html>
