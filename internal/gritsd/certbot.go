@@ -105,7 +105,6 @@ func EnsureCertificate(serverConfig *grits.Config, domain, email string) (certPa
 	return certPath, keyPath, nil
 }
 
-// runCertbotHelper invokes the setuid certbot helper binary.
 func runCertbotHelper(serverConfig *grits.Config, domain, email string) error {
 	helperPath := serverConfig.ServerPath("bin/certbot-helper")
 
@@ -115,10 +114,16 @@ func runCertbotHelper(serverConfig *grits.Config, domain, email string) error {
 
 	certDir := GetCertPath(serverConfig, LetsEncryptCert, domain)
 
+	// Helper requires an absolute path
+	absCertDir, err := filepath.Abs(certDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve cert dir to absolute path: %v", err)
+	}
+
 	cmd := exec.Command(helperPath,
 		"--domain", domain,
 		"--email", email,
-		"--cert-dir", certDir)
+		"--cert-dir", absCertDir)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
