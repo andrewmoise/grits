@@ -256,9 +256,7 @@ func (hm *HTTPModule) Start() error {
 
 				// Copy existing TLS config and set the certificate
 				tlsConfig := hm.HTTPServer.TLSConfig.Clone()
-				tlsConfig.Certificates = []tls.Certificate{cert}
-
-				// Wrap with TLS
+				tlsConfig.Certificates = []tls.Certificate{tlsCert}
 				tlsListener := tls.NewListener(listener, tlsConfig)
 				err = hm.HTTPServer.Serve(tlsListener)
 			} else {
