@@ -208,7 +208,7 @@ func (hm *HTTPModule) Start() error {
 			}
 
 			// Start renewal watcher
-			StartCertRenewalWatcher(hm.Server.Config, hm.Config.ThisHost, hm.Config.CertbotEmail, hm.stopCh)
+			StartCertRenewalWatcher(hm.Server.Config, hm.Config.ThisHost, hm.stopCh)
 
 			if grits.DebugHttp {
 				log.Printf("Using auto-managed certificate for %s", hm.Config.ThisHost)
@@ -254,7 +254,6 @@ func (hm *HTTPModule) Start() error {
 					tlsCert = *cert
 				}
 
-				// Copy existing TLS config and set the certificate
 				tlsConfig := hm.HTTPServer.TLSConfig.Clone()
 				tlsConfig.Certificates = []tls.Certificate{tlsCert}
 				tlsListener := tls.NewListener(listener, tlsConfig)
@@ -267,7 +266,6 @@ func (hm *HTTPModule) Start() error {
 				log.Printf("No pre-opened port %d, opening new", hm.Config.ThisPort)
 			}
 
-			// Normal binding
 			if hm.Config.EnableTls {
 				if hasCert && !hm.Config.AutoCertificate {
 					// Use pre-loaded cert
@@ -323,8 +321,6 @@ func (hm *HTTPModule) Stop() error {
 // Pre-opening ports and certs before privilege drop
 /////
 
-// In module_http.go
-
 // preopened sockets - global map for sockets opened before privilege drop
 var preopenedListeners = make(map[int]net.Listener)
 var preopenedListenersMutex sync.Mutex
@@ -332,15 +328,14 @@ var preopenedListenersMutex sync.Mutex
 // preopened TLS certificates - loaded before privilege drop
 var preopenedCerts = make(map[int]*tls.Certificate)
 
-// PreopenPrivilegedPorts scans the raw module configs and opens any privileged HTTP ports,
-// and also pre-loads any TLS certificates while still root.
+// PreopenPrivilegedPorts scans the raw module configs, opens any privileged HTTP ports,
+// acquires any needed TLS certificates (requires root), and pre-loads the certs.
 // This should be called before dropping privileges.
-func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
+func PreopenPrivilegedPorts(serverConfig *grits.Config, rawModuleConfigs []json.RawMessage) error {
 	preopenedListenersMutex.Lock()
 	defer preopenedListenersMutex.Unlock()
 
 	for _, rawConfig := range rawModuleConfigs {
-		// First, check if this is an HTTP module
 		var baseConfig ModuleConfig
 		if err := json.Unmarshal(rawConfig, &baseConfig); err != nil {
 			continue
@@ -350,7 +345,6 @@ func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
 			continue
 		}
 
-		// Now unmarshal the HTTP config
 		var httpConfig HTTPModuleConfig
 		if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {
 			log.Printf("Warning: failed to parse HTTP module config: %v", err)
@@ -372,24 +366,36 @@ func PreopenPrivilegedPorts(rawModuleConfigs []json.RawMessage) error {
 			log.Printf("Successfully pre-opened port %d", httpConfig.ThisPort)
 		}
 
-		// Pre-load TLS certificate if configured.
-		// Note: if autoCertificate is set, we don't pre-load here — the cert may not
-		// exist yet and will be acquired during Start().
-		if httpConfig.EnableTls && !httpConfig.AutoCertificate {
-			certPath, keyPath, err := resolveCertPaths(&httpConfig)
+		if !httpConfig.EnableTls {
+			continue
+		}
+
+		// Resolve cert paths, acquiring via certbot if needed (we're still root here)
+		var certPath, keyPath string
+
+		if httpConfig.AutoCertificate {
+			if httpConfig.CertbotEmail == "" {
+				return fmt.Errorf("certbotEmail is required when autoCertificate is enabled (port %d)", httpConfig.ThisPort)
+			}
+			certPath, keyPath, err = EnsureCertificate(serverConfig, httpConfig.ThisHost, httpConfig.CertbotEmail)
+			if err != nil {
+				return fmt.Errorf("failed to ensure certificate for %s: %v", httpConfig.ThisHost, err)
+			}
+		} else {
+			certPath, keyPath, err = resolveCertPaths(&httpConfig)
 			if err != nil {
 				return fmt.Errorf("failed to resolve cert paths for port %d: %v", httpConfig.ThisPort, err)
 			}
+		}
 
-			cert, err := tls.LoadX509KeyPair(certPath, keyPath)
-			if err != nil {
-				return fmt.Errorf("failed to load certificate for port %d: %v", httpConfig.ThisPort, err)
-			}
-			preopenedCerts[httpConfig.ThisPort] = &cert
+		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load certificate for port %d: %v", httpConfig.ThisPort, err)
+		}
+		preopenedCerts[httpConfig.ThisPort] = &cert
 
-			if grits.DebugHttp {
-				log.Printf("Pre-loaded TLS certificate for port %d from %s", httpConfig.ThisPort, certPath)
-			}
+		if grits.DebugHttp {
+			log.Printf("Pre-loaded TLS certificate for port %d from %s", httpConfig.ThisPort, certPath)
 		}
 	}
 
@@ -1294,15 +1300,6 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Returning 304 Not Modified\n")
 		return
 	}
-
-	// Check if there's an extension
-	//if lastDotIndex := strings.LastIndex(path, "."); lastDotIndex != -1 {
-	//	extension := path[lastDotIndex+1:]
-	//	contentType := getContentTypeFromExtension(extension)
-	//	if contentType != "" {
-	//		w.Header().Set("Content-Type", contentType)
-	//	}
-	//}
 
 	if r.Method == http.MethodHead {
 		// For HEAD requests, we've already set all needed headers

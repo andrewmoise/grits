@@ -74,7 +74,7 @@ func setupLogging(dir string) *os.File {
 		panic(fmt.Sprintf("Failed to create log directory: %v", err))
 	}
 
-	logFileName := fmt.Sprintf(dir + "/grits-%s.log", time.Now().Format("2006-01-02"))
+	logFileName := fmt.Sprintf(dir+"/grits-%s.log", time.Now().Format("2006-01-02"))
 	f, err := os.OpenFile(logFileName, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0755)
 	if err != nil {
 		log.Fatalf("error opening file: %v", err)
@@ -91,15 +91,13 @@ func main() {
 	flag.StringVar(&workingDir, "d", ".", "Working directory for server")
 	flag.Parse()
 
-	configFile := filepath.Join(workingDir, "grits.cfg") // Configuration file path
+	configFile := filepath.Join(workingDir, "grits.cfg")
 
-	// Check if the configuration file exists
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		log.Printf("Configuration file does not exist: %s\n", configFile)
-		os.Exit(1) // Exit with an error code
+		os.Exit(1)
 	}
 
-	// Load the full configuration
 	config := grits.NewConfig(workingDir)
 	if err := config.LoadFromFile(configFile); err != nil {
 		log.Printf("Failed to load configuration: %v\n", err)
@@ -107,41 +105,26 @@ func main() {
 	}
 	config.ServerDir = workingDir
 
-	// Open any ports we'll need later
-	var err error
 	if isRunningAsRoot() {
 		if config.RunAsUser == "" {
-			panic("Must specify runAsUser to run as root.")
+			log.Fatalf("Must specify runAsUser when running as root.")
 		}
 
-		// Pre-open privileged ports while we're still root
-		// Pass the raw module configs before they're processed
-		if err := gritsd.PreopenPrivilegedPorts(config.Modules); err != nil {
+		// Pre-open privileged ports and acquire any needed TLS certificates
+		// while we're still root
+		if err := gritsd.PreopenPrivilegedPorts(config, config.Modules); err != nil {
 			log.Fatalf("Failed to pre-open privileged ports: %v", err)
 		}
 
-		// Now drop privileges
 		if err := dropPrivileges(config.RunAsUser, config.RunAsGroup); err != nil {
 			log.Fatalf("Failed to drop privileges: %v", err)
 		}
 	}
 
-	if config.RunAsUser != "" || config.RunAsGroup != "" {
-		err = dropPrivileges(config.RunAsUser, config.RunAsGroup)
-		if err != nil {
-			panic(fmt.Sprintf("Cannot drop privileges: %v", err))
-		}
-	} else if isRunningAsRoot() {
-		panic("Must specify runAsUser to run as root.")
+	if err := os.MkdirAll(config.ServerDir, 0700); err != nil {
+		log.Fatalf("Failed to create server directory: %v", err)
 	}
 
-	// Ensure the server directory exists
-	err = os.MkdirAll(config.ServerDir, 0700)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to create server directory: %v", err))
-	}
-
-	// Set up logging if we're doing it
 	if config.DoLogging {
 		logFile := setupLogging(config.ServerPath("var/log"))
 		defer logFile.Close()
@@ -149,10 +132,9 @@ func main() {
 
 	srv, err := gritsd.NewServer(config)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to initialize server: %v", err))
+		log.Fatalf("Failed to initialize server: %v", err)
 	}
 
-	// Setup signal handling for a graceful shutdown
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
@@ -161,7 +143,6 @@ func main() {
 	}
 
 	<-signals
-
 	log.Println("Shutting down server...")
 	srv.Stop()
 }
