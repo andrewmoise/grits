@@ -1,4 +1,4 @@
-package certbothelper
+package main
 
 import (
 	"flag"
