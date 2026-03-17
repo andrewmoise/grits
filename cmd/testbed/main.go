@@ -181,8 +181,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	// 1. Origin module with mirror settings - using fully qualified URLs
 	allowedMirrors := make([]string, NUM_MIRRORS)
 	for i := 0; i < NUM_MIRRORS; i++ {
-		// Use http:// protocol, localhost, and the expected mirror port
-		allowedMirrors[i] = fmt.Sprintf("%s://mirror-%d.cache.%s:%d", originProtocol, i, originHttpConfig.ThisHost, MIRROR_BASE_PORT+i)
+		allowedMirrors[i] = fmt.Sprintf("%s://mirror-%d.cache.%s:%d", protocol, i, originHttpConfig.ThisHost, MIRROR_BASE_PORT+i)
 	}
 
 	// Log the allowed mirrors for debugging
