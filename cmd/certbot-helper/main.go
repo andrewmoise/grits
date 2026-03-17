@@ -69,8 +69,7 @@ func main() {
 	// Run certbot
 	args := []string{
 		"certonly",
-		"--webroot",
-		"--webroot-path", webRootPath,
+		"--standalone",
 		"--email", *email,
 		"--agree-tos",
 		"--no-eff-email",
