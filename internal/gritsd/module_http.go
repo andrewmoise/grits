@@ -3,6 +3,7 @@ package gritsd
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"grits/internal/grits"
@@ -195,92 +196,48 @@ func (hm *HTTPModule) Start() error {
 	// Start reference holder
 	hm.refHolder.Start()
 
-	// Resolve cert paths, acquiring via certbot helper if needed
-	var certPath, keyPath string
-
-	if hm.Config.EnableTls {
-		if hm.Config.AutoCertificate {
-			// Acquire or renew certificate via helper if needed
-			var err error
-			certPath, keyPath, err = EnsureCertificate(hm.Server.Config, hm.Config.ThisHost, hm.Config.CertbotEmail)
-			if err != nil {
-				return fmt.Errorf("failed to ensure TLS certificate for %s: %v", hm.Config.ThisHost, err)
-			}
-
-			// Start renewal watcher
-			StartCertRenewalWatcher(hm.Server.Config, hm.Config.ThisHost, hm.stopCh)
-
-			if grits.DebugHttp {
-				log.Printf("Using auto-managed certificate for %s", hm.Config.ThisHost)
-			}
-		} else {
-			// Use explicitly configured cert paths
-			var err error
-			certPath, keyPath, err = resolveCertPaths(hm.Config)
-			if err != nil {
-				return fmt.Errorf("failed to resolve certificate paths: %v", err)
-			}
-
-			if grits.DebugHttp {
-				log.Printf("Using manual certificate paths: cert=%s, key=%s", certPath, keyPath)
-			}
-		}
-	}
-
-	// Check if we have a pre-opened listener for this port
+	// Check for pre-opened listener and cert
 	preopenedListenersMutex.Lock()
 	listener, hasPreopened := preopenedListeners[hm.Config.ThisPort]
 	cert, hasCert := preopenedCerts[hm.Config.ThisPort]
+	expiry, hasExpiry := preopenedCertExpiries[hm.Config.ThisPort]
 	preopenedListenersMutex.Unlock()
+
+	// Start cert renewal watcher if we have an auto-managed cert
+	if hm.Config.AutoCertificate && hasExpiry {
+		StartCertRenewalWatcher(hm.Config.ThisHost, expiry, hm.stopCh)
+	}
+
+	if grits.DebugHttp {
+		if hm.Config.EnableTls {
+			log.Printf("Using auto-managed certificate for %s", hm.Config.ThisHost)
+		}
+	}
 
 	go func() {
 		var err error
 
-		if hasPreopened {
-			if grits.DebugHttp {
-				log.Printf("Using pre-opened listener for port %d", hm.Config.ThisPort)
+		if hm.Config.EnableTls {
+			if !hasCert {
+				log.Fatalf("TLS enabled for port %d but no certificate was pre-loaded", hm.Config.ThisPort)
 			}
+			tlsConfig := hm.HTTPServer.TLSConfig.Clone()
+			tlsConfig.Certificates = []tls.Certificate{*cert}
 
-			if hm.Config.EnableTls {
-				// For auto-cert, load from the paths we just resolved.
-				// For manual cert, use pre-loaded cert if available, otherwise load now.
-				var tlsCert tls.Certificate
-				if hm.Config.AutoCertificate || !hasCert {
-					tlsCert, err = tls.LoadX509KeyPair(certPath, keyPath)
-					if err != nil {
-						log.Fatalf("Failed to load certificate: %v", err)
-					}
-				} else {
-					tlsCert = *cert
-				}
-
-				tlsConfig := hm.HTTPServer.TLSConfig.Clone()
-				tlsConfig.Certificates = []tls.Certificate{tlsCert}
+			if hasPreopened {
 				tlsListener := tls.NewListener(listener, tlsConfig)
 				err = hm.HTTPServer.Serve(tlsListener)
 			} else {
-				err = hm.HTTPServer.Serve(listener)
+				ln, listenErr := net.Listen("tcp", hm.HTTPServer.Addr)
+				if listenErr != nil {
+					log.Fatalf("Failed to listen on %s: %v", hm.HTTPServer.Addr, listenErr)
+				}
+				tlsListener := tls.NewListener(ln, tlsConfig)
+				err = hm.HTTPServer.Serve(tlsListener)
 			}
 		} else {
-			if grits.DebugHttp {
-				log.Printf("No pre-opened port %d, opening new", hm.Config.ThisPort)
-			}
-
-			if hm.Config.EnableTls {
-				if hasCert && !hm.Config.AutoCertificate {
-					// Use pre-loaded cert
-					tlsConfig := hm.HTTPServer.TLSConfig.Clone()
-					tlsConfig.Certificates = []tls.Certificate{*cert}
-					ln, listenErr := net.Listen("tcp", hm.HTTPServer.Addr)
-					if listenErr != nil {
-						log.Fatalf("Failed to listen on %s: %v", hm.HTTPServer.Addr, listenErr)
-					}
-					tlsListener := tls.NewListener(ln, tlsConfig)
-					err = hm.HTTPServer.Serve(tlsListener)
-				} else {
-					// Load cert from disk (either auto-acquired above or manual)
-					err = hm.HTTPServer.ListenAndServeTLS(certPath, keyPath)
-				}
+			if hasPreopened {
+				err = hm.HTTPServer.Serve(listener)
 			} else {
 				err = hm.HTTPServer.ListenAndServe()
 			}
@@ -327,6 +284,7 @@ var preopenedListenersMutex sync.Mutex
 
 // preopened TLS certificates - loaded before privilege drop
 var preopenedCerts = make(map[int]*tls.Certificate)
+var preopenedCertExpiries = make(map[int]time.Time)
 
 // PreopenPrivilegedPorts scans the raw module configs, opens any privileged HTTP ports,
 // acquires any needed TLS certificates (requires root), and pre-loads the certs.
@@ -393,6 +351,13 @@ func PreopenPrivilegedPorts(serverConfig *grits.Config, rawModuleConfigs []json.
 			return fmt.Errorf("failed to load certificate for port %d: %v", httpConfig.ThisPort, err)
 		}
 		preopenedCerts[httpConfig.ThisPort] = &cert
+
+		// Extract expiry for the renewal watcher
+		leaf, err := x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return fmt.Errorf("failed to parse certificate for port %d: %v", httpConfig.ThisPort, err)
+		}
+		preopenedCertExpiries[httpConfig.ThisPort] = leaf.NotAfter
 
 		if grits.DebugHttp {
 			log.Printf("Pre-loaded TLS certificate for port %d from %s", httpConfig.ThisPort, certPath)

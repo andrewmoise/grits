@@ -132,6 +132,7 @@ func runCertbot(serverConfig *grits.Config, domain, email string) error {
 		"--work-dir", workDir,
 		"--logs-dir", logsDir,
 		"--non-interactive",
+		"--no-autorenew", // We will do this ourselves, we need to schedule a server restart when it happens
 	}
 
 	cmd := exec.Command("certbot", args...)
@@ -141,20 +142,21 @@ func runCertbot(serverConfig *grits.Config, domain, email string) error {
 	return cmd.Run()
 }
 
-// StartCertRenewalWatcher starts a goroutine that watches for certificate expiry
-// and logs a warning when within 7 days of expiry, reminding the admin to restart.
-// Actual renewal requires a restart since it needs root privileges.
-// stopCh signals shutdown.
-func StartCertRenewalWatcher(serverConfig *grits.Config, domain string, stopCh <-chan struct{}) {
+// StartCertRenewalWatcher starts a goroutine that warns when the certificate
+// is approaching expiry. certExpiry is passed in directly since the cert files
+// may not be readable after privilege drop.
+func StartCertRenewalWatcher(domain string, certExpiry time.Time, stopCh <-chan struct{}) {
 	go func() {
 		for {
-			certPath, _ := GetLetsEncryptCertFiles(serverConfig, domain)
-			sleepDur := certRenewalSleep(certPath)
+			renewAt := certExpiry.Add(-7 * 24 * time.Hour)
+			sleepDur := time.Until(renewAt)
+			if sleepDur < 0 {
+				sleepDur = 0
+			}
 
 			select {
 			case <-time.After(sleepDur):
 				log.Printf("WARNING: Certificate for %s is expiring within 7 days. Restart the server to renew.", domain)
-				// Check again in 24 hours in case the admin hasn't restarted yet
 				select {
 				case <-time.After(24 * time.Hour):
 				case <-stopCh:
@@ -167,28 +169,28 @@ func StartCertRenewalWatcher(serverConfig *grits.Config, domain string, stopCh <
 	}()
 }
 
-// certRenewalSleep returns how long to sleep before warning about expiry.
-// We target waking up when 7 days remain before expiry.
-// If the cert can't be read or is already within 7 days, returns 0.
 func certRenewalSleep(certPath string) time.Duration {
 	data, err := os.ReadFile(certPath)
 	if err != nil {
+		log.Printf("certRenewalSleep: failed to read cert at %s: %v", certPath, err)
 		return 0
 	}
 
 	block, _ := pem.Decode(data)
 	if block == nil {
+		log.Printf("certRenewalSleep: failed to PEM decode cert at %s", certPath)
 		return 0
 	}
 
 	cert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
+		log.Printf("certRenewalSleep: failed to parse cert at %s: %v", certPath, err)
 		return 0
 	}
 
-	// Wake up when 7 days remain
 	renewAt := cert.NotAfter.Add(-7 * 24 * time.Hour)
 	sleepDur := time.Until(renewAt)
+	log.Printf("certRenewalSleep: cert at %s expires %s, renewal sleep duration %s", certPath, cert.NotAfter, sleepDur)
 	if sleepDur < 0 {
 		return 0
 	}
