@@ -92,7 +92,7 @@ func (pm *PeerModule) Start() error {
 	log.Printf("Certificate acquired for %s", pm.fqdn)
 
 	// Start cert renewal watcher
-	StartCertRenewalWatcher(pm.Server.Config, pm.fqdn, pm.Config.CertbotEmail, pm.stopCh)
+	StartCertRenewalWatcher(pm.Server.Config, pm.fqdn, pm.stopCh)
 
 	// Start heartbeat loop
 	go pm.heartbeatLoop()
@@ -164,7 +164,6 @@ func (pm *PeerModule) registerWithTracker() error {
 	certPath, keyPath := GetCertificateFiles(pm.Server.Config, SelfSignedCert, "current")
 	log.Printf("Using certificate files: cert=%s, key=%s", certPath, keyPath)
 
-	// Check if the files exist
 	if _, err := os.Stat(certPath); os.IsNotExist(err) {
 		return fmt.Errorf("certificate file does not exist: %s", certPath)
 	}
@@ -196,7 +195,6 @@ func (pm *PeerModule) registerWithTracker() error {
 	}
 	defer resp.Body.Close()
 
-	// Log response headers for debugging
 	log.Printf("Response status: %s", resp.Status)
 
 	// Check response status

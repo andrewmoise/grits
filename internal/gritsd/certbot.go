@@ -67,7 +67,7 @@ func GetLetsEncryptCertFiles(config *grits.Config, domain string) (certPath, key
 }
 
 // CertExpiresWithin returns true if the certificate at certPath will expire within d,
-// or if it cannot be read/parsed.
+// or if it cannot be read or parsed.
 func CertExpiresWithin(certPath string, d time.Duration) bool {
 	data, err := os.ReadFile(certPath)
 	if err != nil {
@@ -88,55 +88,53 @@ func CertExpiresWithin(certPath string, d time.Duration) bool {
 }
 
 // EnsureCertificate checks whether a valid Let's Encrypt certificate exists for domain,
-// and runs the certbot helper to acquire one if not (or if expiring within 7 days).
+// and runs certbot directly to acquire one if not (or if expiring within 7 days).
+// Must be called while still running as root.
 // Returns the cert and key paths on success.
 func EnsureCertificate(serverConfig *grits.Config, domain, email string) (certPath, keyPath string, err error) {
 	certPath, keyPath = GetLetsEncryptCertFiles(serverConfig, domain)
 
-	log.Printf("EnsureCertificate: checking certPath=%s keyPath=%s", certPath, keyPath)
-
 	needsCert := !fileExists(certPath) || !fileExists(keyPath) || CertExpiresWithin(certPath, 7*24*time.Hour)
 	if !needsCert {
-		if grits.DebugHttp {
-			log.Printf("Certificate for %s is valid and not expiring soon", domain)
-		}
+		log.Printf("Certificate for %s is valid and not expiring soon", domain)
 		return certPath, keyPath, nil
 	}
 
-	log.Printf("EnsureCertificate: acquiring certificate, certExists=%v keyExists=%v", fileExists(certPath), fileExists(keyPath))
-
-	if err := runCertbotHelper(serverConfig, domain, email); err != nil {
-		return "", "", fmt.Errorf("certbot helper failed for %s: %v", domain, err)
+	log.Printf("Acquiring/renewing certificate for %s", domain)
+	if err := runCertbot(serverConfig, domain, email); err != nil {
+		return "", "", fmt.Errorf("certbot failed for %s: %v", domain, err)
 	}
 
-	log.Printf("EnsureCertificate: after helper, certExists=%v keyExists=%v", fileExists(certPath), fileExists(keyPath))
-
 	if !fileExists(certPath) || !fileExists(keyPath) {
-		return "", "", fmt.Errorf("certbot helper succeeded but cert files not found for %s", domain)
+		return "", "", fmt.Errorf("certbot succeeded but cert files not found for %s", domain)
 	}
 
 	return certPath, keyPath, nil
 }
 
-func runCertbotHelper(serverConfig *grits.Config, domain, email string) error {
-	helperPath := serverConfig.ServerPath("bin/certbot-helper")
+// runCertbot invokes certbot directly. Must be called while still root.
+func runCertbot(serverConfig *grits.Config, domain, email string) error {
+	certsDir := serverConfig.ServerPath(fmt.Sprintf("var/certs/letsencrypt/%s", domain))
 
-	if _, err := os.Stat(helperPath); err != nil {
-		return fmt.Errorf("certbot helper not found at %s", helperPath)
-	}
+	configDir := filepath.Join(certsDir, "config")
+	workDir := filepath.Join(certsDir, "work")
+	logsDir := filepath.Join(certsDir, "logs")
 
-	certDir := GetCertPath(serverConfig, LetsEncryptCert, domain)
-
-	// Helper requires an absolute path
-	absCertDir, err := filepath.Abs(certDir)
-	if err != nil {
-		return fmt.Errorf("failed to resolve cert dir to absolute path: %v", err)
-	}
-
-	cmd := exec.Command(helperPath,
-		"--domain", domain,
+	args := []string{
+		"certonly",
+		"--standalone",
 		"--email", email,
-		"--cert-dir", absCertDir)
+		"--agree-tos",
+		"--no-eff-email",
+		"--domain", domain,
+		"--key-type", "ecdsa",
+		"--config-dir", configDir,
+		"--work-dir", workDir,
+		"--logs-dir", logsDir,
+		"--non-interactive",
+	}
+
+	cmd := exec.Command("certbot", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -144,29 +142,23 @@ func runCertbotHelper(serverConfig *grits.Config, domain, email string) error {
 }
 
 // StartCertRenewalWatcher starts a goroutine that watches for certificate expiry
-// and renews via the certbot helper when within 7 days of expiry.
-// On failure it retries once per day. stopCh signals shutdown.
-func StartCertRenewalWatcher(serverConfig *grits.Config, domain, email string, stopCh <-chan struct{}) {
+// and logs a warning when within 7 days of expiry, reminding the admin to restart.
+// Actual renewal requires a restart since it needs root privileges.
+// stopCh signals shutdown.
+func StartCertRenewalWatcher(serverConfig *grits.Config, domain string, stopCh <-chan struct{}) {
 	go func() {
 		for {
 			certPath, _ := GetLetsEncryptCertFiles(serverConfig, domain)
-
-			// Figure out how long to sleep until 7 days before expiry
 			sleepDur := certRenewalSleep(certPath)
 
 			select {
 			case <-time.After(sleepDur):
-				// Try to renew
-				log.Printf("Attempting certificate renewal for %s", domain)
-				if err := runCertbotHelper(serverConfig, domain, email); err != nil {
-					log.Printf("Certificate renewal failed for %s: %v — will retry in 24 hours", domain, err)
-					select {
-					case <-time.After(24 * time.Hour):
-					case <-stopCh:
-						return
-					}
-				} else {
-					log.Printf("Certificate renewed successfully for %s", domain)
+				log.Printf("WARNING: Certificate for %s is expiring within 7 days. Restart the server to renew.", domain)
+				// Check again in 24 hours in case the admin hasn't restarted yet
+				select {
+				case <-time.After(24 * time.Hour):
+				case <-stopCh:
+					return
 				}
 			case <-stopCh:
 				return
@@ -175,7 +167,7 @@ func StartCertRenewalWatcher(serverConfig *grits.Config, domain, email string, s
 	}()
 }
 
-// certRenewalSleep returns how long to sleep before attempting renewal.
+// certRenewalSleep returns how long to sleep before warning about expiry.
 // We target waking up when 7 days remain before expiry.
 // If the cert can't be read or is already within 7 days, returns 0.
 func certRenewalSleep(certPath string) time.Duration {
