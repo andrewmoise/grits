@@ -173,13 +173,9 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 		return nil, nil, fmt.Errorf("couldn't find HTTP module in origin server")
 	}
 
-	// Create additional module configurations
-
-	var originProtocol string
+	protocol := "http"
 	if originHttpConfig.EnableTls {
-		originProtocol = "https"
-	} else {
-		originProtocol = "http"
+		protocol = "https"
 	}
 
 	// 1. Origin module with mirror settings - using fully qualified URLs
@@ -526,13 +522,6 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 		return fmt.Errorf("failed to marshal HTTP module config: %v", err)
 	}
 
-	// Determine protocol based on TLS setting
-	protocol := "http"
-	if originHttpConfig.EnableTls {
-		protocol = "https"
-	}
-
-	// Create fully qualified URL for the mirror
 	localURL := fmt.Sprintf("%s://%s:%d", protocol, thisHost, mirrorPort)
 
 	// Create Mirror module configuration
