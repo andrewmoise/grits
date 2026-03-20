@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"grits/internal/grits"
+	"log"
 	"os"
 	"sync"
 	"time"
@@ -87,14 +88,7 @@ func (wv *LocalVolume) Start() error {
 }
 
 func (wv *LocalVolume) Stop() error {
-	// Ensure any final persistence operations are completed
-	if wv.doPersist {
-		return wv.save()
-	} else {
-		return nil
-	}
-
-	// FIXME - We do stop, whether or not we return error -- we should think about that
+	return nil
 }
 
 func (wv *LocalVolume) isReadOnly() bool {
@@ -187,13 +181,30 @@ func (wv *LocalVolume) LookupNode(path string) (grits.FileNode, error) {
 	return wv.ns.LookupNode(path)
 }
 
-func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) error {
-	return wv.ns.LinkByMetadata(name, metadataAddr)
+func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (*grits.LookupResponse, error) {
+	result, err := wv.ns.MultiLink(req, returnResults)
+	if err != nil {
+		return nil, err
+	}
+	if wv.doPersist {
+		if saveErr := wv.save(); saveErr != nil {
+			// Log but don't fail the operation — the link succeeded
+			log.Printf("Warning: failed to checkpoint after MultiLink: %v", saveErr)
+		}
+	}
+	return result, nil
 }
 
-// MultiLink also needs updating since it's part of the same transition
-func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (*grits.LookupResponse, error) {
-	return wv.ns.MultiLink(req, returnResults)
+func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) error {
+	if err := wv.ns.LinkByMetadata(name, metadataAddr); err != nil {
+		return err
+	}
+	if wv.doPersist {
+		if saveErr := wv.save(); saveErr != nil {
+			log.Printf("Warning: failed to checkpoint after LinkByMetadata: %v", saveErr)
+		}
+	}
+	return nil
 }
 
 func (wv *LocalVolume) AddBlob(path string) (grits.CachedFile, error) {
