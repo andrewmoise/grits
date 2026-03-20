@@ -76,9 +76,9 @@ func (pm *PeerModule) Start() error {
 	}
 
 	// Now that we have our FQDN, acquire a certificate for it if needed.
-	// If the cert is expired at startup and we can't acquire one, fail hard.
+	// The helper is setuid root so this works regardless of our current privilege level.
 	if pm.Config.CertbotEmail == "" {
-		return fmt.Errorf("email is required for certificate acquisition")
+		return fmt.Errorf("certbotEmail is required for certificate acquisition")
 	}
 
 	certPath, keyPath, err := EnsureCertificate(pm.Server.Config, pm.fqdn, pm.Config.CertbotEmail)
@@ -92,7 +92,7 @@ func (pm *PeerModule) Start() error {
 	log.Printf("Certificate acquired for %s", pm.fqdn)
 
 	// Start cert renewal watcher
-	StartCertRenewalWatcher(pm.Server.Config, pm.fqdn, pm.stopCh)
+	StartCertRenewalWatcher(pm.Server.Config, pm.fqdn, pm.Config.CertbotEmail, pm.stopCh)
 
 	// Start heartbeat loop
 	go pm.heartbeatLoop()
