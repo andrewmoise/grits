@@ -196,16 +196,14 @@ func (hm *HTTPModule) Start() error {
 	// Start reference holder
 	hm.refHolder.Start()
 
-	// Check for pre-opened listener and cert
 	preopenedListenersMutex.Lock()
 	listener, hasPreopened := preopenedListeners[hm.Config.ThisPort]
 	cert, hasCert := preopenedCerts[hm.Config.ThisPort]
-	expiry, hasExpiry := preopenedCertExpiries[hm.Config.ThisPort]
 	preopenedListenersMutex.Unlock()
 
 	// Start cert renewal watcher if we have an auto-managed cert
-	if hm.Config.AutoCertificate && hasExpiry {
-		StartCertRenewalWatcher(hm.Config.ThisHost, expiry, hm.stopCh)
+	if hm.Config.AutoCertificate {
+		StartCertRenewalWatcher(hm.Server.Config, hm.Config.ThisHost, hm.Config.CertbotEmail, hm.stopCh)
 	}
 
 	if grits.DebugHttp {
@@ -275,7 +273,7 @@ func (hm *HTTPModule) Stop() error {
 }
 
 /////
-// Pre-opening ports and certs before privilege drop
+// Pre-opening ports before privilege drop
 /////
 
 // preopened sockets - global map for sockets opened before privilege drop
@@ -284,10 +282,12 @@ var preopenedListenersMutex sync.Mutex
 
 // preopened TLS certificates - loaded before privilege drop
 var preopenedCerts = make(map[int]*tls.Certificate)
+
+// preopened cert expiries - for the renewal watcher
 var preopenedCertExpiries = make(map[int]time.Time)
 
-// PreopenPrivilegedPorts scans the raw module configs, opens any privileged HTTP ports,
-// acquires any needed TLS certificates (requires root), and pre-loads the certs.
+// PreopenPrivilegedPorts scans the raw module configs and opens any privileged HTTP ports,
+// then pre-loads any TLS certificates.
 // This should be called before dropping privileges.
 func PreopenPrivilegedPorts(serverConfig *grits.Config, rawModuleConfigs []json.RawMessage) error {
 	preopenedListenersMutex.Lock()
@@ -328,13 +328,14 @@ func PreopenPrivilegedPorts(serverConfig *grits.Config, rawModuleConfigs []json.
 			continue
 		}
 
-		// Resolve cert paths, acquiring via certbot if needed (we're still root here)
+		// Resolve cert path, using helper to acquire if needed
 		var certPath, keyPath string
 
 		if httpConfig.AutoCertificate {
 			if httpConfig.CertbotEmail == "" {
 				return fmt.Errorf("certbotEmail is required when autoCertificate is enabled (port %d)", httpConfig.ThisPort)
 			}
+			// Use the helper so permissions are set correctly for the daemon user
 			certPath, keyPath, err = EnsureCertificate(serverConfig, httpConfig.ThisHost, httpConfig.CertbotEmail)
 			if err != nil {
 				return fmt.Errorf("failed to ensure certificate for %s: %v", httpConfig.ThisHost, err)
