@@ -75,7 +75,7 @@ type NameStore struct {
 
 	fetchers   []BlobFetcher
 	fetcherMtx sync.RWMutex
-	forceFetch bool
+	lastFetch  time.Time
 }
 
 // BlobFetcher provides on-demand fetching of blobs not available locally
@@ -122,7 +122,7 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 }
 
 func (ns *NameStore) LookupNode(path string) (FileNode, error) {
-	DebugLog(DebugNameStore, "LookupNode(%s)", path)
+	DebugLog(DebugNameStore, "LookupNode('%s')", path)
 
 	lookupResp, err := ns.resolvePath(path)
 	if err != nil {
@@ -221,17 +221,35 @@ func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 // This function is now lock-free for the traversal phase - it takes a snapshot
 // of the root and then traverses without holding locks.
 func (ns *NameStore) resolvePath(path string) (*LookupResponse, error) {
-	DebugLog(DebugNameStore, "We resolve path %s\n", path)
+	DebugLog(DebugNameStore, "We resolve path '%s'\n", path)
 
-	// Check if we should force fetch
+	// Just hard coded for now
+	freshnessDuration := time.Second * 10
+
+	// Check if we should refetch
 	ns.mtx.Lock()
-	forceFetch := ns.forceFetch
+	forceFetch := (len(ns.fetchers) > 0 && time.Since(ns.lastFetch) > freshnessDuration)
 	ns.mtx.Unlock()
 
-	if forceFetch {
-		return ns.resolveFromFetchers(path)
+	var resp *LookupResponse
+	var err error
+
+	if !forceFetch {
+		DebugLog(DebugNameStore, "  from local")
+		resp, err = ns.resolveFromLocal(path)
+		if err == nil {
+			DebugLog(DebugNameStore, "  we return %v %v from local", resp, err)
+			return resp, err
+		}
 	}
 
+	DebugLog(DebugNameStore, "  from fetchers")
+	resp, err = ns.resolveFromFetchers(path, resp, err)
+	DebugLog(DebugNameStore, "  we return %v %v from fetcher", resp, err)
+	return resp, err
+}
+
+func (ns *NameStore) resolveFromLocal(path string) (*LookupResponse, error) {
 	path = strings.TrimRight(path, "/")
 	if path != "" && path[0] == '/' {
 		return nil, fmt.Errorf("paths must be relative")
@@ -274,7 +292,7 @@ func (ns *NameStore) resolvePath(path string) (*LookupResponse, error) {
 
 	currentPath := ""
 	for _, part := range parts {
-		DebugLog(DebugNameStore, "  part %s\n", part)
+		DebugLog(DebugNameStore, "  part '%s' from %s\n", part, node.Metadata().ContentHash)
 
 		if part == "" {
 			continue
@@ -770,7 +788,8 @@ func EmptyNameStore(bs BlobStore, sparse bool) (*NameStore, error) {
 		BlobStore: bs,
 		fileCache: make(map[BlobAddr]*fileCacheEntry),
 
-		refManager: refManager,
+		refManager:   refManager,
+		serialNumber: 1,
 	}
 	ns.cacheCond = sync.NewCond(&ns.mtx)
 
@@ -1939,27 +1958,17 @@ func (ns *NameStore) UnregisterFetcher(fetcher BlobFetcher) {
 	}
 }
 
-func (ns *NameStore) SetForceFetch(force bool) {
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
-	ns.forceFetch = force
-}
-
 // resolveFromFetchers uses registered fetchers to resolve a path
 // This now takes the write lock when updating the root to ensure atomicity
-func (ns *NameStore) resolveFromFetchers(path string) (*LookupResponse, error) {
+func (ns *NameStore) resolveFromFetchers(path string, _ *LookupResponse, origErr error) (*LookupResponse, error) {
 	DebugLog(DebugNameStore, "resolveFromFetchers(%s)\n", path)
 
 	ns.fetcherMtx.RLock()
 	fetchers := ns.fetchers
 	ns.fetcherMtx.RUnlock()
 
-	if len(fetchers) == 0 {
-		return nil, fmt.Errorf("no fetchers available")
-	}
-
 	// Try each fetcher (no locks held during network I/O)
-	var lastErr error
+	lastErr := origErr
 	for _, fetcher := range fetchers {
 		lookupResp, err := fetcher.FetchPath(path)
 		if err != nil {
@@ -2005,6 +2014,7 @@ func (ns *NameStore) resolveFromFetchers(path string) (*LookupResponse, error) {
 
 		ns.mtx.Lock()
 		oldRootAddr := ns.rootAddr
+		ns.lastFetch = time.Now()
 		ns.mtx.Unlock()
 
 		if oldRootAddr != "" {
@@ -2020,6 +2030,7 @@ func (ns *NameStore) resolveFromFetchers(path string) (*LookupResponse, error) {
 		}
 
 		ns.mtx.Lock()
+		log.Printf("We're updating the root now. Testing %d > %d", lookupResp.SerialNumber, ns.serialNumber)
 		if lookupResp.SerialNumber > ns.serialNumber {
 			ns.rootAddr = lookupResp.Paths[0].Addr
 			ns.serialNumber = lookupResp.SerialNumber
@@ -2030,11 +2041,11 @@ func (ns *NameStore) resolveFromFetchers(path string) (*LookupResponse, error) {
 		return lookupResp, nil
 	}
 
-	if lastErr != nil {
+	if len(fetchers) > 1 {
 		return nil, fmt.Errorf("all fetchers failed: %w", lastErr)
+	} else {
+		return nil, lastErr
 	}
-
-	return nil, fmt.Errorf("no fetchers support path lookup")
 }
 
 /////

@@ -108,7 +108,6 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 	rv.queueCond = sync.NewCond(&rv.queueMutex)
 
 	localCache.ns.RegisterFetcher(rv)
-	localCache.ns.SetForceFetch(true)
 
 	// NOTE: We need to be more idempotent than this... really, this is a little awkward
 	localCache.ns.BlobStore.RegisterFetcher(rv)
