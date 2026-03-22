@@ -226,7 +226,7 @@ func (hm *HTTPModule) Start() error {
 				tlsListener := tls.NewListener(listener, tlsConfig)
 				err = hm.HTTPServer.Serve(tlsListener)
 			} else {
-				ln, listenErr := net.Listen("tcp", hm.HTTPServer.Addr)
+				ln, listenErr := net.Listen("tcp6", hm.HTTPServer.Addr)
 				if listenErr != nil {
 					log.Fatalf("Failed to listen on %s: %v", hm.HTTPServer.Addr, listenErr)
 				}
