@@ -51,16 +51,6 @@ type RemoteVolume struct {
 	queueCond     *sync.Cond
 	stopWorker    chan struct{}
 	workerWg      sync.WaitGroup
-
-	// Track cached blobs and their expiration (currently disabled)
-	blobCacheMtx sync.Mutex
-	cachedBlobs  []*cachedBlobEntry
-}
-
-// cachedBlobEntry tracks a cached blob and when to release it
-type cachedBlobEntry struct {
-	file      grits.CachedFile
-	expiresAt time.Time
 }
 
 var _ = (Volume)((*RemoteVolume)(nil))
@@ -103,13 +93,12 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 		httpClient:    httpClient(),
 		prefetchQueue: make([]grits.BlobAddr, 0, maxPrefetchQueueSize),
 		stopWorker:    make(chan struct{}),
-		cachedBlobs:   make([]*cachedBlobEntry, 0),
 	}
 	rv.queueCond = sync.NewCond(&rv.queueMutex)
 
 	localCache.ns.RegisterFetcher(rv)
 
-	// NOTE: We need to be more idempotent than this... really, this is a little awkward
+	// NOTE: We need to be more idempotent than this... wrapping the thing would be better
 	localCache.ns.BlobStore.RegisterFetcher(rv)
 
 	return rv, nil
@@ -149,29 +138,22 @@ func (rv *RemoteVolume) Start() error {
 		return err
 	}
 
-	// Prefetch workers disabled for now
-	// Uncomment to enable:
 	// for i := 0; i < numPrefetchWorkers; i++ {
 	// 	rv.workerWg.Add(1)
 	// 	go rv.prefetchWorker(i)
 	// }
-	// rv.workerWg.Add(1)
-	// go rv.cleanupWorker()
 
 	return nil
 }
 
 // Stop implements Volume interface
 func (rv *RemoteVolume) Stop() error {
-	// Stop prefetch workers if they're running
-	// Uncomment when prefetch is enabled:
 	// close(rv.stopWorker)
 	// rv.queueCond.Broadcast()
 	// rv.workerWg.Wait()
 
 	// Unregister ourselves as a fetcher
 	rv.localCache.ns.UnregisterFetcher(rv)
-
 	return rv.localCache.Stop()
 }
 
@@ -263,7 +245,6 @@ func (rv *RemoteVolume) UnregisterWatcher(watcher grits.FileTreeWatcher) {
 /////
 // BlobFetcher interface
 
-// FetchBlob retrieves a single blob by address from the remote server
 func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 	start := time.Now()
 	grits.DebugLogWithTime(grits.DebugRemotePerformance, string(addr), "FetchBlob: requested")
@@ -286,28 +267,23 @@ func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error)
 	}
 
 	if cf.GetAddress() != addr {
-		cf.Release()
 		return nil, fmt.Errorf("mismatch of blob addr! %s != %s", cf.GetAddress(), addr)
 	}
 
-	// Prefetch disabled for now
-	// Uncomment to enable:
-	// rv.enqueuePrefetch(addr)
+	cf.Touch(rv.config.CacheExpirationTime)
 
-	grits.DebugLogWithTime(grits.DebugRemotePerformance, string(addr), "FetchBlob(): done")
+	grits.DebugLogWithTime(grits.DebugRemotePerformance, string(addr),
+		"FetchBlob: done (%.1fms)", float64(time.Since(start).Microseconds())/1000.0)
 
 	return cf, nil
 }
 
-// FetchPath retrieves path lookup information from the remote server
-// This is currently not used, but could be used for optimized bulk fetching
 func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 	start := time.Now()
 	grits.DebugLogWithTime(grits.DebugRemotePerformance, path, "FetchPath: requested")
 
 	url := fmt.Sprintf("%s/grits/v1/lookup/%s", rv.config.RemoteURL, rv.config.VolumeName)
 
-	// Encode the path as JSON
 	pathJSON, err := json.Marshal(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode path: %v", err)
@@ -336,8 +312,6 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 		return nil, err
 	}
 
-	// The HTTP handler returns [][]any where each inner array contains:
-	// [path (string), metadataHash (BlobAddr), contentHash (BlobAddr), contentSize (int64)]
 	var pathData [][]interface{}
 	err = json.Unmarshal(body, &pathData)
 	if err != nil {
@@ -356,7 +330,7 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 		IsPartial: resp.StatusCode == http.StatusMultiStatus,
 	}
 
-	for i, entry := range pathData {
+	for _, entry := range pathData {
 		if len(entry) != 4 {
 			return nil, fmt.Errorf("malformed path entry: expected 4 elements, got %d", len(entry))
 		}
@@ -385,8 +359,7 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 			Addr: grits.BlobAddr(metadataAddr),
 		})
 
-		_ = i           // Suppress unused warning until prefetch is enabled
-		_ = contentAddr // Suppress unused warning until prefetch is enabled
+		_ = contentAddr
 	}
 
 	grits.DebugLogWithTime(grits.DebugRemotePerformance, path,
@@ -492,58 +465,10 @@ func (rv *RemoteVolume) prefetchWorker(id int) {
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: Got blob")
 
-		// Store in our cache map with expiration time
-		expiresAt := time.Now().Add(rv.config.CacheExpirationTime)
+		cf.Touch(rv.config.CacheExpirationTime)
+		cf.Release()
 
-		// Need to lock when appending to cachedBlobs since multiple workers access it
-		rv.blobCacheMtx.Lock()
-		rv.cachedBlobs = append(rv.cachedBlobs, &cachedBlobEntry{
-			file:      cf,
-			expiresAt: expiresAt,
-		})
-		rv.blobCacheMtx.Unlock()
-
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: Held reference")
-	}
-}
-
-// cleanupWorker periodically cleans up expired cache entries
-func (rv *RemoteVolume) cleanupWorker() {
-	defer rv.workerWg.Done()
-
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-rv.stopWorker:
-			rv.cleanupExpiredCache(true)
-			return
-		case <-ticker.C:
-			rv.cleanupExpiredCache(false)
-		}
-	}
-}
-
-// cleanupExpiredCache removes expired entries from the cache
-func (rv *RemoteVolume) cleanupExpiredCache(doAll bool) {
-	rv.blobCacheMtx.Lock()
-	defer rv.blobCacheMtx.Unlock()
-
-	now := time.Now()
-	expiredCount := 0
-
-	for _, entry := range rv.cachedBlobs {
-		if now.After(entry.expiresAt) || doAll {
-			entry.file.Release()
-			expiredCount++
-		} else {
-			break
-		}
-	}
-
-	if expiredCount > 0 {
-		rv.cachedBlobs = rv.cachedBlobs[expiredCount:]
+		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: All done")
 	}
 }
 
