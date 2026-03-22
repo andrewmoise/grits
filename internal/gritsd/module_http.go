@@ -845,56 +845,34 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Building response\n")
-
-	// Transform to the format expected by the client
-	pathData := make([][]any, len(lookupResponse.Paths))
-	for i, pair := range lookupResponse.Paths {
+	// Hold refs so blobs don't get GC'd before client fetches them
+	for _, pair := range lookupResponse.Paths {
 		node, err := volume.GetFileNode(pair.Addr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
+			return
 		}
 		defer node.Release()
 
-		metadataHash := node.MetadataBlob().GetAddress()
-
-		pathData[i] = []any{
-			pair.Path,
-			metadataHash,
-			node.Metadata().ContentHash,
-			node.Metadata().Size,
-		}
-
 		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
-		if i != len(lookupResponse.Paths)-1 {
-			// We DO want to hold tree node contents for a short
-			// time, otherwise they might get GCed and then this client
-			// might ask about them and we wouldn't have them
-
-			// But we DON'T want to hold the contents of a blob node,
-			// because it might not even be on this server and we don't
-			// want to force a load if not.
+		if node.Metadata().Type == grits.GNodeTypeDirectory {
 			contentBlob, err := node.ExportedBlob()
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
 				return
 			}
-
 			s.refHolder.Hold(contentBlob, 45*time.Second)
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if !lookupResponse.IsPartial {
-		// Set 200 OK status, if we found the whole path
-		w.WriteHeader(http.StatusOK)
-	} else {
-		// Set 207 Multi-Status to indicate partial success
+	if lookupResponse.IsPartial {
 		w.WriteHeader(http.StatusMultiStatus)
+	} else {
+		w.WriteHeader(http.StatusOK)
 	}
-
-	if err := json.NewEncoder(w).Encode(pathData); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	if err := json.NewEncoder(w).Encode(lookupResponse); err != nil {
+		log.Printf("Failed to encode lookup response: %v", err)
 	}
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Lookup complete\n")
@@ -972,21 +950,8 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Checkpointing\n")
-
-	// Checkpoint the volume after all links are performed
-	err = volume.Checkpoint()
-	if err != nil {
-		log.Printf("Failed to checkpoint %s: %v", volume, err)
-		http.Error(w, fmt.Sprintf("Failed to checkpoint %s: %v", volume, err), http.StatusInternalServerError)
-		return
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Building response\n")
-
-	// Transform to the format expected by the client (same as lookup endpoint)
-	response := make([][]any, len(linkResponse.Paths))
-	for i, pair := range linkResponse.Paths {
+	// Hold refs so blobs don't get GC'd before client fetches them
+	for _, pair := range linkResponse.Paths {
 		node, err := volume.GetFileNode(pair.Addr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Couldn't load node for %s: %v", pair.Path, err), http.StatusInternalServerError)
@@ -994,41 +959,21 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		}
 		defer node.Release()
 
-		metadataHash := node.MetadataBlob().GetAddress()
-
-		response[i] = []any{
-			pair.Path,
-			metadataHash,
-			node.Metadata().ContentHash,
-			node.Metadata().Size,
-		}
-
 		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
-
-		if i != len(linkResponse.Paths)-1 {
-			// We DO want to hold tree node contents for a short
-			// time, otherwise they might get GCed and then this client
-			// might ask about them and we wouldn't have them
-
-			// But we DON'T want to hold the contents of a blob node,
-			// because it might not even be on this server and we don't
-			// want to force a load if not.
+		if node.Metadata().Type == grits.GNodeTypeDirectory {
 			contentBlob, err := node.ExportedBlob()
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
 				return
 			}
-
 			s.refHolder.Hold(contentBlob, 45*time.Second)
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-		return
+	if err := json.NewEncoder(w).Encode(linkResponse); err != nil {
+		log.Printf("Failed to encode link response: %v", err)
 	}
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Link complete\n")

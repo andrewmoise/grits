@@ -66,26 +66,21 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
 
-	var lookupResponse [][]any
-	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
-		t.Fatalf("Failed to decode lookup response: %v", err)
-	}
-
-	// Extract metadata from the response
-	if len(lookupResponse) < 1 {
-		t.Fatalf("Lookup response did not include directory metadata")
-	}
-
 	volume := s.FindVolumeByName("root")
 	if volume == nil {
 		t.Fatalf("Couldn't load root volume")
 	}
 
-	rootAddrStr, ok := lookupResponse[0][1].(string)
-	if !ok {
-		t.Fatalf("Expected string for metadata address, got %T", lookupResponse[0][1])
+	var lookupResponse grits.LookupResponse
+	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
+		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
-	rootAddr := grits.BlobAddr(rootAddrStr)
+
+	if len(lookupResponse.Paths) < 1 {
+		t.Fatalf("Lookup response did not include directory metadata")
+	}
+
+	rootAddr := lookupResponse.Paths[0].Addr
 	rootNode, err := volume.GetFileNode(rootAddr)
 	if err != nil {
 		t.Fatalf("Couldn't load node for root: %v", err)
@@ -96,7 +91,7 @@ func TestFileOperations(t *testing.T) {
 	rootContentHash := rootNode.Metadata().ContentHash
 
 	// Will be able to also access the serial number if needed
-	//log.Printf("Volume serial number: %d", lookupResponse.SerialNumber)
+	log.Printf("Volume serial number: %d", lookupResponse.SerialNumber)
 
 	// Now fetch the directory content
 	dirURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, rootContentHash)
@@ -222,20 +217,16 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
 
-	lookupResponse = make([][]any, 0)
-	if err := json.Unmarshal(respBody, &lookupResponse); err != nil {
+	var lookupResponse2 grits.LookupResponse
+	if err := json.Unmarshal(respBody, &lookupResponse2); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
 
-	if len(lookupResponse) < 1 {
+	if len(lookupResponse2.Paths) < 1 {
 		t.Fatalf("Lookup response did not include directory metadata")
 	}
 
-	rootContentStr, ok := lookupResponse[0][2].(string)
-	if !ok {
-		t.Fatalf("Expected string for content address, got %T", lookupResponse[0][1])
-	}
-	rootContentHash = grits.BlobAddr(rootContentStr)
+	rootContentHash = lookupResponse2.Paths[0].ContentHash
 
 	// Get the updated directory listing
 	dirURL = fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, rootContentHash)

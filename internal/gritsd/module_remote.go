@@ -312,61 +312,33 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 		return nil, err
 	}
 
-	var pathData [][]interface{}
-	err = json.Unmarshal(body, &pathData)
-	if err != nil {
+	var lookupResponse grits.LookupResponse
+	if err := json.Unmarshal(body, &lookupResponse); err != nil {
 		return nil, fmt.Errorf("failed to decode lookup response: %v", err)
 	}
-	if len(pathData) == 0 {
+	if len(lookupResponse.Paths) == 0 {
 		return nil, fmt.Errorf("empty lookup response for %s", path)
 	}
 
 	grits.DebugLogWithTime(grits.DebugRemotePerformance, path,
-		"FetchPath: got response, %d entries (%.1fms)",
-		len(pathData), float64(time.Since(start).Microseconds())/1000.0)
+		"FetchPath: got response, %d entries, serial %d (%.1fms)",
+		len(lookupResponse.Paths),
+		lookupResponse.SerialNumber,
+		float64(time.Since(start).Microseconds())/1000.0)
 
-	lookupResponse := &grits.LookupResponse{
-		Paths:     make([]*grits.PathNodePair, 0, len(pathData)),
-		IsPartial: resp.StatusCode == http.StatusMultiStatus,
-	}
-
-	for _, entry := range pathData {
-		if len(entry) != 4 {
-			return nil, fmt.Errorf("malformed path entry: expected 4 elements, got %d", len(entry))
-		}
-
-		entryPath, ok := entry[0].(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid path type in response")
-		}
-
-		metadataAddr, ok := entry[1].(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid metadata address type in response")
-		}
-
-		contentAddr, ok := entry[2].(string)
-		if !ok {
-			return nil, fmt.Errorf("invalid content address type in response")
-		}
-
+	for _, pair := range lookupResponse.Paths {
 		grits.DebugLogWithTime(grits.DebugRemotePerformance, path,
 			"FetchPath: entry [%s] meta=%s content=%s",
-			entryPath, metadataAddr, contentAddr)
-
-		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
-			Path: entryPath,
-			Addr: grits.BlobAddr(metadataAddr),
-		})
-
-		_ = contentAddr
+			pair.Path, pair.Addr, pair.ContentHash)
 	}
+
+	lookupResponse.IsPartial = resp.StatusCode == http.StatusMultiStatus
 
 	grits.DebugLogWithTime(grits.DebugRemotePerformance, path,
 		"FetchPath: complete (%.1fms total)",
 		float64(time.Since(start).Microseconds())/1000.0)
 
-	return lookupResponse, nil
+	return &lookupResponse, nil
 }
 
 /////
