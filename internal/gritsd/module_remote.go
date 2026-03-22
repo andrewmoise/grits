@@ -266,7 +266,8 @@ func (rv *RemoteVolume) UnregisterWatcher(watcher grits.FileTreeWatcher) {
 
 // FetchBlob retrieves a single blob by address from the remote server
 func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "FetchBlob()")
+	start := time.Now()
+	grits.DebugLogWithTime(grits.DebugRemotePerformance, string(addr), "FetchBlob: requested")
 
 	url := fmt.Sprintf("%s/grits/v1/blob/%s", rv.config.RemoteURL, addr)
 
@@ -294,7 +295,7 @@ func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error)
 	// Uncomment to enable:
 	// rv.enqueuePrefetch(addr)
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(addr), "FetchBlob(): done")
+	grits.DebugLogWithTime(grits.DebugRemotePerformance, string(addr), "FetchBlob(): done")
 
 	return cf, nil
 }
@@ -302,7 +303,8 @@ func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error)
 // FetchPath retrieves path lookup information from the remote server
 // This is currently not used, but could be used for optimized bulk fetching
 func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "FetchPath()")
+	start := time.Now()
+	grits.DebugLogWithTime(grits.DebugRemotePerformance, path, "FetchPath: requested")
 
 	url := fmt.Sprintf("%s/grits/v1/lookup/%s", rv.config.RemoteURL, rv.config.VolumeName)
 
@@ -346,6 +348,10 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 		return nil, fmt.Errorf("empty lookup response for %s", path)
 	}
 
+	grits.DebugLogWithTime(grits.DebugRemotePerformance, path,
+		"FetchPath: got response, %d entries (%.1fms)",
+		len(pathData), float64(time.Since(start).Microseconds())/1000.0)
+
 	lookupResponse := &grits.LookupResponse{
 		Paths:     make([]*grits.PathNodePair, 0, len(pathData)),
 		IsPartial: resp.StatusCode == http.StatusMultiStatus,
@@ -371,12 +377,9 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 			return nil, fmt.Errorf("invalid content address type in response")
 		}
 
-		// Prefetch disabled for now
-		// Uncomment to enable:
-		// rv.enqueuePrefetch(grits.BlobAddr(metadataAddr))
-		// if i < len(pathData)-1 {
-		// 	rv.enqueuePrefetch(grits.BlobAddr(contentAddr))
-		// }
+		grits.DebugLogWithTime(grits.DebugRemotePerformance, path,
+			"FetchPath: entry [%s] meta=%s content=%s",
+			entryPath, metadataAddr, contentAddr)
 
 		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
 			Path: entryPath,
@@ -387,7 +390,9 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 		_ = contentAddr // Suppress unused warning until prefetch is enabled
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "FetchPath(): done")
+	grits.DebugLogWithTime(grits.DebugRemotePerformance, path,
+		"FetchPath: complete (%.1fms total)",
+		float64(time.Since(start).Microseconds())/1000.0)
 
 	return lookupResponse, nil
 }
