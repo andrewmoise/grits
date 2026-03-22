@@ -207,64 +207,43 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d", resp.StatusCode)
 	}
 
-	// Updated for new response format: [path, metadataHash, contentHash, contentSize]
-	var lookupResponse [][]any
+	var lookupResponse grits.LookupResponse
 	if err := json.NewDecoder(resp.Body).Decode(&lookupResponse); err != nil {
 		t.Fatalf("Failed to decode lookup response: %v", err)
 	}
 
-	// Verify response structure and content
-	if len(lookupResponse) < 3 {
-		t.Fatalf("Expected at least 3 path entries in the lookup response, got %d", len(lookupResponse))
+	if len(lookupResponse.Paths) < 3 {
+		t.Fatalf("Expected at least 3 path entries in the lookup response, got %d", len(lookupResponse.Paths))
 	}
 
-	// Check root path
-	if lookupResponse[0][0] != "" { // First entry should be root with empty path
-		t.Errorf("Expected root path to be empty string, got %v", lookupResponse[0][0])
+	if lookupResponse.Paths[0].Path != "" {
+		t.Errorf("Expected root path to be empty string, got %v", lookupResponse.Paths[0].Path)
 	}
 
-	// Check expected paths are in the response
 	expectedPaths := []string{"", "dir", "dir/subdir", "dir/subdir/one"}
 	for i, expectedPath := range expectedPaths {
-		if i >= len(lookupResponse) {
+		if i >= len(lookupResponse.Paths) {
 			t.Errorf("Missing expected path in response: %s", expectedPath)
 			continue
 		}
 
-		// Check path
-		path, ok := lookupResponse[i][0].(string)
-		if !ok {
-			t.Errorf("Path at index %d is not a string: %v", i, lookupResponse[i][0])
-			continue
-		}
-		if path != expectedPath {
-			t.Errorf("Expected path %s at index %d, got %s", expectedPath, i, path)
+		if lookupResponse.Paths[i].Path != expectedPath {
+			t.Errorf("Expected path %s at index %d, got %s", expectedPath, i, lookupResponse.Paths[i].Path)
 		}
 
-		// Verify metadata hash exists
-		if _, ok := lookupResponse[i][1].(string); !ok {
-			t.Errorf("Metadata hash at index %d is not a string: %v", i, lookupResponse[i][1])
+		if lookupResponse.Paths[i].Addr == "" {
+			t.Errorf("Metadata addr at index %d is empty", i)
 		}
 
-		// Verify content hash exists
-		if _, ok := lookupResponse[i][2].(string); !ok {
-			t.Errorf("Content hash at index %d is not a string: %v", i, lookupResponse[i][2])
-		}
-
-		// Verify content size is a number
-		if _, ok := lookupResponse[i][3].(float64); !ok { // JSON numbers deserialize as float64
-			t.Errorf("Content size at index %d is not a number: %v", i, lookupResponse[i][3])
+		if lookupResponse.Paths[i].ContentHash == "" {
+			t.Errorf("Content hash at index %d is empty", i)
 		}
 	}
 
-	// For the final path (dir/subdir/one), verify the content size matches what we expect
-	if len(lookupResponse) >= len(expectedPaths) {
+	if len(lookupResponse.Paths) >= len(expectedPaths) {
 		lastIndex := len(expectedPaths) - 1
-		contentSize, ok := lookupResponse[lastIndex][3].(float64)
-		if !ok {
-			t.Errorf("Content size is not a number: %v", lookupResponse[lastIndex][3])
-		} else if int(contentSize) != len("one") {
-			t.Errorf("Expected content size %d for 'one', got %f", len("one"), contentSize)
+		if int(lookupResponse.Paths[lastIndex].Size) != len("one") {
+			t.Errorf("Expected content size %d for 'one', got %d", len("one"), lookupResponse.Paths[lastIndex].Size)
 		}
 	}
 }
@@ -332,56 +311,33 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	}
 
 	// Decode the response
-	var linkResponse [][]any
+	var linkResponse grits.LookupResponse
 	if err := json.NewDecoder(linkResp.Body).Decode(&linkResponse); err != nil {
 		t.Fatalf("Failed to decode link response: %v", err)
 	}
 
-	// Verify response structure
-	// We should get entries for "", "test", "test/nested", and "test/nested/path.txt"
-
-	if len(linkResponse) < len(linkPaths) {
+	if len(linkResponse.Paths) < len(linkPaths) {
 		t.Fatalf("Expected at least %d path entries in the link response, got %d",
-			len(linkPaths), len(linkResponse))
+			len(linkPaths), len(linkResponse.Paths))
 	}
 
-	// Build a map of paths in the response for easier verification
 	responsePaths := make(map[string]bool)
-	for _, entry := range linkResponse {
-		path, ok := entry[0].(string)
-		if !ok {
-			t.Errorf("Path is not a string: %v", entry[0])
-			continue
-		}
-		responsePaths[path] = true
+	for _, pair := range linkResponse.Paths {
+		responsePaths[pair.Path] = true
 	}
 
-	// Check that all expected paths are present
 	for _, path := range linkPaths {
 		if !responsePaths[path] {
 			t.Errorf("Expected path %s in response, but it was not found", path)
 		}
 	}
 
-	// Find the entry for the linked file and verify it
-	for i, entry := range linkResponse {
-		path, ok := entry[0].(string)
-		if !ok || path != linkPaths[i] {
-			continue
+	for _, pair := range linkResponse.Paths {
+		if pair.Addr == "" {
+			t.Errorf("Metadata addr is empty for path %s", pair.Path)
 		}
-
-		// Verify we have content size, metadata, and content hash at least
-		_, ok = entry[3].(float64)
-		if !ok {
-			t.Errorf("Content size is not a number: %v", entry[3])
-		}
-
-		//
-		if _, ok := entry[1].(string); !ok {
-			t.Errorf("Metadata hash is not a string: %v", entry[1])
-		}
-		if _, ok := entry[2].(string); !ok {
-			t.Errorf("Content hash is not a string: %v", entry[2])
+		if pair.ContentHash == "" {
+			t.Errorf("Content hash is empty for path %s", pair.Path)
 		}
 	}
 }

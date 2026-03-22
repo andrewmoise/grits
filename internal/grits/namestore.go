@@ -147,8 +147,10 @@ func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 
 // PathNodePair represents a path and its corresponding address
 type PathNodePair struct {
-	Path string   `json:"path" validate:"relativePath"`
-	Addr BlobAddr `json:"addr" validate:"blobAddr"`
+	Path        string   `json:"path"`
+	Addr        BlobAddr `json:"addr"`
+	ContentHash BlobAddr `json:"contentHash"`
+	Size        int64    `json:"size"`
 }
 
 // LookupResponse represents a full response to a lookup request
@@ -286,8 +288,10 @@ func (ns *NameStore) resolveFromLocal(path string) (*LookupResponse, error) {
 
 	// Add root
 	response.Paths = append(response.Paths, &PathNodePair{
-		Path: "",
-		Addr: rootAddr,
+		Path:        "",
+		Addr:        rootAddr,
+		ContentHash: node.Metadata().ContentHash,
+		Size:        node.Metadata().Size,
 	})
 
 	currentPath := ""
@@ -333,8 +337,10 @@ func (ns *NameStore) resolveFromLocal(path string) (*LookupResponse, error) {
 		}
 
 		response.Paths = append(response.Paths, &PathNodePair{
-			Path: currentPath,
-			Addr: childAddr,
+			Path:        currentPath,
+			Addr:        childAddr,
+			ContentHash: childNode.Metadata().ContentHash,
+			Size:        childNode.Metadata().Size,
 		})
 
 		node = childNode // Move to the next node in the path
