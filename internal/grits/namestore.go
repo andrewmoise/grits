@@ -73,9 +73,10 @@ type NameStore struct {
 
 	serialNumber int64 // Increments on every root change
 
-	fetchers   []BlobFetcher
-	fetcherMtx sync.RWMutex
-	lastFetch  time.Time
+	fetchers      []BlobFetcher
+	fetcherMtx    sync.RWMutex
+	lastFetch     time.Time
+	CacheDuration time.Duration
 }
 
 // BlobFetcher provides on-demand fetching of blobs not available locally
@@ -225,12 +226,10 @@ func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 func (ns *NameStore) resolvePath(path string) (*LookupResponse, error) {
 	DebugLog(DebugNameStore, "We resolve path '%s'\n", path)
 
-	// Just hard coded for now
-	freshnessDuration := time.Second * 10
-
 	// Check if we should refetch
 	ns.mtx.Lock()
-	forceFetch := (len(ns.fetchers) > 0 && time.Since(ns.lastFetch) > freshnessDuration)
+	DebugLog(DebugNameStore, "  last fetch %v so we check %v > %v", ns.lastFetch, time.Since(ns.lastFetch), ns.CacheDuration)
+	forceFetch := (len(ns.fetchers) > 0 && time.Since(ns.lastFetch) > ns.CacheDuration)
 	ns.mtx.Unlock()
 
 	var resp *LookupResponse
@@ -242,6 +241,8 @@ func (ns *NameStore) resolvePath(path string) (*LookupResponse, error) {
 		if err == nil {
 			DebugLog(DebugNameStore, "  we return %v %v from local", resp, err)
 			return resp, err
+		} else {
+			DebugLog(DebugNameStore, "  we fail a local lookup: %v", err)
 		}
 	}
 
@@ -821,7 +822,7 @@ func (ns *NameStore) GetSerialNumber() int64 {
 	return ns.serialNumber
 }
 
-func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64) error {
+func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64, cacheDuration time.Duration) error {
 	// Take write lock since we're updating the root
 	ns.writeMtx.Lock()
 	defer ns.writeMtx.Unlock()
@@ -831,7 +832,7 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64)
 		return err
 	}
 
-	//ns.refManager.recursiveRelease might be nice here, in case the thing was non-empty when we started
+	//ns.refManager.recursiveRelease might be nice here, in case the thing was somehow non-empty when we started
 
 	err = ns.refManager.recursiveTake(ns, root)
 	if err != nil {
@@ -841,6 +842,7 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64)
 	ns.mtx.Lock()
 	ns.rootAddr = root.MetadataBlob().GetAddress()
 	ns.serialNumber = serialNumber
+	ns.CacheDuration = cacheDuration
 	ns.mtx.Unlock()
 
 	return nil

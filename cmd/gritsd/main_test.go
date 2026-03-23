@@ -112,6 +112,10 @@ func TestFileOperations(t *testing.T) {
 	for name, metadataCID := range dirListing {
 		log.Printf("%s -> %s\n", name, metadataCID)
 
+		if name == ".grits" {
+			continue
+		}
+
 		// Fetch file metadata
 		metadataURL := fmt.Sprintf("%s/grits/v1/blob/%s", baseURL, metadataCID)
 		metadataResp, err := http.Get(metadataURL)
@@ -246,6 +250,10 @@ func TestFileOperations(t *testing.T) {
 
 	for name, metadataCID := range dirListing {
 		log.Printf("%s -> %s\n", name, metadataCID)
+
+		if name == ".grits" {
+			continue
+		}
 
 		if name == "3" {
 			t.Errorf("File 3 should have been deleted")

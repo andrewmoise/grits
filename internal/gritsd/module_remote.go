@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -21,15 +20,15 @@ import (
 
 // RemoteVolumeConfig contains configuration for accessing a remote volume
 type RemoteVolumeConfig struct {
-	VolumeName          string        `json:"volumeName"`
-	RemoteURL           string        `json:"remoteUrl"`
-	FreshnessDuration   time.Duration `json:"freshnessDuration"`
-	CacheExpirationTime time.Duration `json:"cacheExpirationTime"`
+	VolumeName        string        `json:"volumeName"`
+	RemoteURL         string        `json:"remoteUrl"`
+	BlobCacheDuration time.Duration `json:"blobCacheDuration,omitempty"`
 }
 
 const maxPrefetchQueueSize = 128
-const numPrefetchWorkers = 32
-const numHttpConnections = 32
+
+// const numPrefetchWorkers = 32
+// const numHttpConnections = 32
 
 /////
 // Core struct + interface
@@ -95,6 +94,12 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 		stopWorker:    make(chan struct{}),
 	}
 	rv.queueCond = sync.NewCond(&rv.queueMutex)
+
+	if config.BlobCacheDuration == 0 {
+		localCache.ns.CacheDuration = 24 * time.Hour
+	} else {
+		localCache.ns.CacheDuration = config.BlobCacheDuration
+	}
 
 	localCache.ns.RegisterFetcher(rv)
 
@@ -270,7 +275,7 @@ func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error)
 		return nil, fmt.Errorf("mismatch of blob addr! %s != %s", cf.GetAddress(), addr)
 	}
 
-	cf.Touch(rv.config.CacheExpirationTime)
+	cf.Touch(rv.config.BlobCacheDuration)
 
 	grits.DebugLogWithTime(grits.DebugRemotePerformance, string(addr),
 		"FetchBlob: done (%.1fms)", float64(time.Since(start).Microseconds())/1000.0)
@@ -349,11 +354,11 @@ func httpClient() *http.Client {
 	return &http.Client{
 		Timeout: 30 * time.Second,
 		Transport: &http.Transport{
-			MaxIdleConns:        numHttpConnections,
-			MaxIdleConnsPerHost: numHttpConnections,
-			MaxConnsPerHost:     0,
-			IdleConnTimeout:     90 * time.Second,
-			DisableKeepAlives:   false,
+			// MaxIdleConns:        numHttpConnections,
+			// MaxIdleConnsPerHost: numHttpConnections,
+			MaxConnsPerHost:   0,
+			IdleConnTimeout:   90 * time.Second,
+			DisableKeepAlives: false,
 		},
 	}
 }
@@ -437,7 +442,7 @@ func (rv *RemoteVolume) prefetchWorker(id int) {
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: Got blob")
 
-		cf.Touch(rv.config.CacheExpirationTime)
+		cf.Touch(rv.config.BlobCacheDuration)
 		cf.Release()
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: All done")
@@ -447,52 +452,10 @@ func (rv *RemoteVolume) prefetchWorker(id int) {
 /////
 // Config unmarshaling
 
-// Some silliness for parsing durations
+func (c *RemoteVolumeConfig) MarshalJSON() ([]byte, error) {
+	return grits.MarshalDurationFields(c)
+}
+
 func (c *RemoteVolumeConfig) UnmarshalJSON(data []byte) error {
-	// First unmarshal into a map to get raw values
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-
-	// Use reflection to iterate over struct fields
-	v := reflect.ValueOf(c).Elem()
-	t := v.Type()
-
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		jsonTag := field.Tag.Get("json")
-
-		// Parse the json tag (handle "name,omitempty" format)
-		jsonName := strings.Split(jsonTag, ",")[0]
-		if jsonName == "" || jsonName == "-" {
-			continue
-		}
-
-		// Get the raw value from JSON
-		rawValue, ok := raw[jsonName]
-		if !ok {
-			continue
-		}
-
-		fieldValue := v.Field(i)
-
-		// Special handling for duration fields
-		if field.Type == reflect.TypeOf(time.Duration(0)) {
-			if str, ok := rawValue.(string); ok {
-				duration, err := time.ParseDuration(str)
-				if err != nil {
-					return fmt.Errorf("invalid %s: %v", jsonName, err)
-				}
-				fieldValue.Set(reflect.ValueOf(duration))
-			}
-		} else if fieldValue.Kind() == reflect.String {
-			if str, ok := rawValue.(string); ok {
-				fieldValue.SetString(str)
-			}
-		}
-		// Add more type handling as needed
-	}
-
-	return nil
+	return grits.UnmarshalDurationFields(data, c)
 }
