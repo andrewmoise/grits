@@ -1,8 +1,6 @@
 package gritsd
 
 import (
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"grits/internal/grits"
 	"log"
@@ -65,41 +63,10 @@ func GetLetsEncryptCertFiles(config *grits.Config, domain string) (certPath, key
 	return certPath, keyPath
 }
 
-// CertExpiresWithin returns true if the certificate at certPath will expire within d,
-// or if it cannot be read or parsed.
-func CertExpiresWithin(certPath string, d time.Duration) bool {
-	data, err := os.ReadFile(certPath)
-	if err != nil {
-		return true
-	}
-
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return true
-	}
-
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		return true
-	}
-
-	return time.Until(cert.NotAfter) < d
-}
-
-// EnsureCertificate checks whether a valid Let's Encrypt certificate exists for domain,
-// and runs the certbot helper to acquire/renew if needed.
-// Can be called at any privilege level since the helper is setuid root.
-// Returns the cert and key paths on success.
 func EnsureCertificate(serverConfig *grits.Config, domain, email string) (certPath, keyPath string, err error) {
 	certPath, keyPath = GetLetsEncryptCertFiles(serverConfig, domain)
 
-	needsCert := !fileExists(certPath) || !fileExists(keyPath) || CertExpiresWithin(certPath, 7*24*time.Hour)
-	if !needsCert {
-		log.Printf("Certificate for %s is valid and not expiring soon", domain)
-		return certPath, keyPath, nil
-	}
-
-	log.Printf("Acquiring/renewing certificate for %s", domain)
+	log.Printf("Running certbot helper for %s", domain)
 	if err := runCertbotHelper(serverConfig, domain, email); err != nil {
 		return "", "", fmt.Errorf("certbot helper failed for %s: %v", domain, err)
 	}
@@ -138,67 +105,20 @@ func runCertbotHelper(serverConfig *grits.Config, domain, email string) error {
 func StartCertRenewalWatcher(serverConfig *grits.Config, domain, email string, stopCh <-chan struct{}) {
 	go func() {
 		for {
-			certPath, _ := GetLetsEncryptCertFiles(serverConfig, domain)
-			sleepDur := certRenewalSleep(certPath)
-
-			if sleepDur > 0 {
-				select {
-				case <-time.After(sleepDur):
-				case <-stopCh:
-					return
-				}
+			select {
+			case <-time.After(15 * 24 * time.Hour):
+			case <-stopCh:
+				return
 			}
 
-			log.Printf("Attempting certificate renewal for %s", domain)
+			log.Printf("Running scheduled certificate renewal for %s", domain)
 			if err := runCertbotHelper(serverConfig, domain, email); err != nil {
-				log.Printf("Certificate renewal failed for %s: %v — will retry in 24 hours", domain, err)
-				select {
-				case <-time.After(24 * time.Hour):
-				case <-stopCh:
-					return
-				}
+				log.Printf("Certificate renewal failed for %s: %v", domain, err)
 			} else {
-				log.Printf("Certificate renewed successfully for %s", domain)
-				// Sleep at least 24 hours before checking again even if we can't read the cert
-				select {
-				case <-time.After(24 * time.Hour):
-				case <-stopCh:
-					return
-				}
+				log.Printf("Certificate renewal completed for %s", domain)
 			}
 		}
 	}()
-}
-
-// certRenewalSleep returns how long to sleep before attempting renewal.
-// We target waking up when 7 days remain before expiry.
-// If the cert can't be read or is already within 7 days, returns 0.
-func certRenewalSleep(certPath string) time.Duration {
-	data, err := os.ReadFile(certPath)
-	if err != nil {
-		log.Printf("certRenewalSleep: failed to read cert at %s: %v", certPath, err)
-		return 0
-	}
-
-	block, _ := pem.Decode(data)
-	if block == nil {
-		log.Printf("certRenewalSleep: failed to PEM decode cert at %s", certPath)
-		return 0
-	}
-
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		log.Printf("certRenewalSleep: failed to parse cert at %s: %v", certPath, err)
-		return 0
-	}
-
-	renewAt := cert.NotAfter.Add(-7 * 24 * time.Hour)
-	sleepDur := time.Until(renewAt)
-	log.Printf("certRenewalSleep: cert at %s expires %s, renewal sleep duration %s", certPath, cert.NotAfter, sleepDur)
-	if sleepDur < 0 {
-		return 0
-	}
-	return sleepDur
 }
 
 // GenerateSelfCert creates a self-signed certificate for peer authentication using
