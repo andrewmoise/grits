@@ -40,13 +40,13 @@ func DebugLogWithTime(flag bool, tag string, format string, v ...any) {
 		secs := now.Second() % 1000 // This just gives 0-59, but keeping your request
 		millis := now.Nanosecond() / 1000000
 
-		// Get last 5 characters of tag
+		// Get last 15 characters of tag
 		displayTag := tag
-		if len(tag) > 5 {
-			displayTag = tag[len(tag)-5:]
+		if len(tag) > 15 {
+			displayTag = tag[len(tag)-15:]
 		}
 
-		prefix := fmt.Sprintf("%.5s %02d.%03d ", displayTag, secs, millis)
+		prefix := fmt.Sprintf("%15s %02d.%03d ", displayTag, secs, millis)
 		log.Printf(prefix+format, v...)
 	}
 }
