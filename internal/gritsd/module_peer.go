@@ -13,111 +13,109 @@ import (
 	"time"
 )
 
-// PeerModuleConfig defines configuration for peer functionality
 type PeerModuleConfig struct {
-	TrackerUrl   string `json:"trackerUrl"`   // Host of the tracker to connect to
-	PeerName     string `json:"peerName"`     // Name this peer identifies as
-	CertbotEmail string `json:"certbotEmail"` // Email for Let's Encrypt registration
+	TrackerUrl string `json:"trackerUrl"`
+	PeerName   string `json:"peerName"`
 }
 
 type PeerModule struct {
 	Config *PeerModuleConfig
 	Server *Server
 
-	// Registration status
 	registered   bool
 	fqdn         string
 	heartbeatSec int
 
-	// Cert paths, set after successful registration and cert acquisition
-	CertPath string
-	KeyPath  string
-
-	// For heartbeat management
 	heartbeatTicker *time.Ticker
 	stopCh          chan struct{}
 	stoppedCh       chan struct{}
 	running         bool
 }
 
+func (*PeerModule) GetModuleName() string { return "peer" }
+func (*PeerModule) GetDependencies() []*Dependency {
+	return []*Dependency{
+		{
+			ModuleType: "http",
+			Type:       DependRequired,
+		},
+	}
+}
+func (pm *PeerModule) GetConfig() any { return pm.Config }
+
 func NewPeerModule(server *Server, config *PeerModuleConfig) (*PeerModule, error) {
 	if config.TrackerUrl == "" {
-		return nil, fmt.Errorf("TrackerUrl is required")
+		return nil, fmt.Errorf("trackerUrl is required")
 	}
-
 	if config.PeerName == "" {
-		return nil, fmt.Errorf("PeerName is required")
+		return nil, fmt.Errorf("peerName is required")
 	}
-
-	pm := &PeerModule{
+	return &PeerModule{
 		Config:    config,
 		Server:    server,
 		stopCh:    make(chan struct{}),
 		stoppedCh: make(chan struct{}),
-	}
-
-	return pm, nil
+	}, nil
 }
 
 func (pm *PeerModule) Start() error {
-	log.Printf("Starting PeerModule with name %s connecting to tracker %s",
-		pm.Config.PeerName, pm.Config.TrackerUrl)
+	log.Printf("PeerModule: starting, connecting to tracker %s as %s",
+		pm.Config.TrackerUrl, pm.Config.PeerName)
 
-	// Ensure we have self-signed certificates for authenticating with the tracker
-	err := GenerateSelfCert(pm.Server.Config)
-	if err != nil {
-		return fmt.Errorf("failed to generate self-certificates: %v", err)
+	if err := GenerateSelfCert(pm.Server.Config); err != nil {
+		return fmt.Errorf("failed to generate self-signed cert: %v", err)
 	}
 
-	// Attempt initial registration — this gives us our FQDN
-	err = pm.registerWithTracker()
-	if err != nil {
+	if err := pm.registerWithTracker(); err != nil {
 		return fmt.Errorf("failed to register with tracker: %v", err)
 	}
 
-	// Now that we have our FQDN, acquire a certificate for it if needed.
-	// The helper is setuid root so this works regardless of our current privilege level.
-	if pm.Config.CertbotEmail == "" {
-		return fmt.Errorf("certbotEmail is required for certificate acquisition")
+	// Ask the HTTP module to acquire a cert for our FQDN now rather than
+	// waiting for the first inbound TLS handshake.
+	httpMod := pm.findHTTPModule()
+	if httpMod == nil {
+		return fmt.Errorf("no HTTP module found — cannot warm up certificate")
+	}
+	if err := httpMod.WarmUpCert(pm.fqdn); err != nil {
+		// Non-fatal: the cert will be acquired on first request instead.
+		log.Printf("PeerModule: cert warm-up for %s failed: %v", pm.fqdn, err)
+	} else {
+		log.Printf("PeerModule: certificate ready for %s", pm.fqdn)
 	}
 
-	certPath, keyPath, err := EnsureCertificate(pm.Server.Config, pm.fqdn, pm.Config.CertbotEmail)
-	if err != nil {
-		return fmt.Errorf("failed to acquire TLS certificate for %s: %v", pm.fqdn, err)
-	}
-
-	pm.CertPath = certPath
-	pm.KeyPath = keyPath
-
-	log.Printf("Certificate acquired for %s", pm.fqdn)
-
-	// Start cert renewal watcher
-	StartCertRenewalWatcher(pm.Server.Config, pm.fqdn, pm.Config.CertbotEmail, pm.stopCh)
-
-	// Start heartbeat loop
 	go pm.heartbeatLoop()
-
 	pm.running = true
 	return nil
 }
 
-// heartbeatLoop sends periodic heartbeats to the tracker
+func (pm *PeerModule) Stop() error {
+	if !pm.running {
+		return nil
+	}
+	log.Printf("PeerModule: stopping")
+	if pm.heartbeatTicker != nil {
+		pm.heartbeatTicker.Stop()
+	}
+	close(pm.stopCh)
+	<-pm.stoppedCh
+	pm.running = false
+	return nil
+}
+
 func (pm *PeerModule) heartbeatLoop() {
 	defer close(pm.stoppedCh)
 
-	// Default interval if tracker didn't specify one
 	interval := 300 * time.Second
 	if pm.heartbeatSec > 0 {
 		interval = time.Duration(pm.heartbeatSec*9/10) * time.Second
 	}
-
 	pm.heartbeatTicker = time.NewTicker(interval)
 
 	for {
 		select {
 		case <-pm.heartbeatTicker.C:
 			if err := pm.registerWithTracker(); err != nil {
-				log.Printf("Error sending heartbeat: %v", err)
+				log.Printf("PeerModule: heartbeat error: %v", err)
 			}
 		case <-pm.stopCh:
 			return
@@ -126,142 +124,87 @@ func (pm *PeerModule) heartbeatLoop() {
 }
 
 func (pm *PeerModule) registerWithTracker() error {
-	log.Printf("Registering peer with tracker: %s", pm.Config.PeerName)
-
-	// Prepare request payload
 	payload := struct {
 		PeerName string `json:"peerName"`
 		Port     int    `json:"port"`
 	}{
 		PeerName: pm.Config.PeerName,
-		Port:     -1, // Port is determined by the HTTP module; peer module doesn't know it
+		Port:     -1,
 	}
-
-	// Convert to JSON
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %v", err)
 	}
 
-	// Create the request URL - ensure it uses HTTPS if tracker is using TLS
 	trackerUrl := pm.Config.TrackerUrl
 	if !strings.HasPrefix(trackerUrl, "http") {
-		// Default to https if not specified
 		trackerUrl = "https://" + trackerUrl
 	}
-
 	url := fmt.Sprintf("%s/grits/v1/tracker/register-peer", trackerUrl)
-	log.Printf("Posting to tracker at URL: %s", url)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(payloadBytes))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
-
 	req.Header.Set("Content-Type", "application/json")
 
-	// Use our self-signed client certificate for authentication with the tracker
 	certPath, keyPath := GetCertificateFiles(pm.Server.Config, SelfSignedCert, "current")
-	log.Printf("Using certificate files: cert=%s, key=%s", certPath, keyPath)
-
 	if _, err := os.Stat(certPath); os.IsNotExist(err) {
-		return fmt.Errorf("certificate file does not exist: %s", certPath)
-	}
-	if _, err := os.Stat(keyPath); os.IsNotExist(err) {
-		return fmt.Errorf("key file does not exist: %s", keyPath)
+		return fmt.Errorf("self-signed cert not found at %s", certPath)
 	}
 
 	cert, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
-		return fmt.Errorf("failed to load client certificate: %v", err)
-	}
-
-	// Create TLS config with our certificate
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
+		return fmt.Errorf("failed to load self-signed cert: %v", err)
 	}
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
+			TLSClientConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
 		},
 	}
 
-	// Send the request
-	log.Printf("Sending registration request with TLS client certificate")
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send request: %v", err)
+		return fmt.Errorf("failed to send registration: %v", err)
 	}
 	defer resp.Body.Close()
 
-	log.Printf("Response status: %s", resp.Status)
-
-	// Check response status
 	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("tracker rejected registration: status=%d, body=%s",
-			resp.StatusCode, string(bodyBytes))
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("tracker rejected registration: status=%d body=%s",
+			resp.StatusCode, string(body))
 	}
 
-	// Parse response
 	var response struct {
 		Status           string `json:"status"`
 		FQDN             string `json:"fqdn"`
 		RegistrationType string `json:"registrationType"`
 		HeartbeatSec     int    `json:"heartbeatSec"`
 	}
-
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return fmt.Errorf("failed to parse response: %v", err)
+		return fmt.Errorf("failed to parse tracker response: %v", err)
 	}
 
-	// Update our status
 	pm.fqdn = response.FQDN
 	pm.registered = true
 
-	// If heartbeat interval changed, update ticker
-	if pm.heartbeatSec != response.HeartbeatSec && response.HeartbeatSec > 0 {
+	if response.HeartbeatSec > 0 && pm.heartbeatSec != response.HeartbeatSec {
 		pm.heartbeatSec = response.HeartbeatSec
 		if pm.heartbeatTicker != nil {
-			pm.heartbeatTicker.Reset(time.Duration(pm.heartbeatSec) * time.Second)
-			log.Printf("Updated heartbeat interval to %d seconds", pm.heartbeatSec)
+			pm.heartbeatTicker.Reset(time.Duration(pm.heartbeatSec*9/10) * time.Second)
 		}
 	}
 
-	log.Printf("Registration status: %s as %s", response.RegistrationType, pm.fqdn)
+	log.Printf("PeerModule: registered as %s (%s)", pm.fqdn, response.RegistrationType)
 	return nil
 }
 
-// Stop halts the peer module operations
-func (pm *PeerModule) Stop() error {
-	if !pm.running {
-		return nil // Already stopped
+func (pm *PeerModule) findHTTPModule() *HTTPModule {
+	for _, mod := range pm.Server.Modules {
+		if h, ok := mod.(*HTTPModule); ok {
+			return h
+		}
 	}
-
-	log.Printf("Stopping PeerModule")
-
-	if pm.heartbeatTicker != nil {
-		pm.heartbeatTicker.Stop()
-	}
-
-	close(pm.stopCh)
-	<-pm.stoppedCh
-
-	pm.running = false
-	log.Printf("PeerModule stopped")
-
 	return nil
-}
-
-func (pm *PeerModule) GetModuleName() string {
-	return "peer"
-}
-
-func (*PeerModule) GetDependencies() []*Dependency {
-	return []*Dependency{}
-}
-
-func (pm *PeerModule) GetConfig() any {
-	return pm.Config
 }
