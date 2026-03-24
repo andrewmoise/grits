@@ -1,3 +1,7 @@
+//go:build ignore
+
+// Maybe we will come back to this someday
+
 package main
 
 import (

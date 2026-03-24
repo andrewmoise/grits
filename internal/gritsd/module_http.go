@@ -3,7 +3,6 @@ package gritsd
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"grits/internal/grits"
@@ -14,7 +13,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +26,6 @@ const (
 	DefaultMaxUploadSize = 100 * 1024 * 1024
 )
 
-// limitedReader wraps an io.Reader with a size limit
 type limitedReader struct {
 	r         io.Reader
 	remaining int64
@@ -38,11 +35,9 @@ func (lr *limitedReader) Read(p []byte) (int, error) {
 	if lr.remaining <= 0 {
 		return 0, fmt.Errorf("request body too large")
 	}
-
 	if int64(len(p)) > lr.remaining {
 		p = p[:lr.remaining]
 	}
-
 	n, err := lr.r.Read(p)
 	lr.remaining -= int64(n)
 	return n, err
@@ -53,30 +48,28 @@ func newLimitedReader(r io.Reader, maxSize int64) io.Reader {
 }
 
 /////
-// Module stuff
+// Module config and struct
 /////
 
 type HTTPModuleConfig struct {
-	ThisHost string `json:"thisHost"`
-	ThisPort int    `json:"thisPort"`
+	ThisPort int `json:"thisPort"`
 
 	EnableTls bool  `json:"enableTLS,omitempty"`
 	ReadOnly  *bool `json:"readOnly,omitempty"`
 
-	// For TLS certificates, two options:
-
-	// 1. Auto config: acquire and renew via the certbot helper binary.
-	//    The helper must be installed at bin/certbot-helper relative to the server directory.
+	// TLS certificate options.
+	// AutoCertificate: acquire and renew via the certbot helper binary.
 	AutoCertificate bool   `json:"autoCertificate,omitempty"`
 	CertbotEmail    string `json:"certbotEmail,omitempty"`
 
-	// 2. Manual config: provide paths to existing cert and key files.
-	//    The daemon user must be able to read these files.
-	//    Restart the server to pick up renewed certificates.
-	CertPath string `json:"certPath,omitempty"` // Path to fullchain.pem
-	KeyPath  string `json:"keyPath,omitempty"`  // Path to privkey.pem
+	// Manual config: provide paths to existing cert and key files.
+	CertPath string `json:"certPath,omitempty"`
+	KeyPath  string `json:"keyPath,omitempty"`
 
-	// Size limits
+	// Which volume holds deployed content. Defaults to "sites".
+	// Content is served from {volume}/{hostname}/content/{path}.
+	ContentVolume string `json:"contentVolume,omitempty"`
+
 	MaxUploadSize int64 `json:"maxUploadSize,omitempty"`
 }
 
@@ -87,13 +80,20 @@ type HTTPModule struct {
 	HTTPServer *http.Server
 	Mux        *http.ServeMux
 
-	deployments         []*DeploymentModule
 	serviceWorkerModule *ServiceWorkerModule
 	activeMirrorModule  *MirrorModule
 
 	refHolder *ReferenceHolder
 
-	stopCh chan struct{} // For cert renewal watcher
+	// Dynamic TLS certificate management.
+	// certCache holds the most recently loaded cert per hostname.
+	certMu    sync.RWMutex
+	certCache map[string]*tls.Certificate // hostname → cert
+	// renewalStopFns holds a cancel func per hostname renewal goroutine.
+	renewalMu      sync.Mutex
+	renewalStopFns map[string]context.CancelFunc
+
+	stopCh chan struct{}
 }
 
 func (*HTTPModule) GetModuleName() string {
@@ -105,8 +105,6 @@ func (*HTTPModule) GetDependencies() []*Dependency {
 		{
 			ModuleType: "peer",
 			Type:       DependOptional,
-			// Ordering only — if a peer module is present, it must start first so that
-			// it can acquire a certificate for our FQDN before we try to load it.
 		},
 	}
 }
@@ -115,122 +113,102 @@ func (m *HTTPModule) GetConfig() any {
 	return m.Config
 }
 
-// NewHTTPModule creates and initializes an HTTPModule instance based on the provided configuration.
 func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error) {
-	// Validate port
 	if config.ThisPort < 1 || config.ThisPort > 65535 {
 		return nil, fmt.Errorf("invalid port: must be between 1 and 65535")
 	}
-
-	// Validate hostname if provided
-	if config.ThisHost != "" && !Validate("hostname", config.ThisHost) {
-		return nil, fmt.Errorf("invalid hostname: %s", config.ThisHost)
-	}
-
-	// If ReadOnly wasn't specified, default to true
 	if config.ReadOnly == nil {
 		readOnly := true
 		config.ReadOnly = &readOnly
 	}
-
-	// Set default max upload size if not configured
 	if config.MaxUploadSize <= 0 {
 		config.MaxUploadSize = DefaultMaxUploadSize
 	}
-
-	// Validate certificate configuration
+	if config.ContentVolume == "" {
+		config.ContentVolume = "sites"
+	}
 	if config.EnableTls {
-		if config.AutoCertificate {
-			if config.CertbotEmail == "" {
-				return nil, fmt.Errorf("certbotEmail is required when autoCertificate is enabled")
-			}
-			if config.ThisHost == "" {
-				return nil, fmt.Errorf("thisHost is required when autoCertificate is enabled")
-			}
-		} else {
-			if config.CertPath == "" || config.KeyPath == "" {
-				return nil, fmt.Errorf("certPath and keyPath are required when enableTLS is true and autoCertificate is false")
-			}
+		if config.AutoCertificate && config.CertbotEmail == "" {
+			return nil, fmt.Errorf("certbotEmail is required when autoCertificate is enabled")
+		}
+		if !config.AutoCertificate && (config.CertPath == "" || config.KeyPath == "") {
+			return nil, fmt.Errorf("certPath and keyPath are required when enableTLS is true and autoCertificate is false")
 		}
 	}
 
 	mux := http.NewServeMux()
-	HTTPServer := &http.Server{
+	httpServer := &http.Server{
 		Addr:              fmt.Sprintf(":%d", config.ThisPort),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	// Only set TLS config if TLS is enabled
+	m := &HTTPModule{
+		Config:         config,
+		Server:         server,
+		HTTPServer:     httpServer,
+		Mux:            mux,
+		refHolder:      NewReferenceHolder(45 * time.Second),
+		certCache:      make(map[string]*tls.Certificate),
+		renewalStopFns: make(map[string]context.CancelFunc),
+		stopCh:         make(chan struct{}),
+	}
+
 	if config.EnableTls {
-		HTTPServer.TLSConfig = &tls.Config{
-			NextProtos: []string{"h2", "http/1.1"}, // Support HTTP/2 and fallback to HTTP/1.1
+		httpServer.TLSConfig = &tls.Config{
+			GetCertificate: m.getCertificate,
 		}
 	}
 
-	if grits.DebugHttp {
-		log.Printf("HTTP listening on %s\n", HTTPServer.Addr)
-	}
+	m.setupRoutes()
 
-	httpModule := &HTTPModule{
-		Config:      config,
-		Server:      server,
-		HTTPServer:  HTTPServer,
-		Mux:         mux,
-		deployments: make([]*DeploymentModule, 0),
-		refHolder:   NewReferenceHolder(45 * time.Second),
-		stopCh:      make(chan struct{}),
-	}
+	server.AddModuleHook(m.addServiceWorkerModule)
+	server.AddModuleHook(m.addMirrorModule)
 
-	// Set up routes within the constructor or an initialization method
-	httpModule.setupRoutes()
-
-	server.AddModuleHook(httpModule.addDeploymentModule)
-	server.AddModuleHook(httpModule.addServiceWorkerModule)
-	server.AddModuleHook(httpModule.addMirrorModule)
-
-	return httpModule, nil
+	return m, nil
 }
 
+/////
+// Start / Stop
+/////
+
 func (hm *HTTPModule) Start() error {
-	// Start reference holder
 	hm.refHolder.Start()
+
+	if hm.Config.EnableTls && hm.Config.AutoCertificate {
+		// Scan content volume and acquire certs for all known hostnames.
+		if err := hm.initCertsFromContentVolume(); err != nil {
+			// Non-fatal: log and continue; certs will be acquired on first request.
+			log.Printf("HTTP: warning: initial cert scan failed: %v", err)
+		}
+	} else if hm.Config.EnableTls && !hm.Config.AutoCertificate {
+		// Manual cert — load it once into the cache under a wildcard key.
+		cert, err := tls.LoadX509KeyPair(hm.Config.CertPath, hm.Config.KeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS certificate: %v", err)
+		}
+		hm.certMu.Lock()
+		hm.certCache["*"] = &cert
+		hm.certMu.Unlock()
+	}
 
 	preopenedListenersMutex.Lock()
 	listener, hasPreopened := preopenedListeners[hm.Config.ThisPort]
-	cert, hasCert := preopenedCerts[hm.Config.ThisPort]
 	preopenedListenersMutex.Unlock()
-
-	// Start cert renewal watcher if we have an auto-managed cert
-	if hm.Config.AutoCertificate {
-		StartCertRenewalWatcher(hm.Server.Config, hm.Config.ThisHost, hm.Config.CertbotEmail, hm.stopCh)
-	}
-
-	if grits.DebugHttp {
-		if hm.Config.EnableTls {
-			log.Printf("Using auto-managed certificate for %s", hm.Config.ThisHost)
-		}
-	}
 
 	go func() {
 		var err error
-
 		if hm.Config.EnableTls {
-			if !hasCert {
-				log.Fatalf("TLS enabled for port %d but no certificate was pre-loaded", hm.Config.ThisPort)
-			}
-			tlsConfig := hm.HTTPServer.TLSConfig.Clone()
-			tlsConfig.Certificates = []tls.Certificate{*cert}
-
+			tlsCfg := hm.HTTPServer.TLSConfig.Clone()
 			if hasPreopened {
-				tlsListener := tls.NewListener(listener, tlsConfig)
+				tlsListener := tls.NewListener(listener, tlsCfg)
 				err = hm.HTTPServer.Serve(tlsListener)
 			} else {
-				ln, listenErr := net.Listen("tcp6", hm.HTTPServer.Addr)
+				ln, listenErr := net.Listen("tcp", hm.HTTPServer.Addr)
 				if listenErr != nil {
-					log.Fatalf("Failed to listen on %s: %v", hm.HTTPServer.Addr, listenErr)
+					log.Fatalf("HTTP: failed to listen on %s: %v", hm.HTTPServer.Addr, listenErr)
 				}
-				tlsListener := tls.NewListener(ln, tlsConfig)
+				tlsListener := tls.NewListener(ln, tlsCfg)
 				err = hm.HTTPServer.Serve(tlsListener)
 			}
 		} else {
@@ -240,35 +218,38 @@ func (hm *HTTPModule) Start() error {
 				err = hm.HTTPServer.ListenAndServe()
 			}
 		}
-
 		if err != nil && err != http.ErrServerClosed {
-			log.Fatalf("HTTP server error: %v", err)
+			log.Fatalf("HTTP: server error: %v", err)
 		}
 	}()
 
 	time.Sleep(250 * time.Millisecond)
 
 	if grits.DebugHttp {
-		log.Printf("HTTP module started on %s (TLS enabled: %t)\n", hm.HTTPServer.Addr, hm.Config.EnableTls)
+		log.Printf("HTTP module started on %s (TLS: %v)", hm.HTTPServer.Addr, hm.Config.EnableTls)
 	}
 	return nil
 }
 
-// Stop gracefully shuts down the HTTP server.
 func (hm *HTTPModule) Stop() error {
-	// Signal cert renewal watcher to stop
 	close(hm.stopCh)
+
+	// Cancel all renewal goroutines.
+	hm.renewalMu.Lock()
+	for _, cancel := range hm.renewalStopFns {
+		cancel()
+	}
+	hm.renewalMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	err := hm.HTTPServer.Shutdown(ctx)
 	if err != nil {
-		log.Printf("HTTP module shutdown error! %v", err)
+		log.Printf("HTTP: shutdown error: %v", err)
 	}
 
 	hm.refHolder.Stop()
-
 	return err
 }
 
@@ -276,29 +257,25 @@ func (hm *HTTPModule) Stop() error {
 // Pre-opening ports before privilege drop
 /////
 
-// preopened sockets - global map for sockets opened before privilege drop
 var preopenedListeners = make(map[int]net.Listener)
 var preopenedListenersMutex sync.Mutex
 
-// preopened TLS certificates - loaded before privilege drop
-var preopenedCerts = make(map[int]*tls.Certificate)
+// PreopenPrivilegedPorts opens any privileged (<1024) HTTP ports before the
+// process drops root privileges. Certificate acquisition is handled later by
+// the HTTP module itself.
 
-// preopened cert expiries - for the renewal watcher
-var preopenedCertExpiries = make(map[int]time.Time)
-
-// PreopenPrivilegedPorts scans the raw module configs and opens any privileged HTTP ports,
-// then pre-loads any TLS certificates.
-// This should be called before dropping privileges.
 func PreopenPrivilegedPorts(serverConfig *grits.Config, rawModuleConfigs []json.RawMessage) error {
 	preopenedListenersMutex.Lock()
 	defer preopenedListenersMutex.Unlock()
+
+	certdNeeded := false
+	var certbotEmail string
 
 	for _, rawConfig := range rawModuleConfigs {
 		var baseConfig ModuleConfig
 		if err := json.Unmarshal(rawConfig, &baseConfig); err != nil {
 			continue
 		}
-
 		if baseConfig.Type != "http" {
 			continue
 		}
@@ -309,10 +286,7 @@ func PreopenPrivilegedPorts(serverConfig *grits.Config, rawModuleConfigs []json.
 			continue
 		}
 
-		if grits.DebugHttp {
-			log.Printf("Pre-opening port %d", httpConfig.ThisPort)
-		}
-
+		// Open the port.
 		addr := fmt.Sprintf(":%d", httpConfig.ThisPort)
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
@@ -321,88 +295,61 @@ func PreopenPrivilegedPorts(serverConfig *grits.Config, rawModuleConfigs []json.
 		preopenedListeners[httpConfig.ThisPort] = listener
 
 		if grits.DebugHttp {
-			log.Printf("Successfully pre-opened port %d", httpConfig.ThisPort)
+			log.Printf("Pre-opened port %d", httpConfig.ThisPort)
 		}
 
-		if !httpConfig.EnableTls {
-			continue
+		// Note if certd is needed.
+		if httpConfig.EnableTls && httpConfig.AutoCertificate {
+			certdNeeded = true
+			certbotEmail = httpConfig.CertbotEmail
 		}
+	}
 
-		// Resolve cert path, using helper to acquire if needed
-		var certPath, keyPath string
-
-		if httpConfig.AutoCertificate {
-			if httpConfig.CertbotEmail == "" {
-				return fmt.Errorf("certbotEmail is required when autoCertificate is enabled (port %d)", httpConfig.ThisPort)
-			}
-			// Use the helper so permissions are set correctly for the daemon user
-			certPath, keyPath, err = EnsureCertificate(serverConfig, httpConfig.ThisHost, httpConfig.CertbotEmail)
-			if err != nil {
-				return fmt.Errorf("failed to ensure certificate for %s: %v", httpConfig.ThisHost, err)
-			}
-		} else {
-			certPath, keyPath, err = resolveCertPaths(&httpConfig)
-			if err != nil {
-				return fmt.Errorf("failed to resolve cert paths for port %d: %v", httpConfig.ThisPort, err)
-			}
-		}
-
-		cert, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if certdNeeded {
+		certdPath := serverConfig.ServerPath("bin/certbot-helper")
+		certBaseDir, err := filepath.Abs(serverConfig.ServerPath("var/certs/letsencrypt"))
 		if err != nil {
-			return fmt.Errorf("failed to load certificate for port %d: %v", httpConfig.ThisPort, err)
+			return fmt.Errorf("failed to resolve cert base dir: %v", err)
 		}
-		preopenedCerts[httpConfig.ThisPort] = &cert
-
-		// Extract expiry for the renewal watcher
-		leaf, err := x509.ParseCertificate(cert.Certificate[0])
-		if err != nil {
-			return fmt.Errorf("failed to parse certificate for port %d: %v", httpConfig.ThisPort, err)
-		}
-		preopenedCertExpiries[httpConfig.ThisPort] = leaf.NotAfter
-
-		if grits.DebugHttp {
-			log.Printf("Pre-loaded TLS certificate for port %d from %s", httpConfig.ThisPort, certPath)
+		if err := PreopenCertDaemon(certdPath, certBaseDir, certbotEmail, serverConfig.RunAsUser); err != nil {
+			return fmt.Errorf("failed to start cert daemon: %v", err)
 		}
 	}
 
 	return nil
 }
 
-/////
-// Hooks for other module tie-ins
-/////
-
-func (hm *HTTPModule) addDeploymentModule(module Module) {
-	deployment, ok := module.(*DeploymentModule)
-	if !ok {
-		return
+func (hm *HTTPModule) hostnameHasContent(hostname string) bool {
+	volume := hm.Server.FindVolumeByName(hm.Config.ContentVolume)
+	if volume == nil {
+		return false
 	}
-
-	hm.deployments = append(hm.deployments, deployment)
+	node, err := volume.LookupNode(hostname)
+	if err != nil || node == nil {
+		return false
+	}
+	defer node.Release()
+	return node.Metadata().Type == grits.GNodeTypeDirectory
 }
+
+/////
+// Module hooks
+/////
 
 func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 	swModule, ok := module.(*ServiceWorkerModule)
 	if !ok {
 		return
 	}
-
-	// Check if we already have a service worker module
 	if hm.serviceWorkerModule != nil {
 		log.Fatalf("Only one ServiceWorkerModule can be registered")
 	}
-
 	if grits.DebugHttp {
 		log.Printf("Registering ServiceWorkerModule in HTTP module")
 	}
-
-	// Store the service worker module
 	hm.serviceWorkerModule = swModule
-
-	// Add routes
 	hm.Mux.HandleFunc("/grits-bootstrap.js", hm.requestMiddleware(swModule.serveTemplate))
 	hm.Mux.HandleFunc("/grits-serviceworker.js", hm.requestMiddleware(swModule.serveTemplate))
-	hm.Mux.HandleFunc("/grits-serviceworker-config.json", hm.requestMiddleware(swModule.serveConfig))
 }
 
 func (hm *HTTPModule) addMirrorModule(module Module) {
@@ -410,57 +357,64 @@ func (hm *HTTPModule) addMirrorModule(module Module) {
 	if !ok {
 		return
 	}
-
 	if hm.activeMirrorModule != nil {
 		log.Fatalf("Only one mirror module at a time is currently supported.")
 	}
-
 	hm.activeMirrorModule = mirror
 }
 
 /////
-// HTTP API stuff
+// Routes
 /////
 
-// requestMiddleware is a middleware function that adds various headers to the response.
+func (s *HTTPModule) setupRoutes() {
+	s.Mux.HandleFunc("/", s.requestMiddleware(s.handleDeployedContent))
+
+	s.Mux.HandleFunc("/grits/v1/blob", s.requestMiddleware(s.handleBlob))
+	s.Mux.HandleFunc("/grits/v1/blob/", s.requestMiddleware(s.handleBlob))
+	s.Mux.HandleFunc("/grits/v1/lookup/", s.requestMiddleware(s.handleLookup))
+	s.Mux.HandleFunc("/grits/v1/link/", s.requestMiddleware(s.handleLink))
+	s.Mux.HandleFunc("/grits/v1/content/", s.requestMiddleware(s.handleContent))
+
+	s.Mux.HandleFunc("/grits/v1/service-worker.js", s.requestMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, s.Server.Config.ServerPath("client/service-worker.js"))
+	}))
+	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/",
+		s.requestMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
+
+	s.HTTPServer.Handler = s.Mux
+}
+
+/////
+// Middleware
+/////
+
 func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if grits.DebugHttp {
 			log.Printf("Incoming request: %s %s (Proto: %s)", r.Method, r.URL.Path, r.Proto)
 		}
 
-		// Basic request logging
-		if grits.DebugHttp {
-			log.Printf("Received %s request (port %d): %s\n", r.Method, srv.Config.ThisPort, r.URL.Path)
-		}
-
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Request start\n")
 
-		// CORS - Allow requests from origin server and our own origin
 		thisScheme := "http"
 		if srv.Config.EnableTls {
 			thisScheme = "https"
 		}
-		// Our own origin
-		thisOrigin := fmt.Sprintf("%s://%s:%d", thisScheme, srv.Config.ThisHost, srv.Config.ThisPort)
+		thisOrigin := fmt.Sprintf("%s://%s:%d", thisScheme, r.Host, srv.Config.ThisPort)
 
-		// If we're a mirror, also include the origin server we're mirroring
 		if srv.activeMirrorModule != nil {
 			originServer := fmt.Sprintf("%s://%s",
 				srv.activeMirrorModule.Config.Protocol,
 				srv.activeMirrorModule.Config.RemoteHost)
-
-			// Set the header to allow the origin server
 			w.Header().Set("Access-Control-Allow-Origin", originServer)
 		} else {
-			// Set to our own origin otherwise
 			w.Header().Set("Access-Control-Allow-Origin", thisOrigin)
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, POST")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-		// Set cache headers based on the request path
 		if strings.HasPrefix(r.URL.Path, "/grits/v1/blob/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {
@@ -469,77 +423,53 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 			w.Header().Set("Expires", "0")
 		}
 
-		// If it's an OPTIONS request, respond with OK status and return
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
-			grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "OPTIONS complete\n")
 			return
 		}
 
-		// Also do service worker cache control header
 		if srv.serviceWorkerModule != nil {
-			// Get the hash from the service worker module's volume
 			clientDirHash := srv.serviceWorkerModule.getClientDirHash()
 			w.Header().Set("X-Grits-Service-Worker-Hash", string(clientDirHash))
 		}
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Calling handler\n")
-
 		next(w, r)
-
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Request complete\n")
 	}
 }
 
-/*
+/////
+// Content handlers
+/////
 
-General route API:
+func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Request) {
+	hostname := r.Host
+	if h, _, err := net.SplitHostPort(hostname); err == nil {
+		hostname = h
+	}
 
-GET to /grits/v1/blob/{hash} gets blob data
-PUT to /grits/v1/blob uploads a new blob, the response is the new address ("{hash}-{size}" format)
-  as a JSON-encoded bare string
-Or, PUT to /grits/v1/blob/{hash} which will do an early HTTP 204 return if the server already has that blob
-POST to /grits/v1/lookup/{volume} accepts a bare JSON-encoded string in the request body,
-  and returns a JSON-encoded array of pairs of strings: [$path, $resource_addr_at_that_path]
+	if !Validate("hostname", hostname) {
+		log.Printf("HTTP: invalid hostname in request: %s", hostname)
+		http.Error(w, "Invalid hostname", http.StatusBadRequest)
+		return
+	}
 
-POST to /grits/v1/link/{volume} accepts a JSON-encoded array of maps
-  {'path': {path}, 'addr': {addr}} indicating a bunch of resources to link into
-  the given volume's storage atomically.
+	urlPath := strings.TrimPrefix(r.URL.Path, "/")
+	volumePath := path.Join(hostname, "content", urlPath)
 
+	if !Validate("relativePath", volumePath) {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
 
-GET to /grits/v1/content/{volume}/{path} just serves file data (mainly for debugging)
-
-*/
-
-func (s *HTTPModule) setupRoutes() {
-	// Deployment routes:
-	s.Mux.HandleFunc("/", s.requestMiddleware(s.handleDeployedContent))
-
-	// Content routes:
-	s.Mux.HandleFunc("/grits/v1/blob", s.requestMiddleware(s.handleBlob))
-	s.Mux.HandleFunc("/grits/v1/blob/", s.requestMiddleware(s.handleBlob))
-	s.Mux.HandleFunc("/grits/v1/lookup/", s.requestMiddleware(s.handleLookup))
-	s.Mux.HandleFunc("/grits/v1/link/", s.requestMiddleware(s.handleLink))
-
-	s.Mux.HandleFunc("/grits/v1/content/", s.requestMiddleware(s.handleContent))
-
-	// Client tooling routes:
-
-	// Special handling for serving the Service Worker JS from the root
-	s.Mux.HandleFunc("/grits/v1/service-worker.js", s.requestMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, s.Server.Config.ServerPath("client/service-worker.js"))
-	}))
-
-	// Handling client files with CORS enabled
-	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/", s.requestMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
-
-	s.HTTPServer.Handler = s.Mux
+	s.handleContentRequest(s.Config.ContentVolume, volumePath, w, r)
 }
 
 func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodHead:
-		s.handleBlobFetch(w, r) // Automatically skips sending the file for HEAD
+		s.handleBlobFetch(w, r)
 	case http.MethodGet:
 		s.handleBlobFetch(w, r)
 	case http.MethodPut:
@@ -550,29 +480,22 @@ func (s *HTTPModule) handleBlob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
-	// Extract the path part after /grits/v1/blob/
 	fullPath := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob/")
 	if fullPath == "" {
 		http.Error(w, "Missing file address", http.StatusBadRequest)
 		return
 	}
 
-	// Split the path to separate hash and extension
 	addrStr := fullPath
 	var extension string
-
-	// Check if there's an extension
 	if lastDotIndex := strings.LastIndex(fullPath, "."); lastDotIndex != -1 {
 		addrStr = fullPath[:lastDotIndex]
 		extension = fullPath[lastDotIndex+1:]
 	}
-
-	// Strip out the size component if present (format: hash-size)
 	if dashIndex := strings.LastIndex(addrStr, "-"); dashIndex != -1 {
 		addrStr = addrStr[:dashIndex]
 	}
 
-	// Validate blob address
 	if !Validate("blobAddr", addrStr) {
 		http.Error(w, "Invalid blob address format", http.StatusBadRequest)
 		return
@@ -587,19 +510,13 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Blob fetch start\n")
 
 	var cachedFile grits.CachedFile
-
 	if s.activeMirrorModule != nil {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Getting from mirror cache\n")
-		// This is fine whether the blob is local or remote; it'll muck up the mirror stats
-		// a bit in some cases if it's local, but it's basically fine.
 		cachedFile, err = s.activeMirrorModule.blobCache.Get(fileAddr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Can't find %s in mirror", fileAddr), http.StatusInternalServerError)
 			return
 		}
 	} else {
-		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Getting from local store\n")
-		// No mirror, just get it from the local store
 		cachedFile, err = s.Server.BlobStore.ReadFile(fileAddr)
 		if err != nil {
 			http.Error(w, "File not found", http.StatusNotFound)
@@ -608,20 +525,13 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cachedFile.Release()
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Got cached file\n")
-
-	// Set content type based on extension if provided
 	if extension != "" {
-		contentType := getContentTypeFromExtension(extension)
-		if contentType != "" {
-			w.Header().Set("Content-Type", contentType)
+		if ct := getContentTypeFromExtension(extension); ct != "" {
+			w.Header().Set("Content-Type", ct)
 		}
 	}
-
-	// Set content length
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", cachedFile.GetSize()))
 
-	// Get reader and serve
 	reader, err := cachedFile.Reader()
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -629,17 +539,11 @@ func (s *HTTPModule) handleBlobFetch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer reader.Close()
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Serving content\n")
-
-	// Serve the content
 	http.ServeContent(w, r, filepath.Base(string(fileAddr)), time.Now(), reader)
-
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(fileAddr), "Blob fetch complete\n")
 }
 
-// Helper to get content type from extension
 func getContentTypeFromExtension(ext string) string {
-	// Map of common extensions to MIME types
 	mimeTypes := map[string]string{
 		"html":  "text/html",
 		"css":   "text/css",
@@ -654,25 +558,20 @@ func getContentTypeFromExtension(ext string) string {
 		"ttf":   "font/ttf",
 		"eot":   "application/vnd.ms-fontobject",
 	}
-
 	return mimeTypes[strings.ToLower(ext)]
 }
 
 // handleBlobUpload handles PUT requests to /grits/v1/blob/ and /grits/v1/blob/{hash}
 func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
-	// Check if we're in read-only mode
 	if *s.Config.ReadOnly {
 		http.Error(w, "Volume is read-only", http.StatusForbidden)
 		return
 	}
-
-	// Validate content length header if present
 	if r.ContentLength > 0 && r.ContentLength > s.Config.MaxUploadSize {
 		http.Error(w, "Upload too large", http.StatusRequestEntityTooLarge)
 		return
 	}
 
-	// Extract hash from path if present
 	blobPath := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob")
 	blobPath = strings.TrimPrefix(blobPath, "/")
 
@@ -685,8 +584,6 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		if lastDotIndex := strings.LastIndex(expectedHash, "."); lastDotIndex != -1 {
 			expectedHash = expectedHash[:lastDotIndex]
 		}
-
-		// Validate the hash format
 		if !Validate("blobAddr", expectedHash) {
 			http.Error(w, "Invalid blob address format", http.StatusBadRequest)
 			return
@@ -725,9 +622,8 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath) // Clean up the file afterwards
+	defer os.Remove(tmpPath)
 
-	// Wrap the request body with a limited reader to enforce max size
 	limitedBody := newLimitedReader(r.Body, s.Config.MaxUploadSize)
 
 	if grits.DebugHttpPerformance {
@@ -740,7 +636,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Read the request body and write it to the temporary file
 	_, err = io.Copy(tmpFile, limitedBody)
-	tmpFile.Close() // Close the file now that we're done writing
+	tmpFile.Close()
 	if err != nil {
 		log.Printf("Failed to read request body: %v", err)
 		if strings.Contains(err.Error(), "too large") {
@@ -767,18 +663,12 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get the actual hash of the uploaded content
 	actualHash := cachedFile.GetAddress()
 
 	// Verification step when expectedHash is provided
 	if expectedHash != "" && expectedHash != string(actualHash) {
-		// Clean up temporary resources and return error
 		cachedFile.Release()
-
-		http.Error(w, fmt.Sprintf(
-			"Hash mismatch: expected %s but got %s",
-			expectedHash, actualHash),
-			http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("Hash mismatch: expected %s but got %s", expectedHash, actualHash), http.StatusBadRequest)
 		return
 	}
 
@@ -800,7 +690,6 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		log.Printf("  lookup failure! only POST is supported")
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
 	}
@@ -813,7 +702,6 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Lookup start\n")
 
-	// Validate the lookup path
 	if !Validate("relativePath", lookupPath) {
 		http.Error(w, "Invalid lookup path", http.StatusBadRequest)
 		return
@@ -824,8 +712,6 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume name is required", http.StatusBadRequest)
 		return
 	}
-
-	// Validate volume name
 	if !Validate("volumeName", volumeName) {
 		http.Error(w, "Invalid volume name", http.StatusBadRequest)
 		return
@@ -853,7 +739,6 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer node.Release()
-
 		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
 		if node.Metadata().Type == grits.GNodeTypeDirectory {
 			contentBlob, err := node.ExportedBlob()
@@ -887,13 +772,10 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
 		return
 	}
-
 	if *s.Config.ReadOnly {
 		http.Error(w, "Volume is read-only", http.StatusForbidden)
 		return
 	}
-
-	// Validate content length if present
 	if r.ContentLength > 0 && r.ContentLength > s.Config.MaxUploadSize {
 		http.Error(w, "Request too large", http.StatusRequestEntityTooLarge)
 		return
@@ -923,8 +805,6 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Volume name is required", http.StatusBadRequest)
 		return
 	}
-
-	// Validate volume name
 	if !Validate("volumeName", volumeName) {
 		http.Error(w, "Invalid volume name", http.StatusBadRequest)
 		return
@@ -935,7 +815,6 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Volume %s not found", volumeName), http.StatusNotFound)
 		return
 	}
-
 	if volume.isReadOnly() {
 		http.Error(w, fmt.Sprintf("Volume %s is read-only", volumeName), http.StatusForbidden)
 		return
@@ -958,7 +837,6 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer node.Release()
-
 		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
 		if node.Metadata().Type == grits.GNodeTypeDirectory {
 			contentBlob, err := node.ExportedBlob()
@@ -979,91 +857,20 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Link complete\n")
 }
 
-func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Request) {
-	// Extract hostname from the request
-	fullHost := r.Host
-
-	// Strip port if present
-	hostname, port, err := net.SplitHostPort(fullHost)
-	if err != nil {
-		// If there's an error, it likely means there's no port
-		// (SplitHostPort requires a port to be present)
-		// So just use the full host as the hostname
-		hostname = fullHost
-	} else if port != "" {
-		// Validate that port is numeric
-		if _, err := strconv.Atoi(port); err != nil {
-			log.Printf("Invalid port in request: %s", port)
-			http.Error(w, "Invalid port", http.StatusBadRequest)
-			return
-		}
-	}
-
-	// Validate hostname
-	if !Validate("hostname", hostname) {
-		log.Printf("Invalid hostname in request: %s", hostname)
-		http.Error(w, "Invalid hostname", http.StatusBadRequest)
-		return
-	}
-
-	// Find all matching deployments for this hostname
-	var matchingDeployments []*DeploymentModule
-	for _, deployment := range s.deployments {
-		if grits.DebugHttp {
-			log.Printf("Compare %s %s", deployment.Config.HostName, hostname)
-		}
-		if deployment.Config.HostName == fullHost {
-			matchingDeployments = append(matchingDeployments, deployment)
-		}
-	}
-
-	if len(matchingDeployments) == 0 {
-		http.Error(w, fmt.Sprintf("Deployment for %s on %s not found", r.URL.Path, hostname), http.StatusNotFound)
-		return
-	}
-
-	// Try to find a deployment that matches the request path
-	for _, deployment := range matchingDeployments {
-		if strings.HasPrefix(r.URL.Path, deployment.Config.UrlPath) {
-			volume := deployment.Config.Volume
-			volumePath := strings.TrimPrefix(r.URL.Path, deployment.Config.UrlPath)
-			volumePath = path.Join(deployment.Config.VolumePath, volumePath)
-
-			// Validate the constructed volume path
-			if !Validate("relativePath", volumePath) {
-				log.Printf("Invalid volume path: %s", volumePath)
-				http.Error(w, "Invalid path", http.StatusBadRequest)
-				return
-			}
-
-			s.handleContentRequest(volume, volumePath, w, r)
-			return
-		}
-	}
-
-	http.Error(w, fmt.Sprintf("Path %s not found in any deployment for %s", r.URL.Path, hostname), http.StatusNotFound)
-}
-
 func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/grits/v1/content/")
-
-	// Example path: /grits/v1/content/volumeName/some/path
-	pathParts := strings.SplitN(path, "/", 2)
+	p := strings.TrimPrefix(r.URL.Path, "/grits/v1/content/")
+	pathParts := strings.SplitN(p, "/", 2)
 	if len(pathParts) < 2 {
 		http.Error(w, "URL must include a volume name and path", http.StatusBadRequest)
 		return
 	}
-
 	volumeName := pathParts[0]
-	filePath := pathParts[1] // Remaining path
+	filePath := pathParts[1]
 
-	// Validate volume name
 	if !Validate("volumeName", volumeName) {
 		http.Error(w, "Invalid volume name", http.StatusBadRequest)
 		return
 	}
-
-	// Validate file path
 	if !Validate("relativePath", filePath) {
 		http.Error(w, "Invalid file path", http.StatusBadRequest)
 		return
@@ -1073,7 +880,6 @@ func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.ResponseWriter, r *http.Request) {
-	// Validate inputs before proceeding
 	if !Validate("relativePath", filePath) {
 		http.Error(w, "Invalid file path", http.StatusBadRequest)
 		return
@@ -1093,21 +899,18 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
 		handleNamespaceGet(volume, filePath, w, r)
-
 	case http.MethodPut:
 		if *s.Config.ReadOnly {
 			http.Error(w, "Volume is read-only", http.StatusForbidden)
 		} else {
 			handleNamespacePut(s.Server.BlobStore, volume, filePath, w, r, s.Config.MaxUploadSize)
 		}
-
 	case http.MethodDelete:
 		if *s.Config.ReadOnly {
 			http.Error(w, "Volume is read-only", http.StatusForbidden)
 		} else {
 			handleNamespaceDelete(volume, filePath, w)
 		}
-
 	default:
 		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
 	}
@@ -1154,17 +957,18 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 			http.Error(w, "File not found", http.StatusNotFound)
 			return
 		}
-
 		path = indexPath
 		leafNode = indexNode
-		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{Path: indexPath, Addr: indexNode.MetadataBlob().GetAddress()})
+		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
+			Path: indexPath,
+			Addr: indexNode.MetadataBlob().GetAddress(),
+		})
 	}
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Building path metadata\n")
 
 	pathMetadata := make([]map[string]any, 0, len(lookupResponse.Paths))
 	for _, pathResponse := range lookupResponse.Paths {
-		// Extract just the component name from the full path
 		pathComponent := ""
 		if pathResponse.Path != "" { // Skip this logic for root
 			pathParts := strings.Split(pathResponse.Path, "/")
@@ -1172,14 +976,12 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 				pathComponent = pathParts[len(pathParts)-1]
 			}
 		}
-
 		node, err := volume.GetFileNode(pathResponse.Addr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Couldn't read %s: %v", pathComponent, err), http.StatusInternalServerError)
 			return
 		}
 		defer node.Release()
-
 		pathMetadata = append(pathMetadata, map[string]any{
 			"path":         pathComponent,
 			"metadataHash": node.MetadataBlob().GetAddress(),
@@ -1211,7 +1013,6 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Returning 304 Not Modified\n")
 		return
 	}
-
 	if r.Method == http.MethodHead {
 		// For HEAD requests, we've already set all needed headers
 		// No need to read the actual content
@@ -1242,7 +1043,6 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Serving content\n")
 
 	http.ServeContent(w, r, filepath.Base(path), time.Now(), reader)
-
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET complete\n")
 }
 
@@ -1314,7 +1114,6 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
 		return
 	}
-
 	err := volume.LinkByMetadata(path, "")
 	if err != nil {
 		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
@@ -1332,28 +1131,24 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 // CreateAndUploadMetadata creates a metadata blob for a content blob and uploads it to the server
 // Returns the metadata blob address
 func CreateAndUploadMetadata(volume Volume, contentCf grits.CachedFile, remoteUrl string) (grits.BlobAddr, error) {
-	// Create a metadata node for the content
 	contentNode, err := volume.CreateBlobNode(contentCf.GetAddress(), contentCf.GetSize())
 	if err != nil {
 		return "", err
 	}
 	defer contentNode.Release()
 
-	// Get a reader for the metadata blob
 	metadataReader, err := contentNode.MetadataBlob().Reader()
 	if err != nil {
 		return "", fmt.Errorf("couldn't create reader for metadata blob: %v", err)
 	}
 	defer metadataReader.Close()
 
-	// Create a PUT request instead of using http.Post
 	req, err := http.NewRequest(http.MethodPut, remoteUrl+"/blob/", metadataReader)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request for metadata upload: %v", err)
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 
-	// Send the request
 	client := &http.Client{}
 	metadataUploadResp, err := client.Do(req)
 	if err != nil {

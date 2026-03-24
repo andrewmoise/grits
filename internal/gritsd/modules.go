@@ -99,15 +99,6 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return cmdlineModule, nil
 
-	case "deploy":
-		var deploymentConfig DeploymentConfig
-		if err := json.Unmarshal(rawConfig, &deploymentConfig); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal DeploymentModule config: %v", err)
-		}
-
-		module := NewDeploymentModule(s, &deploymentConfig)
-		return module, nil
-
 	case "http":
 		var httpConfig HTTPModuleConfig
 		if err := json.Unmarshal(rawConfig, &httpConfig); err != nil {
