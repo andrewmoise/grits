@@ -137,11 +137,12 @@ func (rv *RemoteVolume) GetVolumeName() string {
 
 // Start implements Volume interface
 func (rv *RemoteVolume) Start() error {
-	// Start the local cache
 	err := rv.localCache.Start()
 	if err != nil {
 		return err
 	}
+
+	rv.fetchVolumeConfig()
 
 	// for i := 0; i < numPrefetchWorkers; i++ {
 	// 	rv.workerWg.Add(1)
@@ -360,6 +361,38 @@ func httpClient() *http.Client {
 			IdleConnTimeout:   90 * time.Second,
 			DisableKeepAlives: false,
 		},
+	}
+}
+
+func (rv *RemoteVolume) fetchVolumeConfig() {
+	node, err := rv.localCache.LookupNode(".grits/volume")
+	if err != nil {
+		log.Printf("Warning: couldn't fetch volume config from %s: %v", rv.config.RemoteURL, err)
+		return
+	}
+	defer node.Release()
+
+	blob, err := node.ExportedBlob()
+	if err != nil {
+		log.Printf("Warning: couldn't load .grits/volume content: %v", err)
+		return
+	}
+
+	data, err := blob.Read(0, blob.GetSize())
+	if err != nil {
+		log.Printf("Warning: couldn't read .grits/volume: %v", err)
+		return
+	}
+
+	var serverConfig LocalVolumeConfig
+	if err := json.Unmarshal(data, &serverConfig); err != nil {
+		log.Printf("Warning: couldn't parse .grits/volume: %v", err)
+		return
+	}
+
+	if serverConfig.ClientCacheDuration != 0 {
+		rv.localCache.ns.CacheDuration = serverConfig.ClientCacheDuration
+		log.Printf("Remote volume %s: using server cache duration %v", rv.volumeName, serverConfig.ClientCacheDuration)
 	}
 }
 
