@@ -37,8 +37,6 @@ type MountModule struct {
 
 	dirtyNodesMtx sync.RWMutex
 	dirtyNodesMap map[string]*gritsNode
-
-	mountPointExisted bool
 }
 
 func NewMountModule(server *Server, config *MountModuleConfig) *MountModule {
@@ -78,9 +76,8 @@ func (mm *MountModule) Start() error {
 	mntDir := mm.config.MountPoint
 
 	if _, err := os.Stat(mntDir); os.IsNotExist(err) {
-		// Mount point doesn't exist, create it
-		os.Mkdir(mntDir, 0755)
-		mm.mountPointExisted = false
+		// Mount point doesn't exist
+		return err
 	} else if err != nil {
 		// Could be a stale FUSE mount ("transport endpoint is not connected") or
 		// some other error. Either way, try to unmount and see if that clears it.
@@ -95,10 +92,6 @@ func (mm *MountModule) Start() error {
 		if _, err := os.Stat(mntDir); err != nil {
 			return fmt.Errorf("mount point %s still inaccessible after unmount: %v", mntDir, err)
 		}
-
-		mm.mountPointExisted = true
-	} else {
-		mm.mountPointExisted = true
 	}
 
 	if grits.DebugServerLifecycle {
@@ -190,13 +183,6 @@ func (mm *MountModule) Stop() error {
 
 		// Wait until unmount completes
 		mm.fsServer.Wait()
-	}
-
-	if !mm.mountPointExisted {
-		err := os.Remove(mm.config.MountPoint)
-		if err != nil {
-			return fmt.Errorf("couldn't remove %s: %v", mm.config.MountPoint, err)
-		}
 	}
 
 	return nil
