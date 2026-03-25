@@ -142,7 +142,7 @@ func (wv *LocalVolume) publishVolumeConfig() error {
 	}
 	defer metadataBlob.Release()
 
-	return wv.ns.LinkByMetadata(".grits/volume", metadataBlob.GetAddress())
+	return wv.LinkByMetadata(".grits/caching.json", metadataBlob.GetAddress())
 }
 
 func (wv *LocalVolume) Start() error {
