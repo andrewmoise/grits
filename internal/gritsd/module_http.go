@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"golang.org/x/sync/singleflight"
 	"grits/internal/grits"
 	"io"
 	"log"
@@ -88,6 +89,8 @@ type HTTPModule struct {
 	// Dynamic TLS certificate management.
 	// certCache holds the most recently loaded cert per hostname.
 	certMu    sync.RWMutex
+	certGroup singleflight.Group
+
 	certCache map[string]*tls.Certificate // hostname → cert
 	// renewalStopFns holds a cancel func per hostname renewal goroutine.
 	renewalMu      sync.Mutex
