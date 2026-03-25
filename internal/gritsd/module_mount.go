@@ -72,6 +72,9 @@ func (m *MountModule) GetConfig() any {
 }
 
 func (mm *MountModule) Start() error {
+	ownerUid = uint32(syscall.Getuid())
+	ownerGid = uint32(syscall.Getgid())
+
 	mntDir := mm.config.MountPoint
 
 	if _, err := os.Stat(mntDir); os.IsNotExist(err) {
@@ -573,8 +576,8 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 // kernel never sends a file handle, even if the Getattr call
 // originated from a fstat system call.
 
-var ownerUid = uint32(syscall.Getuid())
-var ownerGid = uint32(syscall.Getgid())
+var ownerUid uint32
+var ownerGid uint32
 
 var _ = (fs.NodeGetattrer)((*gritsNode)(nil))
 
