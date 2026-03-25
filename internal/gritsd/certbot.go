@@ -176,6 +176,9 @@ func fileExists(path string) bool {
 // It returns a cached cert if available, or acquires one on demand.
 func (hm *HTTPModule) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	hostname := hello.ServerName
+	if hostname == "" {
+		return nil, fmt.Errorf("no SNI hostname provided")
+	}
 
 	// Check cache first.
 	hm.certMu.RLock()
