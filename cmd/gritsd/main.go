@@ -91,7 +91,7 @@ func main() {
 	flag.StringVar(&workingDir, "d", ".", "Working directory for server")
 	flag.Parse()
 
-	configFile := filepath.Join(workingDir, "grits.cfg")
+	configFile := filepath.Join(workingDir, "config.json")
 
 	if _, err := os.Stat(configFile); os.IsNotExist(err) {
 		log.Printf("Configuration file does not exist: %s\n", configFile)
