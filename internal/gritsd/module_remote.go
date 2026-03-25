@@ -365,7 +365,7 @@ func httpClient() *http.Client {
 }
 
 func (rv *RemoteVolume) fetchVolumeConfig() {
-	node, err := rv.localCache.LookupNode(".grits/volume")
+	node, err := rv.localCache.LookupNode(".grits/caching.json")
 	if err != nil {
 		log.Printf("Warning: couldn't fetch volume config from %s: %v", rv.config.RemoteURL, err)
 		return
@@ -374,19 +374,19 @@ func (rv *RemoteVolume) fetchVolumeConfig() {
 
 	blob, err := node.ExportedBlob()
 	if err != nil {
-		log.Printf("Warning: couldn't load .grits/volume content: %v", err)
+		log.Printf("Warning: couldn't load .grits/caching.json content: %v", err)
 		return
 	}
 
 	data, err := blob.Read(0, blob.GetSize())
 	if err != nil {
-		log.Printf("Warning: couldn't read .grits/volume: %v", err)
+		log.Printf("Warning: couldn't read .grits/caching.json: %v", err)
 		return
 	}
 
 	var serverConfig LocalVolumeConfig
 	if err := json.Unmarshal(data, &serverConfig); err != nil {
-		log.Printf("Warning: couldn't parse .grits/volume: %v", err)
+		log.Printf("Warning: couldn't parse .grits/caching.json: %v", err)
 		return
 	}
 
