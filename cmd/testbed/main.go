@@ -67,7 +67,7 @@ func main() {
 		mirrorServers[i] = mirrorServer
 		allServers = append(allServers, mirrorServer)
 
-		configFilePath := filepath.Join(baseDir, fmt.Sprintf("mirror-%d", i), "grits.cfg")
+		configFilePath := filepath.Join(baseDir, fmt.Sprintf("mirror-%d", i), "config.json")
 		configExists := false
 		if _, err := os.Stat(configFilePath); err == nil {
 			configExists = true
@@ -145,7 +145,7 @@ func main() {
 func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	// Load the existing configuration
 	config := grits.NewConfig(".")
-	if err := config.LoadFromFile("grits.cfg"); err != nil {
+	if err := config.LoadFromFile("config.json"); err != nil {
 		return nil, nil, fmt.Errorf("failed to load configuration: %v", err)
 	}
 	config.ServerDir = "." // Ensure server directory is set
@@ -423,7 +423,7 @@ func setupMirrorServer(baseDir string, originHttpConfig *gritsd.HTTPModuleConfig
 	// Create directory for this mirror
 	peerName := fmt.Sprintf("mirror-%d", index)
 	serverDir := filepath.Join(baseDir, peerName)
-	configFilePath := filepath.Join(serverDir, "grits.cfg")
+	configFilePath := filepath.Join(serverDir, "config.json")
 
 	// Check if the config file already exists
 	configExists := false
@@ -543,7 +543,7 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 	config.Modules = append(config.Modules, httpModuleConfig, mirrorModuleConfig)
 
 	// Save the updated config
-	err = config.SaveToFile(filepath.Join(config.ServerDir, "grits.cfg"))
+	err = config.SaveToFile(filepath.Join(config.ServerDir, "config.json"))
 	if err != nil {
 		return fmt.Errorf("couldn't save updated config: %v", err)
 	}
