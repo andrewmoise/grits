@@ -12,6 +12,7 @@
       "volume": "sys",
       "mountPoint": "volumes/sys"
     },
+
     {
       "type": "volume",
       "volumeName": "home"
@@ -21,15 +22,17 @@
       "volume": "home",
       "mountPoint": "volumes/home"   
     },
+
     {
       "type": "volume",
-      "volumeName": "content"
+      "volumeName": "sites"
     },
     {
       "type": "mount",
       "volume": "sites",
       "mountPoint": "volumes/sites"
     },
+    
     {
       "type": "http",
       "thisPort": 443,
