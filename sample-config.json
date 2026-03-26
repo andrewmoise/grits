@@ -5,12 +5,14 @@
   "modules": [
     {
       "type": "volume",
-      "volumeName": "sys"
+      "volumeName": "client",
+      "readOnly": true,
+      "bootstrapFrom": "client"
     },
     {
       "type": "mount",
-      "volume": "sys",
-      "mountPoint": "volumes/sys"
+      "volume": "client",
+      "mountPoint": "volumes/client"
     },
 
     {
@@ -32,7 +34,17 @@
       "volume": "sites",
       "mountPoint": "volumes/sites"
     },
-    
+
+    {
+      "type": "volume",
+      "volumeName": "sys"
+    },
+    {
+      "type": "mount",
+      "volume": "sys",
+      "mountPoint": "volumes/sys"
+    },
+
     {
       "type": "http",
       "thisPort": 443,
