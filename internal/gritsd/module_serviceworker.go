@@ -33,8 +33,9 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 
 	wvc := &LocalVolumeConfig{
 		VolumeName: "client",
+		ReadOnly: true,
 	}
-	wv, err := NewLocalVolume(wvc, server, true, false, false)
+	wv, err := NewLocalVolume(wvc, server, false, false)
 	if err != nil {
 		return nil, err
 	}

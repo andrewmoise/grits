@@ -29,6 +29,7 @@ type Volume interface {
 
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
+	AddDataBlock(data []byte) (grits.CachedFile, error)
 	AddMetadataBlob(*grits.GNodeMetadata) (grits.CachedFile, error)
 
 	GetBlob(addr grits.BlobAddr) (grits.CachedFile, error)
@@ -43,7 +44,6 @@ type LocalVolume struct {
 	name         string
 	server       *Server
 	ns           *grits.NameStore
-	readOnly     bool
 	volumeConfig *LocalVolumeConfig
 
 	persistMtx sync.Mutex
@@ -52,17 +52,14 @@ type LocalVolume struct {
 
 var _ = (Volume)((*LocalVolume)(nil))
 
+// LocalVolumeConfig
 type LocalVolumeConfig struct {
-	VolumeName string `json:"volumeName"`
+    VolumeName    string `json:"volumeName"`
+    BootstrapFrom string `json:"bootstrapFrom,omitempty"`
+    ReadOnly      bool   `json:"readOnly,omitempty"`
 }
 
-func NewLocalVolumeConfig(name string) *LocalVolumeConfig {
-	return &LocalVolumeConfig{
-		VolumeName: name,
-	}
-}
-
-func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool, sparse bool, persist bool) (*LocalVolume, error) {
+func NewLocalVolume(config *LocalVolumeConfig, server *Server, sparse bool, persist bool) (*LocalVolume, error) {
 	ns, err := grits.EmptyNameStore(server.BlobStore, sparse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NameStore: %v", err)
@@ -72,7 +69,6 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool, sp
 		name:         config.VolumeName,
 		server:       server,
 		ns:           ns,
-		readOnly:     false,
 		volumeConfig: config,
 		doPersist:    persist,
 	}
@@ -92,6 +88,19 @@ func (wv *LocalVolume) Start() error {
 		wv.server.AddPeriodicTask(time.Second*10, wv.ns.PrintBlobStorageDebugging)
 	}
 
+	if wv.volumeConfig.BootstrapFrom != "" {
+		prevReadOnly := wv.volumeConfig.ReadOnly
+		wv.volumeConfig.ReadOnly = false
+		defer func() { wv.volumeConfig.ReadOnly = prevReadOnly }()
+
+		localPath := wv.server.Config.ServerPath(wv.volumeConfig.BootstrapFrom)
+		log.Printf("Volume %q: bootstrapping from %s", wv.name, localPath)
+		if err := ImportLocalDir(wv, localPath, wv.name); err != nil {
+			return fmt.Errorf("volume %q: bootstrap from %s failed: %w", wv.name, localPath, err)
+		}
+		log.Printf("Volume %q: bootstrap complete", wv.name)
+	}
+
 	return nil
 }
 
@@ -100,7 +109,7 @@ func (wv *LocalVolume) Stop() error {
 }
 
 func (wv *LocalVolume) isReadOnly() bool {
-	return wv.readOnly
+	return wv.volumeConfig.ReadOnly
 }
 
 func (wv *LocalVolume) Checkpoint() error {
@@ -120,9 +129,7 @@ func (*LocalVolume) GetDependencies() []*Dependency {
 }
 
 func (wv *LocalVolume) GetConfig() any {
-	return &LocalVolumeConfig{
-		VolumeName: wv.name,
-	}
+	return wv.volumeConfig
 }
 
 func (wv *LocalVolume) GetVolumeName() string {
@@ -190,6 +197,10 @@ func (wv *LocalVolume) LookupNode(path string) (grits.FileNode, error) {
 }
 
 func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (*grits.LookupResponse, error) {
+	if wv.isReadOnly() {
+		return nil, fmt.Errorf("cannot write to read-only volume")
+	}
+
 	result, err := wv.ns.MultiLink(req, returnResults)
 	if err != nil {
 		return nil, err
@@ -204,6 +215,10 @@ func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (
 }
 
 func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) error {
+	if wv.isReadOnly() {
+		return fmt.Errorf("cannot write to read-only volume")
+	}
+
 	if err := wv.ns.LinkByMetadata(name, metadataAddr); err != nil {
 		return err
 	}
@@ -216,16 +231,36 @@ func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) 
 }
 
 func (wv *LocalVolume) AddBlob(path string) (grits.CachedFile, error) {
+	if wv.isReadOnly() {
+		return nil, fmt.Errorf("cannot write to read-only volume")
+	}
+
 	return wv.ns.BlobStore.AddLocalFile(path)
 }
 
 func (wv *LocalVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
+	if wv.isReadOnly() {
+		return nil, fmt.Errorf("cannot write to read-only volume")
+	}
+
 	return wv.ns.BlobStore.AddReader(file)
+}
+
+func (wv *LocalVolume) AddDataBlock(data []byte) (grits.CachedFile, error) {
+	if wv.isReadOnly() {
+		return nil, fmt.Errorf("cannot write to read-only volume")
+	}
+
+	return wv.ns.BlobStore.AddDataBlock(data)
 }
 
 // FIXME - This should go away, CreateBlobNode() instead
 
 func (wv *LocalVolume) AddMetadataBlob(metadata *grits.GNodeMetadata) (grits.CachedFile, error) {
+	if wv.isReadOnly() {
+		return nil, fmt.Errorf("cannot write to read-only volume")
+	}
+
 	// Serialize and store the metadata
 	metadataData, err := json.Marshal(metadata)
 	if err != nil {
