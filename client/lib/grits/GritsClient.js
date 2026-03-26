@@ -44,6 +44,7 @@ const DEBUG       = false;
 const DEBUG_STATS = true;
 const JSON_CACHE_MAX_AGE          = 5 * 60 * 1000;
 const JSON_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
+const DEFAULT_HARD_TIMEOUT        = 1 * 60 * 1000; // 1 minute, matches Go-side default
 
 // ─────────────────────────────────────────────────────────────────
 // Type assertion helpers
@@ -78,6 +79,28 @@ function _assertEntriesMap(v, label) {
   if (v !== null && v !== undefined && (typeof v !== 'object' || Array.isArray(v)))
     throw new TypeError(
       `${label}: expected object { name: GritsFile|cidString, ... }, got ${_typename(v)}`);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Duration parser — matches Go's time.Duration string format
+// e.g. "30s", "5m", "2h", "24h", "1m30s"
+// Returns milliseconds, or null if unparseable.
+// ─────────────────────────────────────────────────────────────────
+
+function _parseDuration(s) {
+  if (typeof s !== 'string' || s.length === 0) return null;
+  const units = { ns: 1e-6, us: 1e-3, µs: 1e-3, ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
+  // Go duration strings are a sequence of decimal numbers each with a unit suffix.
+  const re = /([0-9]*\.?[0-9]+)(ns|us|µs|ms|[smh])/g;
+  let match, total = 0, matched = false;
+  while ((match = re.exec(s)) !== null) {
+    const val = parseFloat(match[1]);
+    const mul = units[match[2]];
+    if (mul == null || isNaN(val)) return null;
+    total += val * mul;
+    matched = true;
+  }
+  return matched ? total : null;
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -177,10 +200,11 @@ export class GritsVolume {
 
     this.rootHash          = null;
     this.rootHashTimestamp = 0;
-    this.hardTimeout       = 5 * 60_000;
+    this.hardTimeout       = DEFAULT_HARD_TIMEOUT;
 
     this.serviceWorkerHash = undefined;
 
+    this._configFetched      = false;
     this._inFlightPrefetches = new Map();
     this._prefetchQueue      = [];
     this._isProcessingQueue  = false;
@@ -356,6 +380,37 @@ export class GritsVolume {
     await this._parent._blobCachePut(cid, new Response(local, { status: 200 }));
   }
 
+  // ── Internal: volume config ───────────────────────────────────
+
+  // Reads .grits/volume.json from the volume (using the already-warm root from
+  // the just-completed _slowLookup) and applies clientCacheDuration to
+  // hardTimeout. Fired once, fire-and-forget, after the first successful
+  // _slowLookup — at that point the root is cached so this lookup is local.
+  async _fetchVolumeConfig() {
+    if (this._configFetched) return;
+    this._configFetched = true;
+    try {
+      const info = await this.lookup_internal('.grits/volume.json');
+      if (!info) {
+        // file absent — keep default hardTimeout
+        this.hardTimeout = DEFAULT_HARD_TIMEOUT;
+        return;
+      }
+      const resp = await this._fetchBlob(info.contentHash);
+      if (!resp.ok) return;
+      const cfg = await resp.json();
+      const ms  = _parseDuration(cfg?.clientCacheDuration);
+      if (ms != null && ms > 0) {
+        this.hardTimeout = ms;
+        DEBUG && console.log(
+          `[GritsVolume] ${this._volume}: hardTimeout = ${ms}ms (from .grits/volume.json)`);
+      }
+    } catch (e) {
+      DEBUG && console.warn(
+        `[GritsVolume] ${this._volume}: could not load .grits/volume.json:`, e.message);
+    }
+  }
+
   // ── Internal: Merkle tree lookup ──────────────────────────────
 
   async lookup_internal(path) {
@@ -404,6 +459,11 @@ export class GritsVolume {
     const elapsed = performance.now() - startTime;
     this._parent._tracker.record('slowLookup', elapsed);
     this._parent._tracker.trackContentUrl(path, elapsed);
+
+    // Fire-and-forget on first successful server contact. At this point the
+    // root is warm in the JSON cache so the inner lookup_internal call inside
+    // _fetchVolumeConfig will hit _tryFastLookup rather than recurse here.
+    if (!this._configFetched) this._fetchVolumeConfig();
 
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
   }
