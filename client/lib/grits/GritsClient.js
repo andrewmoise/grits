@@ -31,7 +31,6 @@
 //   file.bytes()      → Promise<ArrayBuffer>
 //   file.text()       → Promise<string>
 //   file.json()       → Promise<any>
-//   file.ls()         → Promise<{ name: metaCID, ... }>  (dirs only)
 
 import MirrorManager     from './MirrorManager.js';      // %FOR MODULE%
 import HashVerifier      from './HashVerifier.js';        // %FOR MODULE%
@@ -176,12 +175,6 @@ export class GritsFile {
   async bytes(){ return (await this.get()).arrayBuffer(); }
   async text() { return (await this.get()).text(); }
   async json() { return this._volume.json(this._meta.contentHash); }
-
-  async ls() {
-    if (!this.isDir())
-      throw new Error(`ls: not a directory (type=${this._meta.type})`);
-    return this._volume.json(this._meta.contentHash);
-  }
 
   toString() {
     return `GritsFile(${this._meta.type}, ${this._meta.size}b, cid=${this._metaCID.slice(0,8)}…)`;
