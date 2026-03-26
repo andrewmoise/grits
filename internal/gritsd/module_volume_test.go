@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -438,4 +439,397 @@ func checkPathInResults(t *testing.T, v Volume, results []*grits.PathNodePair, p
 		}
 	}
 	t.Errorf("Path %s not found in results", path)
+}
+
+
+// makeTestFile writes content to a temp file and returns its path.
+// The file is removed when the test ends.
+func makeTestFile(t *testing.T, content string) string {
+	t.Helper()
+	tmp, err := os.CreateTemp("", "grits-test-*")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	if _, err := tmp.WriteString(content); err != nil {
+		t.Fatalf("WriteString: %v", err)
+	}
+	if err := tmp.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(tmp.Name()) })
+	return tmp.Name()
+}
+
+// makeTestDir builds a small directory tree under a temp directory:
+//
+//	root/
+//	  hello.txt    "hello"
+//	  sub/
+//	    world.txt  "world"
+func makeTestDir(t *testing.T) string {
+	t.Helper()
+	root, err := os.MkdirTemp("", "grits-dir-test-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(root) })
+
+	write := func(rel, content string) {
+		t.Helper()
+		p := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+	}
+	write("hello.txt", "hello")
+	write("sub/world.txt", "world")
+	return root
+}
+
+// readNodeContent is a small helper to read a file node's content as a string.
+func readNodeContent(t *testing.T, node grits.FileNode) string {
+	t.Helper()
+	blob, err := node.ExportedBlob()
+	if err != nil {
+		t.Fatalf("ExportedBlob: %v", err)
+	}
+	data, err := blob.Read(0, blob.GetSize())
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	return string(data)
+}
+
+// -----------------------------------------------------------------------
+// Read-only tests
+// -----------------------------------------------------------------------
+
+func TestReadOnlyVolume_RejectsAllWrites(t *testing.T) {
+	server, cleanup := SetupTestServer(t)
+	defer cleanup()
+
+	vol, err := NewLocalVolume(
+		&LocalVolumeConfig{VolumeName: "ro", ReadOnly: true},
+		server, false, false,
+	)
+	if err != nil {
+		t.Fatalf("NewLocalVolume: %v", err)
+	}
+	server.AddModule(vol)
+	server.Start()
+	defer server.Stop()
+
+	// Prepare a blob node via the blob store directly (bypassing the volume)
+	// so we have a valid address to try linking.
+	rawCF, err := server.BlobStore.AddDataBlock([]byte("data"))
+	if err != nil {
+		t.Fatalf("AddDataBlock: %v", err)
+	}
+	defer rawCF.Release()
+
+	t.Run("LinkByMetadata", func(t *testing.T) {
+		err := vol.LinkByMetadata("x", rawCF.GetAddress())
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
+	})
+
+	t.Run("MultiLink", func(t *testing.T) {
+		_, err := vol.MultiLink([]*grits.LinkRequest{
+			{Path: "x", NewAddr: rawCF.GetAddress()},
+		}, false)
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
+	})
+
+	t.Run("AddBlob", func(t *testing.T) {
+		p := makeTestFile(t, "hi")
+		_, err := vol.AddBlob(p)
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
+	})
+
+	t.Run("AddOpenBlob", func(t *testing.T) {
+		p := makeTestFile(t, "hi")
+		f, err := os.Open(p)
+		if err != nil {
+			t.Fatalf("Open: %v", err)
+		}
+		defer f.Close()
+		_, err = vol.AddOpenBlob(f)
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
+	})
+
+	t.Run("AddDataBlock", func(t *testing.T) {
+		_, err := vol.AddDataBlock([]byte("hi"))
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
+	})
+
+	t.Run("AddMetadataBlob", func(t *testing.T) {
+		_, err := vol.AddMetadataBlob(&grits.GNodeMetadata{
+			Type:        grits.GNodeTypeFile,
+			Size:        2,
+			ContentHash: rawCF.GetAddress(),
+		})
+		if err == nil {
+			t.Error("expected error, got nil")
+		}
+	})
+}
+
+func TestReadOnlyVolume_ReadsStillWork(t *testing.T) {
+	server, cleanup := SetupTestServer(t)
+	defer cleanup()
+
+	// Create a writable volume, put something in it, then swap to read-only.
+	cfg := &LocalVolumeConfig{VolumeName: "ro"}
+	vol, err := NewLocalVolume(cfg, server, false, false)
+	if err != nil {
+		t.Fatalf("NewLocalVolume: %v", err)
+	}
+	server.AddModule(vol)
+	server.Start()
+	defer server.Stop()
+
+	// Write while still writable.
+	cf, err := vol.AddDataBlock([]byte("readable"))
+	if err != nil {
+		t.Fatalf("AddDataBlock: %v", err)
+	}
+	defer cf.Release()
+
+	node, err := vol.CreateBlobNode(cf.GetAddress(), cf.GetSize())
+	if err != nil {
+		t.Fatalf("CreateBlobNode: %v", err)
+	}
+	defer node.Release()
+
+	if err := vol.LinkByMetadata("file.txt", node.MetadataBlob().GetAddress()); err != nil {
+		t.Fatalf("LinkByMetadata: %v", err)
+	}
+
+	// Now flip to read-only.
+	cfg.ReadOnly = true
+
+	// Reads should still work.
+	found, err := vol.LookupNode("file.txt")
+	if err != nil {
+		t.Fatalf("LookupNode: %v", err)
+	}
+	defer found.Release()
+
+	if got := readNodeContent(t, found); got != "readable" {
+		t.Errorf("expected %q, got %q", "readable", got)
+	}
+}
+
+// -----------------------------------------------------------------------
+// Bootstrap tests
+// -----------------------------------------------------------------------
+
+func TestBootstrap_PopulatesVolume(t *testing.T) {
+	server, cleanup := SetupTestServer(t)
+	defer cleanup()
+
+	srcDir := makeTestDir(t)
+
+	vol, err := NewLocalVolume(
+		&LocalVolumeConfig{
+			VolumeName:    "client",
+			BootstrapFrom: srcDir,
+		},
+		server, false, false,
+	)
+	if err != nil {
+		t.Fatalf("NewLocalVolume: %v", err)
+	}
+	server.AddModule(vol)
+	server.Start()
+	defer server.Stop()
+
+	// Check root is a directory.
+	root, err := vol.LookupNode("")
+	if err != nil {
+		t.Fatalf("LookupNode root: %v", err)
+	}
+	defer root.Release()
+	if root.Metadata().Type != grits.GNodeTypeDirectory {
+		t.Errorf("expected directory at root, got %v", root.Metadata().Type)
+	}
+
+	// Check hello.txt content.
+	hello, err := vol.LookupNode("hello.txt")
+	if err != nil {
+		t.Fatalf("LookupNode hello.txt: %v", err)
+	}
+	defer hello.Release()
+	if got := readNodeContent(t, hello); got != "hello" {
+		t.Errorf("hello.txt: expected %q, got %q", "hello", got)
+	}
+
+	// Check sub/world.txt content.
+	world, err := vol.LookupNode("sub/world.txt")
+	if err != nil {
+		t.Fatalf("LookupNode sub/world.txt: %v", err)
+	}
+	defer world.Release()
+	if got := readNodeContent(t, world); got != "world" {
+		t.Errorf("world.txt: expected %q, got %q", "world", got)
+	}
+}
+
+func TestBootstrap_ReadOnlyVolumeCanBootstrap(t *testing.T) {
+	server, cleanup := SetupTestServer(t)
+	defer cleanup()
+
+	srcDir := makeTestDir(t)
+
+	// ReadOnly: true + BootstrapFrom set — Start() must temporarily unlock.
+	vol, err := NewLocalVolume(
+		&LocalVolumeConfig{
+			VolumeName:    "client",
+			BootstrapFrom: srcDir,
+			ReadOnly:      true,
+		},
+		server, false, false,
+	)
+	if err != nil {
+		t.Fatalf("NewLocalVolume: %v", err)
+	}
+	server.AddModule(vol)
+	if err := server.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer server.Stop()
+
+	// Content should be present.
+	hello, err := vol.LookupNode("hello.txt")
+	if err != nil {
+		t.Fatalf("LookupNode hello.txt after read-only bootstrap: %v", err)
+	}
+	defer hello.Release()
+	if got := readNodeContent(t, hello); got != "hello" {
+		t.Errorf("hello.txt: expected %q, got %q", "hello", got)
+	}
+
+	// And writes should now be rejected.
+	if err := vol.LinkByMetadata("new.txt", hello.MetadataBlob().GetAddress()); err == nil {
+		t.Error("expected write to fail on read-only volume post-bootstrap, got nil")
+	}
+}
+
+func TestBootstrap_StableHashesOnRestart(t *testing.T) {
+	server, cleanup := SetupTestServer(t)
+	defer cleanup()
+
+	srcDir := makeTestDir(t)
+
+	newVol := func() *LocalVolume {
+		v, err := NewLocalVolume(
+			&LocalVolumeConfig{
+				VolumeName:    "client",
+				BootstrapFrom: srcDir,
+			},
+			server, false, false,
+		)
+		if err != nil {
+			t.Fatalf("NewLocalVolume: %v", err)
+		}
+		if err := v.Start(); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		return v
+	}
+
+	v1 := newVol()
+	v2 := newVol()
+
+	for _, rel := range []string{
+		"",
+		"hello.txt",
+		"sub",
+		"sub/world.txt",
+	} {
+		n1, err := v1.LookupNode(rel)
+		if err != nil {
+			t.Fatalf("v1 LookupNode %s: %v", rel, err)
+		}
+		defer n1.Release()
+
+		n2, err := v2.LookupNode(rel)
+		if err != nil {
+			t.Fatalf("v2 LookupNode %s: %v", rel, err)
+		}
+		defer n2.Release()
+
+		addr1 := n1.MetadataBlob().GetAddress()
+		addr2 := n2.MetadataBlob().GetAddress()
+		if addr1 != addr2 {
+			t.Errorf("%s: hash changed between bootstraps: %s vs %s", rel, addr1, addr2)
+		}
+	}
+}
+
+func TestBootstrap_ChangedFileUpdatesHash(t *testing.T) {
+	server, cleanup := SetupTestServer(t)
+	defer cleanup()
+
+	srcDir := makeTestDir(t)
+
+	boot := func() *LocalVolume {
+		v, err := NewLocalVolume(
+			&LocalVolumeConfig{
+				VolumeName:    "client",
+				BootstrapFrom: srcDir,
+			},
+			server, false, false,
+		)
+		if err != nil {
+			t.Fatalf("NewLocalVolume: %v", err)
+		}
+		if err := v.Start(); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		return v
+	}
+
+	v1 := boot()
+
+	n1, err := v1.LookupNode("hello.txt")
+	if err != nil {
+		t.Fatalf("v1 LookupNode: %v", err)
+	}
+	defer n1.Release()
+	addr1 := n1.MetadataBlob().GetAddress()
+
+	// Modify the source file.
+	if err := os.WriteFile(filepath.Join(srcDir, "hello.txt"), []byte("goodbye"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	v2 := boot()
+
+	n2, err := v2.LookupNode("hello.txt")
+	if err != nil {
+		t.Fatalf("v2 LookupNode: %v", err)
+	}
+	defer n2.Release()
+	addr2 := n2.MetadataBlob().GetAddress()
+
+	if addr1 == addr2 {
+		t.Error("expected hash to change after file modification, but it stayed the same")
+	}
+
+	if got := readNodeContent(t, n2); got != "goodbye" {
+		t.Errorf("expected %q after modification, got %q", "goodbye", got)
+	}
 }
