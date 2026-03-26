@@ -1,8 +1,7 @@
-/bin/gritsd
-/bin/acme-challenge-helper
-/content/
+/bin/
 /testbed/
 /var/
 /vendor/
-
+/volumes/
 /grits.cfg
+/client.dist/
