@@ -53,23 +53,16 @@ type LocalVolume struct {
 var _ = (Volume)((*LocalVolume)(nil))
 
 type LocalVolumeConfig struct {
-	VolumeName          string        `json:"volumeName"`
-	ClientCacheDuration time.Duration `json:"clientCacheDuration,omitempty"`
+	VolumeName string `json:"volumeName"`
 }
 
 func NewLocalVolumeConfig(name string) *LocalVolumeConfig {
 	return &LocalVolumeConfig{
-		VolumeName:          name,
-		ClientCacheDuration: 30 * time.Second,
+		VolumeName: name,
 	}
 }
 
 func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool, sparse bool, persist bool) (*LocalVolume, error) {
-	// Apply defaults for any zero values
-	if config.ClientCacheDuration == 0 {
-		config.ClientCacheDuration = 30 * time.Second
-	}
-
 	ns, err := grits.EmptyNameStore(server.BlobStore, sparse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NameStore: %v", err)
@@ -91,58 +84,7 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, readOnly bool, sp
 		}
 	}
 
-	if err := wv.publishVolumeConfig(); err != nil {
-		return nil, fmt.Errorf("failed to publish volume config: %v", err)
-	}
-
 	return wv, nil
-}
-
-func (c *LocalVolumeConfig) MarshalJSON() ([]byte, error) {
-	return grits.MarshalDurationFields(c)
-}
-
-func (c *LocalVolumeConfig) UnmarshalJSON(data []byte) error {
-	return grits.UnmarshalDurationFields(data, c)
-}
-
-func (wv *LocalVolume) publishVolumeConfig() error {
-	// Create .grits/ if it doesn't exist — ignore assertion failure meaning it already exists
-	gritsDir, err := wv.ns.CreateTreeNode(make(map[string]grits.BlobAddr))
-	if err != nil {
-		return fmt.Errorf("failed to create .grits dir node: %v", err)
-	}
-
-	req := &grits.LinkRequest{
-		Path:     ".grits",
-		NewAddr:  gritsDir.MetadataBlob().GetAddress(),
-		PrevAddr: grits.NilAddr,
-		Assert:   grits.AssertPrevValueMatches,
-	}
-	_, err = wv.ns.MultiLink([]*grits.LinkRequest{req}, false)
-	if err != nil && !grits.IsAssertionFailed(err) {
-		return fmt.Errorf("failed to ensure .grits dir: %v", err)
-	}
-
-	// Marshal config as JSON
-	data, err := json.MarshalIndent(wv.volumeConfig, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal volume config: %v", err)
-	}
-
-	cf, err := wv.ns.BlobStore.AddDataBlock(data)
-	if err != nil {
-		return fmt.Errorf("failed to store volume config blob: %v", err)
-	}
-	defer cf.Release()
-
-	_, metadataBlob, err := wv.ns.CreateMetadataBlob(cf.GetAddress(), cf.GetSize(), false, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to create volume config metadata: %v", err)
-	}
-	defer metadataBlob.Release()
-
-	return wv.LinkByMetadata(".grits/caching.json", metadataBlob.GetAddress())
 }
 
 func (wv *LocalVolume) Start() error {
@@ -342,7 +284,7 @@ func (wv *LocalVolume) load() error {
 		return fmt.Errorf("failed to unmarshal volume state: %v", err)
 	}
 
-	err = wv.ns.DeserializeNameStore(grits.BlobAddr(state.RootAddr), state.SerialNumber, wv.volumeConfig.ClientCacheDuration)
+	err = wv.ns.DeserializeNameStore(grits.BlobAddr(state.RootAddr), state.SerialNumber, 0)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize name store: %v", err)
 	}

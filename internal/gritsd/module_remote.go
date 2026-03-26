@@ -25,6 +25,14 @@ type RemoteVolumeConfig struct {
 	BlobCacheDuration time.Duration `json:"blobCacheDuration,omitempty"`
 }
 
+func (c *RemoteVolumeConfig) MarshalJSON() ([]byte, error) {
+	return grits.MarshalDurationFields(c)
+}
+
+func (c *RemoteVolumeConfig) UnmarshalJSON(data []byte) error {
+	return grits.UnmarshalDurationFields(data, c)
+}
+
 const maxPrefetchQueueSize = 128
 
 // const numPrefetchWorkers = 32
@@ -94,12 +102,6 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 		stopWorker:    make(chan struct{}),
 	}
 	rv.queueCond = sync.NewCond(&rv.queueMutex)
-
-	if config.BlobCacheDuration == 0 {
-		localCache.ns.CacheDuration = 24 * time.Hour
-	} else {
-		localCache.ns.CacheDuration = config.BlobCacheDuration
-	}
 
 	localCache.ns.RegisterFetcher(rv)
 
@@ -276,7 +278,7 @@ func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error)
 		return nil, fmt.Errorf("mismatch of blob addr! %s != %s", cf.GetAddress(), addr)
 	}
 
-	cf.Touch(rv.config.BlobCacheDuration)
+	cf.Touch(rv.localCache.ns.CacheDuration)
 
 	grits.DebugLogWithTime(grits.DebugRemotePerformance, string(addr),
 		"FetchBlob: done (%.1fms)", float64(time.Since(start).Microseconds())/1000.0)
@@ -364,36 +366,71 @@ func httpClient() *http.Client {
 	}
 }
 
+// volumeJsonConfig is the schema for the hand-authored .grits/volume.json file.
+type volumeJsonConfig struct {
+	ClientCacheDuration time.Duration `json:"clientCacheDuration,omitempty"`
+}
+
+func (c *volumeJsonConfig) MarshalJSON() ([]byte, error) {
+	return grits.MarshalDurationFields(c)
+}
+
+func (c *volumeJsonConfig) UnmarshalJSON(data []byte) error {
+	return grits.UnmarshalDurationFields(data, c)
+}
+
+// fetchVolumeConfig reads .grits/volume.json from the remote volume and applies
+// clientCacheDuration to the local cache. If BlobCacheDuration is set in the
+// local config it takes precedence. Falls back to 1 minute if the file is
+// absent or the field is not specified.
 func (rv *RemoteVolume) fetchVolumeConfig() {
-	node, err := rv.localCache.LookupNode(".grits/caching.json")
+	const defaultCacheDuration = 1 * time.Minute
+
+	// Local config override wins outright — don't even read the file.
+	if rv.config.BlobCacheDuration != 0 {
+		rv.localCache.ns.CacheDuration = rv.config.BlobCacheDuration
+		return
+	}
+
+	node, err := rv.localCache.LookupNode(".grits/volume.json")
 	if err != nil {
-		log.Printf("Warning: couldn't fetch volume config from %s: %v", rv.config.RemoteURL, err)
+		// File absent is normal; anything else is worth noting.
+		if !grits.IsNotExist(err) {
+			log.Printf("Warning: error looking up .grits/volume.json on %s: %v", rv.volumeName, err)
+		}
+		rv.localCache.ns.CacheDuration = defaultCacheDuration
 		return
 	}
 	defer node.Release()
 
 	blob, err := node.ExportedBlob()
 	if err != nil {
-		log.Printf("Warning: couldn't load .grits/caching.json content: %v", err)
+		log.Printf("Warning: couldn't load .grits/volume.json content from %s: %v", rv.volumeName, err)
+		rv.localCache.ns.CacheDuration = defaultCacheDuration
 		return
 	}
 
 	data, err := blob.Read(0, blob.GetSize())
 	if err != nil {
-		log.Printf("Warning: couldn't read .grits/caching.json: %v", err)
+		log.Printf("Warning: couldn't read .grits/volume.json from %s: %v", rv.volumeName, err)
+		rv.localCache.ns.CacheDuration = defaultCacheDuration
 		return
 	}
 
-	var serverConfig LocalVolumeConfig
-	if err := json.Unmarshal(data, &serverConfig); err != nil {
-		log.Printf("Warning: couldn't parse .grits/caching.json: %v", err)
+	var cfg volumeJsonConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		log.Printf("Warning: couldn't parse .grits/volume.json from %s: %v", rv.volumeName, err)
+		rv.localCache.ns.CacheDuration = defaultCacheDuration
 		return
 	}
 
-	if serverConfig.ClientCacheDuration != 0 {
-		rv.localCache.ns.CacheDuration = serverConfig.ClientCacheDuration
-		log.Printf("Remote volume %s: using server cache duration %v", rv.volumeName, serverConfig.ClientCacheDuration)
+	if cfg.ClientCacheDuration == 0 {
+		rv.localCache.ns.CacheDuration = defaultCacheDuration
+		return
 	}
+
+	rv.localCache.ns.CacheDuration = cfg.ClientCacheDuration
+	log.Printf("Remote volume %s: clientCacheDuration = %v (from .grits/volume.json)", rv.volumeName, cfg.ClientCacheDuration)
 }
 
 /////
@@ -475,20 +512,9 @@ func (rv *RemoteVolume) prefetchWorker(id int) {
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: Got blob")
 
-		cf.Touch(rv.config.BlobCacheDuration)
+		cf.Touch(rv.localCache.ns.CacheDuration)
 		cf.Release()
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, string(entry), "Prefetch: All done")
 	}
-}
-
-/////
-// Config unmarshaling
-
-func (c *RemoteVolumeConfig) MarshalJSON() ([]byte, error) {
-	return grits.MarshalDurationFields(c)
-}
-
-func (c *RemoteVolumeConfig) UnmarshalJSON(data []byte) error {
-	return grits.UnmarshalDurationFields(data, c)
 }
