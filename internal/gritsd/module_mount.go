@@ -79,13 +79,14 @@ func (mm *MountModule) Start() error {
 		// Mount point doesn't exist
 		return err
 	} else if err != nil {
-		// Could be a stale FUSE mount ("transport endpoint is not connected") or
-		// some other error. Either way, try to unmount and see if that clears it.
-		log.Printf("Mount point %s is inaccessible (%v), attempting to unmount...", mntDir, err)
+		if pathErr, ok := err.(*os.PathError); !ok || pathErr.Err != syscall.ENOTCONN {
+			return fmt.Errorf("mount point %s is inaccessible: %v", mntDir, err)
+		}
 
+		log.Printf("Mount point %s has a stale FUSE mount, attempting to unmount...", mntDir)
 		cmd := exec.Command("umount", mntDir)
 		if umountErr := cmd.Run(); umountErr != nil {
-			return fmt.Errorf("mount point %s is inaccessible and unmount failed: stat error: %v, unmount error: %v", mntDir, err, umountErr)
+			return fmt.Errorf("Unmount failed: stat error: %v, unmount error: %v", err, umountErr)
 		}
 
 		// Confirm it's accessible now
@@ -722,6 +723,14 @@ func fillAttr(cacheFile string, out *fuse.AttrOut, isDir bool) error {
 	out.Rdev = 0
 
 	return nil
+}
+
+// Show Statx not implemented
+
+var _ = (fs.NodeStatxer)((*gritsNode)(nil))
+
+func (gn *gritsNode) Statx(ctx context.Context, f fs.FileHandle, flags uint32, mask uint32, out *fuse.StatxOut) syscall.Errno {
+    return syscall.ENOSYS
 }
 
 /////
