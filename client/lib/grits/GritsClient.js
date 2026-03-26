@@ -1,26 +1,35 @@
 // GritsClient.js — Gimbal filesystem client
 //
-// One instance ("gg") spans multiple hosts and volumes.
+// GritsClient — cache operations (local + browser cache, no server contact)
+//   gg.cacheGet(cidString)                → Response  (local or browser cache only)
+//   gg.cachePut(bytes)                    → string (content CID, stored locally)
+//   gg.mkfile(cidString, size)            → string (metadata CID, stored locally)
+//   gg.mkdir(entries?)                    → string (metadata CID, stored locally)
+//   gg.gc(cidString?)                     → void
 //
-// Two caches:
-//   localCache:  Map<cid, Uint8Array>  — synthesized/pending blobs, lives until gc()
-//   blobCache:   browser Cache API     — confirmed server content, can be evicted
+// GritsVolume — server operations (with shared cache fallthrough)
+//   vol.lo  / vol.lookup (path)           → GritsFile
+//   vol.li  / vol.link   (file|cid, path) → LinkResponse
+//   vol.get / vol.g      (cidString)      → Response
+//   vol.put / vol.p      (bytes)          → string (content CID)
+//   vol.meta(cidString)                   → { type, size, contentHash, ... }
+//   vol.json(cidString)                   → parsed JS object
+//   vol.mkfile(cidString, size)           → string (metadata CID, stored locally)
+//   vol.mkdir(entries?)                   → string (metadata CID, stored locally)
+//   vol.gc(cidString?)                    → void
 //
-// Core API (short aliases in parens):
-//   gg.put / gg.p  (bytes, serverUrl?, volume?)      → string (content CID)
-//   gg.get / gg.g  (cid, serverUrl?, volume?)        → Response
-//   gg.lo / gg.lookup (serverUrl, volume, path)      → GritsFile
-//   gg.li / gg.link   (file|cid, serverUrl, vol, path) → void
-//   gg.mkfile(contentCID ,size)                      → string (metadata CID)
-//   gg.mkdir(entries?)                               → string (metadata CID)
-//       entries: { name: GritsFile|cidString, ... }
-//   gg.meta(metaCID)                                 → { type, size, contentHash, ... }
-//   gg.json(contentCID)                              → parsed JS object
-//   gg.gc(cid?)                                      → void
-//
-// Volume handle:
-//   const vol = gg.volume(serverUrl, volumeName)
-//   All methods available with serverUrl+volume pre-filled.
+// GritsFile — obtained from vol.lo():
+//   file.cid()        → string  (metadata CID — use this for li())
+//   file.contentCID() → string  (content blob CID — use this for get())
+//   file.size()       → number
+//   file.isDir()      → boolean
+//   file.isFile()     → boolean
+//   file.meta()       → { type, size, contentHash, mode, timestamp }
+//   file.get()        → Promise<Response>
+//   file.bytes()      → Promise<ArrayBuffer>
+//   file.text()       → Promise<string>
+//   file.json()       → Promise<any>
+//   file.ls()         → Promise<{ name: metaCID, ... }>  (dirs only)
 
 import MirrorManager from './MirrorManager.js'; // %FOR MODULE%
 //importScripts('/grits/v1/content/client/MirrorManager-sw.js'); // %FOR SERVICEWORKER%
@@ -30,7 +39,42 @@ const JSON_CACHE_MAX_AGE          = 5 * 60 * 1000;
 const JSON_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 
 // ─────────────────────────────────────────────────────────────────
-// Hashing (SHA-256 → Base58 multihash, matching server format)
+// Type assertion helpers
+// ─────────────────────────────────────────────────────────────────
+
+function _typename(v) {
+  if (v === null)      return 'null';
+  if (v === undefined) return 'undefined';
+  return v?.constructor?.name ?? typeof v;
+}
+
+function _assertString(v, label) {
+  if (typeof v !== 'string')
+    throw new TypeError(
+      `${label}: expected CID string, got ${_typename(v)}` +
+      (v instanceof GritsFile ? ' — did you mean file.cid() or file.contentCID()?' : ''));
+}
+
+function _assertBytes(v, label) {
+  if (!(v instanceof Uint8Array) && !(v instanceof ArrayBuffer) &&
+      !(v instanceof Blob) && !(v instanceof ReadableStream))
+    throw new TypeError(
+      `${label}: expected bytes (Uint8Array/ArrayBuffer/Blob/ReadableStream), got ${_typename(v)}`);
+}
+
+function _assertStringOrFile(v, label) {
+  if (typeof v !== 'string' && !(v instanceof GritsFile))
+    throw new TypeError(`${label}: expected CID string or GritsFile, got ${_typename(v)}`);
+}
+
+function _assertEntriesMap(v, label) {
+  if (v !== null && v !== undefined && (typeof v !== 'object' || Array.isArray(v)))
+    throw new TypeError(
+      `${label}: expected object { name: GritsFile|cidString, ... }, got ${_typename(v)}`);
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Hashing
 // ─────────────────────────────────────────────────────────────────
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -59,7 +103,6 @@ function _base58Encode(buffer) {
 }
 
 async function _computeCID(data) {
-  // data must be Uint8Array
   const digest    = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
   const multihash = new Uint8Array(34);
   multihash[0] = 0x12; multihash[1] = 0x20;
@@ -70,7 +113,6 @@ async function _computeCID(data) {
 async function _toUint8Array(bytes) {
   if (bytes instanceof Uint8Array)  return bytes;
   if (bytes instanceof ArrayBuffer) return new Uint8Array(bytes);
-  // Blob, ReadableStream, etc.
   return new Uint8Array(await new Response(bytes).arrayBuffer());
 }
 
@@ -83,31 +125,48 @@ function _isoNow() {
 // ─────────────────────────────────────────────────────────────────
 
 export class GritsFile {
-  constructor(metaCID, meta, client) {
+  constructor(metaCID, meta, volume) {
     this._metaCID = metaCID;
     this._meta    = meta;
-    this._client  = client;
+    this._volume  = volume; // GritsVolume, for content fetching
   }
 
+  // Metadata CID — stable node identifier. Use with vol.li().
   cid()        { return this._metaCID; }
+
+  // Content blob CID. Use with vol.get() for raw blob access.
   contentCID() { return this._meta.contentHash; }
+
   size()       { return this._meta.size; }
   isDir()      { return this._meta.type === 'dir'; }
   isFile()     { return this._meta.type === 'blob'; }
   meta()       { return { ...this._meta }; }
 
-  get()  { return this._client.get(this._meta.contentHash); }
-  json() { return this._client.json(this._meta.contentHash); }
+  get()        { return this._volume.get(this._meta.contentHash); }
+  async bytes(){ return (await this.get()).arrayBuffer(); }
+  async text() { return (await this.get()).text(); }
+  async json() { return this._volume.json(this._meta.contentHash); }
+
+  async ls() {
+    if (!this.isDir())
+      throw new Error(`ls: not a directory (type=${this._meta.type})`);
+    return this._volume.json(this._meta.contentHash);
+  }
+
+  toString() {
+    return `GritsFile(${this._meta.type}, ${this._meta.size}b, cid=${this._metaCID.slice(0,8)}…)`;
+  }
 }
 
-// GritsVolume — Unified volume class
-// Obtained via gg.volume(serverUrl, volumeName).
+// ─────────────────────────────────────────────────────────────────
+// GritsVolume — server operations + convenience wrappers
+// ─────────────────────────────────────────────────────────────────
 
 export class GritsVolume {
   constructor(serverUrl, volume, parent) {
     this._serverUrl = serverUrl.replace(/\/$/, '');
     this._volume    = volume;
-    this._parent    = parent; // GritsClient
+    this._parent    = parent; // GritsClient (for shared caches)
 
     this.rootHash          = null;
     this.rootHashTimestamp = 0;
@@ -124,38 +183,104 @@ export class GritsVolume {
       debug:     DEBUG,
     });
     this.mirrorManager.initialize().catch(err =>
-      console.error(`[GritsClient] mirror init (${this._volume}):`, err));
+      console.error(`[GritsVolume] mirror init (${this._volume}):`, err));
   }
 
-  // ── Public API ────────────────────────────────────────────────
+  // ── Lookup ────────────────────────────────────────────────────
 
-  lo(path)              { return this._parent.lo(this._serverUrl, this._volume, path); }
-  lookup(path)          { return this.lo(path); }
-  li(fileOrCID, path)   { return this._parent.li(fileOrCID, this._serverUrl, this._volume, path); }
+  async lo(path) {
+    if (typeof path !== 'string')
+      throw new TypeError(`lo: path must be a string, got ${_typename(path)}`);
+    const info = await this.lookup_internal(path);
+    if (!info) throw new Error(`lo: ${this._volume}:${path}: not found`);
+    const meta = await this._fetchMeta(info.metadataHash);
+    return new GritsFile(info.metadataHash, meta, this);
+  }
+
+  lookup(path) { return this.lo(path); }
+
+  // ── Link ──────────────────────────────────────────────────────
+
+  async li(fileOrCID, path) {
+    _assertStringOrFile(fileOrCID, 'li');
+    if (typeof path !== 'string')
+      throw new TypeError(`li: path must be a string, got ${_typename(path)}`);
+    const metaCID = fileOrCID instanceof GritsFile ? fileOrCID.cid() : fileOrCID;
+    await this._ensureOnServer(metaCID);
+    return this._linkRaw(metaCID, path);
+  }
+
   link(fileOrCID, path) { return this.li(fileOrCID, path); }
-  get(cid)              { return this._parent.get(cid, this._serverUrl, this._volume); }
-  g(cid)                { return this.get(cid); }
-  put(bytes)            { return this._parent.put(bytes, this._serverUrl, this._volume); }
-  p(bytes)              { return this.put(bytes); }
-  meta(cid)             { return this._parent.meta(cid); }
-  json(cid)             { return this._parent.json(cid); }
-  mkfile(cid, size)     { return this._parent.mkfile(cid, size); }
-  mkdir(entries)        { return this._parent.mkdir(entries); }
 
-  // ── Internal: used by GritsClient ────────────────────────────
+  // ── Get ───────────────────────────────────────────────────────
+  // Checks: localCache → blobCache → server
 
-  // Upload a single blob. Server returns 204 if already present.
-  async uploadBlob(cid, bytes) {
+  async get(cid) {
+    _assertString(cid, 'get');
+
+    // local synthetic cache
+    const local = this._parent._local.get(cid);
+    if (local) return new Response(local, { status: 200 });
+
+    // browser blob cache
+    const cached = await this._parent._blobCacheGet(cid);
+    if (cached) return cached;
+
+    // server
+    const resp = await this._fetchBlob(cid);
+    if (resp.ok) { await this._parent._blobCachePut(cid, resp.clone()); return resp; }
+    throw new Error(`get: CID ${cid} not found on ${this._serverUrl}/${this._volume}`);
+  }
+
+  g(cid) { return this.get(cid); }
+
+  // ── Put ───────────────────────────────────────────────────────
+  // Uploads to server + stores in blobCache. Returns content CID string.
+
+  async put(bytes) {
+    _assertBytes(bytes, 'put');
+    const data = await _toUint8Array(bytes);
+    const cid  = await _computeCID(data);
+    await this._uploadBlob(cid, data);
+    await this._parent._blobCachePut(cid, new Response(data, { status: 200 }));
+    return cid;
+  }
+
+  p(bytes) { return this.put(bytes); }
+
+  // ── Meta / JSON ───────────────────────────────────────────────
+
+  async meta(metaCID) {
+    _assertString(metaCID, 'meta');
+    return this._fetchMeta(metaCID);
+  }
+
+  async json(cid) {
+    _assertString(cid, 'json');
+    const cached = this._parent._jsonCache.get(cid);
+    if (cached) { cached.lastAccessed = Date.now(); return cached.data; }
+    const data = await (await this.get(cid)).json();
+    this._parent._jsonCache.set(cid, { data, lastAccessed: Date.now() });
+    return data;
+  }
+
+  // ── mkfile / mkdir / gc — convenience wrappers ───────────────
+
+  mkfile(cid, size)  { return this._parent.mkfile(cid, size); }
+  mkdir(entries)     { return this._parent.mkdir(entries); }
+  gc(cid)            { return this._parent.gc(cid); }
+
+  // ── Internal: server communication ───────────────────────────
+
+  async _uploadBlob(cid, bytes) {
     const resp = await fetch(`${this._serverUrl}/grits/v1/blob/${cid}`, {
       method: 'PUT', body: bytes,
     });
     if (resp.status === 204 || resp.ok) return cid;
-    throw new Error(`blob upload ${cid}: ${resp.status} ${resp.statusText}`);
+    throw new Error(`uploadBlob ${cid}: ${resp.status} ${resp.statusText}`);
   }
 
-  // Link a metadata CID at a path. Returns the LinkResponse
-  // (includes new volume root address).
-  async linkRaw(metaCID, path) {
+  async _linkRaw(metaCID, path) {
     const url  = `${this._serverUrl}/grits/v1/link/${this._volume}`;
     const body = JSON.stringify([{ path: _normalizePath(path), addr: metaCID }]);
     const resp = await fetch(url, {
@@ -165,14 +290,42 @@ export class GritsVolume {
       const msg = await resp.text().catch(() => resp.statusText);
       throw new Error(`li ${this._volume}:${path}: ${resp.status} ${msg}`);
     }
-    return resp.json(); // { paths: [...], root: newRootCID, ... }
+    return resp.json();
   }
 
-  async fetchBlob(cid) {
+  async _fetchBlob(cid) {
     return this.mirrorManager.fetchBlob(cid, null);
   }
 
-  // ── Internal: Merkle tree lookup ─────────────────────────────
+  async _fetchMeta(metaCID) {
+    const cached = this._parent._jsonCache.get(metaCID);
+    if (cached) { cached.lastAccessed = Date.now(); return cached.data; }
+    const resp = await this.get(metaCID);
+    const data = await resp.json();
+    this._parent._jsonCache.set(metaCID, { data, lastAccessed: Date.now() });
+    return data;
+  }
+
+  // Upload locally-cached blobs to server, content before metadata
+  async _ensureOnServer(cid, visited = new Set()) {
+    if (visited.has(cid)) return;
+    visited.add(cid);
+
+    const local = this._parent._local.get(cid);
+    if (!local) return;
+
+    try {
+      const meta = JSON.parse(new TextDecoder().decode(local));
+      if (meta?.contentHash)
+        await this._ensureOnServer(meta.contentHash, visited);
+    } catch (_) {}
+
+    await this._uploadBlob(cid, local);
+    this._parent._local.delete(cid);
+    await this._parent._blobCachePut(cid, new Response(local, { status: 200 }));
+  }
+
+  // ── Internal: Merkle tree lookup ──────────────────────────────
 
   async lookup_internal(path) {
     const n = _normalizePath(path);
@@ -214,8 +367,6 @@ export class GritsVolume {
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
   }
 
-  // ── Internal: prefetch ────────────────────────────────────────
-
   _startPrefetch(paths) {
     for (const e of paths) {
       if (e.addr && !this._inFlightPrefetches.has(e.addr)) {
@@ -231,16 +382,14 @@ export class GritsVolume {
       const hash = this._prefetchQueue.shift();
       try {
         if (!this._parent._jsonCache.has(hash)) {
-          const resp = await this.fetchBlob(hash);
+          const resp = await this._fetchBlob(hash);
           if (!resp.ok) continue;
           const data = await resp.json();
           this._parent._jsonCache.set(hash, { data, lastAccessed: Date.now() });
           if (data.type === 'dir' && !this._parent._jsonCache.has(data.contentHash)) {
-            const r2 = await this.fetchBlob(data.contentHash);
-            if (r2.ok) {
-              this._parent._jsonCache.set(data.contentHash,
-                { data: await r2.json(), lastAccessed: Date.now() });
-            }
+            const r2 = await this._fetchBlob(data.contentHash);
+            if (r2.ok) this._parent._jsonCache.set(data.contentHash,
+              { data: await r2.json(), lastAccessed: Date.now() });
           }
         }
       } catch (e) { DEBUG && console.warn(`[prefetch] ${hash}:`, e.message); }
@@ -252,22 +401,16 @@ export class GritsVolume {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// GritsClient
+// GritsClient — cache operations only, no server contact
 // ─────────────────────────────────────────────────────────────────
 
 export default class GritsClient {
   constructor() {
-    // localCache: synthesized blobs pending upload. Lives until gc().
-    this._local     = new Map(); // cid → Uint8Array
-
-    // jsonCache: parsed metadata/directory JSON. Evicted after idle.
+    this._local     = new Map(); // cid → Uint8Array  (synthesized, pending upload)
     this._jsonCache = new Map(); // cid → { data, lastAccessed }
-
-    // blobCache: browser Cache API for confirmed server content.
-    this._blobCache = null;
+    this._blobCache = null;      // browser Cache API (confirmed server content)
+    this._volumes   = new Map(); // volKey → GritsVolume
     this._initBlobCache();
-
-    this._volumes = new Map(); // volKey → GritsVolume
     this._cleanupTimer = setInterval(() => this._cleanupJsonCache(), JSON_CACHE_CLEANUP_INTERVAL);
   }
 
@@ -276,76 +419,47 @@ export default class GritsClient {
   // ── Volume registration ───────────────────────────────────────
 
   volume(serverUrl, volumeName) {
+    if (typeof serverUrl  !== 'string') throw new TypeError(`volume: serverUrl must be a string, got ${_typename(serverUrl)}`);
+    if (typeof volumeName !== 'string') throw new TypeError(`volume: volumeName must be a string, got ${_typename(volumeName)}`);
     const key = _volKey(serverUrl, volumeName);
     if (!this._volumes.has(key))
       this._volumes.set(key, new GritsVolume(serverUrl, volumeName, this));
     return this._volumes.get(key);
   }
 
-  _vol(serverUrl, volume) {
-    const v = this._volumes.get(_volKey(serverUrl, volume));
-    if (!v) throw new Error(`Unknown volume ${serverUrl}/${volume} — call gg.volume() first`);
-    return v;
+  // ── cacheGet ─────────────────────────────────────────────────
+  // Read from local or browser cache only. No server contact.
+
+  async cacheGet(cid) {
+    _assertString(cid, 'cacheGet');
+    const local = this._local.get(cid);
+    if (local) return new Response(local, { status: 200 });
+    const cached = await this._blobCacheGet(cid);
+    if (cached) return cached;
+    return null; // not found — caller can decide what to do
   }
 
-  // ── put / p ───────────────────────────────────────────────────
-  // Store bytes. Local-only if no server args.
-  // With server args: upload to server (dedup via hash), store in blobCache.
-  // Does NOT put in localCache if uploading to server — server is the backing store.
+  // ── cachePut ─────────────────────────────────────────────────
+  // Store bytes in local cache only. No server contact.
   // Returns content CID string.
 
-  async put(bytes, serverUrl = null, volume = null) {
+  async cachePut(bytes) {
+    _assertBytes(bytes, 'cachePut');
     const data = await _toUint8Array(bytes);
     const cid  = await _computeCID(data);
-
-    if (serverUrl && volume) {
-      // Upload to server; cache the response in blobCache
-      await this._vol(serverUrl, volume).uploadBlob(cid, data);
-      // Store in blobCache so get() can find it without a round-trip
-      const synthetic = new Response(data, { status: 200 });
-      await this._blobCachePut(cid, synthetic);
-    } else {
-      // Local only — keep in localCache until li() flushes it
-      if (!this._local.has(cid)) this._local.set(cid, data);
-    }
-
+    if (!this._local.has(cid)) this._local.set(cid, data);
     return cid;
   }
 
-  p(bytes, serverUrl = null, volume = null) { return this.put(bytes, serverUrl, volume); }
-
-  // ── get / g ───────────────────────────────────────────────────
-  // Fetch content by CID.
-  // Checks: localCache → blobCache → server (if args given, or tries all volumes)
-  // Returns a Response.
-
-  async get(cid, serverUrl = null, volume = null) {
-    // 1. local synthetic cache
-    const local = this._local.get(cid);
-    if (local) return new Response(local, { status: 200 });
-
-    // 2. browser blob cache
-    const cached = await this._blobCacheGet(cid);
-    if (cached) return cached;
-
-    // 3. specific volume
-    if (serverUrl && volume) {
-      const resp = await this._vol(serverUrl, volume).fetchBlob(cid);
-      if (resp.ok) { await this._blobCachePut(cid, resp.clone()); return resp; }
-      throw new Error(`get: CID ${cid} not found on ${serverUrl}/${volume}`);
-    }
-
-    throw new Error(`get: CID ${cid} not found`);
-  }
-
-  g(cid, serverUrl = null, volume = null) { return this.get(cid, serverUrl, volume); }
-
   // ── mkfile ────────────────────────────────────────────────────
-  // Synthesize a file metadata blob from a content CID.
-  // Size is inferred from localCache; must be in localCache or provided.
-  // Stores result in localCache. Returns metadata CID string.
+  // Synthesize a file metadata blob. Stores in localCache.
+  // Returns metadata CID string.
 
   async mkfile(contentCID, size) {
+    _assertString(contentCID, 'mkfile');
+    if (typeof size !== 'number' || !Number.isInteger(size) || size < 0)
+      throw new TypeError(`mkfile: size must be a non-negative integer, got ${_typename(size)} (${size})`);
+
     const meta  = {
       type:        'blob',
       size,
@@ -360,13 +474,13 @@ export default class GritsClient {
   }
 
   // ── mkdir ─────────────────────────────────────────────────────
-  // Synthesize a directory metadata blob.
-  // entries: { name: GritsFile|cidString, ... } or omit for empty dir.
-  // Stores content listing blob + metadata blob in localCache.
+  // Synthesize a directory metadata blob. Stores in localCache.
+  // entries: { name: GritsFile|cidString, ... } or null for empty dir.
   // Returns metadata CID string.
 
   async mkdir(entries = null) {
-    // Normalize entries — accept GritsFile, cid string, or anything with .cid()
+    _assertEntriesMap(entries, 'mkdir');
+
     const listing = {};
     for (const [name, value] of Object.entries(entries ?? {})) {
       if (typeof value === 'string') {
@@ -376,15 +490,16 @@ export default class GritsClient {
       } else if (typeof value?.cid === 'function') {
         listing[name] = value.cid();
       } else {
-        throw new TypeError(`mkdir: entry "${name}" is not a CID string or GritsFile`);
+        throw new TypeError(
+          `mkdir: entry "${name}" must be a CID string or GritsFile, got ${_typename(value)}`);
       }
     }
 
-    const dirBytes = new TextEncoder().encode(JSON.stringify(listing));
-    const dirCID   = await _computeCID(dirBytes);
+    const dirBytes  = new TextEncoder().encode(JSON.stringify(listing));
+    const dirCID    = await _computeCID(dirBytes);
     if (!this._local.has(dirCID)) this._local.set(dirCID, dirBytes);
 
-    const meta     = {
+    const meta      = {
       type:        'dir',
       size:        dirBytes.byteLength,
       contentHash: dirCID,
@@ -398,88 +513,16 @@ export default class GritsClient {
     return metaCID;
   }
 
-  // ── lo / lookup ───────────────────────────────────────────────
-  // Lookup path → GritsFile (identified by metadata CID)
-
-  async lo(serverUrl, volume, path) {
-    const info = await this._vol(serverUrl, volume).lookup_internal(path);
-    if (!info) throw new Error(`${volume}:${path}: not found`);
-    const meta = await this._fetchMeta(info.metadataHash, serverUrl, volume);
-    return new GritsFile(info.metadataHash, meta, this);
-  }
-
-  lookup(serverUrl, volume, path) { return this.lo(serverUrl, volume, path); }
-
-  // ── li / link ─────────────────────────────────────────────────
-  // Link a node at a path. Accepts GritsFile or metadata CID string.
-  // Uploads content blob first, then metadata blob, then links.
-
-  async li(fileOrCID, serverUrl, volume, path) {
-    const metaCID = fileOrCID instanceof GritsFile ? fileOrCID.cid() : fileOrCID;
-    await this._ensureOnServer(metaCID, serverUrl, volume);
-    return this._vol(serverUrl, volume).link(metaCID, path);
-  }
-
-  link(fileOrCID, serverUrl, volume, path) { return this.li(fileOrCID, serverUrl, volume, path); }
-
-  // ── meta ──────────────────────────────────────────────────────
-
-  async meta(metaCID) { return this._fetchMeta(metaCID, null, null); }
-
-  // ── json ──────────────────────────────────────────────────────
-
-  async json(cid) {
-    const cached = this._jsonCache.get(cid);
-    if (cached) { cached.lastAccessed = Date.now(); return cached.data; }
-    const data = await (await this.get(cid)).json();
-    this._jsonCache.set(cid, { data, lastAccessed: Date.now() });
-    return data;
-  }
-
   // ── gc ────────────────────────────────────────────────────────
+  // Clear local synthetic cache. gc() clears all, gc(cid) removes one.
 
   gc(cid = null) {
+    if (cid !== null) _assertString(cid, 'gc');
     if (cid === null) this._local.clear();
     else this._local.delete(cid);
   }
 
-  // ── Internal: upload local blobs to server (content first) ───
-
-  async _ensureOnServer(cid, serverUrl, volume, visited = new Set()) {
-    if (visited.has(cid)) return;
-    visited.add(cid);
-
-    const local = this._local.get(cid);
-    if (!local) return; // not local — assume server has it
-
-    // If this looks like a metadata blob, upload its content blob first
-    try {
-      const meta = JSON.parse(new TextDecoder().decode(local));
-      if (meta?.contentHash) {
-        await this._ensureOnServer(meta.contentHash, serverUrl, volume, visited);
-      }
-    } catch (_) { /* plain content blob, not JSON */ }
-
-    // Now upload this blob
-    await this._vol(serverUrl, volume).uploadBlob(cid, local);
-
-    // Move from localCache to blobCache now that server has it
-    this._local.delete(cid);
-    await this._blobCachePut(cid, new Response(local, { status: 200 }));
-  }
-
-  // ── Internal: fetch and parse metadata ───────────────────────
-
-  async _fetchMeta(metaCID, serverUrl, volume) {
-    const cached = this._jsonCache.get(metaCID);
-    if (cached) { cached.lastAccessed = Date.now(); return cached.data; }
-    const resp = await this.get(metaCID, serverUrl, volume);
-    const data = await resp.json();
-    this._jsonCache.set(metaCID, { data, lastAccessed: Date.now() });
-    return data;
-  }
-
-  // ── Internal: JSON cache (used by VolumeClient fast path) ────
+  // ── Internal: JSON cache (used by GritsVolume) ────────────────
 
   async _unmarshal(hash) {
     const cached = this._jsonCache.get(hash);
@@ -493,7 +536,7 @@ export default class GritsClient {
       if (v.lastAccessed < cutoff) this._jsonCache.delete(k);
   }
 
-  // ── Internal: browser blob cache ─────────────────────────────
+  // ── Internal: browser blob cache (used by GritsVolume) ───────
 
   async _initBlobCache() {
     try { this._blobCache = await caches.open('grits-blobs-v1'); }
