@@ -201,11 +201,11 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		return trackerModule, nil
 
 	case "volume":
-		config := NewLocalVolumeConfig("")
+		config := &LocalVolumeConfig{}
 		if err := json.Unmarshal(rawConfig, config); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal LocalVolume module config: %v", err)
 		}
-		localVolume, err := NewLocalVolume(config, s, false, false, true)
+		localVolume, err := NewLocalVolume(config, s, false, true)
 		if err != nil {
 			return nil, fmt.Errorf("failed to instantiate LocalVolume: %v", err)
 		}

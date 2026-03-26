@@ -86,8 +86,9 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 	// Create a local volume to handle the actual tree/namespace management
 	localConfig := &LocalVolumeConfig{
 		VolumeName: config.VolumeName,
+		ReadOnly: true,
 	}
-	localCache, err := NewLocalVolume(localConfig, server, true, true, false) // readOnly=true, sparse=true, persist=false
+	localCache, err := NewLocalVolume(localConfig, server, true, false) // readOnly=true, sparse=true, persist=false
 	if err != nil {
 		return nil, err
 	}
@@ -217,6 +218,11 @@ func (rv *RemoteVolume) AddBlob(path string) (grits.CachedFile, error) {
 
 // AddOpenBlob implements Volume interface
 func (rv *RemoteVolume) AddOpenBlob(file *os.File) (grits.CachedFile, error) {
+	return nil, fmt.Errorf("cannot write to remote volume")
+}
+
+// AddOpenBlob implements Volume interface
+func (rv *RemoteVolume) AddDataBlock(data []byte) (grits.CachedFile, error) {
 	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
