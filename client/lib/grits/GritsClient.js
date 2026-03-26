@@ -408,21 +408,29 @@ export class GritsVolume {
 
   async lookup_internal(path) {
     const n = _normalizePath(path);
-    return (await this._tryFastLookup(n)) ?? (await this._slowLookup(n));
+    const fast = await this._tryFastLookup(n);
+    if (fast === null) return null;        // known not to exist
+    if (fast === undefined) return this._slowLookup(n);  // don't know, ask server
+    return fast;
   }
 
   async _tryFastLookup(path) {
-    if (!this.rootHash || Date.now() - this.rootHashTimestamp > this.hardTimeout) return null;
+    if (!this.rootHash || Date.now() - this.rootHashTimestamp > this.hardTimeout) return undefined;
     const parts = path.split('/').filter(Boolean);
     let metaHash = this.rootHash, contentHash = null, contentSize = null;
     for (let i = 0; i < parts.length; i++) {
       const [meta] = await this._parent._unmarshal(metaHash);
-      if (!meta || meta.type !== 'dir') return null;
+      if (!meta) return undefined;
+      if (meta.type !== 'dir') return null;
+      
       const [dir] = await this._parent._unmarshal(meta.contentHash);
+      if (!dir) return undefined;
       if (!dir?.[parts[i]]) return null;
+
       const childMetaHash = dir[parts[i]];
       const [childMeta]   = await this._parent._unmarshal(childMetaHash);
-      if (!childMeta) return null;
+      if (!childMeta) return undefined;
+      
       metaHash    = childMetaHash;
       contentHash = childMeta.contentHash;
       contentSize = childMeta.size ?? 0;
@@ -447,7 +455,9 @@ export class GritsVolume {
     const root = result.paths.find(e => e.path === '');
     if (root) { this.rootHash = root.addr; this.rootHashTimestamp = Date.now(); }
     this._startPrefetch(result.paths);
+
     const leaf = result.paths[result.paths.length - 1];
+    if (result.isPartial || leaf.path !== path) return null;
 
     const elapsed = performance.now() - startTime;
     this._parent._tracker.record('slowLookup', elapsed);
