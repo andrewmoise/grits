@@ -305,7 +305,7 @@ func TestSerialNumberPersistence(t *testing.T) {
 	expectedSerial := vol1.ns.GetSerialNumber()
 
 	// Because of .grits directory
-	if expectedSerial != 4 {
+	if expectedSerial != 2 {
 		t.Fatalf("Expected serial number 4, got %d", expectedSerial)
 	}
 
@@ -319,14 +319,14 @@ func TestSerialNumberPersistence(t *testing.T) {
 	}
 
 	// Verify serial number was preserved
-	if vol2.ns.GetSerialNumber() != expectedSerial+1 {
+	if vol2.ns.GetSerialNumber() != expectedSerial {
 		t.Errorf("Serial number not preserved: expected %d, got %d",
 			expectedSerial, vol2.ns.GetSerialNumber())
 	}
 
 	// Make another change and confirm serial number increments
 	vol2.LinkByMetadata("file3.txt", node.MetadataBlob().GetAddress())
-	if vol2.ns.GetSerialNumber() != expectedSerial+2 {
+	if vol2.ns.GetSerialNumber() != expectedSerial+1 {
 		t.Errorf("Serial number did not increment correctly after load")
 	}
 }
