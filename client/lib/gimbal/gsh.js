@@ -1,28 +1,38 @@
 // gsh.js — Gimbal Shell
 //
-// Usage:
-//   import { makeShell } from './gsh.js';
-//   const gsh = makeShell({ gg, gwm: null, serverUrl: '...', volume: '...' });
+// Architecture:
+//   GimbalShell   — one per session. Holds cwd, history, import cache, lib
+//                   paths. This is what xterm.js (or any REPL host) holds.
 //
-// Chain model: each command returns a new shell with its output as the next
-// command's input (analogous to stdin). Commands do not take path arguments
-// when they can read from input instead.
+//   GimbalProcess — one per pipeline stage. Wraps a Promise<value> and a ref
+//                   to the shell. Thenable so tools can `await previous`.
+//                   Always returned wrapped in a dispatch Proxy so that
+//                   unknown method calls auto-dispatch to lib/<name>/main.js.
 //
-//   await gsh.ls()                        — list cwd
-//   await gsh.lo('sub').ls()              — list a subdirectory
-//   await gsh.ls().filter(x => ...)       — filter a listing
-//   await gsh.lo('file.txt').cat()        — print a file
-//   await gsh.lo('file.txt').li('dest')   — copy by re-linking
-//   await gsh('hello', 'world')           — run lib/hello/main.js
+// Tool contract:
+//   lib/<name>/main.js must export:
+//     export async function invoke(shell, previous, args) { ... }
+//   - shell    : GimbalShell  (cwd, lib paths, helpers)
+//   - previous : GimbalProcess (thenable; await it to get the prior result)
+//   - args     : array of arguments the user passed
+//   - returns  : any value (or Promise<value>); the shell wraps it.
 //
-// Coercion chain (automatic, one direction):
-//   GimbalPath → GritsFile → GimbalStream → JS object
+// Coercion cascade (one direction only):
+//   GritsFile → CID string → GimbalStream → bytes → string → JS object
+//   Each tool is explicit about what it accepts and coerces forward as needed.
+//
+// Eval model:
+//   shell.eval(src) evals src in sloppy mode using an indirect eval so that
+//   `with` works. Unknown identifiers are caught by a Proxy and dispatched.
+//
+// Example:
+//   await shell.eval("cat('GritsClient.js').grep('FOR MODULE').li('out.txt')")
 
-import { GritsFile } from './GritsClient.js'; // %FOR MODULE%
-//const { GritsFile } = self.Grits;            // %FOR SERVICEWORKER%
+import { GritsFile, GritsVolume } from './GritsClient.js'; // %FOR MODULE%
+//const { GritsFile, GritsVolume } = self.Grits;           // %FOR SERVICEWORKER%
 
 // ─────────────────────────────────────────────────────────────────
-// Shell-layer output types
+// Shell-layer I/O types
 // ─────────────────────────────────────────────────────────────────
 
 // GimbalPath: an unresolved path reference within a server+volume
@@ -46,84 +56,70 @@ export class GimbalStream {
     this.contentType = response.headers.get('content-type');
     this.size        = response.headers.get('content-length')
       ? parseInt(response.headers.get('content-length')) : null;
-    this.source      = source; // GimbalPath, GritsFile, or CID string
+    this.source      = source;
   }
   get response() { return this._response; }
   async bytes()  { return this._response.arrayBuffer(); }
   async text()   { return this._response.text(); }
   async json()   { return this._response.json(); }
+  toString()     { return `[GimbalStream type=${this.contentType} size=${this.size}]`; }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Session — shared mutable state across a chain
-// ─────────────────────────────────────────────────────────────────
+// Void sentinel — returned by commands that produce no output (cd, mkdir, …)
+export const VOID = Object.freeze({ _gimbalVoid: true });
 
-class GimbalSession {
-  constructor({ gg, gwm = null, serverUrl = null, volume = null, cwd = '', mounts = {} }) {
-    this.gg        = gg;
-    this.gwm       = gwm;
-    this.serverUrl = serverUrl;
-    this.volume    = volume;
-    this.cwd       = cwd;
-    this.mounts    = mounts;
-    this.jobs      = [];
-  }
-
-  resolvePath(p) {
-    if (!p || p === '.') return this.cwd;
-    if (p.startsWith('/')) return p.replace(/^\//, '');
-    if (!this.cwd) return p;
-    return `${this.cwd}/${p}`.replace(/\/+/g, '/');
-  }
-
-  _sv() { if (!this.serverUrl) throw new Error('no serverUrl on session'); return this.serverUrl; }
-  _vo() { if (!this.volume)    throw new Error('no volume on session');    return this.volume; }
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Coercion: GimbalPath → GritsFile → GimbalStream → JS object
-// ─────────────────────────────────────────────────────────────────
-
-async function coerceToFile(value, session) {
-  if (value instanceof GritsFile)  return value;
-  if (value instanceof GimbalPath) {
-    return session.gg.lo(
-      value.serverUrl ?? session._sv(),
-      value.volume    ?? session._vo(),
-      value.path
-    );
-  }
-  if (typeof value === 'string') {
-    // Treat as a metadata CID
-    const meta = await session.gg.meta(value);
-    return new GritsFile(value, meta, session.gg);
-  }
-  throw new TypeError(`Cannot coerce ${value?.constructor?.name ?? typeof value} to GritsFile`);
-}
-
-async function coerceToStream(value, session) {
-  if (value instanceof GimbalStream) return value;
-  if (value instanceof GritsFile)
-    return new GimbalStream(await value.get(), { source: value });
-  if (value instanceof GimbalPath || typeof value === 'string') {
-    const file = await coerceToFile(value, session);
-    return new GimbalStream(await file.get(), { source: file });
-  }
-  throw new TypeError(`Cannot coerce ${value?.constructor?.name ?? typeof value} to GimbalStream`);
-}
-
-async function coerceToJS(value, session) {
-  if (value instanceof GimbalStream) return value.json();
-  if (value instanceof GritsFile)    return value.json();
-  if (value instanceof GimbalPath || typeof value === 'string')
-    return (await coerceToStream(value, session)).json();
-  return value;
+export function isVoid(v) {
+  return v === null || v === undefined || v === VOID;
 }
 
 export { coerceToFile, coerceToStream, coerceToJS };
 
 // ─────────────────────────────────────────────────────────────────
-// Module loading from source string
+// Coercion helpers
+// ─────────────────────────────────────────────────────────────────
+
+async function coerceToFile(value, shell) {
+  if (value instanceof GritsFile) return value;
+  if (value instanceof GimbalPath) {
+    const vol = shell._vol(value.serverUrl, value.volume);
+    return vol.lo(value.path);
+  }
+  if (typeof value === 'string') {
+    // Treat as a metadata CID — ask the current volume for its meta
+    const meta = await shell._currentVol().meta(value);
+    return new GritsFile(value, meta, shell._currentVol());
+  }
+  throw new TypeError(`Cannot coerce ${_tn(value)} to GritsFile`);
+}
+
+async function coerceToStream(value, shell) {
+  if (value instanceof GimbalStream) return value;
+  if (value instanceof GritsFile)
+    return new GimbalStream(await value.get(), { source: value });
+  if (value instanceof GimbalPath || typeof value === 'string') {
+    const file = await coerceToFile(value, shell);
+    return new GimbalStream(await file.get(), { source: file });
+  }
+  throw new TypeError(`Cannot coerce ${_tn(value)} to GimbalStream`);
+}
+
+async function coerceToJS(value, shell) {
+  if (isVoid(value))             return undefined;
+  if (value instanceof GimbalStream) return value.json();
+  if (value instanceof GritsFile)    return value.json();
+  if (value instanceof GimbalPath || typeof value === 'string')
+    return (await coerceToStream(value, shell)).json();
+  return value;
+}
+
+function _tn(v) {
+  if (v === null)      return 'null';
+  if (v === undefined) return 'undefined';
+  return v?.constructor?.name ?? typeof v;
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Module loading from source string (blob URL trick)
 // ─────────────────────────────────────────────────────────────────
 
 async function _evalModule(src) {
@@ -134,229 +130,193 @@ async function _evalModule(src) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Shell — immutable chain node
+// GimbalProcess — one pipeline stage
 // ─────────────────────────────────────────────────────────────────
 
-class GimbalShell {
-  constructor(session, _input = null) {
-    this._session = session;
-    this._input   = _input; // Promise<any> | null
+class GimbalProcess {
+  // _promise: Promise<any>  — resolves to this stage's output value
+  constructor(shell, promise) {
+    this._shell   = shell;
+    this._promise = Promise.resolve(promise);
   }
 
-  _next(p) { return new GimbalShell(this._session, Promise.resolve(p)); }
+  // Thenable — so tools can `await previous` and chain .then()
+  then(resolve, reject) { return this._promise.then(resolve, reject); }
+  catch(reject)         { return this._promise.catch(reject); }
 
-  // ── read input ────────────────────────────────────────────────
+  // Unwrap to a display string for the REPL
+  async _display() {
+    const value = await this._promise;
+    if (isVoid(value)) return null;
+    if (typeof value === 'string') return value;
+    if (value?.toString && value.toString !== Object.prototype.toString)
+      return value.toString();
+    return JSON.stringify(value, null, 2);
+  }
+}
 
-  async read_void() {
-    if (this._input !== null) {
-      const v = await this._input;
-      if (v !== undefined && v !== null)
-        throw new Error('read_void: unexpected input');
-    }
-    return undefined;
+// Wrap a GimbalProcess in a Proxy that auto-dispatches unknown method names
+// through the shell's lib lookup.
+function _wrapProcess(proc) {
+  return new Proxy(proc, {
+    get(target, key, receiver) {
+      // Pass through known GimbalProcess props / Promise protocol
+      if (key in target || typeof key === 'symbol') {
+        return Reflect.get(target, key, receiver);
+      }
+      // Unknown name → return a function that dispatches to lib/<key>/main.js
+      return (...args) => _wrapProcess(
+        new GimbalProcess(target._shell,
+          target._shell._dispatch(key, target, args))
+      );
+    },
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────
+// GimbalShell — one per session
+// ─────────────────────────────────────────────────────────────────
+
+export class GimbalShell {
+  constructor({ gg, serverUrl = null, volume = null, cwd = '', libPaths = null }) {
+    this.gg        = gg;                           // GritsClient instance
+    this.serverUrl = serverUrl;
+    this.volume    = volume;
+    this.cwd       = cwd;
+    this.libPaths  = libPaths ?? ['lib'];          // searched in order
+    this.history   = [];
+    this._importCache = new Map();                 // name → module exports
   }
 
-  async read_js()         {
-    if (this._input === null) throw new Error('read_js: no input');
-    return coerceToJS(await this._input, this._session);
-  }
-  async read_bytestream() {
-    if (this._input === null) throw new Error('read_bytestream: no input');
-    return coerceToStream(await this._input, this._session);
-  }
-  async read_file()       {
-    if (this._input === null) throw new Error('read_file: no input');
-    return coerceToFile(await this._input, this._session);
-  }
-  async read_path() {
-    if (this._input === null) throw new Error('read_path: no input');
-    const v = await this._input;
-    if (!(v instanceof GimbalPath))
-      throw new TypeError(`read_path: got ${v?.constructor?.name ?? typeof v}`);
-    return v;
+  // ── Volume helpers ────────────────────────────────────────────
+
+  _currentVol() {
+    return this._vol(this.serverUrl, this.volume);
   }
 
-  // ── background ───────────────────────────────────────────────
-
-  bg() {
-    if (this._input === null) return this;
-    const idx = this._session.jobs.length;
-    const job = { promise: this._input, done: false, result: undefined, error: undefined };
-    this._input.then(
-      r => { job.done = true; job.result = r; },
-      e => { job.done = true; job.error  = e; console.warn(`[gsh job ${idx} error]`, e); }
+  _vol(serverUrl, volume) {
+    return this.gg.volume(
+      serverUrl ?? this.serverUrl,
+      volume    ?? this.volume
     );
-    this._session.jobs.push(job);
-    console.log(`[${idx}] background`);
-    return new GimbalShell(this._session, null);
   }
 
-  // ── filesystem ───────────────────────────────────────────────
+  // ── Path helpers ──────────────────────────────────────────────
 
-  // ls: no args — lists input (if given) or cwd.
-  // Input must be a GritsFile of a directory, or a GimbalPath/CID resolving to one.
-  ls() {
-    return this._next((async () => {
-      if (this._input !== null) {
-        // ls of whatever was piped in
-        const file = await coerceToFile(await this._input, this._session);
-        if (!file.isDir()) throw new Error('ls: input is not a directory');
-        return file.json();
-      }
-      // ls of cwd
-      const file = await this._session.gg.lo(
-        this._session._sv(), this._session._vo(),
-        this._session.cwd || '.'
-      );
-      if (!file.isDir()) throw new Error('ls: cwd is not a directory');
-      return file.json();
-    })());
+  resolvePath(p) {
+    if (!p || p === '.') return this.cwd;
+    if (p.startsWith('/')) return p.replace(/^\/+/, '');
+    if (!this.cwd) return p;
+    return `${this.cwd}/${p}`.replace(/\/+/g, '/');
   }
 
-  // cat: no args — prints input as text.
-  cat() {
-    return this._next((async () => {
-      if (this._input === null) throw new Error('cat: no input');
-      const stream = await coerceToStream(await this._input, this._session);
-      const text   = await stream.text();
-      console.log(text);
-      return text;
-    })());
-  }
+  // ── Import a tool module, with caching ───────────────────────
 
-  // cd: updates cwd. Verifies path exists.
-  cd(path) {
-    return this._next((async () => {
-      const resolved = this._session.resolvePath(path);
-      await this._session.gg.lo(this._session._sv(), this._session._vo(), resolved);
-      this._session.cwd = resolved;
-      return new GimbalPath(resolved, this._session.serverUrl, this._session.volume);
-    })());
-  }
+  async _importTool(name) {
+    if (this._importCache.has(name)) return this._importCache.get(name);
 
-  // lo: resolve a path to a GritsFile (no network call yet for the content)
-  lo(path) {
-    return this._next((async () => {
-      return this._session.gg.lo(
-        this._session._sv(), this._session._vo(),
-        this._session.resolvePath(path)
-      );
-    })());
-  }
+    const vol = this._currentVol();
+    for (const base of this.libPaths) {
+      const tryPath = `${base}/${name}/main.js`;
+      let file;
+      try { file = await vol.lo(tryPath); }
+      catch (_) { continue; }
 
-  // li: link input into the filesystem at pathArg.
-  // GritsFile or CID string → re-link pointer only (no upload).
-  // Bytes/stream/string/object → put + mkfile + li.
-  li(pathArg) {
-    return this._next((async () => {
-      if (this._input === null) throw new Error('li: no input');
-      const dest  = this._session.resolvePath(pathArg);
-      const sv    = this._session._sv();
-      const vo    = this._session._vo();
-      const input = await this._input;
-
-      if (input instanceof GritsFile) {
-        await this._session.gg.li(input, sv, vo, dest);
-        return new GimbalPath(dest, sv, vo);
-      }
-
-      if (input instanceof GimbalPath) {
-        const file = await coerceToFile(input, this._session);
-        await this._session.gg.li(file, sv, vo, dest);
-        return new GimbalPath(dest, sv, vo);
-      }
-
-      if (typeof input === 'string' && !input.includes('/')) {
-        // Raw metadata CID string
-        await this._session.gg.li(input, sv, vo, dest);
-        return new GimbalPath(dest, sv, vo);
-      }
-
-      // Bytes — put + mkfile + li
-      let bytes;
-      if (input instanceof GimbalStream)                               bytes = await input.bytes();
-      else if (input instanceof ArrayBuffer || ArrayBuffer.isView(input)) bytes = input;
-      else if (typeof input === 'string')                              bytes = new TextEncoder().encode(input);
-      else                                                             bytes = new TextEncoder().encode(JSON.stringify(input));
-
-      const byteArray  = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-      const contentCID = await this._session.gg.put(byteArray);
-      const metaCID    = await this._session.gg.mkfile(contentCID, byteArray.byteLength);
-      await this._session.gg.li(metaCID, sv, vo, dest);
-      return new GimbalPath(dest, sv, vo);
-    })());
-  }
-
-  // ── filter ───────────────────────────────────────────────────
-
-  filter(fn) {
-    return this._next((async () => {
-      const input = await coerceToJS(await this._input, this._session);
-      if (Array.isArray(input))
-        return input.filter(fn);
-      if (typeof input === 'object' && input !== null)
-        return Object.fromEntries(Object.entries(input).filter(([k, v]) => fn(k, v)));
-      throw new TypeError('filter: input must be array or object');
-    })());
-  }
-
-  // ── app dispatch ─────────────────────────────────────────────
-  // Looks for lib/{name}/main.js in the current volume.
-
-  run(name, ...args) {
-    return this._next((async () => {
-      const { gg } = this._session;
-      const sv     = this._session._sv();
-      const vo     = this._session._vo();
-      let mod;
-
-      const mainPath = this._session.resolvePath(`lib/${name}/main.js`);
-      try {
-        const file = await gg.lo(sv, vo, mainPath);
-        const resp = await file.get();
-        if (resp.ok) mod = await _evalModule(await resp.text());
-      } catch (_) {}
-
-      if (!mod) throw new Error(`command not found: ${name}`);
-      if (typeof mod.run !== 'function')
-        throw new Error(`lib/${name}/main.js has no exported run()`);
-
-      return mod.run(new GimbalShell(this._session, this._input), ...args);
-    })());
-  }
-
-  // ── import ───────────────────────────────────────────────────
-  // Load lib/{name}/index.js and return its exports.
-  // Subsequent calls for the same name return the cached module.
-
-  import(name) {
-    return this._next((async () => {
-      if (!this._session._importCache) this._session._importCache = new Map();
-      if (this._session._importCache.has(name))
-        return this._session._importCache.get(name);
-
-      const { gg } = this._session;
-      const sv     = this._session._sv();
-      const vo     = this._session._vo();
-
-      const indexPath = this._session.resolvePath(`lib/${name}/index.js`);
-      const file = await gg.lo(sv, vo, indexPath);
       const resp = await file.get();
-      if (!resp.ok) throw new Error(`import: lib/${name}/index.js not found`);
+      if (!resp.ok) continue;
 
       const mod = await _evalModule(await resp.text());
-      this._session._importCache.set(name, mod);
+      if (typeof mod.invoke !== 'function')
+        throw new Error(`lib/${name}/main.js has no exported invoke()`);
+
+      this._importCache.set(name, mod);
       return mod;
-    })());
+    }
+
+    throw new Error(`command not found: ${name}`);
   }
 
-  // ── thenable — so `await gsh.ls()` just works ────────────────
+  // ── Dispatch: look up tool, call invoke(), return Promise ─────
 
-  then(resolve, reject) {
-    return (this._input ?? Promise.resolve(undefined)).then(resolve, reject);
+  async _dispatch(name, prevProcess, args) {
+    const mod    = await this._importTool(name);
+    const result = await mod.invoke(this, prevProcess, args);
+    return result;
   }
-  catch(reject) {
-    return (this._input ?? Promise.resolve(undefined)).catch(reject);
+
+  // ── Built-in commands (available without a lib/ lookup) ───────
+
+  // cd — changes cwd, returns VOID
+  async _builtinCd(path) {
+    const resolved = this.resolvePath(path);
+    // Verify the path exists and is a directory
+    const file = await this._currentVol().lo(resolved || '.');
+    if (!file.isDir()) throw new Error(`cd: not a directory: ${path}`);
+    this.cwd = resolved;
+    return VOID;
+  }
+
+  // ── Root process factory ──────────────────────────────────────
+
+  _rootProcess() {
+    return _wrapProcess(new GimbalProcess(this, Promise.resolve(VOID)));
+  }
+
+  // ── eval — the main REPL entry point ─────────────────────────
+  //
+  // Evals `src` in sloppy mode (so `with` works) with the root process as
+  // the implicit receiver for unknown identifiers.
+  //
+  // Returns { value, display } where display is the string to print (or null
+  // for void results).
+
+  async eval(src) {
+    this.history.push(src);
+
+    const root    = this._rootProcess();
+    const shell   = this;
+
+    // The `with`-target Proxy: known properties pass through to `root`,
+    // unknown ones return a dispatch function bound to `root`.
+    const withTarget = new Proxy(root, {
+      has(_t, _key)  { return true; },   // claim everything so `with` always asks us
+      get(target, key) {
+        // Let JS internals and known process props through
+        if (typeof key === 'symbol') return Reflect.get(target, key);
+
+        // Built-ins wired directly to the shell
+        if (key === 'cd') return (path) => _wrapProcess(
+          new GimbalProcess(shell, shell._builtinCd(path)));
+
+        // Known GimbalProcess properties (then, catch, _shell, …)
+        if (key in target) return Reflect.get(target, key);
+
+        // Unknown → dispatch through lib lookup, starting from root (void) input
+        return (...args) => _wrapProcess(
+          new GimbalProcess(shell, shell._dispatch(key, root, args)));
+      },
+    });
+
+    // Indirect eval runs in global (sloppy) scope, enabling `with`.
+    // We pass withTarget in via a closure so the evaled code can reach it.
+    let finalProcess;
+    try {
+      // The IIFE wrapper lets us inject `withTarget` without polluting globals.
+      // eslint-disable-next-line no-new-func
+      const fn = new Function('__w__', `with (__w__) { return (${src}); }`);
+      finalProcess = fn(withTarget);
+    } catch (e) {
+      throw new Error(`eval error: ${e.message}`);
+    }
+
+    // If the expression didn't produce a GimbalProcess (e.g. a bare value),
+    // wrap it so we have a uniform interface.
+    if (!(finalProcess instanceof GimbalProcess)) {
+      finalProcess = new GimbalProcess(this, Promise.resolve(finalProcess));
+    }
+
+    const display = await finalProcess._display();
+    return { value: await finalProcess, display };
   }
 }
 
@@ -364,13 +324,6 @@ class GimbalShell {
 // Entry point
 // ─────────────────────────────────────────────────────────────────
 
-export function makeShell({ gg, gwm = null, serverUrl = null, volume = null, cwd = '', mounts = {} }) {
-  const session = new GimbalSession({ gg, gwm, serverUrl, volume, cwd, mounts });
-  const root    = new GimbalShell(session, null);
-
-  // callable: gsh('cmd', ...args) → gsh.run('cmd', ...args)
-  return new Proxy(root, {
-    apply(_t, _this, [name, ...args]) { return root.run(name, ...args); },
-    get(t, k) { return t[k]; },
-  });
+export function makeShell(opts) {
+  return new GimbalShell(opts);
 }
