@@ -1,7 +1,7 @@
 // GritsClient.js — Gimbal filesystem client
 //
 // GritsClient — cache operations (local + browser cache, no server contact)
-//   gg.cacheGet(cidString)                → Response  (local or browser cache only)
+//   gg.cacheGet(cidString)                → Response | null
 //   gg.cachePut(bytes)                    → string (content CID, stored locally)
 //   gg.mkfile(cidString, size)            → string (metadata CID, stored locally)
 //   gg.mkdir(entries?)                    → string (metadata CID, stored locally)
@@ -17,6 +17,8 @@
 //   vol.mkfile(cidString, size)           → string (metadata CID, stored locally)
 //   vol.mkdir(entries?)                   → string (metadata CID, stored locally)
 //   vol.gc(cidString?)                    → void
+//   vol.resetRoot()                       → void
+//   vol.getServiceWorkerHash()            → string | undefined
 //
 // GritsFile — obtained from vol.lo():
 //   file.cid()        → string  (metadata CID — use this for li())
@@ -31,10 +33,15 @@
 //   file.json()       → Promise<any>
 //   file.ls()         → Promise<{ name: metaCID, ... }>  (dirs only)
 
-import MirrorManager from './MirrorManager.js'; // %FOR MODULE%
-//importScripts('/grits/v1/content/client/MirrorManager-sw.js'); // %FOR SERVICEWORKER%
+import MirrorManager     from './MirrorManager.js';      // %FOR MODULE%
+import HashVerifier      from './HashVerifier.js';        // %FOR MODULE%
+import PerformanceTracker from './PerformanceTracker.js'; // %FOR MODULE%
+//importScripts('/grits/v1/content/client/MirrorManager-sw.js');      // %FOR SERVICEWORKER%
+//importScripts('/grits/v1/content/client/HashVerifier-sw.js');        // %FOR SERVICEWORKER%
+//importScripts('/grits/v1/content/client/PerformanceTracker-sw.js');  // %FOR SERVICEWORKER%
 
-const DEBUG = false;
+const DEBUG       = false;
+const DEBUG_STATS = true;
 const JSON_CACHE_MAX_AGE          = 5 * 60 * 1000;
 const JSON_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 
@@ -74,7 +81,7 @@ function _assertEntriesMap(v, label) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Hashing
+// Hashing (SHA-256 → Base58 multihash, matching server format)
 // ─────────────────────────────────────────────────────────────────
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
@@ -166,11 +173,13 @@ export class GritsVolume {
   constructor(serverUrl, volume, parent) {
     this._serverUrl = serverUrl.replace(/\/$/, '');
     this._volume    = volume;
-    this._parent    = parent; // GritsClient (for shared caches)
+    this._parent    = parent; // GritsClient
 
     this.rootHash          = null;
     this.rootHashTimestamp = 0;
     this.hardTimeout       = 5 * 60_000;
+
+    this.serviceWorkerHash = undefined;
 
     this._inFlightPrefetches = new Map();
     this._prefetchQueue      = [];
@@ -213,29 +222,32 @@ export class GritsVolume {
   link(fileOrCID, path) { return this.li(fileOrCID, path); }
 
   // ── Get ───────────────────────────────────────────────────────
-  // Checks: localCache → blobCache → server
 
   async get(cid) {
     _assertString(cid, 'get');
+    const startTime = performance.now();
 
-    // local synthetic cache
     const local = this._parent._local.get(cid);
     if (local) return new Response(local, { status: 200 });
 
-    // browser blob cache
     const cached = await this._parent._blobCacheGet(cid);
-    if (cached) return cached;
+    if (cached) {
+      this._parent._tracker.record('blobCacheHit', performance.now() - startTime);
+      return cached;
+    }
 
-    // server
     const resp = await this._fetchBlob(cid);
-    if (resp.ok) { await this._parent._blobCachePut(cid, resp.clone()); return resp; }
+    if (resp.ok) {
+      this._parent._tracker.record('blobCacheMiss', performance.now() - startTime);
+      await this._parent._blobCachePut(cid, resp.clone());
+      return resp;
+    }
     throw new Error(`get: CID ${cid} not found on ${this._serverUrl}/${this._volume}`);
   }
 
   g(cid) { return this.get(cid); }
 
   // ── Put ───────────────────────────────────────────────────────
-  // Uploads to server + stores in blobCache. Returns content CID string.
 
   async put(bytes) {
     _assertBytes(bytes, 'put');
@@ -266,9 +278,17 @@ export class GritsVolume {
 
   // ── mkfile / mkdir / gc — convenience wrappers ───────────────
 
-  mkfile(cid, size)  { return this._parent.mkfile(cid, size); }
-  mkdir(entries)     { return this._parent.mkdir(entries); }
-  gc(cid)            { return this._parent.gc(cid); }
+  mkfile(cid, size) { return this._parent.mkfile(cid, size); }
+  mkdir(entries)    { return this._parent.mkdir(entries); }
+  gc(cid)           { return this._parent.gc(cid); }
+
+  // ── Misc ──────────────────────────────────────────────────────
+
+  /** Reset the cached root so the next lookup forces a server round-trip. */
+  resetRoot() { this.rootHashTimestamp = 0; }
+
+  /** Return the last seen service worker hash for this volume, or undefined. */
+  getServiceWorkerHash() { return this.serviceWorkerHash; }
 
   // ── Internal: server communication ───────────────────────────
 
@@ -294,7 +314,19 @@ export class GritsVolume {
   }
 
   async _fetchBlob(cid) {
-    return this.mirrorManager.fetchBlob(cid, null);
+    const response = await this.mirrorManager.fetchBlob(cid, null);
+    if (response.ok) {
+      const result = await this._parent._verifier.verify(response, cid);
+      if (!result.ok) {
+        console.error(`[GritsVolume] Hash verification FAILED for ${cid}: ${result.error}`);
+        this._parent._tracker.count('hashVerifyFail');
+        return new Response(
+          `Hash verification failed: ${result.error}`,
+          { status: 502, headers: { 'Content-Type': 'text/plain' } }
+        );
+      }
+    }
+    return response;
   }
 
   async _fetchMeta(metaCID) {
@@ -306,7 +338,6 @@ export class GritsVolume {
     return data;
   }
 
-  // Upload locally-cached blobs to server, content before metadata
   async _ensureOnServer(cid, visited = new Set()) {
     if (visited.has(cid)) return;
     visited.add(cid);
@@ -353,19 +384,31 @@ export class GritsVolume {
   }
 
   async _slowLookup(path) {
+    const startTime = performance.now();
     const url  = `${this._serverUrl}/grits/v1/lookup/${this._volume}`;
     const resp = await fetch(url, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(path),
     });
     if (!resp.ok) return null;
+
+    const swHash = resp.headers.get('X-Grits-Service-Worker-Hash');
+    if (swHash) this.serviceWorkerHash = swHash;
+
     const result = await resp.json();
     if (!result.paths?.length) return null;
     const root = result.paths.find(e => e.path === '');
     if (root) { this.rootHash = root.addr; this.rootHashTimestamp = Date.now(); }
     this._startPrefetch(result.paths);
     const leaf = result.paths[result.paths.length - 1];
+
+    const elapsed = performance.now() - startTime;
+    this._parent._tracker.record('slowLookup', elapsed);
+    this._parent._tracker.trackContentUrl(path, elapsed);
+
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
   }
+
+  // ── Internal: prefetch ────────────────────────────────────────
 
   _startPrefetch(paths) {
     for (const e of paths) {
@@ -386,10 +429,14 @@ export class GritsVolume {
           if (!resp.ok) continue;
           const data = await resp.json();
           this._parent._jsonCache.set(hash, { data, lastAccessed: Date.now() });
+          this._parent._tracker.count('prefetchSuccess');
           if (data.type === 'dir' && !this._parent._jsonCache.has(data.contentHash)) {
             const r2 = await this._fetchBlob(data.contentHash);
-            if (r2.ok) this._parent._jsonCache.set(data.contentHash,
-              { data: await r2.json(), lastAccessed: Date.now() });
+            if (r2.ok) {
+              this._parent._jsonCache.set(data.contentHash,
+                { data: await r2.json(), lastAccessed: Date.now() });
+              this._parent._tracker.count('prefetchSuccess');
+            }
           }
         }
       } catch (e) { DEBUG && console.warn(`[prefetch] ${hash}:`, e.message); }
@@ -408,13 +455,27 @@ export default class GritsClient {
   constructor() {
     this._local     = new Map(); // cid → Uint8Array  (synthesized, pending upload)
     this._jsonCache = new Map(); // cid → { data, lastAccessed }
-    this._blobCache = null;      // browser Cache API (confirmed server content)
+    this._blobCache = null;      // browser Cache API
     this._volumes   = new Map(); // volKey → GritsVolume
+
+    this._verifier = new HashVerifier({ debug: DEBUG });
+    this._tracker  = new PerformanceTracker({
+      enabled:      DEBUG_STATS,
+      interval:     10_000,
+      mirrorStatsFn: () => this._collectMirrorStats(),
+    });
+
     this._initBlobCache();
     this._cleanupTimer = setInterval(() => this._cleanupJsonCache(), JSON_CACHE_CLEANUP_INTERVAL);
   }
 
-  destroy() { clearInterval(this._cleanupTimer); }
+  destroy() {
+    clearInterval(this._cleanupTimer);
+    this._tracker.destroy();
+  }
+
+  /** Access the performance tracker (for custom recording or snapshots). */
+  get tracker() { return this._tracker; }
 
   // ── Volume registration ───────────────────────────────────────
 
@@ -428,20 +489,17 @@ export default class GritsClient {
   }
 
   // ── cacheGet ─────────────────────────────────────────────────
-  // Read from local or browser cache only. No server contact.
+  // Read from local or browser cache only. Returns null if not found.
 
   async cacheGet(cid) {
     _assertString(cid, 'cacheGet');
     const local = this._local.get(cid);
     if (local) return new Response(local, { status: 200 });
-    const cached = await this._blobCacheGet(cid);
-    if (cached) return cached;
-    return null; // not found — caller can decide what to do
+    return this._blobCacheGet(cid);
   }
 
   // ── cachePut ─────────────────────────────────────────────────
-  // Store bytes in local cache only. No server contact.
-  // Returns content CID string.
+  // Store bytes in local cache only. Returns content CID string.
 
   async cachePut(bytes) {
     _assertBytes(bytes, 'cachePut');
@@ -514,7 +572,6 @@ export default class GritsClient {
   }
 
   // ── gc ────────────────────────────────────────────────────────
-  // Clear local synthetic cache. gc() clears all, gc(cid) removes one.
 
   gc(cid = null) {
     if (cid !== null) _assertString(cid, 'gc');
@@ -549,6 +606,19 @@ export default class GritsClient {
 
   async _blobCachePut(cid, resp) {
     if (this._blobCache && resp.ok) this._blobCache.put(cid, resp).catch(() => {});
+  }
+
+  // ── Internal: aggregate mirror stats across all volumes ───────
+
+  _collectMirrorStats() {
+    const all = [];
+    for (const vol of this._volumes.values()) {
+      try {
+        all.push(...vol.mirrorManager.getMirrorStats());
+        vol.mirrorManager.resetStats();
+      } catch (_) {}
+    }
+    return all;
   }
 }
 
