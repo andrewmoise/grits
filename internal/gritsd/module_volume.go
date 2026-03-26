@@ -6,6 +6,7 @@ import (
 	"grits/internal/grits"
 	"log"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -93,9 +94,13 @@ func (wv *LocalVolume) Start() error {
 		wv.volumeConfig.ReadOnly = false
 		defer func() { wv.volumeConfig.ReadOnly = prevReadOnly }()
 
-		localPath := wv.server.Config.ServerPath(wv.volumeConfig.BootstrapFrom)
-		log.Printf("Volume %q: bootstrapping from %s", wv.name, localPath)
-		if err := ImportLocalDir(wv, localPath, wv.name); err != nil {
+		localPath := wv.volumeConfig.BootstrapFrom
+		if !filepath.IsAbs(localPath) {
+			localPath = wv.server.Config.ServerPath(localPath)
+		}
+
+		log.Printf("Volume %q: bootstrapping from %s", wv.name, wv.volumeConfig.BootstrapFrom)
+		if err := ImportLocalDir(wv, localPath, ""); err != nil {
 			return fmt.Errorf("volume %q: bootstrap from %s failed: %w", wv.name, localPath, err)
 		}
 		log.Printf("Volume %q: bootstrap complete", wv.name)
