@@ -99,6 +99,36 @@ func (bs *LocalBlobStore) Stop() error {
 	return nil
 }
 
+// blobToPath converts a BlobAddr to its storage path with subdirectory sharding.
+// e.g. QmVhvSFKf... -> storageDir/QmV/h/vSFKf...
+func (bs *LocalBlobStore) blobToPath(addr BlobAddr) string {
+	s := string(addr)
+	// Expected format is "Qm" + at least 2 more chars; be defensive
+	if len(s) < 5 {
+		return filepath.Join(bs.storageDir, s)
+	}
+	// s[0:2] == "Qm", s[2] is first subdir char, s[3] is second subdir char
+	dir1 := s[0:3] // "QmV"
+	dir2 := s[3:4] // "h"
+	rest := s[4:]  // remainder
+	return filepath.Join(bs.storageDir, dir1, dir2, rest)
+}
+
+// tryRmdirParents attempts to remove shard subdirectories if they're now empty.
+// Failures are silently ignored — the dirs will just persist until next cleanup.
+func (bs *LocalBlobStore) tryRmdirParents(blobPath string) {
+	dir := filepath.Dir(blobPath)
+	for i := 0; i < 2; i++ { // at most 2 levels (the "h" and "QmV" dirs)
+		if dir == bs.storageDir {
+			break
+		}
+		if err := os.Remove(dir); err != nil {
+			break // not empty, or some other error — stop
+		}
+		dir = filepath.Dir(dir)
+	}
+}
+
 func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
@@ -113,7 +143,9 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 				return fmt.Errorf("can't relativize %s: %v", path, err)
 			}
 
-			blobAddr, err := NewBlobAddrFromString(relativePath)
+			// Reconstruct the blob address by stripping path separators
+			blobAddrStr := strings.ReplaceAll(relativePath, string(filepath.Separator), "")
+			blobAddr, err := NewBlobAddrFromString(blobAddrStr)
 			if err != nil {
 				log.Printf("File %s seems not to be a blob. Skipping...\n", path)
 				return nil
@@ -126,7 +158,7 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 					return err // continue scanning other files even if one fails
 				}
 
-				if string(computedBlobAddr) != relativePath {
+				if string(computedBlobAddr) != blobAddrStr {
 					return fmt.Errorf("failure to verify %s", path)
 				}
 			}
@@ -241,13 +273,11 @@ func (bs *LocalBlobStore) AddReader(reader io.Reader) (CachedFile, error) {
 	}
 
 	// We don't have this blob, move temp file to final location
-	destPath := filepath.Join(bs.storageDir, string(blobAddr))
-
-	// Ensure the directory exists
+	destPath := bs.blobToPath(blobAddr)
 	destDir := filepath.Dir(destPath)
 	if err := os.MkdirAll(destDir, 0755); err != nil {
 		os.Remove(tempPath)
-		return nil, fmt.Errorf("failed to create destination directory: %w", err)
+		return nil, fmt.Errorf("failed to create shard directories: %w", err)
 	}
 
 	// Move the file to its final location
@@ -325,7 +355,10 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 	}
 
 	// Since the data block does not exist, store it
-	destPath := filepath.Join(bs.storageDir, string(blobAddr))
+	destPath := bs.blobToPath(blobAddr)
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create shard directories: %w", err)
+	}
 
 	if err := os.WriteFile(destPath, data, 0644); err != nil {
 		return nil, fmt.Errorf("error writing data block to store: %v", err)
@@ -411,6 +444,7 @@ func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 			delete(bs.files, cachedFile.Address)
 			bs.mtx.Unlock()
 			os.Remove(cachedFile.Path)
+			bs.tryRmdirParents(cachedFile.Path)
 			return
 		}
 
@@ -428,6 +462,7 @@ func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 			if err != nil {
 				log.Printf("Warning: couldn't delete file %s from cache: %v", cachedFile.Path, err)
 			}
+			bs.tryRmdirParents(cachedFile.Path)
 			return
 		}
 		// Otherwise, keep it until expiration - the worker will clean it up
@@ -542,14 +577,15 @@ func (bs *LocalBlobStore) EvictOldFiles() {
 			return nil
 		}
 
-		// Get the blob address from the file path
+		// Get the blob address from the file path, stripping shard separators
 		relativePath, err := filepath.Rel(bs.storageDir, path)
 		if err != nil {
 			log.Printf("Can't relativize %s", path)
 			return nil // Skip this file
 		}
 
-		blobAddr, err := NewBlobAddrFromString(relativePath)
+		blobAddrStr := strings.ReplaceAll(relativePath, string(filepath.Separator), "")
+		blobAddr, err := NewBlobAddrFromString(blobAddrStr)
 		if err != nil {
 			log.Printf("Found strange blob %s during cleanup", path)
 			return nil // Not a valid blob, skip
@@ -594,6 +630,7 @@ func (bs *LocalBlobStore) EvictOldFiles() {
 			if err != nil {
 				log.Printf("Warning: couldn't delete expired file %s: %v", path, err)
 			}
+			bs.tryRmdirParents(path)
 		}
 
 		return nil
