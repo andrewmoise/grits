@@ -952,21 +952,26 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	defer leafNode.Release()
 
 	if leafNode.Metadata().Type == grits.GNodeTypeDirectory {
-		// We have a directory, try index.html instead
-		// FIXME more flexible
-		indexPath := strings.TrimRight(path, "/") + "/index.html"
-		indexNode, err := volume.LookupNode(indexPath)
-		if err != nil {
-			http.Error(w, "File not found", http.StatusNotFound)
-			return
+		accept := r.Header.Get("Accept")
+		if strings.Contains(accept, "application/json") {
+			// Client wants the raw directory listing — fall through and serve
+			// the directory's content blob (which is already JSON).
+		} else {
+			// Browser request — try to serve index.html instead.
+			indexPath := strings.TrimRight(path, "/") + "/index.html"
+			indexNode, err := volume.LookupNode(indexPath)
+			if err != nil {
+				http.Error(w, "File not found", http.StatusNotFound)
+				return
+			}
+			path = indexPath
+			leafNode = indexNode
+			lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
+				Path: indexPath,
+				Addr: indexNode.MetadataBlob().GetAddress(),
+			})
 		}
-		path = indexPath
-		leafNode = indexNode
-		lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
-			Path: indexPath,
-			Addr: indexNode.MetadataBlob().GetAddress(),
-		})
-	}
+ 	}
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Building path metadata\n")
 

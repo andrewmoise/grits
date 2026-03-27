@@ -176,6 +176,19 @@ export class GritsFile {
   async text() { return (await this.get()).text(); }
   async json() { return this._volume.json(this._meta.contentHash); }
 
+  // If this is a directory, fetch the directory listing and return a GritsFile
+  // for its index.html entry. Throws if not a directory or no index.html exists.
+  async indexHtml() {
+    if (!this.isDir())
+      throw new Error('indexHtml: not a directory');
+    const listing = await this.json();
+    const indexCID = listing['index.html'];
+    if (!indexCID)
+      throw new Error('indexHtml: no index.html in this directory');
+    const meta = await this._volume.meta(indexCID);
+    return new GritsFile(indexCID, meta, this._volume);
+  }
+
   toString() {
     return `GritsFile(${this._meta.type}, ${this._meta.size}b, cid=${this._metaCID.slice(0,8)}…)`;
   }
@@ -434,7 +447,6 @@ export class GritsVolume {
       metaHash    = childMetaHash;
       contentHash = childMeta.contentHash;
       contentSize = childMeta.size ?? 0;
-      if (i === parts.length - 1 && childMeta.type === 'dir') parts.push('index.html');
     }
     return { metadataHash: metaHash, contentHash, contentSize };
   }
