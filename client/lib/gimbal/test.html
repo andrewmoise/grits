@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>gsh test harness</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d1117; color: #e6edf3;
+      font-family: 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
+      font-size: 13px; display: flex; flex-direction: column;
+      height: 100vh; padding: 16px; gap: 12px;
+    }
+    h1 { font-size: 14px; color: #58a6ff; font-weight: normal;
+         letter-spacing: 0.05em; border-bottom: 1px solid #21262d; padding-bottom: 8px; }
+    #config { display: flex; gap: 8px; flex-wrap: wrap; }
+    #config input {
+      background: #161b22; border: 1px solid #30363d; color: #e6edf3;
+      padding: 4px 8px; border-radius: 4px; font-family: inherit;
+      font-size: 12px; flex: 1; min-width: 180px;
+    }
+    #config input::placeholder { color: #484f58; }
+    .btn {
+      background: #21262d; border: 1px solid #30363d; color: #58a6ff;
+      padding: 4px 12px; border-radius: 4px; cursor: pointer;
+      font-family: inherit; font-size: 12px;
+    }
+    .btn:hover    { background: #30363d; }
+    .btn:disabled { color: #484f58; cursor: default; }
+    #run-btn {
+      background: #1f6feb; border: none; color: #fff;
+      padding: 6px 14px; border-radius: 4px; cursor: pointer;
+      font-family: inherit; font-size: 13px;
+    }
+    #run-btn:hover    { background: #388bfd; }
+    #run-btn:disabled { background: #21262d; color: #484f58; cursor: default; }
+    #output {
+      flex: 1; overflow-y: auto; background: #0d1117;
+      border: 1px solid #21262d; border-radius: 4px; padding: 10px;
+      display: flex; flex-direction: column; gap: 4px;
+    }
+    .entry  { display: flex; flex-direction: column; gap: 2px;
+              border-bottom: 1px solid #161b22; padding-bottom: 4px; }
+    .prompt { color: #3fb950; }
+    .prompt .cwd { color: #58a6ff; }
+    .result { color: #e6edf3; white-space: pre-wrap; padding-left: 16px; }
+    .error  { color: #f85149; white-space: pre-wrap; padding-left: 16px; }
+    .info   { color: #8b949e; font-style: italic; }
+    .void   { color: #484f58; font-style: italic; padding-left: 16px; }
+    #input-row { display: flex; gap: 8px; align-items: center; }
+    .prompt-label      { color: #3fb950; white-space: nowrap; }
+    .prompt-label .cwd { color: #58a6ff; }
+    #repl-input {
+      flex: 1; background: #161b22; border: 1px solid #30363d;
+      color: #e6edf3; padding: 6px 10px; border-radius: 4px;
+      font-family: inherit; font-size: 13px; outline: none;
+    }
+    #repl-input:focus    { border-color: #58a6ff; }
+    #repl-input:disabled { color: #484f58; }
+  </style>
+</head>
+<body>
+
+<h1>▸ gsh — gimbal shell test harness</h1>
+
+<div id="config">
+  <input id="cfg-server"  placeholder="serverUrl  e.g. https://test.melanic.org">
+  <input id="cfg-volume"  placeholder="volume  e.g. client" value="client">
+  <input id="cfg-liburl"  placeholder="libUrl  e.g. https://test.melanic.org/grits/v1/content/client/lib">
+  <input id="cfg-cwd"     placeholder="initial cwd (blank = root)">
+  <button class="btn" id="init-btn">Init shell</button>
+  <button class="btn" id="test-btn" disabled>Run tests</button>
+</div>
+
+<div id="output">
+  <div class="info">Configure the fields above, then click Init shell.</div>
+</div>
+
+<div id="input-row">
+  <span class="prompt-label">gsh <span class="cwd" id="cwd-label">/</span> $</span>
+  <input id="repl-input" placeholder="enter a shell expression…" disabled autocomplete="off" spellcheck="false">
+  <button id="run-btn" disabled>Run</button>
+</div>
+
+<script type="module">
+  import GritsClient   from './GritsClient.js';
+  import { makeShell } from './gsh.js';
+
+  let shell      = null;
+  let historyIdx = -1;
+
+  const output    = document.getElementById('output');
+  const replInput = document.getElementById('repl-input');
+  const runBtn    = document.getElementById('run-btn');
+  const testBtn   = document.getElementById('test-btn');
+  const cwdLabel  = document.getElementById('cwd-label');
+
+  function _esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function logInfo(msg) {
+    const el = document.createElement('div');
+    el.className = 'info';
+    el.textContent = msg;
+    output.appendChild(el);
+    output.scrollTop = output.scrollHeight;
+  }
+
+  function logCmd(cwdAtTime, src, display, isError) {
+    const entry = document.createElement('div');
+    entry.className = 'entry';
+
+    const p = document.createElement('div');
+    p.className = 'prompt';
+    p.innerHTML = `<span class="cwd">${_esc(cwdAtTime || '/')}</span> $ ${_esc(src)}`;
+    entry.appendChild(p);
+
+    const r = document.createElement('div');
+    if (isError)           { r.className = 'error';  r.textContent = display; }
+    else if (display===null){ r.className = 'void';   r.textContent = '(void)'; }
+    else                   { r.className = 'result'; r.textContent = display; }
+    entry.appendChild(r);
+
+    output.appendChild(entry);
+    output.scrollTop = output.scrollHeight;
+  }
+
+  function syncCwd() { if (shell) cwdLabel.textContent = shell.cwd || '/'; }
+
+  async function runExpr(src) {
+    if (!shell || !src.trim()) return;
+    const cwdAtTime = shell.cwd;
+    try {
+      const { display } = await shell.eval(src);
+      logCmd(cwdAtTime, src, display, false);
+    } catch (e) {
+      logCmd(cwdAtTime, src, e.message ?? String(e), true);
+      console.error(e);
+    }
+    syncCwd();
+  }
+
+  // ── Init ─────────────────────────────────────────────────────
+
+  document.getElementById('init-btn').addEventListener('click', () => {
+    const serverUrl = document.getElementById('cfg-server').value.trim();
+    const volume    = document.getElementById('cfg-volume').value.trim();
+    const libUrl    = document.getElementById('cfg-liburl').value.trim();
+    const cwd       = document.getElementById('cfg-cwd').value.trim();
+
+    if (!serverUrl) { logInfo('serverUrl is required'); return; }
+    if (!volume)    { logInfo('volume is required');    return; }
+
+    // libUrl is optional — if omitted, tool dispatch will fail with a clear
+    // error message, which is fine for testing cd, cid(), etc.
+    const libUrls = libUrl ? [libUrl] : [];
+
+    const gg = new GritsClient();
+    shell = makeShell({ gg, serverUrl, volume, cwd, libUrls });
+
+    output.innerHTML = '';
+    logInfo(`shell ready`);
+    logInfo(`  server  = ${serverUrl}`);
+    logInfo(`  volume  = ${volume}`);
+    logInfo(`  libUrls = ${libUrls.length ? libUrls.join(', ') : '(none)'}`);
+    logInfo(`  cwd     = "${cwd || '/'}"`);
+
+    replInput.disabled = false;
+    runBtn.disabled    = false;
+    testBtn.disabled   = false;
+    syncCwd();
+    replInput.focus();
+  });
+
+  // ── REPL ─────────────────────────────────────────────────────
+
+  runBtn.addEventListener('click', () => {
+    const src = replInput.value.trim();
+    if (!src) return;
+    replInput.value = ''; historyIdx = -1;
+    runExpr(src);
+  });
+
+  replInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      const src = replInput.value.trim();
+      if (!src) return;
+      replInput.value = ''; historyIdx = -1;
+      runExpr(src); return;
+    }
+    if (!shell) return;
+    const h = shell.history;
+    if (e.key === 'ArrowUp') {
+      if (!h.length) return;
+      historyIdx = Math.min(historyIdx + 1, h.length - 1);
+      replInput.value = h[h.length - 1 - historyIdx];
+      e.preventDefault();
+    }
+    if (e.key === 'ArrowDown') {
+      if (historyIdx <= 0) { historyIdx = -1; replInput.value = ''; return; }
+      historyIdx--;
+      replInput.value = h[h.length - 1 - historyIdx];
+      e.preventDefault();
+    }
+  });
+
+  // ── Automated tests ───────────────────────────────────────────
+  // Tests run in order; side effects (cd) persist between them intentionally.
+
+  const TESTS = [
+    // Basic reads
+    `cat('lib/grits/GritsClient.js')`,
+    `cat('lib/grits/GritsClient.js').grep('export')`,
+    `cat('lib/grits/GritsClient.js').grep('function', { ignoreCase: true })`,
+    `cat('lib/grits/GritsClient.js').grep('//', { invert: true })`,
+    // echo
+    `echo('hello\\nworld\\nhello again')`,
+    `echo('hello\\nworld\\nhello again').grep('hello')`,
+    // lo (handle only, no content)
+    `lo('lib/grits/GritsClient.js')`,
+    // wget
+    `wget('https://example.com')`,
+    `wget('https://example.com').grep('href')`,
+    // cd + relative cat
+    `cd('lib/grits')`,
+    `cat('GritsClient.js').grep('GritsVolume')`,
+    `cd('/')`,
+    // write and read back
+    `mkfile('hello from gsh').li('test-output.txt')`,
+    `cat('test-output.txt')`,
+    // copy a pointer
+    `lo('lib/grits/GritsClient.js').li('GritsClient-copy.js')`,
+    // expected errors
+    `cat('does/not/exist.txt')`,
+    `grep('pattern')`,
+    `li('dest.txt')`,
+  ];
+
+  testBtn.addEventListener('click', async () => {
+    if (!shell) return;
+    testBtn.disabled = true;
+    shell.cwd = ''; syncCwd();
+    logInfo('── running automated tests ──');
+    for (const src of TESTS) {
+      await runExpr(src);
+      await new Promise(r => setTimeout(r, 80));
+    }
+    logInfo('── tests complete ──');
+    testBtn.disabled = false;
+  });
+</script>
+</body>
+</html>
