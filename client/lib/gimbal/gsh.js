@@ -1,32 +1,47 @@
 // gsh.js — Gimbal Shell
 //
 // Architecture:
-//   GimbalShell   — one per session. Holds cwd, history, lib URLs, import
-//                   cache. This is what xterm.js (or any REPL host) holds.
+//   GimbalShell — one per session. Holds cwd, history, lib URLs, import
+//                 cache. This is what xterm.js (or any REPL host) holds.
 //
-//   GimbalProcess — one per pipeline stage. Wraps a Promise<value> and a ref
-//                   to the shell. Thenable so tools can `await previous`.
-//                   Always returned wrapped in a dispatch Proxy so that
-//                   unknown method calls auto-dispatch to lib/<n>/main.js.
+//   Result      — one per pipeline stage. Wraps a Promise<value> and a ref
+//                 to the shell. Thenable so tools can `await previous`.
+//                 Always returned wrapped in a dispatch Proxy so that unknown
+//                 method calls auto-dispatch to lib/<n>/main.js.
+//
+//                 Terminal methods (cross the boundary to plain JS values):
+//                   .toText()     → Promise<string>
+//                   .toBytes()    → Promise<Uint8Array>
+//                   .toResponse() → Promise<Response>
+//                   .toFile()     → Promise<GritsFile>
+//                   .toCID()      → Promise<GritsCID>
+//                   .toJS()       → Promise<any>
+//
+//                 .toString() returns a non-blocking descriptive string,
+//                 safe for use in string contexts without triggering I/O.
+//
+//   Path        — an unresolved path reference within a server+volume.
+//                 Coerces to GritsFile on demand.
 //
 // Tool contract:
-//   Each tool is a standard ES module served from a known URL. It must export:
+//   Each tool is a standard ES module served from a known URL. It exports:
 //     export async function invoke(shell, previous, args) { ... }
-//   - shell    : GimbalShell  (cwd, lib URLs, coercion helpers, vol access)
-//   - previous : GimbalProcess (thenable; await it to get the prior result)
-//   - args     : array of arguments the user passed
-//   - returns  : any value (or Promise<value>); the shell wraps it.
+//   - shell    : GimbalShell
+//   - previous : Result (thenable)
+//   - args     : array of user-supplied arguments
+//   - returns  : any value or Promise<value>
 //
-//   Tools are loaded via the browser's native import() from libUrls, so their
-//   own relative imports resolve normally. The browser module cache handles
-//   deduplication — a tool at a given URL is only fetched once per page load.
+//   Options convention: if the last argument is a plain object it is treated
+//   as an options map. Positional args occupy all slots before it.
+//
+//   Help convention: export const help = '...' for usage text.
+//   Calling a tool with ({help: true}) as the only arg prints that string.
 //
 // Tool discovery:
-//   shell.libUrls is an array of base URLs searched in order, e.g.:
-//     ['https://test.melanic.org/grits/v1/content/client/lib']
-//   For a command named 'grep', it tries:
-//     https://…/lib/grep/main.js
-//   The first URL that successfully imports and exports invoke() wins.
+//   shell.libUrls is an array of base URLs searched in order.
+//   For command 'grep': tries <base>/grep/main.js, first match wins.
+//   The browser's native import() handles caching and relative imports inside
+//   tool modules automatically.
 //
 // Type cascade (one direction only):
 //   GritsCID → GritsFile → Response → ArrayBuffer → string → JS object
@@ -34,6 +49,10 @@
 // Eval model:
 //   shell.eval(src) evals src via new Function() (sloppy mode) with a
 //   `with` Proxy so unknown identifiers dispatch to lib/<n>/main.js.
+//   Special names wired into the eval context:
+//     cd(path)    — built-in, updates cwd, returns void Result
+//     cid(addr)   — constructs a GritsCID
+//     $(result)   — unwraps a Result to its raw Promise<value>
 //
 // Example:
 //   const shell = makeShell({
@@ -41,8 +60,11 @@
 //     libUrls: ['https://test.melanic.org/grits/v1/content/client/lib'],
 //   });
 //   await shell.eval("cat('lib/grits/GritsClient.js').grep('export')")
+//
+//   // Outside eval, use terminal methods:
+//   const text = await shell.cat('lib/grits/GritsClient.js').toText()
 
-import { GritsFile } from './GritsClient.js';
+import { GritsFile } from '../grits/GritsClient.js';
 
 // ─────────────────────────────────────────────────────────────────
 // GritsCID — explicit CID wrapper, top of the type cascade
@@ -51,29 +73,31 @@ import { GritsFile } from './GritsClient.js';
 export class GritsCID {
   constructor(addr) {
     if (typeof addr !== 'string' || !addr)
-      throw new TypeError(`GritsCID: addr must be a non-empty string, got ${_tn(addr)}`);
+      throw new TypeError(`GritsCID: expected non-empty string, got ${_tn(addr)}`);
     this.addr = addr;
   }
-  toString() { return this.addr; }
+  toString() { return `GritsCID(${this.addr})`; }
+  valueOf()  { return this.addr; } // so == comparisons work naturally
 }
 
-// Convenience constructor exposed in the shell eval context as cid('Qm...')
+// Convenience constructor, available as cid('Qm...') inside shell.eval()
 export function cid(addr) { return new GritsCID(addr); }
 
 // ─────────────────────────────────────────────────────────────────
-// GimbalPath — unresolved path reference within a server+volume
+// Path — unresolved path reference within a server+volume
 // ─────────────────────────────────────────────────────────────────
 
-export class GimbalPath {
+export class Path {
   constructor(path, serverUrl = null, volume = null) {
     this.path      = path;
     this.serverUrl = serverUrl;
     this.volume    = volume;
   }
   toString() {
-    if (this.serverUrl && this.volume) return `${this.serverUrl}/${this.volume}:${this.path}`;
-    if (this.volume) return `${this.volume}:${this.path}`;
-    return this.path;
+    if (this.serverUrl && this.volume)
+      return `Path(${this.serverUrl}/${this.volume}:${this.path})`;
+    if (this.volume) return `Path(${this.volume}:${this.path})`;
+    return `Path(${this.path})`;
   }
 }
 
@@ -81,7 +105,7 @@ export class GimbalPath {
 // Void sentinel — returned by commands with no meaningful output
 // ─────────────────────────────────────────────────────────────────
 
-export const VOID = Object.freeze({ _gimbalVoid: true });
+export const VOID = Object.freeze({ _gimbalVoid: true, toString: () => '(void)' });
 export function isVoid(v) { return v === null || v === undefined || v === VOID; }
 
 // ─────────────────────────────────────────────────────────────────
@@ -94,22 +118,28 @@ function _tn(v) {
   return v?.constructor?.name ?? typeof v;
 }
 
+function _isPlainObject(v) {
+  if (!v || typeof v !== 'object') return false;
+  const p = Object.getPrototypeOf(v);
+  return p === Object.prototype || p === null;
+}
+
 // ─────────────────────────────────────────────────────────────────
 // Coercion cascade
 // GritsCID → GritsFile → Response → ArrayBuffer → string → JS object
 //
-// Each step accepts a GimbalProcess and awaits it first, so tools can
-// pass process arguments directly without manually awaiting them.
+// Each step accepts a Result and awaits it first, so tools can pass
+// process arguments directly without manually awaiting.
 // ─────────────────────────────────────────────────────────────────
 
 export async function coerceToFile(value, shell) {
-  if (value instanceof GimbalProcess) value = await value;
-  if (value instanceof GritsFile)     return value;
+  if (value instanceof Result)    value = await value;
+  if (value instanceof GritsFile) return value;
   if (value instanceof GritsCID) {
     const meta = await shell._currentVol().meta(value.addr);
     return new GritsFile(value.addr, meta, shell._currentVol());
   }
-  if (value instanceof GimbalPath)
+  if (value instanceof Path)
     return shell._vol(value.serverUrl, value.volume).lo(value.path);
   if (typeof value === 'string')
     return shell._currentVol().lo(shell.resolvePath(value));
@@ -117,85 +147,127 @@ export async function coerceToFile(value, shell) {
 }
 
 export async function coerceToResponse(value, shell) {
-  if (value instanceof GimbalProcess) value = await value;
-  if (value instanceof Response)      return value;
-  if (value instanceof GritsFile)     return value.get();
+  if (value instanceof Result)   value = await value;
+  if (value instanceof Response) return value;
+  if (value instanceof GritsFile) return value.get();
   return (await coerceToFile(value, shell)).get();
 }
 
 export async function coerceToBytes(value, shell) {
-  if (value instanceof GimbalProcess) value = await value;
-  if (value instanceof ArrayBuffer)   return value;
-  if (ArrayBuffer.isView(value))      return value.buffer;
-  return (await coerceToResponse(value, shell)).arrayBuffer();
+  if (value instanceof Result)      value = await value;
+  if (value instanceof Uint8Array)  return value;
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (ArrayBuffer.isView(value))    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  const buf = await (await coerceToResponse(value, shell)).arrayBuffer();
+  return new Uint8Array(buf);
 }
 
 export async function coerceToText(value, shell) {
-  if (value instanceof GimbalProcess) value = await value;
-  if (typeof value === 'string')      return value;
-  if (value instanceof ArrayBuffer)   return new TextDecoder().decode(value);
-  if (ArrayBuffer.isView(value))      return new TextDecoder().decode(value);
+  if (value instanceof Result)      value = await value;
+  if (typeof value === 'string')    return value;
+  if (value instanceof ArrayBuffer) return new TextDecoder().decode(value);
+  if (ArrayBuffer.isView(value))    return new TextDecoder().decode(value);
   return (await coerceToResponse(value, shell)).text();
 }
 
 export async function coerceToJS(value, shell) {
-  if (value instanceof GimbalProcess) value = await value;
-  if (isVoid(value)) return undefined;
-  // Already a plain JS object/array — pass through
-  if (typeof value === 'object'       &&
-      !(value instanceof Response)    &&
-      !(value instanceof ArrayBuffer) &&
-      !(value instanceof GritsFile)   &&
-      !(value instanceof GritsCID)    &&
-      !(value instanceof GimbalPath))
-    return value;
+  if (value instanceof Result) value = await value;
+  if (isVoid(value))  return undefined;
+  if (_isPlainObject(value) || Array.isArray(value)) return value;
+  if (typeof value === 'number'  ||
+      typeof value === 'boolean' ||
+      typeof value === 'bigint')  return value;
   return JSON.parse(await coerceToText(value, shell));
 }
 
 // ─────────────────────────────────────────────────────────────────
-// GimbalProcess — one pipeline stage
+// Result — one pipeline stage
 // ─────────────────────────────────────────────────────────────────
 
-class GimbalProcess {
+class Result {
   constructor(shell, promise) {
     this._shell   = shell;
     this._promise = Promise.resolve(promise);
+    // Cache the resolved value so toString() can be informative after settling
+    this._settled = null; // { value } | { error }
+    this._promise.then(
+      v  => { this._settled = { value: v }; },
+      e  => { this._settled = { error: e }; }
+    );
   }
 
-  // Thenable — so `await process` and promise chaining both work
+  // ── Thenable ──────────────────────────────────────────────────
   then(resolve, reject) { return this._promise.then(resolve, reject); }
   catch(reject)         { return this._promise.catch(reject); }
 
-  // Produce a display string for the REPL. Returns null for void.
+  // ── Non-blocking description, safe in any string context ──────
+  toString() {
+    if (!this._settled)         return 'Result(pending)';
+    if (this._settled.error)    return `Result(error: ${this._settled.error.message ?? this._settled.error})`;
+    const v = this._settled.value;
+    if (isVoid(v))              return 'Result(void)';
+    if (typeof v === 'string')  return `Result(${v.length} chars)`;
+    if (v instanceof GritsFile) return `Result(GritsFile ${v.cid()})`;
+    if (v instanceof GritsCID)  return `Result(GritsCID ${v.addr})`;
+    if (v instanceof Path)      return `Result(${v.toString()})`;
+    if (v instanceof Response)  return `Result(Response ${v.status} ${v.url || ''})`.trim();
+    if (v instanceof Uint8Array || v instanceof ArrayBuffer)
+      return `Result(${v.byteLength ?? v.length} bytes)`;
+    return `Result(${_tn(v)})`;
+  }
+
+  // ── Terminal methods — cross the boundary to plain JS values ──
+
+  async toText()     { return coerceToText    (await this._promise, this._shell); }
+  async toBytes()    { return coerceToBytes   (await this._promise, this._shell); }
+  async toResponse() { return coerceToResponse(await this._promise, this._shell); }
+  async toFile()     { return coerceToFile    (await this._promise, this._shell); }
+  async toJS()       { return coerceToJS      (await this._promise, this._shell); }
+
+  async toCID() {
+    const value = await this._promise;
+    if (value instanceof GritsCID)  return value;
+    if (value instanceof GritsFile) return new GritsCID(value.cid());
+    if (value instanceof Path) {
+      const file = await coerceToFile(value, this._shell);
+      return new GritsCID(file.cid());
+    }
+    throw new TypeError(`Cannot coerce ${_tn(value)} to GritsCID`);
+  }
+
+  // ── REPL display ──────────────────────────────────────────────
+  // Used by shell.eval() to produce the string shown to the user.
+  // May do I/O (reads Response body), unlike toString().
+
   async _display() {
     const value = await this._promise;
-    if (isVoid(value))               return null;
-    if (typeof value === 'string')   return value;
-    if (value instanceof GritsCID)   return value.toString();
-    if (value instanceof GimbalPath) return value.toString();
-    if (value instanceof GritsFile)  return `GritsFile(${value.cid()})`;
+    if (isVoid(value))              return null;
+    if (typeof value === 'string')  return value;
+    if (value instanceof GritsCID)  return value.addr;
+    if (value instanceof Path)      return value.path;
+    if (value instanceof GritsFile) return `GritsFile(${value.cid()})`;
     if (value instanceof Response) {
       try { return await value.clone().text(); }
-      catch (_) { return '[Response]'; }
+      catch (_) { return `[Response ${value.status}]`; }
     }
-    if (value instanceof ArrayBuffer)
-      return `[ArrayBuffer ${value.byteLength} bytes]`;
-    if (value?.toString && value.toString !== Object.prototype.toString)
-      return value.toString();
-    return JSON.stringify(value, null, 2);
+    if (value instanceof Uint8Array || value instanceof ArrayBuffer)
+      return `[${value.byteLength ?? value.length} bytes]`;
+    if (_isPlainObject(value) || Array.isArray(value))
+      return JSON.stringify(value, null, 2);
+    return String(value);
   }
 }
 
-// Wrap a GimbalProcess in a Proxy that auto-dispatches unknown method names
-// through the shell's lib lookup. This is what makes chaining work uniformly.
-function _wrapProcess(proc) {
-  return new Proxy(proc, {
+// Wrap a Result in a Proxy that auto-dispatches unknown method names.
+// This is what makes chaining work uniformly at every stage.
+function _wrapResult(result) {
+  return new Proxy(result, {
     get(target, key, receiver) {
       if (typeof key === 'symbol') return Reflect.get(target, key, receiver);
       if (key in target)           return Reflect.get(target, key, receiver);
-      // Unknown name → dispatch to lib/<key>/main.js, this process as previous
-      return (...args) => _wrapProcess(
-        new GimbalProcess(target._shell,
+      // Unknown name → dispatch to lib/<key>/main.js with this result as previous
+      return (...args) => _wrapResult(
+        new Result(target._shell,
           target._shell._dispatch(key, target, args))
       );
     },
@@ -212,14 +284,8 @@ export class GimbalShell {
     this.serverUrl    = serverUrl;
     this.volume       = volume;
     this.cwd          = cwd;
-    // libUrls: array of base URLs to search for tool modules, in order.
-    // e.g. ['https://test.melanic.org/grits/v1/content/client/lib']
-    // Tool 'grep' is looked up as <base>/grep/main.js
     this.libUrls      = libUrls ?? [];
     this.history      = [];
-    // Note: the browser's native module cache already deduplicates imports by
-    // URL, so _importCache is just a fast-path to avoid repeated URL probing
-    // across multiple libUrls entries.
     this._importCache = new Map();
   }
 
@@ -244,10 +310,6 @@ export class GimbalShell {
   }
 
   // ── Tool import ───────────────────────────────────────────────
-  // Searches libUrls in order. Uses the browser's native import() so:
-  //   - the browser module cache handles dedup across calls
-  //   - relative imports inside tools resolve correctly against their URL
-  //   - CORS and caching headers are respected automatically
 
   async _importTool(name) {
     if (this._importCache.has(name)) return this._importCache.get(name);
@@ -257,6 +319,7 @@ export class GimbalShell {
 
     for (const base of this.libUrls) {
       const url = `${base.replace(/\/$/, '')}/${name}/main.js`;
+      console.log("Trying URL: ", url);
       let mod;
       try { mod = await import(url); }
       catch (_) { continue; }
@@ -271,11 +334,22 @@ export class GimbalShell {
     throw new Error(`command not found: ${name}`);
   }
 
-  // ── Dispatch a tool call ──────────────────────────────────────
+  // ── Help handling ─────────────────────────────────────────────
 
-  async _dispatch(name, prevProcess, args) {
+  _isHelpCall(args) {
+    return args.length === 1 && _isPlainObject(args[0]) && args[0].help === true;
+  }
+
+  // ── Dispatch ──────────────────────────────────────────────────
+
+  async _dispatch(name, prevResult, args) {
     const mod = await this._importTool(name);
-    return mod.invoke(this, prevProcess, args);
+
+    if (this._isHelpCall(args)) {
+      return mod.help ?? `${name}: no help text available`;
+    }
+
+    return mod.invoke(this, prevResult, args);
   }
 
   // ── Built-in: cd ──────────────────────────────────────────────
@@ -288,66 +362,61 @@ export class GimbalShell {
     return VOID;
   }
 
-  // ── Root process (void input, start of every eval) ────────────
+  // ── Root result (void input, start of every eval) ─────────────
 
-  _rootProcess() {
-    return _wrapProcess(new GimbalProcess(this, Promise.resolve(VOID)));
+  _rootResult() {
+    return _wrapResult(new Result(this, Promise.resolve(VOID)));
   }
 
-  // ── eval — main REPL entry point ──────────────────────────────
-  //
-  // Evaluates `src` as a JS expression in sloppy mode (via new Function so
-  // that `with` works). Unknown identifiers in the expression are intercepted
-  // by the withTarget Proxy and dispatched to lib/<n>/main.js.
-  //
-  // Returns { value, display } where display is the string to show the user,
-  // or null if the result was void.
+  // ── eval ──────────────────────────────────────────────────────
 
   async eval(src) {
     this.history.push(src);
 
-    const root  = this._rootProcess();
+    const root  = this._rootResult();
     const shell = this;
 
     const withTarget = new Proxy(Object.create(null), {
-      has()       { return true; }, // claim everything so `with` routes here
+      has()       { return true; },
       get(_, key) {
         if (typeof key === 'symbol') return undefined;
 
-        // Built-ins wired directly, bypassing lib lookup
+        // Built-ins
         if (key === 'cd')
-          return (path) => _wrapProcess(
-            new GimbalProcess(shell, shell._builtinCd(path)));
+          return (path) => _wrapResult(
+            new Result(shell, shell._builtinCd(path)));
 
         // cid() convenience constructor
         if (key === 'cid') return cid;
 
+        // $ — unwrap a Result to its raw Promise<value>
+        if (key === '$')
+          return (result) => {
+            if (result instanceof Result) return result._promise;
+            return Promise.resolve(result);
+          };
+
         // Everything else → dispatch through lib URL search.
-        // Root process (void) is the initial previous for the first
-        // command on the line; subsequent commands in the chain are
-        // dispatched by the _wrapProcess Proxy on the returned process.
-        return (...args) => _wrapProcess(
-          new GimbalProcess(shell, shell._dispatch(key, root, args)));
+        // Root result (void) is previous for the first command on the line.
+        return (...args) => _wrapResult(
+          new Result(shell, shell._dispatch(key, root, args)));
       },
     });
 
-    let finalProcess;
+    let finalResult;
     try {
-      // new Function always produces sloppy-mode code, enabling `with`.
       const fn = new Function('__w__', `with (__w__) { return (${src}); }`);
-      finalProcess = fn(withTarget);
+      finalResult = fn(withTarget);
     } catch (e) {
       throw new Error(`eval error: ${e.message}`);
     }
 
-    // If the expression returned a plain value rather than a process, wrap it
-    // so the rest of the machinery has a uniform interface.
-    if (!(finalProcess instanceof GimbalProcess)) {
-      finalProcess = new GimbalProcess(this, Promise.resolve(finalProcess));
+    if (!(finalResult instanceof Result)) {
+      finalResult = new Result(this, Promise.resolve(finalResult));
     }
 
-    const display = await finalProcess._display();
-    return { value: await finalProcess, display };
+    const display = await finalResult._display();
+    return { value: await finalResult, display };
   }
 }
 
