@@ -459,6 +459,8 @@ func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Reques
 	}
 
 	urlPath := strings.TrimPrefix(r.URL.Path, "/")
+	urlPath = strings.TrimRight(urlPath, "/")
+
 	volumePath := path.Join(hostname, "content", urlPath)
 
 	if !Validate("relativePath", volumePath) {
@@ -874,15 +876,13 @@ func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Invalid volume name", http.StatusBadRequest)
 		return
 	}
-	if !Validate("relativePath", filePath) {
-		http.Error(w, "Invalid file path", http.StatusBadRequest)
-		return
-	}
 
 	s.handleContentRequest(volumeName, filePath, w, r)
 }
 
 func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.ResponseWriter, r *http.Request) {
+    filePath = strings.TrimRight(filePath, "/")
+
 	if !Validate("relativePath", filePath) {
 		http.Error(w, "Invalid file path", http.StatusBadRequest)
 		return
