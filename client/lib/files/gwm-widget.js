@@ -1,5 +1,5 @@
 /*
- * @cell filebrowser-widget
+ * @cell files-widget
  * @version 0.1
  * @about
  *   Stub file browser for the Gimbal shell. Renders a clickable tree of
