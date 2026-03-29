@@ -260,12 +260,15 @@ function _wrapResult(result) {
 // ─────────────────────────────────────────────────────────────────
 
 export class GimbalShell {
-  constructor({ gg, serverUrl = null, volume = null, cwd = '', libUrls = null }) {
+  constructor({ gg, serverUrl, volume, cwd, libUrls, evalContext = {} }) {
     this.gg           = gg;
     this.serverUrl    = serverUrl;
     this.volume       = volume;
     this.cwd          = cwd;
     this.libUrls      = libUrls ?? [];
+    this._evalContext = evalContext;
+    this.ui           = evalContext.ui ?? null;
+
     this.history      = [];
     this._importCache = new Map();
   }
@@ -316,7 +319,7 @@ export class GimbalShell {
 
   resolvePath(p) {
     if (p && p.includes(':')) return p; // cross-volume — let _parsePath handle it
-    if (!p || p === '.' || p === '/') return this.cwd;
+    if (!p || p === '.') return this.cwd;
     if (p.startsWith('/'))            return p.replace(/^\/+/, '');
     if (!this.cwd)                    return p;
     return `${this.cwd}/${p}`.replace(/\/+/g, '/');
@@ -465,8 +468,7 @@ export class GimbalShell {
 
     let finalResult;
     try {
-      const fn = new Function('__w__', `with (__w__) { return (${src}); }`);
-      finalResult = fn(withTarget);
+      const fn = new Function('__w__', `with (__w__) { return (async () => (${src}))(); }`);      finalResult = fn(withTarget);
     } catch (e) {
       throw new Error(`eval error: ${e.message}`);
     }

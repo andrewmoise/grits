@@ -322,6 +322,23 @@
 <div id="drag-ghost"></div>
 
 <script type="module">
+
+import GritsClient   from '../grits/GritsClient.js';
+import { makeShell } from '../gimbal/gsh.js';
+
+const _origin = window.location.origin;
+const _vol    = 'client';
+const _libUrl = `${_origin}/grits/v1/content/${_vol}/lib`;
+const _gg     = new GritsClient();
+
+const evalContext = { fs: _gg, sh: null, ui: null };
+
+const _shell = makeShell({
+  gg: _gg, serverUrl: _origin, volume: _vol,
+  cwd: '', libUrls: [_libUrl], evalContext,
+});
+evalContext.sh = _shell;
+
 // ─────────────────────────────────────────────────────────
 // CELL REGISTRY
 // Each entry maps a launcher id to a dynamic import path and
@@ -329,20 +346,13 @@
 // ─────────────────────────────────────────────────────────
 const CELL_REGISTRY = {
   terminal: {
-    name:        'Terminal',
-    icon:        'terminal',
-    defaultZone: 'stack',
-    module:      './terminal-widget.js',
-    _cache:      null,
+    name: 'Terminal', icon: 'terminal', defaultZone: 'stack',
+    module: `${_libUrl}/gterm/gwm-widget.js`, _cache: null,
   },
   files: {
-    name:        'File Browser',
-    icon:        'files',
-    defaultZone: 'master',
-    module:      './filebrowser-widget.js',
-    _cache:      null,
+    name: 'File Browser', icon: 'files', defaultZone: 'master',
+    module: `${_libUrl}/files/gwm-widget.js`, _cache: null,
   },
-  // future cells registered here
 };
 
 async function loadCell(id) {
@@ -354,9 +364,6 @@ async function loadCell(id) {
   }
   return entry._cache;
 }
-
-// Stub eval context — replaced when wired to real grits backend
-const evalContext = { fs: null, sh: null, ui: null };
 
 // ─────────────────────────────────────────────────────────
 // SVG ICONS
@@ -377,6 +384,23 @@ const ICONS = {
 let widgetSeq  = 0;
 let masterFrac = 0.62;
 const widgets  = new Map(); // id → widget record
+
+evalContext.ui = {
+  openWidget({ el, focus, destroy, name = 'widget', icon = 'terminal', zone = 'stack' }) {
+    const id = ++widgetSeq;
+    const record = {
+      id, name, icon, zone,
+      masterHistory: zone === 'master' ? Date.now() : 0,
+      stackOrder:    zone === 'stack'  ? stackMaxOrder() + 1 : 0,
+      flexRatio: 1,
+      cellEl:       el,
+      cellInstance: { focus, destroy },
+    };
+    widgets.set(id, record);
+    render();
+    return id;
+  }
+};
 
 // ─────────────────────────────────────────────────────────
 // DOM HELPERS
@@ -487,6 +511,10 @@ function buildWidgetEl(w, zone) {
   body.style.padding = '0'; // cells manage their own padding
   if (w.cellEl) {
     body.appendChild(w.cellEl);
+    // notify cell it is now in the DOM (cells that need dimensions at init)
+    if (w.cellInstance?.mount) {
+      requestAnimationFrame(() => w.cellInstance.mount());
+    }
   } else {
     body.style.padding = '12px';
     body.style.color = 'var(--text-dim)';
@@ -499,7 +527,7 @@ function buildWidgetEl(w, zone) {
 // ─────────────────────────────────────────────────────────
 // WINDOW OPERATIONS
 // ─────────────────────────────────────────────────────────
-async function openWidget(cellId) {
+async function launchCell(cellId) {
   const entry = CELL_REGISTRY[cellId];
   if (!entry) return;
 
@@ -538,7 +566,7 @@ async function openWidget(cellId) {
   // load cell module asynchronously
   try {
     const createWidget = await loadCell(cellId);
-    const instance = createWidget({ name: entry.name, evalContext });
+    const instance = await Promise.resolve(createWidget({ name: entry.name, evalContext }));
     record.cellEl       = instance.el;
     record.cellInstance = instance;
     render(); // re-render with real content
@@ -708,7 +736,7 @@ function buildStrip() {
   Object.entries(CELL_REGISTRY).forEach(([id, entry]) => {
     const b = el('div', 'strip-launcher');
     b.innerHTML = ICONS[entry.icon] + `<span class="tip">${entry.name}</span>`;
-    b.addEventListener('click', () => openWidget(id));
+    b.addEventListener('click', () => launchCell(id));
     strip.insertBefore(b, divLine);
   });
 }
@@ -717,8 +745,8 @@ function buildStrip() {
 // INIT
 // ─────────────────────────────────────────────────────────
 buildStrip();
-openWidget('files');
-openWidget('terminal');
+launchCell('files');
+launchCell('terminal');
 </script>
 </body>
 </html>
