@@ -46,23 +46,20 @@
 // Type cascade (one direction only):
 //   GritsCID → GritsFile → Response → ArrayBuffer → string → JS object
 //
+// Path syntax (scp-style):
+//   'lib/grits'                     — relative path, current server+volume
+//   '/lib/grits'                    — absolute path, current server+volume
+//   ':client/lib'                   — different volume, same server
+//   ':client'                       — different volume root, same server
+//   'test.melanic.org:client/lib'   — different server+volume
+//
 // Eval model:
 //   shell.eval(src) evals src via new Function() (sloppy mode) with a
 //   `with` Proxy so unknown identifiers dispatch to lib/<n>/main.js.
 //   Special names wired into the eval context:
-//     cd(path)    — built-in, updates cwd, returns void Result
+//     cd(path)    — built-in, updates cwd (and volume if :vol syntax used)
 //     cid(addr)   — constructs a GritsCID
 //     $(result)   — unwraps a Result to its raw Promise<value>
-//
-// Example:
-//   const shell = makeShell({
-//     gg, serverUrl: 'https://test.melanic.org', volume: 'client',
-//     libUrls: ['https://test.melanic.org/grits/v1/content/client/lib'],
-//   });
-//   await shell.eval("cat('lib/grits/GritsClient.js').grep('export')")
-//
-//   // Outside eval, use terminal methods:
-//   const text = await shell.cat('lib/grits/GritsClient.js').toText()
 
 import { GritsFile } from '../grits/GritsClient.js';
 
@@ -77,10 +74,9 @@ export class GritsCID {
     this.addr = addr;
   }
   toString() { return `GritsCID(${this.addr})`; }
-  valueOf()  { return this.addr; } // so == comparisons work naturally
+  valueOf()  { return this.addr; }
 }
 
-// Convenience constructor, available as cid('Qm...') inside shell.eval()
 export function cid(addr) { return new GritsCID(addr); }
 
 // ─────────────────────────────────────────────────────────────────
@@ -118,7 +114,7 @@ function _tn(v) {
   return v?.constructor?.name ?? typeof v;
 }
 
-function _isPlainObject(v) {
+export function _isPlainObject(v) {
   if (!v || typeof v !== 'object') return false;
   const p = Object.getPrototypeOf(v);
   return p === Object.prototype || p === null;
@@ -127,9 +123,6 @@ function _isPlainObject(v) {
 // ─────────────────────────────────────────────────────────────────
 // Coercion cascade
 // GritsCID → GritsFile → Response → ArrayBuffer → string → JS object
-//
-// Each step accepts a Result and awaits it first, so tools can pass
-// process arguments directly without manually awaiting.
 // ─────────────────────────────────────────────────────────────────
 
 export async function coerceToFile(value, shell) {
@@ -147,8 +140,8 @@ export async function coerceToFile(value, shell) {
 }
 
 export async function coerceToResponse(value, shell) {
-  if (value instanceof Result)   value = await value;
-  if (value instanceof Response) return value;
+  if (value instanceof Result)    value = await value;
+  if (value instanceof Response)  return value;
   if (value instanceof GritsFile) return value.get();
   return (await coerceToFile(value, shell)).get();
 }
@@ -188,19 +181,16 @@ class Result {
   constructor(shell, promise) {
     this._shell   = shell;
     this._promise = Promise.resolve(promise);
-    // Cache the resolved value so toString() can be informative after settling
-    this._settled = null; // { value } | { error }
+    this._settled = null;
     this._promise.then(
-      v  => { this._settled = { value: v }; },
-      e  => { this._settled = { error: e }; }
+      v => { this._settled = { value: v }; },
+      e => { this._settled = { error: e }; }
     );
   }
 
-  // ── Thenable ──────────────────────────────────────────────────
   then(resolve, reject) { return this._promise.then(resolve, reject); }
   catch(reject)         { return this._promise.catch(reject); }
 
-  // ── Non-blocking description, safe in any string context ──────
   toString() {
     if (!this._settled)         return 'Result(pending)';
     if (this._settled.error)    return `Result(error: ${this._settled.error.message ?? this._settled.error})`;
@@ -215,8 +205,6 @@ class Result {
       return `Result(${v.byteLength ?? v.length} bytes)`;
     return `Result(${_tn(v)})`;
   }
-
-  // ── Terminal methods — cross the boundary to plain JS values ──
 
   async toText()     { return coerceToText    (await this._promise, this._shell); }
   async toBytes()    { return coerceToBytes   (await this._promise, this._shell); }
@@ -234,10 +222,6 @@ class Result {
     }
     throw new TypeError(`Cannot coerce ${_tn(value)} to GritsCID`);
   }
-
-  // ── REPL display ──────────────────────────────────────────────
-  // Used by shell.eval() to produce the string shown to the user.
-  // May do I/O (reads Response body), unlike toString().
 
   async _display() {
     const value = await this._promise;
@@ -258,14 +242,11 @@ class Result {
   }
 }
 
-// Wrap a Result in a Proxy that auto-dispatches unknown method names.
-// This is what makes chaining work uniformly at every stage.
 function _wrapResult(result) {
   return new Proxy(result, {
     get(target, key, receiver) {
       if (typeof key === 'symbol') return Reflect.get(target, key, receiver);
       if (key in target)           return Reflect.get(target, key, receiver);
-      // Unknown name → dispatch to lib/<key>/main.js with this result as previous
       return (...args) => _wrapResult(
         new Result(target._shell,
           target._shell._dispatch(key, target, args))
@@ -300,9 +281,41 @@ export class GimbalShell {
     );
   }
 
+  // ── Path parsing ──────────────────────────────────────────────
+  // Parses scp-style syntax: [[host:]volume/]path
+  // Returns { serverUrl, volume, path } where null means "use current".
+  //
+  //   'lib/grits'                   → { serverUrl: null, volume: null, path: 'lib/grits' }
+  //   '/lib/grits'                  → { serverUrl: null, volume: null, path: 'lib/grits' }
+  //   ':client'                     → { serverUrl: null, volume: 'client', path: '' }
+  //   ':client/lib'                 → { serverUrl: null, volume: 'client', path: 'lib' }
+  //   'test.melanic.org:client/lib' → { serverUrl: 'https://test.melanic.org', volume: 'client', path: 'lib' }
+
+  _parsePath(p) {
+    if (!p) return { serverUrl: null, volume: null, path: '' };
+
+    const colonIdx = p.indexOf(':');
+    if (colonIdx !== -1) {
+      const hostPart  = p.slice(0, colonIdx);
+      const rest      = p.slice(colonIdx + 1);
+      const slashIdx  = rest.indexOf('/');
+      const volume    = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
+      const path      = slashIdx === -1 ? ''   : rest.slice(slashIdx + 1);
+      const serverUrl = hostPart
+        ? (hostPart.startsWith('http') ? hostPart : `https://${hostPart}`)
+        : null;
+      return { serverUrl, volume: volume || null, path };
+    }
+
+    return { serverUrl: null, volume: null, path: p.replace(/^\/+/, '') };
+  }
+
   // ── Path resolution ───────────────────────────────────────────
+  // Resolves a plain path relative to cwd.
+  // Cross-volume/server paths (containing ':') are returned as-is.
 
   resolvePath(p) {
+    if (p && p.includes(':')) return p; // cross-volume — let _parsePath handle it
     if (!p || p === '.' || p === '/') return this.cwd;
     if (p.startsWith('/'))            return p.replace(/^\/+/, '');
     if (!this.cwd)                    return p;
@@ -319,7 +332,6 @@ export class GimbalShell {
 
     for (const base of this.libUrls) {
       const url = `${base.replace(/\/$/, '')}/${name}/main.js`;
-      console.log("Trying URL: ", url);
       let mod;
       try { mod = await import(url); }
       catch (_) { continue; }
@@ -344,22 +356,69 @@ export class GimbalShell {
 
   async _dispatch(name, prevResult, args) {
     const mod = await this._importTool(name);
-
-    if (this._isHelpCall(args)) {
+    if (this._isHelpCall(args))
       return mod.help ?? `${name}: no help text available`;
-    }
-
     return mod.invoke(this, prevResult, args);
   }
 
   // ── Built-in: cd ──────────────────────────────────────────────
+  // Supports plain paths, :volume/path, and host:volume/path syntax.
+  // Updates this.serverUrl and this.volume when crossing boundaries.
 
   async _builtinCd(path) {
-    const resolved = this.resolvePath(path);
-    const file     = await this._currentVol().lo(resolved || '.');
+    let serverUrl = this.serverUrl;
+    let volume    = this.volume;
+    let cwd       = this.cwd;
+    let rest      = path;
+
+    // Step 1: if ':' appears before the first '/', extract host+volume
+    const slashIdx  = rest.indexOf('/');
+    const colonIdx  = rest.indexOf(':');
+    if (colonIdx !== -1 && (slashIdx === -1 || colonIdx < slashIdx)) {
+      const hostPart = rest.slice(0, colonIdx);
+      rest           = rest.slice(colonIdx + 1);            // chop "host:" prefix
+      const nextSlash = rest.indexOf('/');
+      const volPart  = nextSlash === -1 ? rest : rest.slice(0, nextSlash);
+      rest           = nextSlash === -1 ? ''   : rest.slice(nextSlash + 1);
+      if (hostPart) serverUrl = hostPart.startsWith('http') ? hostPart : `https://${hostPart}`;
+      volume = volPart || volume;
+      cwd    = '';                                          // reset to volume root
+    }
+
+    // Step 2: if what's left starts with '/', it's absolute within the volume
+    if (rest.startsWith('/')) {
+      cwd  = '';
+      rest = rest.replace(/^\/+/, '');
+    }
+
+    // Step 3: resolve whatever's left relative to cwd
+    if (rest) {
+      cwd = cwd ? `${cwd}/${rest}` : rest;
+      cwd = cwd.replace(/\/+/g, '/').replace(/\/$/, '');
+    }
+
+    const vol  = this.gg.volume(serverUrl, volume);
+    const file = await vol.lo(cwd || '');
     if (!file.isDir()) throw new Error(`cd: not a directory: ${path}`);
-    this.cwd = resolved;
+
+    this.serverUrl = serverUrl;
+    this.volume    = volume;
+    this.cwd       = cwd;
     return VOID;
+  }
+
+  // ── Location — for prompt display ─────────────────────────────
+  // Returns a concise string for the current location. The caller passes
+  // the session defaults so we only show what's changed.
+  //
+  //   same volume, cwd='lib/grits'  → 'lib/grits'
+  //   volume='client', cwd='lib'    → ':client/lib'   (defaultVolume differs)
+
+  location({ defaultServerUrl = null, defaultVolume = null } = {}) {
+    const showVolume = this.volume && this.volume !== defaultVolume;
+    const path       = this.cwd || '/';
+    if (showVolume) return `:${this.volume}/${path}`;
+    return path;
   }
 
   // ── Root result (void input, start of every eval) ─────────────
@@ -377,27 +436,28 @@ export class GimbalShell {
     const shell = this;
 
     const withTarget = new Proxy(Object.create(null), {
-      has()       { return true; },
+      has(_, key) {
+        // Let known globals through so e.g. console.log, Math, etc. work normally.
+        // Only claim keys that don't exist on globalThis.
+        if (typeof key === 'symbol') return false;
+        if (key in globalThis)       return false;
+        return true;
+      },
       get(_, key) {
         if (typeof key === 'symbol') return undefined;
 
-        // Built-ins
         if (key === 'cd')
           return (path) => _wrapResult(
             new Result(shell, shell._builtinCd(path)));
 
-        // cid() convenience constructor
         if (key === 'cid') return cid;
 
-        // $ — unwrap a Result to its raw Promise<value>
         if (key === '$')
           return (result) => {
             if (result instanceof Result) return result._promise;
             return Promise.resolve(result);
           };
 
-        // Everything else → dispatch through lib URL search.
-        // Root result (void) is previous for the first command on the line.
         return (...args) => _wrapResult(
           new Result(shell, shell._dispatch(key, root, args)));
       },
