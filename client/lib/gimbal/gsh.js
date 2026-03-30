@@ -14,14 +14,10 @@
 //                   .toBytes()    → Promise<Uint8Array>
 //                   .toResponse() → Promise<Response>
 //                   .toFile()     → Promise<GritsFile>
-//                   .toCID()      → Promise<GritsCID>
 //                   .toJS()       → Promise<any>
 //
 //                 .toString() returns a non-blocking descriptive string,
 //                 safe for use in string contexts without triggering I/O.
-//
-//   Path        — an unresolved path reference within a server+volume.
-//                 Coerces to GritsFile on demand.
 //
 // Tool contract:
 //   Each tool is a standard ES module served from a known URL. It exports:
@@ -44,7 +40,7 @@
 //   tool modules automatically.
 //
 // Type cascade (one direction only):
-//   GritsCID → GritsFile → Response → ArrayBuffer → string → JS object
+//   GritsFile → Response → string
 //
 // Path syntax (scp-style):
 //   'lib/grits'                     — relative path, current server+volume
@@ -54,48 +50,13 @@
 //   'test.melanic.org:client/lib'   — different server+volume
 //
 // Eval model:
-//   shell.eval(src) evals src via new Function() (sloppy mode) with a
-//   `with` Proxy so unknown identifiers dispatch to lib/<n>/main.js.
-//   Special names wired into the eval context:
-//     cd(path)    — built-in, updates cwd (and volume if :vol syntax used)
-//     cid(addr)   — constructs a GritsCID
-//     $(result)   — unwraps a Result to its raw Promise<value>
+//   shell.eval(src) evals src via new Function() (async, sloppy mode) with
+//   a `with` Proxy so unknown identifiers dispatch to lib/<n>/main.js.
+//   All tool names including cd, from, to, ls, cat, grep etc. are just
+//   tool modules — there are no special built-in names.
 
 import { GritsFile } from '../grits/GritsClient.js';
-
-// ─────────────────────────────────────────────────────────────────
-// GritsCID — explicit CID wrapper, top of the type cascade
-// ─────────────────────────────────────────────────────────────────
-
-export class GritsCID {
-  constructor(addr) {
-    if (typeof addr !== 'string' || !addr)
-      throw new TypeError(`GritsCID: expected non-empty string, got ${_tn(addr)}`);
-    this.addr = addr;
-  }
-  toString() { return `GritsCID(${this.addr})`; }
-  valueOf()  { return this.addr; }
-}
-
-export function cid(addr) { return new GritsCID(addr); }
-
-// ─────────────────────────────────────────────────────────────────
-// Path — unresolved path reference within a server+volume
-// ─────────────────────────────────────────────────────────────────
-
-export class Path {
-  constructor(path, serverUrl = null, volume = null) {
-    this.path      = path;
-    this.serverUrl = serverUrl;
-    this.volume    = volume;
-  }
-  toString() {
-    if (this.serverUrl && this.volume)
-      return `Path(${this.serverUrl}/${this.volume}:${this.path})`;
-    if (this.volume) return `Path(${this.volume}:${this.path})`;
-    return `Path(${this.path})`;
-  }
-}
+import stringify from '../vendor/json-stringify-pretty-compact/index.js';
 
 // ─────────────────────────────────────────────────────────────────
 // Void sentinel — returned by commands with no meaningful output
@@ -121,29 +82,15 @@ export function _isPlainObject(v) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Coercion cascade
-// GritsCID → GritsFile → Response → ArrayBuffer → string → JS object
+// Coercion utilities — imported by tool modules as needed
+// GritsFile → Response → ArrayBuffer → string
 // ─────────────────────────────────────────────────────────────────
-
-export async function coerceToFile(value, shell) {
-  if (value instanceof Result)    value = await value;
-  if (value instanceof GritsFile) return value;
-  if (value instanceof GritsCID) {
-    const meta = await shell._currentVol().meta(value.addr);
-    return new GritsFile(value.addr, meta, shell._currentVol());
-  }
-  if (value instanceof Path)
-    return shell._vol(value.serverUrl, value.volume).lo(value.path);
-  if (typeof value === 'string')
-    return shell._currentVol().lo(shell.resolvePath(value).replace(/^\//, ''));
-  throw new TypeError(`Cannot coerce ${_tn(value)} to GritsFile`);
-}
 
 export async function coerceToResponse(value, shell) {
   if (value instanceof Result)    value = await value;
   if (value instanceof Response)  return value;
   if (value instanceof GritsFile) return value.get();
-  return (await coerceToFile(value, shell)).get();
+  throw new TypeError(`cannot coerce ${_tn(value)} to Response`);
 }
 
 export async function coerceToBytes(value, shell) {
@@ -196,10 +143,11 @@ class Result {
     if (this._settled.error)    return `Result(error: ${this._settled.error.message ?? this._settled.error})`;
     const v = this._settled.value;
     if (isVoid(v))              return 'Result(void)';
-    if (typeof v === 'string')  return `Result(${v.length} chars)`;
+    if (typeof v === 'string')
+      return v.length > 20
+        ? `Result("${v.slice(0, 20)}…")`
+        : `Result("${v}")`;
     if (v instanceof GritsFile) return `Result(GritsFile ${v.cid()})`;
-    if (v instanceof GritsCID)  return `Result(GritsCID ${v.addr})`;
-    if (v instanceof Path)      return `Result(${v.toString()})`;
     if (v instanceof Response)  return `Result(Response ${v.status} ${v.url || ''})`.trim();
     if (v instanceof Uint8Array || v instanceof ArrayBuffer)
       return `Result(${v.byteLength ?? v.length} bytes)`;
@@ -209,26 +157,18 @@ class Result {
   async toText()     { return coerceToText    (await this._promise, this._shell); }
   async toBytes()    { return coerceToBytes   (await this._promise, this._shell); }
   async toResponse() { return coerceToResponse(await this._promise, this._shell); }
-  async toFile()     { return coerceToFile    (await this._promise, this._shell); }
-  async toJS()       { return coerceToJS      (await this._promise, this._shell); }
 
-  async toCID() {
+  async toJS()       { return coerceToJS      (await this._promise, this._shell); }
+  async toFile() {
     const value = await this._promise;
-    if (value instanceof GritsCID)  return value;
-    if (value instanceof GritsFile) return new GritsCID(value.cid());
-    if (value instanceof Path) {
-      const file = await coerceToFile(value, this._shell);
-      return new GritsCID(file.cid());
-    }
-    throw new TypeError(`Cannot coerce ${_tn(value)} to GritsCID`);
+    if (value instanceof GritsFile) return value;
+    throw new TypeError(`cannot coerce ${_tn(value)} to GritsFile`);
   }
 
-  async _display() {
+  async _display(cols = 80) {
     const value = await this._promise;
     if (isVoid(value))              return null;
     if (typeof value === 'string')  return value;
-    if (value instanceof GritsCID)  return value.addr;
-    if (value instanceof Path)      return value.path;
     if (value instanceof GritsFile) return `GritsFile(${value.cid()})`;
     if (value instanceof Response) {
       try { return await value.clone().text(); }
@@ -237,7 +177,7 @@ class Result {
     if (value instanceof Uint8Array || value instanceof ArrayBuffer)
       return `[${value.byteLength ?? value.length} bytes]`;
     if (_isPlainObject(value) || Array.isArray(value))
-      return JSON.stringify(value, null, 2);
+      return stringify(value, cols);
     return String(value);
   }
 }
@@ -264,14 +204,16 @@ export class GimbalShell {
     this.gg           = gg;
     this.serverUrl    = serverUrl;
     this.volume       = volume;
-    this.cwd = cwd || '/';
+    this.cwd          = cwd || '/';
     this.libUrls      = libUrls ?? [];
     this._evalContext = evalContext;
-    this.ui           = evalContext.ui ?? null;
-
     this.history      = [];
     this._importCache = new Map();
   }
+
+  // ── ui accessor — reads evalContext live so timing doesn't matter ─
+
+  get ui() { return this._evalContext.ui ?? null; }
 
   // ── Volume helpers ────────────────────────────────────────────
 
@@ -284,43 +226,16 @@ export class GimbalShell {
     );
   }
 
-  // ── Path parsing ──────────────────────────────────────────────
-  // Parses scp-style syntax: [[host:]volume/]path
-  // Returns { serverUrl, volume, path } where null means "use current".
-  //
-  //   'lib/grits'                   → { serverUrl: null, volume: null, path: 'lib/grits' }
-  //   '/lib/grits'                  → { serverUrl: null, volume: null, path: 'lib/grits' }
-  //   ':client'                     → { serverUrl: null, volume: 'client', path: '' }
-  //   ':client/lib'                 → { serverUrl: null, volume: 'client', path: 'lib' }
-  //   'test.melanic.org:client/lib' → { serverUrl: 'https://test.melanic.org', volume: 'client', path: 'lib' }
-
-  _parsePath(p) {
-    if (!p) return { serverUrl: null, volume: null, path: '' };
-
-    const colonIdx = p.indexOf(':');
-    if (colonIdx !== -1) {
-      const hostPart  = p.slice(0, colonIdx);
-      const rest      = p.slice(colonIdx + 1);
-      const slashIdx  = rest.indexOf('/');
-      const volume    = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
-      const path      = slashIdx === -1 ? ''   : rest.slice(slashIdx + 1);
-      const serverUrl = hostPart
-        ? (hostPart.startsWith('http') ? hostPart : `https://${hostPart}`)
-        : null;
-      return { serverUrl, volume: volume || null, path };
-    }
-
-    return { serverUrl: null, volume: null, path: p.replace(/^\/+/, '') };
-  }
-
   // ── Path resolution ───────────────────────────────────────────
-  // Resolves a plain path relative to cwd.
-  // Cross-volume/server paths (containing ':') are returned as-is.
+  // Always returns a /‑prefixed absolute path.
+  // Cross-volume paths (containing ':') are returned as-is for
+  // the tool to handle via vol() directly.
 
   resolvePath(p) {
-    if (p && p.includes(':')) return p; // cross-volume — let _parsePath handle it
-    if (!p || p === '.')    return this.cwd;
-    if (p.startsWith('/'))  return p;
+    if (p && p.includes(':')) return p;
+    if (!p || p === '.')      return this.cwd || '/';
+    if (p.startsWith('/'))    return p;
+    if (!this.cwd || this.cwd === '/') return '/' + p;
     return `${this.cwd}/${p}`.replace(/\/+/g, '/');
   }
 
@@ -363,64 +278,6 @@ export class GimbalShell {
     return mod.invoke(this, prevResult, args);
   }
 
-  // ── Built-in: cd ──────────────────────────────────────────────
-  // Supports plain paths, :volume/path, and host:volume/path syntax.
-  // Updates this.serverUrl and this.volume when crossing boundaries.
-
-  async _builtinCd(path) {
-    let serverUrl = this.serverUrl;
-    let volume    = this.volume;
-    let cwd       = this.cwd || '/';
-    let rest      = path || '/';
-
-    const slashIdx = rest.indexOf('/');
-    const colonIdx = rest.indexOf(':');
-    if (colonIdx !== -1 && (slashIdx === -1 || colonIdx < slashIdx)) {
-      const hostPart  = rest.slice(0, colonIdx);
-      rest            = rest.slice(colonIdx + 1);
-      const nextSlash = rest.indexOf('/');
-      const volPart   = nextSlash === -1 ? rest : rest.slice(0, nextSlash);
-      rest            = nextSlash === -1 ? ''   : rest.slice(nextSlash + 1);
-      if (hostPart) serverUrl = hostPart.startsWith('http') ? hostPart : `https://${hostPart}`;
-      volume = volPart || volume;
-      cwd    = '/';
-    }
-
-    if (rest.startsWith('/')) {
-      cwd  = '/';
-      rest = rest.replace(/^\/+/, '');
-    }
-
-    if (rest) {
-      cwd = (cwd === '/' ? '/' : cwd + '/') + rest;
-      cwd = cwd.replace(/\/+/g, '/');
-    }
-
-    // Strip leading slash only at the vol.lo() boundary
-    const vol  = this.gg.volume(serverUrl, volume);
-    const file = await vol.lo(cwd.replace(/^\//, ''));
-    if (!file.isDir()) throw new Error(`cd: not a directory: ${path}`);
-
-    this.serverUrl = serverUrl;
-    this.volume    = volume;
-    this.cwd       = cwd;
-    return VOID;
-  }
-
-  // ── Location — for prompt display ─────────────────────────────
-  // Returns a concise string for the current location. The caller passes
-  // the session defaults so we only show what's changed.
-  //
-  //   same volume, cwd='lib/grits'  → 'lib/grits'
-  //   volume='client', cwd='lib'    → ':client/lib'   (defaultVolume differs)
-
-  location({ defaultServerUrl = null, defaultVolume = null } = {}) {
-    const showVolume = this.volume && this.volume !== defaultVolume;
-    const path       = this.cwd || '/';
-    if (showVolume) return `:${this.volume}${path}`;
-    return path;
-  }
-
   // ── Root result (void input, start of every eval) ─────────────
 
   _rootResult() {
@@ -429,7 +286,7 @@ export class GimbalShell {
 
   // ── eval ──────────────────────────────────────────────────────
 
-  async eval(src) {
+  async eval(src, cols = 80) {
     this.history.push(src);
 
     const root  = this._rootResult();
@@ -437,27 +294,12 @@ export class GimbalShell {
 
     const withTarget = new Proxy(Object.create(null), {
       has(_, key) {
-        // Let known globals through so e.g. console.log, Math, etc. work normally.
-        // Only claim keys that don't exist on globalThis.
         if (typeof key === 'symbol') return false;
         if (key in globalThis)       return false;
         return true;
       },
       get(_, key) {
         if (typeof key === 'symbol') return undefined;
-
-        if (key === 'cd')
-          return (path) => _wrapResult(
-            new Result(shell, shell._builtinCd(path)));
-
-        if (key === 'cid') return cid;
-
-        if (key === '$')
-          return (result) => {
-            if (result instanceof Result) return result._promise;
-            return Promise.resolve(result);
-          };
-
         return (...args) => _wrapResult(
           new Result(shell, shell._dispatch(key, root, args)));
       },
@@ -465,7 +307,8 @@ export class GimbalShell {
 
     let finalResult;
     try {
-      const fn = new Function('__w__', `with (__w__) { return (async () => (${src}))(); }`);      finalResult = fn(withTarget);
+      const fn = new Function('__w__', `with (__w__) { return (async () => (${src}))(); }`);
+      finalResult = fn(withTarget);
     } catch (e) {
       throw new Error(`eval error: ${e.message}`);
     }
@@ -474,7 +317,7 @@ export class GimbalShell {
       finalResult = new Result(this, Promise.resolve(finalResult));
     }
 
-    const display = await finalResult._display();
+    const display = await finalResult._display(cols);
     return { value: await finalResult, display };
   }
 }
