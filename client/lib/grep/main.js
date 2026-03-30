@@ -1,70 +1,72 @@
-// lib/grep/main.js — filter lines matching a pattern
-
+// lib/grep/main.js
 export const help = `\
 grep — filter lines matching a pattern
 
 Usage:
-  <input>.grep('pattern')
-  <input>.grep('pattern', { ignoreCase: true, invert: true, fixed: true })
-  grep('pattern', 'path/to/file')
-  grep('pattern', 'path/to/file', { ignoreCase: true })
-
-Input:  anything coercible to text (Response, GritsFile, string, …)
-Output: string (matched lines joined by newline)
-
+  <input>.grep('pattern')                    filter pipeline input
+  grep('pattern', 'path1', 'path2', ...)     filter named files
+  
 Options:
-  invert     : boolean — return non-matching lines (like grep -v)
-  ignoreCase : boolean — case-insensitive match (like grep -i)
-  fixed      : boolean — treat pattern as a literal string, not a regex`;
+  {invert:true}      return non-matching lines
+  {ignoreCase:true}  case-insensitive match
+  {fixed:true}       treat pattern as literal string`;
 
-import { isVoid, coerceToText } from '../gimbal/gsh.js';
+import { isVoid, _isPlainObject } from '../gimbal/gsh.js';
+import { GritsFile } from '../grits/GritsClient.js';
 
 export async function invoke(shell, previous, args) {
-  // Peel off trailing options map if present
-  const opts = (args.length > 0 && _isPlainObj(args[args.length - 1]))
-    ? args[args.length - 1] : {};
+  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
   const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
+  const [pattern, ...paths] = positional;
 
-  const [pattern, pathArg] = positional;
+  if (pattern === undefined)
+    throw new Error('grep: pattern required');
 
-  if (pattern === undefined || pattern === null)
-    throw new Error('grep: first argument must be a pattern string or RegExp');
+  const prev = await previous;
+  const hasInput = !isVoid(prev);
+  const hasPaths = paths.length > 0;
 
-  // Source: explicit path arg, or stdin
-  let source;
-  if (pathArg !== undefined) {
-    source = pathArg;
-  } else {
-    source = await previous;
-    if (isVoid(source))
-      throw new Error('grep: no input — pipe something in, or pass a path as the second argument');
+  if (hasInput && hasPaths)
+    throw new Error('grep: cannot combine pipeline input with path arguments');
+  if (!hasInput && !hasPaths)
+    throw new Error('grep: requires either pipeline input or path arguments');
+
+  const re = _buildRegex(pattern, opts);
+
+  if (hasInput) {
+    const text = await _toText(prev, 'grep');
+    return _filterLines(text, re, opts);
   }
 
-  const text = await coerceToText(source, shell);
-
-  let re;
-  if (pattern instanceof RegExp) {
-    re = pattern;
-  } else {
-    const flags = opts.ignoreCase ? 'i' : '';
-    if (opts.fixed) {
-      const escaped = String(pattern).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      re = new RegExp(escaped, flags);
-    } else {
-      re = new RegExp(String(pattern), flags);
-    }
-  }
-
-  const lines   = text.split('\n');
-  const matched = opts.invert
-    ? lines.filter(l => !re.test(l))
-    : lines.filter(l =>  re.test(l));
-
-  return matched.join('\n');
+  // Path arguments mode — validate all are strings, read and concatenate
+  const results = await Promise.all(paths.map(async p => {
+    if (typeof p !== 'string')
+      throw new Error(`grep: path arguments must be strings, got ${typeof p}`);
+    const file = await shell._currentVol().lo(shell.resolvePath(p).replace(/^\//, ''));
+    const text = await file.text();
+    return _filterLines(text, re, opts);
+  }));
+  return results.filter(Boolean).join('\n');
 }
 
-function _isPlainObj(v) {
-  if (!v || typeof v !== 'object') return false;
-  const p = Object.getPrototypeOf(v);
-  return p === Object.prototype || p === null;
+function _buildRegex(pattern, opts) {
+  if (pattern instanceof RegExp) return pattern;
+  const flags = opts.ignoreCase ? 'i' : '';
+  if (opts.fixed) {
+    const escaped = String(pattern).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(escaped, flags);
+  }
+  return new RegExp(String(pattern), flags);
+}
+
+async function _toText(value, toolName) {
+  if (typeof value === 'string')   return value;
+  if (value instanceof GritsFile)  return value.text();
+  if (value instanceof Response)   return value.text();
+  throw new Error(`${toolName}: cannot read text from ${value?.constructor?.name ?? typeof value}`);
+}
+
+function _filterLines(text, re, opts) {
+  const lines = text.split('\n');
+  return (opts.invert ? lines.filter(l => !re.test(l)) : lines.filter(l => re.test(l))).join('\n');
 }
