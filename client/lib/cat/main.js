@@ -1,31 +1,27 @@
-// lib/cat/main.js — read a file from the filesystem, return its Response
-
+// lib/cat/main.js
 export const help = `\
-cat — read a file from the filesystem
+cat — read a file and output its text content
 
 Usage:
-  cat('path/to/file')
-  cat('path/to/file', { volume: 'other', serverUrl: 'https://...' })
+  cat('path/to/file')    read a file by path
 
-Input:  void (cat reads from the filesystem, not stdin)
-Output: Response`;
+Requires void input and exactly one path argument.`;
 
-import { isVoid } from '../gimbal/gsh.js';
+import { isVoid, _isPlainObject } from '../gimbal/gsh.js';
+import { coerceToFile } from '../gimbal/gsh.js';
 
 export async function invoke(shell, previous, args) {
-  const [pathArg, opts = {}] = args;
-
   const prev = await previous;
   if (!isVoid(prev))
-    console.warn('cat: ignoring piped input (cat always reads from the filesystem)');
+    throw new Error('cat: does not accept pipeline input — provide a path argument');
+
+  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
+  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
+  const [pathArg]  = positional;
 
   if (!pathArg || typeof pathArg !== 'string')
-    throw new Error('cat: first argument must be a file path string');
+    throw new Error('cat: path argument required');
 
-  const vol  = shell._vol(opts.serverUrl ?? null, opts.volume ?? null);
-  const file = await vol.lo(shell.resolvePath(pathArg));
-
-  if (file.isDir()) throw new Error(`cat: ${pathArg}: is a directory`);
-
-  return file.get();
+  const file = await coerceToFile(pathArg, shell);
+  return file.text();
 }
