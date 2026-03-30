@@ -70,8 +70,8 @@ export default function createWidget({ name, evalContext = {} }) {
       if (shellHost !== defaultHost) hostPart = shellHost;
     }
     const loc = hostPart
-      ? `${hostPart}:${volume}/${path}`
-      : `:${volume}/${path}`;
+      ? `${hostPart}:${volume}${shell.cwd}`
+      : `:${volume}${shell.cwd}`;
     promptLabel.textContent = loc.replace(/\/+/g, '/') + '$ ';
   }
 

@@ -230,12 +230,13 @@ export class GritsVolume {
   async lo(path) {
     if (typeof path !== 'string')
       throw new TypeError(`lo: path must be a string, got ${_typename(path)}`);
-    const info = await this.lookup_internal(path);
+    const normalized = path.replace(/^\/+/, '');
+    const info = await this.lookup_internal(normalized);
     if (!info) throw new Error(`lo: ${this._volume}:${path}: not found`);
     const meta = await this._fetchMeta(info.metadataHash);
     return new GritsFile(info.metadataHash, meta, this);
   }
-
+  
   lookup(path) { return this.lo(path); }
 
   // ── Link ──────────────────────────────────────────────────────
