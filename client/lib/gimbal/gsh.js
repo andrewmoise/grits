@@ -135,7 +135,7 @@ export async function coerceToFile(value, shell) {
   if (value instanceof Path)
     return shell._vol(value.serverUrl, value.volume).lo(value.path);
   if (typeof value === 'string')
-    return shell._currentVol().lo(shell.resolvePath(value));
+    return shell._currentVol().lo(shell.resolvePath(value).replace(/^\//, ''));
   throw new TypeError(`Cannot coerce ${_tn(value)} to GritsFile`);
 }
 
@@ -264,7 +264,7 @@ export class GimbalShell {
     this.gg           = gg;
     this.serverUrl    = serverUrl;
     this.volume       = volume;
-    this.cwd          = cwd;
+    this.cwd = cwd || '/';
     this.libUrls      = libUrls ?? [];
     this._evalContext = evalContext;
     this.ui           = evalContext.ui ?? null;
@@ -319,9 +319,8 @@ export class GimbalShell {
 
   resolvePath(p) {
     if (p && p.includes(':')) return p; // cross-volume — let _parsePath handle it
-    if (!p || p === '.') return this.cwd;
-    if (p.startsWith('/'))            return p.replace(/^\/+/, '');
-    if (!this.cwd)                    return p;
+    if (!p || p === '.')    return this.cwd;
+    if (p.startsWith('/'))  return p;
     return `${this.cwd}/${p}`.replace(/\/+/g, '/');
   }
 
@@ -371,37 +370,35 @@ export class GimbalShell {
   async _builtinCd(path) {
     let serverUrl = this.serverUrl;
     let volume    = this.volume;
-    let cwd       = this.cwd;
-    let rest      = path;
+    let cwd       = this.cwd || '/';
+    let rest      = path || '/';
 
-    // Step 1: if ':' appears before the first '/', extract host+volume
-    const slashIdx  = rest.indexOf('/');
-    const colonIdx  = rest.indexOf(':');
+    const slashIdx = rest.indexOf('/');
+    const colonIdx = rest.indexOf(':');
     if (colonIdx !== -1 && (slashIdx === -1 || colonIdx < slashIdx)) {
-      const hostPart = rest.slice(0, colonIdx);
-      rest           = rest.slice(colonIdx + 1);            // chop "host:" prefix
+      const hostPart  = rest.slice(0, colonIdx);
+      rest            = rest.slice(colonIdx + 1);
       const nextSlash = rest.indexOf('/');
-      const volPart  = nextSlash === -1 ? rest : rest.slice(0, nextSlash);
-      rest           = nextSlash === -1 ? ''   : rest.slice(nextSlash + 1);
+      const volPart   = nextSlash === -1 ? rest : rest.slice(0, nextSlash);
+      rest            = nextSlash === -1 ? ''   : rest.slice(nextSlash + 1);
       if (hostPart) serverUrl = hostPart.startsWith('http') ? hostPart : `https://${hostPart}`;
       volume = volPart || volume;
-      cwd    = '';                                          // reset to volume root
+      cwd    = '/';
     }
 
-    // Step 2: if what's left starts with '/', it's absolute within the volume
     if (rest.startsWith('/')) {
-      cwd  = '';
+      cwd  = '/';
       rest = rest.replace(/^\/+/, '');
     }
 
-    // Step 3: resolve whatever's left relative to cwd
     if (rest) {
-      cwd = cwd ? `${cwd}/${rest}` : rest;
-      cwd = cwd.replace(/\/+/g, '/').replace(/\/$/, '');
+      cwd = (cwd === '/' ? '/' : cwd + '/') + rest;
+      cwd = cwd.replace(/\/+/g, '/');
     }
 
+    // Strip leading slash only at the vol.lo() boundary
     const vol  = this.gg.volume(serverUrl, volume);
-    const file = await vol.lo(cwd || '');
+    const file = await vol.lo(cwd.replace(/^\//, ''));
     if (!file.isDir()) throw new Error(`cd: not a directory: ${path}`);
 
     this.serverUrl = serverUrl;
@@ -420,7 +417,7 @@ export class GimbalShell {
   location({ defaultServerUrl = null, defaultVolume = null } = {}) {
     const showVolume = this.volume && this.volume !== defaultVolume;
     const path       = this.cwd || '/';
-    if (showVolume) return `:${this.volume}/${path}`;
+    if (showVolume) return `:${this.volume}${path}`;
     return path;
   }
 

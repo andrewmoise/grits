@@ -27,7 +27,7 @@ export async function invoke(shell, previous, args) {
   } else {
     const prev = await previous;
     file = isVoid(prev)
-      ? await coerceToFile('', shell)
+      ? await coerceToFile(shell.cwd, shell)
       : await coerceToFile(prev, shell);
   }
 
