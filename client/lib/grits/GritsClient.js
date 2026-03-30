@@ -341,7 +341,9 @@ export class GritsVolume {
       const msg = await resp.text().catch(() => resp.statusText);
       throw new Error(`li ${this._volume}:${path}: ${resp.status} ${msg}`);
     }
-    return resp.json();
+    const result = await resp.json();
+    this._ingestLookupResponse(result);
+    return result;
   }
 
   async _fetchBlob(cid) {
@@ -464,10 +466,7 @@ export class GritsVolume {
     if (swHash) this.serviceWorkerHash = swHash;
 
     const result = await resp.json();
-    if (!result.paths?.length) return null;
-    const root = result.paths.find(e => e.path === '');
-    if (root) { this.rootHash = root.addr; this.rootHashTimestamp = Date.now(); }
-    this._startPrefetch(result.paths);
+    this._ingestLookupResponse(result);
 
     const leaf = result.paths[result.paths.length - 1];
     if (result.isPartial || leaf.path !== path) return null;
@@ -484,7 +483,18 @@ export class GritsVolume {
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
   }
 
-  // ── Internal: prefetch ────────────────────────────────────────
+  // ── Internal ────────────────────────────────────────
+
+  _ingestLookupResponse(result) {
+    if (!result?.paths?.length) return;
+    const root = result.paths.find(e => e.path === '');
+    if (root && result.serialNumber >= (this._lastSerial ?? 0)) {
+      this.rootHash          = root.addr;
+      this.rootHashTimestamp = Date.now();
+      this._lastSerial       = result.serialNumber;
+    }
+    this._startPrefetch(result.paths);
+  }
 
   _startPrefetch(paths) {
     for (const e of paths) {
