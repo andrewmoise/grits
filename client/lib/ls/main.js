@@ -1,44 +1,51 @@
-// lib/ls/main.js — list directory contents
-
+// lib/ls/main.js
 export const help = `\
 ls — list directory contents
 
 Usage:
-  ls()                list current directory
-  ls('some/path')     list a relative or absolute path
-  ls({raw:true})      return raw { name: metadataCID } map
-  ls({l:true})        return { name: metadata } map (long listing)
-  <dir>.ls()          list a directory passed in as input
+  ls()                list current directory (void input, no arg)
+  ls('some/path')     list a path (void input, path arg)
+  <dir>.ls()          list a directory passed in as input (no arg)
 
-Input:  GritsFile, CID, path string, or void (uses cwd)
-Output: string[] of names, or object if raw/l option given`;
+Options:
+  {raw:true}   return raw { name: metadataCID } map
+  {l:true}     return { name: metadata } map (long listing)`;
 
-import { coerceToFile, isVoid, _isPlainObject } from '../gimbal/gsh.js';
+import { isVoid, _isPlainObject } from '../gimbal/gsh.js';
+import { GritsFile } from '../grits/GritsClient.js';
 
 export async function invoke(shell, previous, args) {
   const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
   const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
   const [pathArg]  = positional;
 
-  // Resolve which directory to list
+  const prev = await previous;
+
   let file;
-  if (pathArg !== undefined) {
-    file = await coerceToFile(pathArg, shell);
+  if (!isVoid(prev)) {
+    // Pipeline mode — no path arg allowed
+    if (pathArg !== undefined)
+      throw new Error('ls: cannot combine pipeline input with path argument');
+    if (!(prev instanceof GritsFile))
+      throw new Error('ls: pipeline input must be a GritsFile');
+    file = prev;
   } else {
-    const prev = await previous;
-    file = isVoid(prev)
-      ? await coerceToFile(shell.cwd, shell)
-      : await coerceToFile(prev, shell);
+    // Argument mode — optional path, falls back to cwd
+    if (pathArg !== undefined) {
+      if (typeof pathArg !== 'string')
+        throw new Error('ls: path argument must be a string');
+      file = await shell._currentVol().lo(shell.resolvePath(pathArg).replace(/^\//, ''));
+    } else {
+      file = await shell._currentVol().lo(shell.cwd.replace(/^\//, ''));
+    }
   }
 
   if (!file.isDir())
     throw new Error(`ls: not a directory`);
 
-  // file.json() fetches contentHash and parses → { filename: metadataCID }
   const dirMap = await file.json();
 
-  if (opts.raw)
-    return dirMap;
+  if (opts.raw)  return dirMap;
 
   if (opts.l || opts.long) {
     const vol     = shell._currentVol();
