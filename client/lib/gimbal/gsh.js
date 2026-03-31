@@ -86,6 +86,14 @@ export function _isPlainObject(v) {
 // GritsFile → Response → ArrayBuffer → string
 // ─────────────────────────────────────────────────────────────────
 
+export async function coerceToFile(value, shell) {
+  if (value instanceof Result) value = await value;
+  if (value instanceof GritsFile) return value;
+  if (typeof value === 'string')
+    return shell._currentVol().lookup(shell.resolvePath(value).replace(/^\//, ''));
+  throw new TypeError(`cannot coerce ${_tn(value)} to GritsFile — expected a path string or GritsFile`);
+}
+
 export async function coerceToResponse(value, shell) {
   if (value instanceof Result)    value = await value;
   if (value instanceof Response)  return value;
@@ -200,15 +208,17 @@ function _wrapResult(result) {
 // ─────────────────────────────────────────────────────────────────
 
 export class GimbalShell {
-  constructor({ gg, serverUrl, volume, cwd, libUrls, evalContext = {} }) {
+  constructor({ gg, serverUrl, volume, cwd, libs, evalContext = {} }) {
     this.gg           = gg;
     this.serverUrl    = serverUrl;
     this.volume       = volume;
     this.cwd          = cwd || '/';
-    this.libUrls      = libUrls ?? [];
+    this.libs         = libs ?? [];
     this._evalContext = evalContext;
     this.history      = [];
-    this._importCache = new Map();
+    this._importCache    = new Map();
+    this._availableTools = null;
+    this._cacheWarmed    = false;
   }
 
   // ── ui accessor — reads evalContext live so timing doesn't matter ─
@@ -241,17 +251,21 @@ export class GimbalShell {
 
   // ── Tool import ───────────────────────────────────────────────
 
+  _libUrl({ serverUrl, volume, path }) {
+    return `${serverUrl}/grits/v1/content/${volume}/${path}`;
+  }
+
   async _importTool(name) {
     if (this._importCache.has(name)) return this._importCache.get(name);
 
-    if (this.libUrls.length === 0)
-      throw new Error(`command not found: ${name} (no libUrls configured)`);
-
-    for (const base of this.libUrls) {
-      const url = `${base.replace(/\/$/, '')}/${name}/main.js`;
+    for (const lib of this.libs) {
+      const url = `${this._libUrl(lib)}/${name}/main.js`;
       let mod;
       try { mod = await import(url); }
-      catch (_) { continue; }
+      catch (e) {
+        console.error(`_importTool: failed to import ${url}:`, e);
+        continue;
+      }
 
       if (typeof mod.invoke !== 'function')
         throw new Error(`${url} has no exported invoke()`);
@@ -263,6 +277,28 @@ export class GimbalShell {
     throw new Error(`command not found: ${name}`);
   }
 
+  async _warmCache() {
+    if (this._cacheWarmed) return;
+    this._cacheWarmed = true;
+    for (const lib of this.libs) {
+      try {
+        const vol = this.gg.volume(lib.serverUrl, lib.volume);
+        const file = await vol.lookup(lib.path);
+        console.log('warmCache: got file', file, file.isDir());
+        if (!file.isDir()) continue;
+        const dir = await file.json();
+        console.log('warmCache: dir keys', Object.keys(dir));
+        if (!this._availableTools) this._availableTools = new Set();
+        for (const name of Object.keys(dir)) {
+          this._availableTools.add(name);
+        }
+      } catch (e) {
+        console.error('warmCache failed:', e);
+      }
+    }
+    console.log('warmCache done, tools:', this._availableTools);
+  }
+ 
   // ── Help handling ─────────────────────────────────────────────
 
   _isHelpCall(args) {
@@ -287,6 +323,7 @@ export class GimbalShell {
   // ── eval ──────────────────────────────────────────────────────
 
   async eval(src, cols = 80) {
+    await this._warmCache();
     this.history.push(src);
 
     const root  = this._rootResult();
@@ -294,9 +331,9 @@ export class GimbalShell {
 
     const withTarget = new Proxy(Object.create(null), {
       has(_, key) {
-        if (typeof key === 'symbol') return false;
-        if (key in globalThis)       return false;
-        return true;
+        if (typeof key === 'symbol')    return false;
+        if (key in globalThis)          return false;
+        return shell._availableTools?.has(key) ?? false;
       },
       get(_, key) {
         if (typeof key === 'symbol') return undefined;

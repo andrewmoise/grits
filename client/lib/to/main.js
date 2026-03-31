@@ -40,6 +40,6 @@ export async function invoke(shell, previous, args) {
 
   const contentCID = await vol.put(data);
   const metaCID    = await vol.mkfile(contentCID, data.byteLength);
-  await vol.li(metaCID, resolved);
-  return vol.lo(resolved);
+  await vol.link(metaCID, resolved);
+  return vol.lookup(resolved);
 }

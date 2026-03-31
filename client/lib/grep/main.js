@@ -42,7 +42,7 @@ export async function invoke(shell, previous, args) {
   const results = await Promise.all(paths.map(async p => {
     if (typeof p !== 'string')
       throw new Error(`grep: path arguments must be strings, got ${typeof p}`);
-    const file = await shell._currentVol().lo(shell.resolvePath(p).replace(/^\//, ''));
+    const file = await shell._currentVol().lookup(shell.resolvePath(p).replace(/^\//, ''));
     const text = await file.text();
     return _filterLines(text, re, opts);
   }));

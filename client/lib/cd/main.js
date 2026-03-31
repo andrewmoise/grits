@@ -47,7 +47,7 @@ export async function invoke(shell, previous, args) {
   }
 
   const vol  = shell.gg.volume(serverUrl, volume);
-  const file = await vol.lo(cwd.replace(/^\//, ''));
+  const file = await vol.lookup(cwd.replace(/^\//, ''));
   if (!file.isDir()) throw new Error(`cd: not a directory: ${path}`);
 
   shell.serverUrl = serverUrl;
