@@ -27,6 +27,7 @@ export default function createWidget({ name, evalContext = {} }) {
   output.style.cssText = `
     flex: 1; overflow-y: auto; min-height: 0;
     padding: 8px 10px; display: flex; flex-direction: column; gap: 2px;
+    user-select: text;
   `;
 
   // ── Input row ─────────────────────────────────────────────
