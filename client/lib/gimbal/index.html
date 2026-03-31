@@ -4,9 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>gimbal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   /* ═══════════════════════════════════════════════════
-     THEME
+     THEME — swap this block to change the entire palette
      ═══════════════════════════════════════════════════ */
   :root {
     --bg-root:      #080a0e;
@@ -32,10 +35,20 @@
 
     --red:          #e05555;
     --red-dim:      rgba(224,85,85,0.12);
+
+    /* Layout tokens */
+    --strip-w:      2.8rem;
+    --title-h:      2rem;
+    --icon-size:    2.4rem;
+    --btn-size:     1.75rem;
+    --icon-r:       0.5rem;
+    --widget-r:     0.625rem;
+    --divider-hit:  0.5rem;
   }
 
   /* ═══════════════════════════════════════════════════
-     BASE
+     BASE — no font-size set; inherits browser default
+     which respects system DPI and accessibility prefs
      ═══════════════════════════════════════════════════ */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -43,8 +56,7 @@
     width: 100%; height: 100%;
     background: var(--bg-root);
     color: var(--text);
-    font-family: 'Inter', 'Helvetica Neue', sans-serif;
-    font-size: 13px;
+    font-family: 'Rubik', 'Inter', sans-serif;
     overflow: hidden;
     user-select: none;
   }
@@ -55,16 +67,16 @@
     background-image:
       linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
       linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
-    background-size: 40px 40px;
+    background-size: 2rem 2rem;
     pointer-events: none; z-index: 0;
   }
 
   /* ═══════════════════════════════════════════════════
      SCROLLBARS
      ═══════════════════════════════════════════════════ */
-  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar { width: 0.25rem; height: 0.25rem; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 0.125rem; }
   * { scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
   #minimized-section { scrollbar-width: none; }
   #minimized-section::-webkit-scrollbar { display: none; }
@@ -79,7 +91,8 @@
 
   #workspace {
     flex: 1 1 0; display: flex; min-width: 0;
-    padding: 10px 8px 10px 10px; position: relative;
+    padding: 0.5rem 0.4rem 0.5rem 0.5rem;
+    position: relative;
   }
 
   #master {
@@ -96,55 +109,54 @@
      DIVIDERS
      ═══════════════════════════════════════════════════ */
   #ms-divider {
-    width: 10px; flex: 0 0 10px;
+    width: var(--divider-hit); flex: 0 0 var(--divider-hit);
     cursor: col-resize; z-index: 10;
     display: flex; align-items: center; justify-content: center;
   }
   #ms-divider::after {
     content: '';
-    width: 1px; height: 36px;
+    width: 1px; height: 1.75rem;
     background: var(--border); border-radius: 1px;
     transition: background 0.2s, height 0.2s;
   }
   #ms-divider:hover::after, #ms-divider.dragging::after {
-    background: var(--a1); height: 56px;
+    background: var(--a1); height: 2.75rem;
   }
 
   .stack-divider {
-    height: 10px; flex: 0 0 10px;
+    height: var(--divider-hit); flex: 0 0 var(--divider-hit);
     cursor: row-resize; z-index: 5;
     display: flex; align-items: center; justify-content: center;
   }
   .stack-divider::after {
     content: '';
-    height: 1px; width: 40px;
+    height: 1px; width: 2rem;
     background: var(--border); border-radius: 1px;
     transition: background 0.2s, width 0.2s;
   }
   .stack-divider:hover::after, .stack-divider.dragging::after {
-    background: var(--a1); width: 56px;
+    background: var(--a1); width: 2.75rem;
   }
 
   /* ═══════════════════════════════════════════════════
      ICON STRIP
      ═══════════════════════════════════════════════════ */
   #strip {
-    width: 56px; flex: 0 0 56px;
+    width: var(--strip-w); flex: 0 0 var(--strip-w);
     display: flex; flex-direction: column;
-    align-items: center; padding: 10px 0; gap: 0;
+    align-items: center; padding: 0.625rem 0; gap: 0;
     position: relative; z-index: 20;
   }
 
   #strip-top {
     display: flex; flex-direction: column;
-    align-items: center; gap: 5px;
-    padding-bottom: 10px;
+    align-items: center; gap: 0.4rem;
+    padding-bottom: 0.625rem;
   }
 
-  /* Launcher icons — have a + badge */
   .strip-launcher {
-    width: 38px; height: 38px;
-    border-radius: 10px;
+    width: var(--icon-size); height: var(--icon-size);
+    border-radius: var(--icon-r);
     border: 1px solid var(--border);
     background: var(--bg-float);
     color: var(--text-dim);
@@ -158,50 +170,41 @@
     color: var(--text); transform: scale(1.06);
   }
   .strip-launcher:active { transform: scale(0.96); }
-  .strip-launcher svg { width: 15px; height: 15px; stroke-width: 1.5; }
+  .strip-launcher svg { width: 1.3em; height: 1.3em; stroke-width: 1.5; }
 
-  /* Small + badge bottom-right */
   .strip-launcher::after {
     content: '+';
-    position: absolute; bottom: 4px; right: 5px;
-    font-size: 9px; line-height: 1;
+    position: absolute; bottom: 0.2rem; right: 0.25rem;
+    font-size: 0.45rem; line-height: 1;
     color: var(--text-dim); opacity: 0.55;
     font-family: 'JetBrains Mono', monospace;
-    pointer-events: none;
-    transition: opacity 0.15s;
+    pointer-events: none; transition: opacity 0.15s;
   }
   .strip-launcher:hover::after { opacity: 0.9; }
 
-  /* Strip separator — more visually substantial */
   #strip-separator {
-    width: 38px;
+    width: var(--icon-size);
     display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0; margin: 4px 0;
-    gap: 4px;
+    flex-shrink: 0; margin: 0.2rem 0; gap: 0.2rem;
   }
-  #strip-separator::before,
-  #strip-separator::after {
-    content: '';
-    flex: 1; height: 1px;
-    background: var(--border);
+  #strip-separator::before, #strip-separator::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
   }
   #strip-separator span {
-    font-size: 8px; letter-spacing: 0.1em;
+    font-size: 0.4rem; letter-spacing: 0.1em;
     color: var(--text-dim); opacity: 0.35;
-    font-family: 'JetBrains Mono', monospace;
-    line-height: 1;
+    font-family: 'JetBrains Mono', monospace; line-height: 1;
   }
 
   #minimized-section {
     flex: 1; display: flex; flex-direction: column;
-    align-items: center; gap: 5px; overflow-y: auto;
-    padding-top: 4px; padding-bottom: 8px;
+    align-items: center; gap: 0.4rem; overflow-y: auto;
+    padding-top: 0.2rem; padding-bottom: 0.4rem;
   }
 
-  /* Minimized thumbs — no + badge, slightly different shade to distinguish */
   .min-thumb {
-    width: 38px; height: 38px;
-    border-radius: 10px;
+    width: var(--icon-size); height: var(--icon-size);
+    border-radius: var(--icon-r);
     border: 1px solid var(--border);
     background: var(--bg-elevated);
     color: var(--text-dim);
@@ -214,16 +217,16 @@
     border-color: var(--a1); color: var(--a1);
     background: var(--a1-glow); transform: scale(1.06);
   }
-  .min-thumb svg { width: 14px; height: 14px; stroke-width: 1.5; }
+  .min-thumb svg { width: 1.1em; height: 1.1em; stroke-width: 1.5; }
 
   .strip-launcher .tip, .min-thumb .tip {
     display: none;
     position: absolute;
-    right: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+    right: calc(100% + 0.5rem); top: 50%; transform: translateY(-50%);
     background: var(--bg-elevated); border: 1px solid var(--border-hi);
-    color: var(--text-hi); padding: 4px 10px; border-radius: 6px;
-    font-size: 11px; white-space: nowrap; pointer-events: none; z-index: 100;
-    font-family: 'JetBrains Mono', monospace; letter-spacing: 0.03em;
+    color: var(--text-hi); padding: 0.2rem 0.5rem; border-radius: 0.3rem;
+    font-size: 0.75rem; white-space: nowrap; pointer-events: none; z-index: 100;
+    font-family: 'Rubik', sans-serif; font-weight: 400;
   }
   .strip-launcher:hover .tip, .min-thumb:hover .tip { display: block; }
 
@@ -234,76 +237,76 @@
     display: flex; flex-direction: column;
     background: var(--bg-float);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--widget-r);
     overflow: hidden; position: relative; min-height: 0;
     box-shadow:
       0 0 0 1px rgba(0,0,0,0.5),
-      0 8px 28px rgba(0,0,0,0.45),
-      0 2px 6px rgba(0,0,0,0.3);
+      0 0.4rem 1.5rem rgba(0,0,0,0.45),
+      0 0.1rem 0.3rem rgba(0,0,0,0.3);
     transition: border-color 0.15s, box-shadow 0.15s;
   }
   .widget:focus-within {
     border-color: var(--border-focus);
     box-shadow:
       0 0 0 1px rgba(0,0,0,0.5),
-      0 12px 36px rgba(0,0,0,0.55),
-      0 2px 6px rgba(0,0,0,0.3),
+      0 0.6rem 1.75rem rgba(0,0,0,0.55),
+      0 0.1rem 0.3rem rgba(0,0,0,0.3),
       inset 0 1px 0 rgba(255,255,255,0.03);
   }
   .widget.in-master { flex: 1; }
 
   .widget-title {
-    height: 32px;
+    height: var(--title-h);
     background: var(--bg-elevated);
     border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; padding: 0 6px;
+    display: flex; align-items: center; padding: 0 0.3rem;
     flex-shrink: 0; cursor: grab;
-    border-radius: 12px 12px 0 0;
+    border-radius: var(--widget-r) var(--widget-r) 0 0;
     transition: background 0.15s;
+    overflow: visible;
   }
   .widget:focus-within .widget-title { background: var(--bg-active); }
   .widget-title:active { cursor: grabbing; }
 
-  /* Left zone — empty, reserved for menus/nav */
   .title-left {
-    width: 48px; display: flex; align-items: center;
-    gap: 2px; flex-shrink: 0;
+    width: 3.75rem; display: flex; align-items: center;
+    gap: 0.1rem; flex-shrink: 0;
   }
 
   .widget-name {
     flex: 1; text-align: center;
-    font-size: 11px; font-weight: 400;
+    font-size: 0.875rem; font-weight: 400;
     color: var(--text-dim);
-    letter-spacing: 0.06em;
+    letter-spacing: 0.02em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    font-family: 'JetBrains Mono', monospace;
+    font-family: 'Rubik', sans-serif;
     transition: color 0.15s;
   }
   .widget:focus-within .widget-name { color: var(--text); }
 
-  /* Right zone — minimize · promote/demote · close (left to right) */
   .title-right {
-    width: 48px; display: flex; align-items: center;
-    justify-content: flex-end; gap: 1px; flex-shrink: 0;
+    width: 3.75rem; display: flex; align-items: center;
+    justify-content: flex-end; gap: 0.1rem; flex-shrink: 0;
   }
 
   .widget-btn {
-    width: 22px; height: 22px;
-    border-radius: 5px; border: none;
+    width: var(--btn-size); height: var(--btn-size);
+    border-radius: 0.35rem; border: none;
     background: transparent; color: var(--text-dim);
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
     padding: 0; transition: background 0.12s, color 0.12s;
+    flex-shrink: 0;
   }
   .widget-btn:hover { background: var(--bg-hover); color: var(--text-hi); }
   .widget-btn.close:hover { background: var(--red-dim); color: var(--red); }
-  .widget-btn svg { width: 11px; height: 11px; stroke-width: 1.8; }
+  .widget-btn svg { width: 1.2em; height: 1.2em; stroke-width: 1.7; }
 
   .widget-body {
     flex: 1; overflow: auto; min-height: 0;
     color: var(--text);
     font-family: 'JetBrains Mono', monospace;
-    font-size: 12px; line-height: 1.6;
+    font-size: 0.8125rem; line-height: 1.6;
   }
 
   /* ═══════════════════════════════════════════════════
@@ -312,20 +315,20 @@
   #drag-ghost {
     position: fixed; pointer-events: none; z-index: 9999;
     background: var(--bg-elevated); border: 1px solid var(--a1);
-    border-radius: 8px; padding: 5px 14px;
-    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    border-radius: 0.4rem; padding: 0.25rem 0.7rem;
+    font-size: 0.75rem; font-family: 'Rubik', sans-serif;
     color: var(--a1); opacity: 0.92; display: none;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+    box-shadow: 0 0.2rem 0.8rem rgba(0,0,0,0.5);
   }
 
   .empty-state {
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    gap: 10px; color: var(--text-dim);
-    font-size: 11px; font-family: 'JetBrains Mono', monospace;
-    letter-spacing: 0.04em; opacity: 0.4;
+    gap: 0.5rem; color: var(--text-dim);
+    font-size: 0.75rem; font-family: 'Rubik', sans-serif;
+    opacity: 0.4;
   }
-  .empty-state svg { width: 22px; height: 22px; }
+  .empty-state svg { width: 1.25rem; height: 1.25rem; }
 </style>
 </head>
 <body>
@@ -388,9 +391,7 @@ const ICONS = {
   terminal: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
   files:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
   minimize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
-  // Left chevron = promote to master (stack windows)
   promote:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`,
-  // Right chevron = demote to stack (master window)
   demote:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`,
   close:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
 };
@@ -423,6 +424,11 @@ function mkBtn(iconName, label, extraClass, onClick) {
   return b;
 }
 
+// Count visible (non-minimized) widgets
+function visibleCount() {
+  return [...widgets.values()].filter(w => w.zone === 'master' || w.zone === 'stack').length;
+}
+
 function render() {
   const masterEl = $('master'), stackEl = $('stack');
   const minEl = $('minimized-section'), msd = $('ms-divider');
@@ -451,7 +457,7 @@ function render() {
     stackWs.forEach((w, i) => {
       const wEl = buildWidgetEl(w, 'stack');
       wEl.style.flex = `${w.flexRatio} 1 0`;
-      wEl.style.minHeight = '60px';
+      wEl.style.minHeight = '3.5rem';
       stackEl.appendChild(wEl);
       if (i < stackWs.length - 1) {
         const div = mkEl('div', 'stack-divider');
@@ -476,22 +482,24 @@ function buildWidgetEl(w, zone) {
   wrap.dataset.id = w.id;
 
   const title = mkEl('div', 'widget-title');
-
-  // Left zone — reserved
   title.appendChild(mkEl('div', 'title-left'));
 
   const name = mkEl('span', 'widget-name');
   name.textContent = w.name;
   title.appendChild(name);
 
-  // Right zone — order: minimize · promote/demote · close
   const right = mkEl('div', 'title-right');
   right.appendChild(mkBtn('minimize', 'minimize', '', () => minimizeWidget(w.id)));
-  right.appendChild(mkBtn(
-    zone === 'stack' ? 'promote' : 'demote',
-    zone === 'stack' ? 'make master' : 'send to stack',
-    '', () => zone === 'stack' ? promoteWidget(w.id) : demoteWidget(w.id)
-  ));
+
+  // Only show promote/demote when more than one window is visible
+  if (visibleCount() > 1) {
+    right.appendChild(mkBtn(
+      zone === 'stack' ? 'promote' : 'demote',
+      zone === 'stack' ? 'make master' : 'send to stack',
+      '', () => zone === 'stack' ? promoteWidget(w.id) : demoteWidget(w.id)
+    ));
+  }
+
   right.appendChild(mkBtn('close', 'close', 'close', () => closeWidget(w.id)));
   title.appendChild(right);
 
@@ -504,7 +512,7 @@ function buildWidgetEl(w, zone) {
     body.appendChild(w.cellEl);
     if (w.cellInstance?.mount) requestAnimationFrame(() => w.cellInstance.mount());
   } else {
-    body.style.cssText += '; padding:16px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:11px;';
+    body.style.cssText += '; padding:0.75rem; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:0.75rem; font-family:"Rubik",sans-serif;';
     body.textContent = 'loading…';
   }
   wrap.appendChild(body);
@@ -615,7 +623,7 @@ function normalizeStackOrder() {
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
     const ws = $('workspace').getBoundingClientRect();
-    masterFrac = Math.max(0.15, Math.min(0.85, startFrac + (e.clientX - startX) / (ws.width - 10)));
+    masterFrac = Math.max(0.15, Math.min(0.85, startFrac + (e.clientX - startX) / ws.width));
     $('master').style.width = (masterFrac * 100) + '%';
   });
   document.addEventListener('mouseup', () => { dragging = false; div.classList.remove('dragging'); });

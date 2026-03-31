@@ -106,6 +106,8 @@ export async function coerceToBytes(value, shell) {
   if (value instanceof Uint8Array)  return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value))    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (_isPlainObject(value) || Array.isArray(value))
+    return new TextEncoder().encode(stringify(value, { maxLength: 76 }));
   const buf = await (await coerceToResponse(value, shell)).arrayBuffer();
   return new Uint8Array(buf);
 }
@@ -115,6 +117,8 @@ export async function coerceToText(value, shell) {
   if (typeof value === 'string')    return value;
   if (value instanceof ArrayBuffer) return new TextDecoder().decode(value);
   if (ArrayBuffer.isView(value))    return new TextDecoder().decode(value);
+  if (_isPlainObject(value) || Array.isArray(value))
+    return stringify(value, { maxLength: 76 });
   return (await coerceToResponse(value, shell)).text();
 }
 
