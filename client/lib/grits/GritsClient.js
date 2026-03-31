@@ -8,10 +8,10 @@
 //   gg.gc(cidString?)                     → void
 //
 // GritsVolume — server operations (with shared cache fallthrough)
-//   vol.lo  / vol.lookup (path)           → GritsFile
-//   vol.li  / vol.link   (file|cid, path) → LinkResponse
-//   vol.get / vol.g      (cidString)      → Response
-//   vol.put / vol.p      (bytes)          → string (content CID)
+//   vol.lookup (path)                     → GritsFile
+//   vol.link   (file|cid, path)           → LinkResponse
+//   vol.get    (cidString)                → Response
+//   vol.put    (bytes)                    → string (content CID)
 //   vol.meta(cidString)                   → { type, size, contentHash, ... }
 //   vol.json(cidString)                   → parsed JS object
 //   vol.mkfile(cidString, size)           → string (metadata CID, stored locally)
@@ -20,7 +20,7 @@
 //   vol.resetRoot()                       → void
 //   vol.getServiceWorkerHash()            → string | undefined
 //
-// GritsFile — obtained from vol.lo():
+// GritsFile — obtained from vol.lookup():
 //   file.cid()        → string  (metadata CID — use this for li())
 //   file.contentCID() → string  (content blob CID — use this for get())
 //   file.size()       → number
@@ -44,6 +44,22 @@ const DEBUG_STATS = true;
 const JSON_CACHE_MAX_AGE          = 5 * 60 * 1000;
 const JSON_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 const DEFAULT_HARD_TIMEOUT        = 1 * 60 * 1000; // 1 minute, matches Go-side default
+
+// ─────────────────────────────────────────────────────────────────
+// MultiLink assertion flags — mirror of Go-side constants in namestore.go
+// ─────────────────────────────────────────────────────────────────
+
+export const ASSERT_PREV_MATCHES = 1;
+export const ASSERT_IS_BLOB      = 2;
+export const ASSERT_IS_TREE      = 4;
+export const ASSERT_IS_NONEMPTY  = 8;
+
+export class AssertionError extends Error {
+  constructor(msg) {
+    super(msg);
+    this.name = 'AssertionError';
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────
 // Type assertion helpers
@@ -227,7 +243,7 @@ export class GritsVolume {
 
   // ── Lookup ────────────────────────────────────────────────────
 
-  async lo(path) {
+  async lookup(path) {
     if (typeof path !== 'string')
       throw new TypeError(`lo: path must be a string, got ${_typename(path)}`);
     const normalized = path.replace(/^\/+/, '');
@@ -237,11 +253,9 @@ export class GritsVolume {
     return new GritsFile(info.metadataHash, meta, this);
   }
   
-  lookup(path) { return this.lo(path); }
-
   // ── Link ──────────────────────────────────────────────────────
 
-  async li(fileOrCID, path) {
+  async link(fileOrCID, path) {
     _assertStringOrFile(fileOrCID, 'li');
     if (typeof path !== 'string')
       throw new TypeError(`li: path must be a string, got ${_typename(path)}`);
@@ -250,7 +264,26 @@ export class GritsVolume {
     return this._linkRaw(metaCID, path);
   }
 
-  link(fileOrCID, path) { return this.li(fileOrCID, path); }
+  async multiLink(requests) {
+    const url  = `${this._serverUrl}/grits/v1/link/${this._volume}`;
+    const body = JSON.stringify(requests.map(r => ({
+      path:     _normalizePath(r.path),
+      addr:     r.addr     ?? '',
+      prevAddr: r.prevAddr ?? '',
+      assert:   r.assert   ?? 0,
+    })));
+    const resp = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+    });
+    if (!resp.ok) {
+      const msg = await resp.text().catch(() => resp.statusText);
+      if (resp.status === 409) throw new AssertionError(msg);
+      throw new Error(`multiLink: ${resp.status} ${msg}`);
+    }
+    const result = await resp.json();
+    this._ingestLookupResponse(result);
+    return result;
+  }
 
   // ── Get ───────────────────────────────────────────────────────
 
@@ -276,8 +309,6 @@ export class GritsVolume {
     throw new Error(`get: CID ${cid} not found on ${this._serverUrl}/${this._volume}`);
   }
 
-  g(cid) { return this.get(cid); }
-
   // ── Put ───────────────────────────────────────────────────────
 
   async put(bytes) {
@@ -288,8 +319,6 @@ export class GritsVolume {
     await this._parent._blobCachePut(cid, new Response(data, { status: 200 }));
     return cid;
   }
-
-  p(bytes) { return this.put(bytes); }
 
   // ── Meta / JSON ───────────────────────────────────────────────
 
@@ -332,18 +361,7 @@ export class GritsVolume {
   }
 
   async _linkRaw(metaCID, path) {
-    const url  = `${this._serverUrl}/grits/v1/link/${this._volume}`;
-    const body = JSON.stringify([{ path: _normalizePath(path), addr: metaCID }]);
-    const resp = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
-    });
-    if (!resp.ok) {
-      const msg = await resp.text().catch(() => resp.statusText);
-      throw new Error(`li ${this._volume}:${path}: ${resp.status} ${msg}`);
-    }
-    const result = await resp.json();
-    this._ingestLookupResponse(result);
-    return result;
+    return this.multiLink([{ path, addr: metaCID }]);
   }
 
   async _fetchBlob(cid) {
