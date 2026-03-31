@@ -1,309 +1,331 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!--
-  @cell gimbal-shell
-  @version 0.1
-  @about
-    Gimbal: a tiling window manager for the browser, backed by the grits
-    content-addressed filesystem. Hosts a master pane (left, full-height)
-    and a stack of widgets (right, proportionally sized), plus an icon strip
-    for launching and restoring widgets. Layout is driven by a small state
-    machine; widgets are independently loaded ES modules.
-
-  @interface widget
-    Widgets are ES modules with a default export:
-
-      createWidget(opts) → { el, focus(), destroy() }
-
-    opts:
-      name        {string}   Display name for the title bar
-      evalContext {object}   Namespace injected into interactive widgets.
-                             Contains: { fs, sh, ui } — all initially null
-                             stubs until wired to a real grits backend.
-
-    Return value:
-      el          {HTMLElement}  Root node. Will be mounted inside
-                                 .widget-body. Must fill its container
-                                 (width:100%, height:100% or flex:1).
-      focus()                    Called when the widget's pane becomes
-                                 active (e.g. on click or keyboard nav).
-      destroy()                  Called on close. Must remove any global
-                                 event listeners the widget registered.
-
-    Styles:
-      Use only CSS variables defined here (--bg, --bg2, --bg3, --border,
-      --border-hi, --accent, --accent-dim, --text, --text-dim, --text-hi,
-      --danger). Define no global class names; scope all styles to the
-      element returned as `el`.
--->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>gimbal</title>
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=IBM+Plex+Sans:wght@300;400&display=swap');
-
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
+  /* ═══════════════════════════════════════════════════
+     THEME
+     ═══════════════════════════════════════════════════ */
   :root {
-    --bg:          #0e0f11;
-    --bg2:         #13151a;
-    --bg3:         #1a1d24;
-    --border:      #2a2d36;
-    --border-hi:   #3d4150;
-    --accent:      #5b8dd9;
-    --accent-dim:  #3a5a8a;
-    --text:        #c8cdd8;
-    --text-dim:    #6b7080;
-    --text-hi:     #e8ecf4;
-    --danger:      #c45a5a;
-    --strip-w:     52px;
-    --title-h:     28px;
-    --divider-w:   5px;
-    --divider-h:   5px;
+    --bg-root:      #080a0e;
+    --bg-float:     #0d1017;
+    --bg-elevated:  #111520;
+    --bg-hover:     #181f2e;
+    --bg-active:    #141926;
+
+    --border:       rgba(255,255,255,0.06);
+    --border-hi:    rgba(255,255,255,0.11);
+    --border-focus: rgba(255,255,255,0.14);
+
+    --text-hi:      #e8edf6;
+    --text:         #8fa0b8;
+    --text-dim:     #6b7a94;
+
+    --a1:           #4d9ef7;
+    --a1-dim:       rgba(77,158,247,0.12);
+    --a1-glow:      rgba(77,158,247,0.06);
+
+    --a2:           #3fb97a;
+    --a2-dim:       rgba(63,185,122,0.12);
+
+    --red:          #e05555;
+    --red-dim:      rgba(224,85,85,0.12);
   }
+
+  /* ═══════════════════════════════════════════════════
+     BASE
+     ═══════════════════════════════════════════════════ */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   html, body {
     width: 100%; height: 100%;
-    background: var(--bg);
+    background: var(--bg-root);
     color: var(--text);
-    font-family: 'IBM Plex Mono', monospace;
+    font-family: 'Inter', 'Helvetica Neue', sans-serif;
     font-size: 13px;
     overflow: hidden;
     user-select: none;
   }
 
-  /* ── SCROLLBARS ──────────────────────────────────── */
-  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none; z-index: 0;
+  }
+
+  /* ═══════════════════════════════════════════════════
+     SCROLLBARS
+     ═══════════════════════════════════════════════════ */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 3px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
-  ::-webkit-scrollbar-corner { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
   * { scrollbar-width: thin; scrollbar-color: var(--border-hi) transparent; }
   #minimized-section { scrollbar-width: none; }
-  #minimized-section::-webkit-scrollbar { width: 0; }
+  #minimized-section::-webkit-scrollbar { display: none; }
 
-  /* ── ROOT LAYOUT ─────────────────────────────────── */
-  #root { display: flex; width: 100%; height: 100%; }
-
-  /* ── WORKSPACE ───────────────────────────────────── */
-  #workspace { flex: 1 1 0; display: flex; min-width: 0; position: relative; }
-
-  /* ── MASTER PANE ─────────────────────────────────── */
-  #master { flex: 0 0 auto; position: relative; display: flex; flex-direction: column; }
-
-  /* ── MASTER/STACK DIVIDER ────────────────────────── */
-  #ms-divider {
-    width: var(--divider-w);
-    background: var(--border);
-    cursor: col-resize;
-    flex: 0 0 var(--divider-w);
-    position: relative;
-    transition: background 0.15s;
-    z-index: 10;
+  /* ═══════════════════════════════════════════════════
+     LAYOUT
+     ═══════════════════════════════════════════════════ */
+  #root {
+    display: flex; width: 100%; height: 100%;
+    position: relative; z-index: 1;
   }
-  #ms-divider:hover, #ms-divider.dragging { background: var(--accent-dim); }
+
+  #workspace {
+    flex: 1 1 0; display: flex; min-width: 0;
+    padding: 10px 8px 10px 10px; position: relative;
+  }
+
+  #master {
+    flex: 0 0 auto; position: relative;
+    display: flex; flex-direction: column;
+  }
+
+  #stack {
+    flex: 1 1 0; display: flex; flex-direction: column;
+    min-width: 0; position: relative;
+  }
+
+  /* ═══════════════════════════════════════════════════
+     DIVIDERS
+     ═══════════════════════════════════════════════════ */
+  #ms-divider {
+    width: 10px; flex: 0 0 10px;
+    cursor: col-resize; z-index: 10;
+    display: flex; align-items: center; justify-content: center;
+  }
   #ms-divider::after {
     content: '';
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    width: 1px; height: 32px;
-    background: var(--border-hi);
-    border-radius: 1px;
+    width: 1px; height: 36px;
+    background: var(--border); border-radius: 1px;
+    transition: background 0.2s, height 0.2s;
+  }
+  #ms-divider:hover::after, #ms-divider.dragging::after {
+    background: var(--a1); height: 56px;
   }
 
-  /* ── STACK PANE ──────────────────────────────────── */
-  #stack { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; position: relative; }
+  .stack-divider {
+    height: 10px; flex: 0 0 10px;
+    cursor: row-resize; z-index: 5;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .stack-divider::after {
+    content: '';
+    height: 1px; width: 40px;
+    background: var(--border); border-radius: 1px;
+    transition: background 0.2s, width 0.2s;
+  }
+  .stack-divider:hover::after, .stack-divider.dragging::after {
+    background: var(--a1); width: 56px;
+  }
 
-  /* ── ICON STRIP ──────────────────────────────────── */
+  /* ═══════════════════════════════════════════════════
+     ICON STRIP
+     ═══════════════════════════════════════════════════ */
   #strip {
-    width: var(--strip-w);
-    flex: 0 0 var(--strip-w);
-    background: var(--bg2);
-    border-left: 1px solid var(--border);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    padding: 8px 0;
-    gap: 4px;
-    position: relative;
-    z-index: 20;
+    width: 56px; flex: 0 0 56px;
+    display: flex; flex-direction: column;
+    align-items: center; padding: 10px 0; gap: 0;
+    position: relative; z-index: 20;
   }
 
+  #strip-top {
+    display: flex; flex-direction: column;
+    align-items: center; gap: 5px;
+    padding-bottom: 10px;
+  }
+
+  /* Launcher icons — have a + badge */
   .strip-launcher {
-    width: 36px; height: 36px;
-    border-radius: 6px;
-    border: 1px solid transparent;
-    background: transparent;
+    width: 38px; height: 38px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-float);
     color: var(--text-dim);
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    transition: background 0.12s, border-color 0.12s, color 0.12s;
+    transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
     position: relative;
   }
-  .strip-launcher:hover { background: var(--bg3); border-color: var(--border); color: var(--text-hi); }
-  .strip-launcher:active { background: var(--border); }
-  .strip-launcher svg { width: 18px; height: 18px; }
-  .strip-launcher .tip {
-    display: none;
-    position: absolute;
-    right: calc(100% + 8px);
-    top: 50%; transform: translateY(-50%);
-    background: var(--bg3);
-    border: 1px solid var(--border-hi);
-    color: var(--text-hi);
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    white-space: nowrap;
-    pointer-events: none;
-    z-index: 100;
+  .strip-launcher:hover {
+    background: var(--bg-hover); border-color: var(--border-hi);
+    color: var(--text); transform: scale(1.06);
   }
-  .strip-launcher:hover .tip { display: block; }
+  .strip-launcher:active { transform: scale(0.96); }
+  .strip-launcher svg { width: 15px; height: 15px; stroke-width: 1.5; }
 
-  #strip-divider-line { width: 28px; height: 1px; background: var(--border); margin: 4px 0; flex-shrink: 0; }
+  /* Small + badge bottom-right */
+  .strip-launcher::after {
+    content: '+';
+    position: absolute; bottom: 4px; right: 5px;
+    font-size: 9px; line-height: 1;
+    color: var(--text-dim); opacity: 0.55;
+    font-family: 'JetBrains Mono', monospace;
+    pointer-events: none;
+    transition: opacity 0.15s;
+  }
+  .strip-launcher:hover::after { opacity: 0.9; }
+
+  /* Strip separator — more visually substantial */
+  #strip-separator {
+    width: 38px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; margin: 4px 0;
+    gap: 4px;
+  }
+  #strip-separator::before,
+  #strip-separator::after {
+    content: '';
+    flex: 1; height: 1px;
+    background: var(--border);
+  }
+  #strip-separator span {
+    font-size: 8px; letter-spacing: 0.1em;
+    color: var(--text-dim); opacity: 0.35;
+    font-family: 'JetBrains Mono', monospace;
+    line-height: 1;
+  }
 
   #minimized-section {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding-bottom: 8px;
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; gap: 5px; overflow-y: auto;
+    padding-top: 4px; padding-bottom: 8px;
   }
 
+  /* Minimized thumbs — no + badge, slightly different shade to distinguish */
   .min-thumb {
-    width: 36px; height: 36px;
-    border-radius: 6px;
+    width: 38px; height: 38px;
+    border-radius: 10px;
     border: 1px solid var(--border);
-    background: var(--bg3);
+    background: var(--bg-elevated);
     color: var(--text-dim);
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    transition: border-color 0.12s, color 0.12s, background 0.12s;
+    transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
     position: relative;
   }
-  .min-thumb:hover { border-color: var(--accent-dim); color: var(--text-hi); background: var(--bg); }
-  .min-thumb svg { width: 16px; height: 16px; }
-  .min-thumb .tip {
+  .min-thumb:hover {
+    border-color: var(--a1); color: var(--a1);
+    background: var(--a1-glow); transform: scale(1.06);
+  }
+  .min-thumb svg { width: 14px; height: 14px; stroke-width: 1.5; }
+
+  .strip-launcher .tip, .min-thumb .tip {
     display: none;
     position: absolute;
-    right: calc(100% + 8px);
-    top: 50%; transform: translateY(-50%);
-    background: var(--bg3);
-    border: 1px solid var(--border-hi);
-    color: var(--text-hi);
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    white-space: nowrap;
-    pointer-events: none;
-    z-index: 100;
+    right: calc(100% + 10px); top: 50%; transform: translateY(-50%);
+    background: var(--bg-elevated); border: 1px solid var(--border-hi);
+    color: var(--text-hi); padding: 4px 10px; border-radius: 6px;
+    font-size: 11px; white-space: nowrap; pointer-events: none; z-index: 100;
+    font-family: 'JetBrains Mono', monospace; letter-spacing: 0.03em;
   }
-  .min-thumb:hover .tip { display: block; }
+  .strip-launcher:hover .tip, .min-thumb:hover .tip { display: block; }
 
-  /* ── WIDGET CHROME ───────────────────────────────── */
+  /* ═══════════════════════════════════════════════════
+     WIDGET CHROME
+     ═══════════════════════════════════════════════════ */
   .widget {
-    display: flex;
-    flex-direction: column;
-    background: var(--bg2);
+    display: flex; flex-direction: column;
+    background: var(--bg-float);
     border: 1px solid var(--border);
-    overflow: hidden;
-    position: relative;
-    min-height: 0;
+    border-radius: 12px;
+    overflow: hidden; position: relative; min-height: 0;
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.5),
+      0 8px 28px rgba(0,0,0,0.45),
+      0 2px 6px rgba(0,0,0,0.3);
+    transition: border-color 0.15s, box-shadow 0.15s;
   }
-  .widget.in-master { flex: 1; border: none; }
-  /* .widget.in-stack  { } */ /* height via flexRatio */
+  .widget:focus-within {
+    border-color: var(--border-focus);
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.5),
+      0 12px 36px rgba(0,0,0,0.55),
+      0 2px 6px rgba(0,0,0,0.3),
+      inset 0 1px 0 rgba(255,255,255,0.03);
+  }
+  .widget.in-master { flex: 1; }
 
   .widget-title {
-    height: var(--title-h);
-    background: var(--bg3);
+    height: 32px;
+    background: var(--bg-elevated);
     border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    padding: 0 6px 0 10px;
-    gap: 6px;
-    flex-shrink: 0;
-    cursor: grab;
+    display: flex; align-items: center; padding: 0 6px;
+    flex-shrink: 0; cursor: grab;
+    border-radius: 12px 12px 0 0;
+    transition: background 0.15s;
   }
+  .widget:focus-within .widget-title { background: var(--bg-active); }
   .widget-title:active { cursor: grabbing; }
 
+  /* Left zone — empty, reserved for menus/nav */
+  .title-left {
+    width: 48px; display: flex; align-items: center;
+    gap: 2px; flex-shrink: 0;
+  }
+
   .widget-name {
-    flex: 1;
-    font-size: 11px;
+    flex: 1; text-align: center;
+    font-size: 11px; font-weight: 400;
     color: var(--text-dim);
-    letter-spacing: 0.05em;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    letter-spacing: 0.06em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: 'JetBrains Mono', monospace;
+    transition: color 0.15s;
+  }
+  .widget:focus-within .widget-name { color: var(--text); }
+
+  /* Right zone — minimize · promote/demote · close (left to right) */
+  .title-right {
+    width: 48px; display: flex; align-items: center;
+    justify-content: flex-end; gap: 1px; flex-shrink: 0;
   }
 
   .widget-btn {
-    width: 20px; height: 20px;
-    border-radius: 4px;
-    border: none;
-    background: transparent;
-    color: var(--text-dim);
+    width: 22px; height: 22px;
+    border-radius: 5px; border: none;
+    background: transparent; color: var(--text-dim);
     cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    padding: 0;
-    transition: background 0.1s, color 0.1s;
-    flex-shrink: 0;
+    padding: 0; transition: background 0.12s, color 0.12s;
   }
-  .widget-btn:hover { background: var(--border); color: var(--text-hi); }
-  .widget-btn.danger:hover { background: var(--danger); color: #fff; }
-  .widget-btn svg { width: 12px; height: 12px; }
+  .widget-btn:hover { background: var(--bg-hover); color: var(--text-hi); }
+  .widget-btn.close:hover { background: var(--red-dim); color: var(--red); }
+  .widget-btn svg { width: 11px; height: 11px; stroke-width: 1.8; }
 
   .widget-body {
-    flex: 1;
-    overflow: auto;
-    min-height: 0;
-    padding: 12px;
-    font-size: 12px;
-    line-height: 1.6;
+    flex: 1; overflow: auto; min-height: 0;
     color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; line-height: 1.6;
   }
 
-  /* ── STACK DIVIDERS ──────────────────────────────── */
-  .stack-divider {
-    height: var(--divider-h);
-    background: var(--border);
-    cursor: row-resize;
-    flex: 0 0 var(--divider-h);
-    position: relative;
-    transition: background 0.15s;
-    z-index: 5;
-  }
-  .stack-divider:hover, .stack-divider.dragging { background: var(--accent-dim); }
-  .stack-divider::after {
-    content: '';
-    position: absolute;
-    left: 50%; top: 50%;
-    transform: translate(-50%, -50%);
-    height: 1px; width: 32px;
-    background: var(--border-hi);
-    border-radius: 1px;
-  }
-
-  /* ── DRAG GHOST ──────────────────────────────────── */
+  /* ═══════════════════════════════════════════════════
+     DRAG GHOST & EMPTY STATE
+     ═══════════════════════════════════════════════════ */
   #drag-ghost {
-    position: fixed;
-    pointer-events: none;
-    z-index: 9999;
-    background: var(--bg3);
-    border: 1px solid var(--accent-dim);
-    border-radius: 6px;
-    padding: 4px 12px;
-    font-size: 11px;
-    color: var(--accent);
-    opacity: 0.85;
-    display: none;
+    position: fixed; pointer-events: none; z-index: 9999;
+    background: var(--bg-elevated); border: 1px solid var(--a1);
+    border-radius: 8px; padding: 5px 14px;
+    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    color: var(--a1); opacity: 0.92; display: none;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5);
   }
 
-  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+  .empty-state {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 10px; color: var(--text-dim);
+    font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    letter-spacing: 0.04em; opacity: 0.4;
+  }
+  .empty-state svg { width: 22px; height: 22px; }
 </style>
 </head>
 <body>
@@ -315,7 +337,8 @@
     <div id="stack"></div>
   </div>
   <div id="strip">
-    <div id="strip-divider-line"></div>
+    <div id="strip-top"></div>
+    <div id="strip-separator"><span>open</span></div>
     <div id="minimized-section"></div>
   </div>
 </div>
@@ -334,27 +357,22 @@ const _gg     = new GritsClient();
 const evalContext = { fs: _gg, sh: null, ui: null };
 
 const _shell = makeShell({
-  gg:       _gg,
+  gg:        _gg,
   serverUrl: _origin,
-  volume:   _vol,
-  cwd:      '/',
-  libs: [{ serverUrl: _origin, volume: _vol, path: 'lib' }],
+  volume:    _vol,
+  cwd:       '/',
+  libs:      [{ serverUrl: _origin, volume: _vol, path: 'lib' }],
+  evalContext,
 });
-
 evalContext.sh = _shell;
 
-// ─────────────────────────────────────────────────────────
-// CELL REGISTRY
-// Each entry maps a launcher id to a dynamic import path and
-// metadata. The module is loaded once on first use and cached.
-// ─────────────────────────────────────────────────────────
 const CELL_REGISTRY = {
   terminal: {
-    name: 'Terminal', icon: 'terminal', defaultZone: 'stack',
+    name: 'terminal', icon: 'terminal', defaultZone: 'stack',
     module: `${_libUrl}/gterm/gwm-widget.js`, _cache: null,
   },
   files: {
-    name: 'File Browser', icon: 'files', defaultZone: 'master',
+    name: 'files', icon: 'files', defaultZone: 'master',
     module: `${_libUrl}/files/gwm-widget.js`, _cache: null,
   },
 };
@@ -362,102 +380,70 @@ const CELL_REGISTRY = {
 async function loadCell(id) {
   const entry = CELL_REGISTRY[id];
   if (!entry) throw new Error(`Unknown cell: ${id}`);
-  if (!entry._cache) {
-    const mod = await import(entry.module);
-    entry._cache = mod.default;
-  }
+  if (!entry._cache) { const mod = await import(entry.module); entry._cache = mod.default; }
   return entry._cache;
 }
 
-// ─────────────────────────────────────────────────────────
-// SVG ICONS
-// ─────────────────────────────────────────────────────────
 const ICONS = {
-  terminal: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
-  files:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
-  minimize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
-  maximize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>`,
-  promote:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>`,
-  demote:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="10" y1="14" x2="21" y2="3"/><line x1="3" y1="21" x2="14" y2="10"/></svg>`,
-  close:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
+  terminal: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+  files:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
+  minimize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  // Left chevron = promote to master (stack windows)
+  promote:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`,
+  // Right chevron = demote to stack (master window)
+  demote:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`,
+  close:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
 };
 
-// ─────────────────────────────────────────────────────────
-// STATE
-// ─────────────────────────────────────────────────────────
 let widgetSeq  = 0;
-let masterFrac = 0.62;
-const widgets  = new Map(); // id → widget record
+let masterFrac = 0.60;
+const widgets  = new Map();
 
 evalContext.ui = {
   openWidget({ el, focus, destroy, name = 'widget', icon = 'terminal', zone = 'stack' }) {
     const id = ++widgetSeq;
-    const record = {
+    widgets.set(id, {
       id, name, icon, zone,
       masterHistory: zone === 'master' ? Date.now() : 0,
       stackOrder:    zone === 'stack'  ? stackMaxOrder() + 1 : 0,
-      flexRatio: 1,
-      cellEl:       el,
-      cellInstance: { focus, destroy },
-    };
-    widgets.set(id, record);
+      flexRatio: 1, cellEl: el, cellInstance: { focus, destroy },
+    });
     render();
     return id;
   }
 };
 
-// ─────────────────────────────────────────────────────────
-// DOM HELPERS
-// ─────────────────────────────────────────────────────────
-const el  = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
-const $   = id => document.getElementById(id);
+const mkEl = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+const $    = id => document.getElementById(id);
 
-function btn(iconName, label, danger, onClick) {
-  const b = el('button', `widget-btn${danger ? ' danger' : ''}`);
-  b.innerHTML = ICONS[iconName];
-  b.title = label;
+function mkBtn(iconName, label, extraClass, onClick) {
+  const b = mkEl('button', `widget-btn${extraClass ? ' '+extraClass : ''}`);
+  b.innerHTML = ICONS[iconName]; b.title = label;
   b.addEventListener('click', e => { e.stopPropagation(); onClick(); });
   return b;
 }
 
-// ─────────────────────────────────────────────────────────
-// RENDER
-// ─────────────────────────────────────────────────────────
 function render() {
-  const masterEl = $('master');
-  const stackEl  = $('stack');
-  const minEl    = $('minimized-section');
-  const msd      = $('ms-divider');
+  const masterEl = $('master'), stackEl = $('stack');
+  const minEl = $('minimized-section'), msd = $('ms-divider');
 
   const masterW = [...widgets.values()].find(w => w.zone === 'master');
-  const stackWs = [...widgets.values()].filter(w => w.zone === 'stack')
-                    .sort((a,b) => a.stackOrder - b.stackOrder);
+  const stackWs = [...widgets.values()].filter(w => w.zone === 'stack').sort((a,b) => a.stackOrder - b.stackOrder);
   const minWs   = [...widgets.values()].filter(w => w.zone === 'minimized');
 
-  // master/stack divider visibility
   msd.style.display = (masterW && stackWs.length) ? '' : 'none';
+  masterEl.style.width = masterW && stackWs.length ? (masterFrac*100)+'%'
+    : masterW ? '100%' : stackWs.length ? '0' : '100%';
 
-  // master width
-  if (masterW && stackWs.length) {
-    masterEl.style.width = (masterFrac * 100) + '%';
-  } else if (masterW) {
-    masterEl.style.width = '100%';
-  } else {
-    masterEl.style.width = stackWs.length ? '0' : '100%';
-  }
-
-  // ── master ──
   masterEl.innerHTML = '';
   if (masterW) {
     masterEl.appendChild(buildWidgetEl(masterW, 'master'));
   } else {
-    const emp = el('div');
-    emp.style.cssText = 'flex:1;display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:11px;opacity:0.35;';
-    emp.textContent = 'no master window';
+    const emp = mkEl('div', 'empty-state');
+    emp.innerHTML = ICONS.files + '<span>no master window</span>';
     masterEl.appendChild(emp);
   }
 
-  // ── stack ──
   stackEl.innerHTML = '';
   if (stackWs.length) {
     const total = stackWs.reduce((s,w) => s + (w.flexRatio||1), 0);
@@ -465,153 +451,122 @@ function render() {
     stackWs.forEach((w, i) => {
       const wEl = buildWidgetEl(w, 'stack');
       wEl.style.flex = `${w.flexRatio} 1 0`;
-      wEl.style.minHeight = '48px';
+      wEl.style.minHeight = '60px';
       stackEl.appendChild(wEl);
       if (i < stackWs.length - 1) {
-        const div = el('div', 'stack-divider');
-        div.dataset.above = w.id;
-        div.dataset.below = stackWs[i+1].id;
+        const div = mkEl('div', 'stack-divider');
+        div.dataset.above = w.id; div.dataset.below = stackWs[i+1].id;
         stackEl.appendChild(div);
         bindStackDivider(div);
       }
     });
   }
 
-  // ── minimized ──
   minEl.innerHTML = '';
   minWs.forEach(w => {
-    const thumb = el('div', 'min-thumb');
-    thumb.innerHTML = ICONS[w.icon] + `<span class="tip">${w.name}</span>`;
+    const thumb = mkEl('div', 'min-thumb');
+    thumb.innerHTML = (ICONS[w.icon]||ICONS.terminal) + `<span class="tip">${w.name}</span>`;
     thumb.addEventListener('click', () => restoreWidget(w.id));
     minEl.appendChild(thumb);
   });
 }
 
-// ─────────────────────────────────────────────────────────
-// WIDGET ELEMENT BUILDER
-// ─────────────────────────────────────────────────────────
 function buildWidgetEl(w, zone) {
-  const wrap = el('div', `widget in-${zone}`);
+  const wrap = mkEl('div', `widget in-${zone}`);
   wrap.dataset.id = w.id;
 
-  // title bar
-  const title = el('div', 'widget-title');
-  const nameEl = el('span', 'widget-name');
-  nameEl.textContent = w.name;
-  title.appendChild(nameEl);
+  const title = mkEl('div', 'widget-title');
 
-  if (zone === 'stack') title.appendChild(btn('promote', 'send to master', false, () => promoteWidget(w.id)));
-  if (zone === 'master' && [...widgets.values()].some(x => x.zone === 'stack'))
-    title.appendChild(btn('demote', 'send to stack', false, () => demoteWidget(w.id)));
-  title.appendChild(btn('maximize', 'maximize',  false, () => maximizeWidget(w.id)));
-  title.appendChild(btn('minimize', 'minimize',  false, () => minimizeWidget(w.id)));
-  title.appendChild(btn('close',    'close',     true,  () => closeWidget(w.id)));
+  // Left zone — reserved
+  title.appendChild(mkEl('div', 'title-left'));
+
+  const name = mkEl('span', 'widget-name');
+  name.textContent = w.name;
+  title.appendChild(name);
+
+  // Right zone — order: minimize · promote/demote · close
+  const right = mkEl('div', 'title-right');
+  right.appendChild(mkBtn('minimize', 'minimize', '', () => minimizeWidget(w.id)));
+  right.appendChild(mkBtn(
+    zone === 'stack' ? 'promote' : 'demote',
+    zone === 'stack' ? 'make master' : 'send to stack',
+    '', () => zone === 'stack' ? promoteWidget(w.id) : demoteWidget(w.id)
+  ));
+  right.appendChild(mkBtn('close', 'close', 'close', () => closeWidget(w.id)));
+  title.appendChild(right);
 
   bindTitleDrag(title, w);
   wrap.appendChild(title);
 
-  // body — mount the cell's el if available, else a loading placeholder
-  const body = el('div', 'widget-body');
-  body.style.padding = '0'; // cells manage their own padding
+  const body = mkEl('div', 'widget-body');
+  body.style.padding = '0';
   if (w.cellEl) {
     body.appendChild(w.cellEl);
-    // notify cell it is now in the DOM (cells that need dimensions at init)
-    if (w.cellInstance?.mount) {
-      requestAnimationFrame(() => w.cellInstance.mount());
-    }
+    if (w.cellInstance?.mount) requestAnimationFrame(() => w.cellInstance.mount());
   } else {
-    body.style.padding = '12px';
-    body.style.color = 'var(--text-dim)';
+    body.style.cssText += '; padding:16px; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:11px;';
     body.textContent = 'loading…';
   }
   wrap.appendChild(body);
   return wrap;
 }
 
-// ─────────────────────────────────────────────────────────
-// WINDOW OPERATIONS
-// ─────────────────────────────────────────────────────────
 async function launchCell(cellId) {
   const entry = CELL_REGISTRY[cellId];
   if (!entry) return;
+  const id = ++widgetSeq, now = Date.now(), zone = entry.defaultZone;
 
-  const id  = ++widgetSeq;
-  const now = Date.now();
-  const zone = entry.defaultZone;
-
-  // evict current master if opening as master
   if (zone === 'master') {
     const cur = [...widgets.values()].find(w => w.zone === 'master');
     if (cur) { cur.zone = 'stack'; cur.stackOrder = stackMaxOrder() + 1; }
   }
 
-  // proportional stack sizing
   let newRatio = 1;
   if (zone === 'stack') {
-    const existing = [...widgets.values()].filter(w => w.zone === 'stack');
-    const n = existing.length;
+    const ex = [...widgets.values()].filter(w => w.zone === 'stack'), n = ex.length;
     if (n > 0) {
-      const total = existing.reduce((s,w) => s + (w.flexRatio||1), 0);
-      existing.forEach(w => w.flexRatio = (w.flexRatio||1) * n / (n+1));
+      const total = ex.reduce((s,w) => s + (w.flexRatio||1), 0);
+      ex.forEach(w => w.flexRatio = (w.flexRatio||1) * n / (n+1));
       newRatio = total / (n+1);
     }
   }
 
   const record = {
-    id, name: entry.name, icon: entry.icon,
-    zone, masterHistory: zone === 'master' ? now : 0,
+    id, name: entry.name, icon: entry.icon, zone,
+    masterHistory: zone === 'master' ? now : 0,
     stackOrder: zone === 'stack' ? stackMaxOrder() + 1 : 0,
-    flexRatio: newRatio,
-    cellEl: null, cellInstance: null,
+    flexRatio: newRatio, cellEl: null, cellInstance: null,
   };
   widgets.set(id, record);
-  render(); // show loading state immediately
+  render();
 
-  // load cell module asynchronously
   try {
     const createWidget = await loadCell(cellId);
     const instance = await Promise.resolve(createWidget({ name: entry.name, evalContext }));
-    record.cellEl       = instance.el;
-    record.cellInstance = instance;
-    render(); // re-render with real content
-  } catch(e) {
-    console.error(`Failed to load cell "${cellId}":`, e);
-  }
+    record.cellEl = instance.el; record.cellInstance = instance;
+    render();
+  } catch(e) { console.error(`Failed to load cell "${cellId}":`, e); }
 }
 
 function closeWidget(id) {
-  const w = widgets.get(id);
-  if (!w) return;
+  const w = widgets.get(id); if (!w) return;
   w.cellInstance?.destroy();
   const wasMaster = w.zone === 'master';
   widgets.delete(id);
   if (wasMaster) electNewMaster();
-  normalizeStackOrder();
-  render();
+  normalizeStackOrder(); render();
 }
 
 function minimizeWidget(id) {
-  const w = widgets.get(id);
-  if (!w) return;
+  const w = widgets.get(id); if (!w) return;
   const wasMaster = w.zone === 'master';
   w.zone = 'minimized';
   if (wasMaster) electNewMaster();
-  normalizeStackOrder();
-  render();
-}
-
-function maximizeWidget(id) {
-  widgets.forEach((w, wid) => {
-    if (wid !== id && (w.zone === 'master' || w.zone === 'stack')) w.zone = 'minimized';
-  });
-  const w = widgets.get(id);
-  w.zone = 'master'; w.masterHistory = Date.now();
   normalizeStackOrder(); render();
 }
 
 function promoteWidget(id) {
-  const w = widgets.get(id);
-  if (!w) return;
+  const w = widgets.get(id); if (!w) return;
   const cur = [...widgets.values()].find(x => x.zone === 'master');
   if (cur) { cur.zone = 'stack'; cur.stackOrder = stackMaxOrder() + 1; }
   w.zone = 'master'; w.masterHistory = Date.now();
@@ -619,21 +574,16 @@ function promoteWidget(id) {
 }
 
 function demoteWidget(id) {
-  const w = widgets.get(id);
-  if (!w) return;
+  const w = widgets.get(id); if (!w) return;
   w.zone = 'stack'; w.stackOrder = stackMaxOrder() + 1;
   electNewMaster(); normalizeStackOrder(); render();
 }
 
 function restoreWidget(id) {
-  const w = widgets.get(id);
-  if (!w) return;
+  const w = widgets.get(id); if (!w) return;
   const masterOccupied = [...widgets.values()].some(x => x.zone === 'master');
-  if (!masterOccupied && w.masterHistory > 0) {
-    w.zone = 'master'; w.masterHistory = Date.now();
-  } else {
-    w.zone = 'stack'; w.stackOrder = stackMaxOrder() + 1;
-  }
+  if (!masterOccupied && w.masterHistory > 0) { w.zone = 'master'; w.masterHistory = Date.now(); }
+  else { w.zone = 'stack'; w.stackOrder = stackMaxOrder() + 1; }
   normalizeStackOrder(); render();
 }
 
@@ -655,9 +605,6 @@ function normalizeStackOrder() {
     .forEach((w,i) => w.stackOrder = i);
 }
 
-// ─────────────────────────────────────────────────────────
-// DIVIDER DRAG — master/stack
-// ─────────────────────────────────────────────────────────
 (function() {
   const div = $('ms-divider');
   let dragging = false, startX, startFrac;
@@ -668,16 +615,12 @@ function normalizeStackOrder() {
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
     const ws = $('workspace').getBoundingClientRect();
-    const dx = e.clientX - startX;
-    masterFrac = Math.max(0.15, Math.min(0.85, startFrac + dx / (ws.width - 5)));
+    masterFrac = Math.max(0.15, Math.min(0.85, startFrac + (e.clientX - startX) / (ws.width - 10)));
     $('master').style.width = (masterFrac * 100) + '%';
   });
   document.addEventListener('mouseup', () => { dragging = false; div.classList.remove('dragging'); });
 })();
 
-// ─────────────────────────────────────────────────────────
-// DIVIDER DRAG — stack internal
-// ─────────────────────────────────────────────────────────
 function bindStackDivider(divEl) {
   let dragging = false, startY, aboveW, belowW;
   divEl.addEventListener('mousedown', e => {
@@ -689,29 +632,22 @@ function bindStackDivider(divEl) {
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
     const rect = $('stack').getBoundingClientRect();
-    const total = [...widgets.values()].filter(w => w.zone === 'stack')
-                    .reduce((s,w) => s + w.flexRatio, 0);
+    const total = [...widgets.values()].filter(w => w.zone === 'stack').reduce((s,w) => s + w.flexRatio, 0);
     const delta = (e.clientY - startY) / rect.height * total;
     aboveW.flexRatio = Math.max(0.05, aboveW.flexRatio + delta);
     belowW.flexRatio = Math.max(0.05, belowW.flexRatio - delta);
-    startY = e.clientY;
-    render();
+    startY = e.clientY; render();
   });
   document.addEventListener('mouseup', () => { dragging = false; divEl.classList.remove('dragging'); });
 }
 
-// ─────────────────────────────────────────────────────────
-// TITLE BAR DRAG — move between zones
-// ─────────────────────────────────────────────────────────
 function bindTitleDrag(titleEl, w) {
   let dragging = false;
   const ghost = $('drag-ghost');
-
   titleEl.addEventListener('mousedown', e => {
     if (e.target.closest('.widget-btn')) return;
     dragging = true;
-    ghost.textContent = `↳ ${w.name}`;
-    ghost.style.display = 'block';
+    ghost.textContent = `↳ ${w.name}`; ghost.style.display = 'block';
     moveGhost(e); e.preventDefault();
   });
   document.addEventListener('mousemove', e => { if (dragging) moveGhost(e); });
@@ -731,27 +667,19 @@ function bindTitleDrag(titleEl, w) {
   }
 }
 
-// ─────────────────────────────────────────────────────────
-// STRIP LAUNCHERS
-// ─────────────────────────────────────────────────────────
 function buildStrip() {
-  const strip   = $('strip');
-  const divLine = $('strip-divider-line');
+  const stripTop = $('strip-top');
   Object.entries(CELL_REGISTRY).forEach(([id, entry]) => {
-    const b = el('div', 'strip-launcher');
-    b.innerHTML = ICONS[entry.icon] + `<span class="tip">${entry.name}</span>`;
+    const b = mkEl('div', 'strip-launcher');
+    b.innerHTML = (ICONS[entry.icon]||ICONS.terminal) + `<span class="tip">${entry.name}</span>`;
     b.addEventListener('click', () => launchCell(id));
-    strip.insertBefore(b, divLine);
+    stripTop.appendChild(b);
   });
 }
 
-// ─────────────────────────────────────────────────────────
-// INIT
-// ─────────────────────────────────────────────────────────
 buildStrip();
 launchCell('files');
 launchCell('terminal');
 </script>
 </body>
 </html>
-
