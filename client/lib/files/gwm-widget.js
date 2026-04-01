@@ -159,10 +159,11 @@ export default function createWidget({ name, evalContext = {} }) {
       return;
     }
 
+    // node.open is true from here
+    caretEl.classList.add('open');
+    childrenEl.classList.add('open');
+    
     if (node.open && !node.loaded) {
-      caretEl.classList.toggle('open', node.open);
-      childrenEl.classList.toggle('open', node.open);
-
       // First expand — fetch children
       node.loaded = true;
       childrenEl.appendChild(msgEl('gf-loading', '...', depthOf(node)+1))
