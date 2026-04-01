@@ -1,9 +1,11 @@
 /*
  * @cell terminal-widget
- * @version 0.7
+ * @version 0.8
  * @about
  *   Gimbal shell terminal widget. Classic inline-prompt layout.
  *   Single history array is the source of truth for all state.
+ *   __ is a live array of result values, accessible in eval context.
+ *   __[n] labels appear in the gutter on successful completion.
  */
 
 import { VOID, isVoid, makeShell } from '../gimbal/gsh.js';
@@ -41,6 +43,11 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     libs:      [{ serverUrl: window.location.origin, volume: 'client', path: 'lib' }],
     evalContext,
   });
+
+  // ── result history — live array passed into every eval ────────
+  // __[0] is the first result, __[n] the nth. Void results are
+  // stored as undefined so indices stay stable.
+  const __ = [];
 
   // ── root element ──────────────────────────────────────
   const el = document.createElement('div');
@@ -102,6 +109,13 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       }
       .gt-status.is-queued { color: var(--text-dim); }
       .gt-status.is-error  { color: var(--red); }
+      .gt-status.is-ref {
+        font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
+        font-size: 0.6rem;
+        color: var(--text-dim);
+        width: auto;
+        letter-spacing: -0.02em;
+      }
 
       .gt-result {
         padding-left: 0.875rem;
@@ -152,15 +166,8 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   }
 
   // ── history — single source of truth ──────────────────
-  //
-  // Each record:
-  //   src        : string  — the command text
-  //   status     : 'queued' | 'running' | 'done' | 'error'
-  //   display    : string | null — result text (null until done)
-  //   dom        : { entry, locEl, statusEl, resultContainer } — live DOM refs
-  //
   const history = [];
-  let running = false; // true while a command is executing
+  let running = false;
 
   // ── output area ───────────────────────────────────────
   const output = document.createElement('div');
@@ -195,16 +202,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   inputLine.appendChild(textarea);
   output.appendChild(inputLine);
 
-  // ── prompt sync ───────────────────────────────────────
-  // The live input prompt shows the current directory only when idle.
-  // When anything is running or queued we don't know where we'll land.
-  function syncInputPrompt() {
-    inputLoc.textContent = running || history.some(r => r.status === 'queued' || r.status === 'running')
-      ? ''
-      : cwdLabel(shell);
-  }
-  syncInputPrompt();
-
   function resizeTextarea() {
     textarea.style.height = '0';
     textarea.style.height = textarea.scrollHeight + 'px';
@@ -234,7 +231,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     output.insertBefore(entry, inputLine);
     output.scrollTop = output.scrollHeight;
 
-    // locEl and sep are inserted when command starts running
     rec.dom = { entry, cmdLine, srcEl, statusEl, locEl: null, spinnerTimer: null };
   }
 
@@ -245,7 +241,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     const locEl = document.createElement('span');
     locEl.className = 'gt-loc';
     locEl.textContent = cwdLabel(shell);
-    rec.dom.locEl = locEl;  // ← store it
+    rec.dom.locEl = locEl;
 
     const sep = document.createElement('span');
     sep.className = 'gt-sep';
@@ -260,14 +256,25 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       statusEl.innerHTML = SVG_SPINNER;
     }, 200);
   }
-    
+
   function applyDone(rec) {
     const { statusEl, entry } = rec.dom;
     clearTimeout(rec.dom.spinnerTimer);
 
     const isError = rec.status === 'error';
-    statusEl.className = isError ? 'gt-status is-error' : 'gt-status';
-    statusEl.innerHTML = isError ? SVG_ERROR : '';
+
+    if (isError) {
+      statusEl.className = 'gt-status is-error';
+      statusEl.innerHTML = SVG_ERROR;
+    } else if (rec.refIndex !== null) {
+      statusEl.className = 'gt-status is-ref';
+      statusEl.innerHTML = '';
+      statusEl.textContent = `__[${rec.refIndex}]`;
+    } else {
+      // void result — no icon, no label
+      statusEl.className = 'gt-status';
+      statusEl.innerHTML = '';
+    }
 
     if (rec.display !== null) {
       const result = document.createElement('div');
@@ -283,26 +290,35 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     if (running) return;
     const rec = history.find(r => r.status === 'queued');
     if (!rec) {
-      syncInputPrompt(); // queue fully drained — show directory
+      inputLoc.textContent = cwdLabel(shell);
       return;
     }
 
     running = true;
     rec.status = 'running';
     applyRunning(rec);
-    syncInputPrompt(); // still busy, clears the directory from input prompt
+    inputLoc.textContent = '';
 
     try {
-      const { display } = await shell.eval(rec.src);
-      rec.status  = 'done';
-      rec.display = display;
+      const { value, display } = await shell.eval(rec.src, 80, { __, _: __.length ? __[__.length - 1] : VOID });
+      rec.status   = 'done';
+      rec.display  = display;
+
+      if (!isVoid(value)) {
+        rec.refIndex = __.length;
+        __.push(value);
+      } else {
+        rec.refIndex = null;
+      }
     } catch(e) {
-      rec.status  = 'error';
-      rec.display = e.message ?? String(e);
+      rec.status   = 'error';
+      rec.display  = e.message ?? String(e);
+      rec.refIndex = null;
       console.error(e);
     }
 
     applyDone(rec);
+    inputLoc.textContent = cwdLabel(shell);
     running = false;
     runNext();
   }
@@ -311,13 +327,14 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   function enqueue(src) {
     const rec = {
       src,
-      status:    'queued',
-      display:   null,
-      dom:       null,
+      status:   'queued',
+      display:  null,
+      refIndex: null,
+      dom:      null,
     };
     history.push(rec);
     buildEntryDOM(rec);
-    syncInputPrompt();
+    inputLoc.textContent = '';
     runNext();
   }
 
@@ -329,7 +346,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       e.preventDefault();
       const src = textarea.value.trim();
       if (!src) return;
-      inputLoc.textContent = '';
       textarea.value = '';
       resizeTextarea();
       historyIdx = -1;
@@ -361,7 +377,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       output.innerHTML = '';
       output.appendChild(spacer);
       output.appendChild(inputLine);
-      syncInputPrompt();
+      inputLoc.textContent = cwdLabel(shell);
     }
   });
 
@@ -371,7 +387,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
 
   // ── init ──────────────────────────────────────────────
   shell._warmCache().then(() => {
-    syncInputPrompt();
+    inputLoc.textContent = cwdLabel(shell);
     if (runOnInit) enqueue(runOnInit);
   });
   textarea.focus();
