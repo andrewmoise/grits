@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   /* ═══════════════════════════════════════════════════
-     THEME — swap this block to change the entire palette
+     THEME
      ═══════════════════════════════════════════════════ */
   :root {
     --bg-root:      #080a0e;
@@ -36,7 +36,6 @@
     --red:          #e05555;
     --red-dim:      rgba(224,85,85,0.12);
 
-    /* Layout tokens */
     --strip-w:      2.8rem;
     --title-h:      2rem;
     --icon-size:    2.4rem;
@@ -44,11 +43,15 @@
     --icon-r:       0.5rem;
     --widget-r:     0.625rem;
     --divider-hit:  0.5rem;
+
+    /* Sine-curve easing — slow start, fast middle, slow end */
+    --ease-sine:    cubic-bezier(0.37, 0, 0.63, 1);
+    --ease-in:      cubic-bezier(0.55, 0, 1, 0.45);
+    --dur:          1.5s;
   }
 
   /* ═══════════════════════════════════════════════════
-     BASE — no font-size set; inherits browser default
-     which respects system DPI and accessibility prefs
+     BASE
      ═══════════════════════════════════════════════════ */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -71,9 +74,6 @@
     pointer-events: none; z-index: 0;
   }
 
-  /* ═══════════════════════════════════════════════════
-     SCROLLBARS
-     ═══════════════════════════════════════════════════ */
   ::-webkit-scrollbar { width: 0.25rem; height: 0.25rem; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 0.125rem; }
@@ -84,26 +84,15 @@
   /* ═══════════════════════════════════════════════════
      LAYOUT
      ═══════════════════════════════════════════════════ */
-  #root {
-    display: flex; width: 100%; height: 100%;
-    position: relative; z-index: 1;
-  }
+  #root { display: flex; width: 100%; height: 100%; position: relative; z-index: 1; }
 
   #workspace {
     flex: 1 1 0; display: flex; min-width: 0;
-    padding: 0.5rem 0.4rem 0.5rem 0.5rem;
-    position: relative;
+    padding: 0.5rem 0.4rem 0.5rem 0.5rem; position: relative;
   }
 
-  #master {
-    flex: 0 0 auto; position: relative;
-    display: flex; flex-direction: column;
-  }
-
-  #stack {
-    flex: 1 1 0; display: flex; flex-direction: column;
-    min-width: 0; position: relative;
-  }
+  #master { flex: 0 0 auto; position: relative; display: flex; flex-direction: column; }
+  #stack  { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; position: relative; }
 
   /* ═══════════════════════════════════════════════════
      DIVIDERS
@@ -114,14 +103,11 @@
     display: flex; align-items: center; justify-content: center;
   }
   #ms-divider::after {
-    content: '';
-    width: 1px; height: 1.75rem;
+    content: ''; width: 1px; height: 1.75rem;
     background: var(--border); border-radius: 1px;
     transition: background 0.2s, height 0.2s;
   }
-  #ms-divider:hover::after, #ms-divider.dragging::after {
-    background: var(--a1); height: 2.75rem;
-  }
+  #ms-divider:hover::after, #ms-divider.dragging::after { background: var(--a1); height: 2.75rem; }
 
   .stack-divider {
     height: var(--divider-hit); flex: 0 0 var(--divider-hit);
@@ -129,14 +115,11 @@
     display: flex; align-items: center; justify-content: center;
   }
   .stack-divider::after {
-    content: '';
-    height: 1px; width: 2rem;
+    content: ''; height: 1px; width: 2rem;
     background: var(--border); border-radius: 1px;
     transition: background 0.2s, width 0.2s;
   }
-  .stack-divider:hover::after, .stack-divider.dragging::after {
-    background: var(--a1); width: 2.75rem;
-  }
+  .stack-divider:hover::after, .stack-divider.dragging::after { background: var(--a1); width: 2.75rem; }
 
   /* ═══════════════════════════════════════════════════
      ICON STRIP
@@ -148,51 +131,33 @@
     position: relative; z-index: 20;
   }
 
-  #strip-top {
-    display: flex; flex-direction: column;
-    align-items: center; gap: 0.4rem;
-    padding-bottom: 0.625rem;
-  }
+  #strip-top { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; padding-bottom: 0.625rem; }
 
   .strip-launcher {
     width: var(--icon-size); height: var(--icon-size);
-    border-radius: var(--icon-r);
-    border: 1px solid var(--border);
-    background: var(--bg-float);
-    color: var(--text-dim);
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
+    border-radius: var(--icon-r); border: 1px solid var(--border);
+    background: var(--bg-float); color: var(--text-dim);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
     position: relative;
   }
-  .strip-launcher:hover {
-    background: var(--bg-hover); border-color: var(--border-hi);
-    color: var(--text); transform: scale(1.06);
-  }
+  .strip-launcher:hover { background: var(--bg-hover); border-color: var(--border-hi); color: var(--text); transform: scale(1.06); }
   .strip-launcher:active { transform: scale(0.96); }
   .strip-launcher svg { width: 1.3em; height: 1.3em; stroke-width: 1.5; }
-
   .strip-launcher::after {
-    content: '+';
-    position: absolute; bottom: 0.2rem; right: 0.25rem;
-    font-size: 0.45rem; line-height: 1;
-    color: var(--text-dim); opacity: 0.55;
-    font-family: 'JetBrains Mono', monospace;
-    pointer-events: none; transition: opacity 0.15s;
+    content: '+'; position: absolute; bottom: 0.2rem; right: 0.25rem;
+    font-size: 0.45rem; line-height: 1; color: var(--text-dim); opacity: 0.55;
+    font-family: 'JetBrains Mono', monospace; pointer-events: none; transition: opacity 0.15s;
   }
   .strip-launcher:hover::after { opacity: 0.9; }
 
   #strip-separator {
-    width: var(--icon-size);
-    display: flex; align-items: center; justify-content: center;
+    width: var(--icon-size); display: flex; align-items: center; justify-content: center;
     flex-shrink: 0; margin: 0.2rem 0; gap: 0.2rem;
   }
-  #strip-separator::before, #strip-separator::after {
-    content: ''; flex: 1; height: 1px; background: var(--border);
-  }
+  #strip-separator::before, #strip-separator::after { content: ''; flex: 1; height: 1px; background: var(--border); }
   #strip-separator span {
-    font-size: 0.4rem; letter-spacing: 0.1em;
-    color: var(--text-dim); opacity: 0.35;
+    font-size: 0.4rem; letter-spacing: 0.1em; color: var(--text-dim); opacity: 0.35;
     font-family: 'JetBrains Mono', monospace; line-height: 1;
   }
 
@@ -204,24 +169,17 @@
 
   .min-thumb {
     width: var(--icon-size); height: var(--icon-size);
-    border-radius: var(--icon-r);
-    border: 1px solid var(--border);
-    background: var(--bg-elevated);
-    color: var(--text-dim);
-    cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
+    border-radius: var(--icon-r); border: 1px solid var(--border);
+    background: var(--bg-elevated); color: var(--text-dim);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
     position: relative;
   }
-  .min-thumb:hover {
-    border-color: var(--a1); color: var(--a1);
-    background: var(--a1-glow); transform: scale(1.06);
-  }
+  .min-thumb:hover { border-color: var(--a1); color: var(--a1); background: var(--a1-glow); transform: scale(1.06); }
   .min-thumb svg { width: 1.1em; height: 1.1em; stroke-width: 1.5; }
 
   .strip-launcher .tip, .min-thumb .tip {
-    display: none;
-    position: absolute;
+    display: none; position: absolute;
     right: calc(100% + 0.5rem); top: 50%; transform: translateY(-50%);
     background: var(--bg-elevated); border: 1px solid var(--border-hi);
     color: var(--text-hi); padding: 0.2rem 0.5rem; border-radius: 0.3rem;
@@ -235,83 +193,56 @@
      ═══════════════════════════════════════════════════ */
   .widget {
     display: flex; flex-direction: column;
-    background: var(--bg-float);
-    border: 1px solid var(--border);
-    border-radius: var(--widget-r);
-    overflow: hidden; position: relative; min-height: 0;
-    box-shadow:
-      0 0 0 1px rgba(0,0,0,0.5),
-      0 0.4rem 1.5rem rgba(0,0,0,0.45),
-      0 0.1rem 0.3rem rgba(0,0,0,0.3);
+    background: var(--bg-float); border: 1px solid var(--border);
+    border-radius: var(--widget-r); overflow: hidden; position: relative; min-height: 0;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 0.4rem 1.5rem rgba(0,0,0,0.45), 0 0.1rem 0.3rem rgba(0,0,0,0.3);
     transition: border-color 0.15s, box-shadow 0.15s;
+    will-change: transform;
   }
   .widget:focus-within {
     border-color: var(--border-focus);
-    box-shadow:
-      0 0 0 1px rgba(0,0,0,0.5),
-      0 0.6rem 1.75rem rgba(0,0,0,0.55),
-      0 0.1rem 0.3rem rgba(0,0,0,0.3),
-      inset 0 1px 0 rgba(255,255,255,0.03);
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 0.6rem 1.75rem rgba(0,0,0,0.55), 0 0.1rem 0.3rem rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);
   }
   .widget.in-master { flex: 1; }
 
   .widget-title {
-    height: var(--title-h);
-    background: var(--bg-elevated);
+    height: var(--title-h); background: var(--bg-elevated);
     border-bottom: 1px solid var(--border);
     display: flex; align-items: center; padding: 0 0.3rem;
     flex-shrink: 0; cursor: grab;
     border-radius: var(--widget-r) var(--widget-r) 0 0;
-    transition: background 0.15s;
-    overflow: visible;
+    transition: background 0.15s; overflow: visible;
   }
   .widget:focus-within .widget-title { background: var(--bg-active); }
   .widget-title:active { cursor: grabbing; }
 
-  .title-left {
-    width: 3.75rem; display: flex; align-items: center;
-    gap: 0.1rem; flex-shrink: 0;
-  }
+  .title-left  { width: 3.75rem; display: flex; align-items: center; gap: 0.1rem; flex-shrink: 0; }
+  .title-right { width: 3.75rem; display: flex; align-items: center; justify-content: flex-end; gap: 0.1rem; flex-shrink: 0; }
 
   .widget-name {
     flex: 1; text-align: center;
-    font-size: 0.875rem; font-weight: 400;
-    color: var(--text-dim);
-    letter-spacing: 0.02em;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    font-family: 'Rubik', sans-serif;
-    transition: color 0.15s;
+    font-size: 0.875rem; font-weight: 400; color: var(--text-dim);
+    letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: 'Rubik', sans-serif; transition: color 0.15s;
   }
   .widget:focus-within .widget-name { color: var(--text); }
-
-  .title-right {
-    width: 3.75rem; display: flex; align-items: center;
-    justify-content: flex-end; gap: 0.1rem; flex-shrink: 0;
-  }
 
   .widget-btn {
     width: var(--btn-size); height: var(--btn-size);
     border-radius: 0.35rem; border: none;
-    background: transparent; color: var(--text-dim);
-    cursor: pointer;
+    background: transparent; color: var(--text-dim); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    padding: 0; transition: background 0.12s, color 0.12s;
-    flex-shrink: 0;
+    padding: 0; transition: background 0.12s, color 0.12s; flex-shrink: 0;
   }
   .widget-btn:hover { background: var(--bg-hover); color: var(--text-hi); }
   .widget-btn.close:hover { background: var(--red-dim); color: var(--red); }
   .widget-btn svg { width: 1.2em; height: 1.2em; stroke-width: 1.7; }
 
   .widget-body {
-    flex: 1; overflow: auto; min-height: 0;
-    color: var(--text);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 0.8125rem; line-height: 1.6;
+    flex: 1; overflow: auto; min-height: 0; color: var(--text);
+    font-family: 'JetBrains Mono', monospace; font-size: 0.8125rem; line-height: 1.6;
   }
 
-  /* ═══════════════════════════════════════════════════
-     DRAG GHOST & EMPTY STATE
-     ═══════════════════════════════════════════════════ */
   #drag-ghost {
     position: fixed; pointer-events: none; z-index: 9999;
     background: var(--bg-elevated); border: 1px solid var(--a1);
@@ -325,8 +256,7 @@
     flex: 1; display: flex; flex-direction: column;
     align-items: center; justify-content: center;
     gap: 0.5rem; color: var(--text-dim);
-    font-size: 0.75rem; font-family: 'Rubik', sans-serif;
-    opacity: 0.4;
+    font-size: 0.75rem; font-family: 'Rubik', sans-serif; opacity: 0.4;
   }
   .empty-state svg { width: 1.25rem; height: 1.25rem; }
 </style>
@@ -396,9 +326,17 @@ const ICONS = {
   close:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
 };
 
+// Easing strings — match CSS vars
+const EASE_SINE = 'cubic-bezier(0.37, 0, 0.63, 1)';
+const EASE_IN   = 'cubic-bezier(0.55, 0, 1, 0.45)';
+const DUR       = '1.5s';
+
 let widgetSeq  = 0;
 let masterFrac = 0.60;
 const widgets  = new Map();
+
+// Store the icon rect that spawned each new widget id
+const spawnOrigins = new Map();
 
 evalContext.ui = {
   openWidget({ el, focus, destroy, name = 'widget', icon = 'terminal', zone = 'stack' }) {
@@ -409,7 +347,7 @@ evalContext.ui = {
       stackOrder:    zone === 'stack'  ? stackMaxOrder() + 1 : 0,
       flexRatio: 1, cellEl: el, cellInstance: { focus, destroy },
     });
-    render();
+    render(true);
     return id;
   }
 };
@@ -424,12 +362,125 @@ function mkBtn(iconName, label, extraClass, onClick) {
   return b;
 }
 
-// Count visible (non-minimized) widgets
 function visibleCount() {
   return [...widgets.values()].filter(w => w.zone === 'master' || w.zone === 'stack').length;
 }
 
-function render() {
+// ─────────────────────────────────────────────────────────
+// FLIP + SPAWN ANIMATION
+// ─────────────────────────────────────────────────────────
+function snapshotPositions() {
+  const map = new Map();
+  document.querySelectorAll('.widget[data-id]').forEach(el => {
+    map.set(el.dataset.id, el.getBoundingClientRect());
+  });
+  return map;
+}
+
+function applyFlip(before) {
+  document.querySelectorAll('.widget[data-id]').forEach(el => {
+    const id  = el.dataset.id;
+    const old = before.get(id);
+
+    if (!old) {
+      // New widget — check for a spawn origin
+      const numId  = parseInt(id);
+      const origin = spawnOrigins.get(numId);
+      spawnOrigins.delete(numId);
+
+      const now = el.getBoundingClientRect();
+
+      if (origin) {
+        // Animate from icon position to final position
+        const dx = (origin.left + origin.width  / 2) - (now.left + now.width  / 2);
+        const dy = (origin.top  + origin.height / 2) - (now.top  + now.height / 2);
+        const sw = origin.width  / now.width;
+        const sh = origin.height / now.height;
+        el.style.transition    = 'none';
+        el.style.transformOrigin = 'center center';
+        el.style.transform     = `translate(${dx}px, ${dy}px) scale(${sw}, ${sh})`;
+        el.style.opacity       = '0.2';
+      } else {
+        // No origin — simple scale-in
+        el.style.transition = 'none';
+        el.style.transform  = 'scale(0.92)';
+        el.style.opacity    = '0';
+      }
+
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          el.style.transition    = `transform ${DUR} ${EASE_SINE}, opacity ${DUR} ${EASE_SINE}`;
+          el.style.transform     = '';
+          el.style.transformOrigin = '';
+          el.style.opacity       = '';
+        });
+      });
+      return;
+    }
+
+    // Existing widget that moved — FLIP it
+    const now = el.getBoundingClientRect();
+    const dx  = old.left - now.left;
+    const dy  = old.top  - now.top;
+    const dw  = old.width  / now.width;
+    const dh  = old.height / now.height;
+
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(dw - 1) < 0.01 && Math.abs(dh - 1) < 0.01) return;
+
+    el.style.transition    = 'none';
+    el.style.transformOrigin = 'top left';
+    el.style.transform     = `translate(${dx}px, ${dy}px) scale(${dw}, ${dh})`;
+
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        el.style.transition    = `transform ${DUR} ${EASE_SINE}`;
+        el.style.transform     = '';
+        el.style.transformOrigin = '';
+      });
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// CLOSE / MINIMIZE ANIMATION
+// ─────────────────────────────────────────────────────────
+function animateClose(id) {
+  const el = document.querySelector(`.widget[data-id="${id}"]`);
+  if (!el) return;
+  const rect  = el.getBoundingClientRect();
+  const ghost = el.cloneNode(true);
+  ghost.querySelectorAll('input, button, textarea').forEach(i => i.disabled = true);
+  Object.assign(ghost.style, {
+    position:      'fixed',
+    left:          rect.left   + 'px',
+    top:           rect.top    + 'px',
+    width:         rect.width  + 'px',
+    height:        rect.height + 'px',
+    pointerEvents: 'none',
+    zIndex:        '9998',
+    borderRadius:  'var(--widget-r)',
+    overflow:      'hidden',
+    transition:    'none',
+    opacity:       '1',
+    transform:     'none',
+  });
+  document.body.appendChild(ghost);
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      ghost.style.transition = `transform ${DUR} ${EASE_IN}, opacity ${DUR} ${EASE_IN}`;
+      ghost.style.transform  = 'translateY(1.25rem) scale(0.96)';
+      ghost.style.opacity    = '0';
+      setTimeout(() => ghost.remove(), 200);
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// RENDER
+// ─────────────────────────────────────────────────────────
+function render(animate = false) {
+  const before = animate ? snapshotPositions() : null;
+
   const masterEl = $('master'), stackEl = $('stack');
   const minEl = $('minimized-section'), msd = $('ms-divider');
 
@@ -475,6 +526,8 @@ function render() {
     thumb.addEventListener('click', () => restoreWidget(w.id));
     minEl.appendChild(thumb);
   });
+
+  if (before) applyFlip(before);
 }
 
 function buildWidgetEl(w, zone) {
@@ -490,8 +543,6 @@ function buildWidgetEl(w, zone) {
 
   const right = mkEl('div', 'title-right');
   right.appendChild(mkBtn('minimize', 'minimize', '', () => minimizeWidget(w.id)));
-
-  // Only show promote/demote when more than one window is visible
   if (visibleCount() > 1) {
     right.appendChild(mkBtn(
       zone === 'stack' ? 'promote' : 'demote',
@@ -499,7 +550,6 @@ function buildWidgetEl(w, zone) {
       '', () => zone === 'stack' ? promoteWidget(w.id) : demoteWidget(w.id)
     ));
   }
-
   right.appendChild(mkBtn('close', 'close', 'close', () => closeWidget(w.id)));
   title.appendChild(right);
 
@@ -519,7 +569,10 @@ function buildWidgetEl(w, zone) {
   return wrap;
 }
 
-async function launchCell(cellId) {
+// ─────────────────────────────────────────────────────────
+// WINDOW OPERATIONS
+// ─────────────────────────────────────────────────────────
+async function launchCell(cellId, iconRect) {
   const entry = CELL_REGISTRY[cellId];
   if (!entry) return;
   const id = ++widgetSeq, now = Date.now(), zone = entry.defaultZone;
@@ -546,31 +599,37 @@ async function launchCell(cellId) {
     flexRatio: newRatio, cellEl: null, cellInstance: null,
   };
   widgets.set(id, record);
-  render();
+  render(true);
 
   try {
     const createWidget = await loadCell(cellId);
     const instance = await Promise.resolve(createWidget({ name: entry.name, evalContext }));
-    record.cellEl = instance.el; record.cellInstance = instance;
-    render();
+    record.cellEl       = instance.el;
+    record.cellInstance = instance;
+    if (iconRect) spawnOrigins.set(id, iconRect);  // ← moved here
+    render(true);                                   // ← change false to true
   } catch(e) { console.error(`Failed to load cell "${cellId}":`, e); }
 }
 
 function closeWidget(id) {
   const w = widgets.get(id); if (!w) return;
+  animateClose(id);
   w.cellInstance?.destroy();
   const wasMaster = w.zone === 'master';
   widgets.delete(id);
   if (wasMaster) electNewMaster();
-  normalizeStackOrder(); render();
+  normalizeStackOrder();
+  render(true);
 }
 
 function minimizeWidget(id) {
   const w = widgets.get(id); if (!w) return;
+  animateClose(id);
   const wasMaster = w.zone === 'master';
   w.zone = 'minimized';
   if (wasMaster) electNewMaster();
-  normalizeStackOrder(); render();
+  normalizeStackOrder();
+  render(true);
 }
 
 function promoteWidget(id) {
@@ -578,21 +637,25 @@ function promoteWidget(id) {
   const cur = [...widgets.values()].find(x => x.zone === 'master');
   if (cur) { cur.zone = 'stack'; cur.stackOrder = stackMaxOrder() + 1; }
   w.zone = 'master'; w.masterHistory = Date.now();
-  normalizeStackOrder(); render();
+  normalizeStackOrder(); render(true);
 }
 
 function demoteWidget(id) {
   const w = widgets.get(id); if (!w) return;
   w.zone = 'stack'; w.stackOrder = stackMaxOrder() + 1;
-  electNewMaster(); normalizeStackOrder(); render();
+  electNewMaster(); normalizeStackOrder(); render(true);
 }
 
 function restoreWidget(id) {
   const w = widgets.get(id); if (!w) return;
+  // Animate from the minimized thumb
+  const thumb = document.querySelector(`.min-thumb[data-restore="${id}"]`);
+  const origin = thumb ? thumb.getBoundingClientRect() : null;
+  if (origin) spawnOrigins.set(id, origin);
   const masterOccupied = [...widgets.values()].some(x => x.zone === 'master');
   if (!masterOccupied && w.masterHistory > 0) { w.zone = 'master'; w.masterHistory = Date.now(); }
   else { w.zone = 'stack'; w.stackOrder = stackMaxOrder() + 1; }
-  normalizeStackOrder(); render();
+  normalizeStackOrder(); render(true);
 }
 
 function electNewMaster() {
@@ -644,7 +707,7 @@ function bindStackDivider(divEl) {
     const delta = (e.clientY - startY) / rect.height * total;
     aboveW.flexRatio = Math.max(0.05, aboveW.flexRatio + delta);
     belowW.flexRatio = Math.max(0.05, belowW.flexRatio - delta);
-    startY = e.clientY; render();
+    startY = e.clientY; render(false);
   });
   document.addEventListener('mouseup', () => { dragging = false; divEl.classList.remove('dragging'); });
 }
@@ -675,19 +738,26 @@ function bindTitleDrag(titleEl, w) {
   }
 }
 
+// ─────────────────────────────────────────────────────────
+// STRIP — capture icon rect on click for spawn animation
+// ─────────────────────────────────────────────────────────
 function buildStrip() {
   const stripTop = $('strip-top');
   Object.entries(CELL_REGISTRY).forEach(([id, entry]) => {
     const b = mkEl('div', 'strip-launcher');
     b.innerHTML = (ICONS[entry.icon]||ICONS.terminal) + `<span class="tip">${entry.name}</span>`;
-    b.addEventListener('click', () => launchCell(id));
+    b.addEventListener('click', () => {
+      const iconRect = b.getBoundingClientRect();
+      launchCell(id, iconRect);
+    });
     stripTop.appendChild(b);
   });
 }
 
 buildStrip();
-launchCell('files');
-launchCell('terminal');
+// Initial launch — no icon rect, just appear
+launchCell('files', null);
+launchCell('terminal', null);
 </script>
 </body>
 </html>
