@@ -751,13 +751,46 @@ function closeWidget(id) {
 }
 
 function minimizeWidget(id) {
-  const w = widgets.get(id); if (!w) return;
-  animateOut(id);
+  const w = widgets.get(id);
+  if (!w) return;
+
+  const el = domCache.get(id);
   const wasMaster = w.zone === 'master';
+
   w.zone = 'minimized';
   if (wasMaster) electNewMaster();
   normalizeStackOrder();
-  render(true);
+
+  // render() will call applyRect on remaining widgets and draw the thumb,
+  // but el is no longer in the layout so it won't be touched — however
+  // render() also calls el.remove() / domCache.delete() for widgets not
+  // in the layout, so we need to rescue el before that happens
+  domCache.delete(id);        // ← remove from cache so render() won't touch or delete it
+  el.style.zIndex = '9999';   // ← stay on top for the duration of the fly
+  render(true);               // ← other widgets animate to new positions, thumb appears
+
+  // Now el is an orphaned-but-still-in-DOM element we fully control
+  const thumb = document.querySelector(`#minimized-section .min-thumb[data-id="${id}"]`);
+  if (el && thumb) {
+    requestAnimationFrame(() => {
+      const thumbRect = thumb.getBoundingClientRect();
+      const wsRect    = document.getElementById('workspace').getBoundingClientRect();
+
+      const destLeft = thumbRect.left - wsRect.left + thumbRect.width  / 2;
+      const destTop  = thumbRect.top  - wsRect.top  + thumbRect.height / 2;
+
+      el.style.transition = `left ${DUR} ${EASE_IN}, top ${DUR} ${EASE_IN}, width ${DUR} ${EASE_IN}, height ${DUR} ${EASE_IN}, opacity ${DUR} ${EASE_IN}`;
+      el.style.left    = destLeft + 'px';
+      el.style.top     = destTop  + 'px';
+      el.style.width   = '0px';
+      el.style.height  = '0px';
+      el.style.opacity = '0';
+
+      setTimeout(() => el.remove(), 300);
+    });
+  } else {
+    if (el) el.remove();
+  }
 }
 
 function promoteWidget(id) {
