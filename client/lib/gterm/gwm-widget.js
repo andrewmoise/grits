@@ -195,7 +195,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   textarea.rows = 1;
   textarea.autocomplete = 'off';
   textarea.spellcheck = false;
-  textarea.placeholder = 'enter expression…';
+  textarea.placeholder = '';
 
   inputLine.appendChild(inputLoc);
   inputLine.appendChild(inputSep);
