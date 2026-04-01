@@ -213,6 +213,7 @@
   #strip-separator {
     width: var(--icon-size); display: flex; align-items: center;
     justify-content: center; flex-shrink: 0; margin: 0.2rem 0; gap: 0.2rem;
+    margin-top: auto;
   }
   #strip-separator::before, #strip-separator::after { content: ''; flex: 1; height: 1px; background: var(--border); }
   #strip-separator span {
@@ -221,7 +222,7 @@
   }
 
   #minimized-section {
-    flex: 1; display: flex; flex-direction: column;
+    display: flex; flex-direction: column;
     align-items: center; gap: 0.4rem; overflow-y: auto;
     padding-top: 0.2rem; padding-bottom: 0.4rem;
   }
@@ -469,12 +470,9 @@ function updateWidgetButtons(wrap, w, zone) {
   const right = wrap._rightEl;
   right.innerHTML = '';
   right.appendChild(mkBtn('minimize', 'minimize', '', () => minimizeWidget(w.id)));
-  if (visibleCount() > 1) {
-    right.appendChild(mkBtn(
-      zone === 'stack' ? 'promote' : 'demote',
-      zone === 'stack' ? 'make master' : 'send to stack',
-      '', () => zone === 'stack' ? promoteWidget(w.id) : demoteWidget(w.id)
-    ));
+  if (visibleCount() > 1 && zone === 'stack') {
+   right.appendChild(mkBtn('promote', 'make master', '',
+      () => promoteWidget(w.id)));
   }
   right.appendChild(mkBtn('close', 'close', 'close', () => closeWidget(w.id)));
 }
@@ -618,13 +616,29 @@ function bindVResize(handle, above, below) {
   });
   document.addEventListener('mousemove', e => {
     if (!dragging) return;
-    const ws     = $('workspace');
-    const H      = ws.clientHeight - PAD * 2;
-    const stackWs = [...widgets.values()].filter(w => w.zone === 'stack');
-    const total  = stackWs.reduce((s,w) => s + (w.flexRatio||1), 0);
-    const delta  = (e.clientY - startY) / H * total;
-    above.flexRatio = Math.max(0.05, (above.flexRatio||1) + delta);
-    below.flexRatio = Math.max(0.05, (below.flexRatio||1) - delta);
+    const ws      = $('workspace');
+    const H       = ws.clientHeight - PAD * 2;
+    const stackWs = [...widgets.values()].filter(w => w.zone === 'stack')
+      .sort((a,b) => a.stackOrder - b.stackOrder);
+
+    const aboveIdx = stackWs.findIndex(w => w.id === above.id);
+    const aboveGroup = stackWs.slice(0, aboveIdx + 1);
+    const belowGroup = stackWs.slice(aboveIdx + 1);
+
+    const totalAbove = aboveGroup.reduce((s,w) => s + w.flexRatio, 0);
+    const totalBelow = belowGroup.reduce((s,w) => s + w.flexRatio, 0);
+    const total      = totalAbove + totalBelow;
+
+    const delta = (e.clientY - startY) / H * total;
+    const newAbove = Math.max(0.05 * aboveGroup.length, totalAbove + delta);
+    const newBelow = Math.max(0.05 * belowGroup.length, totalBelow - delta);
+
+    // Scale each group proportionally
+    const scaleA = newAbove / totalAbove;
+    const scaleB = newBelow / totalBelow;
+    aboveGroup.forEach(w => w.flexRatio = Math.max(0.05, w.flexRatio * scaleA));
+    belowGroup.forEach(w => w.flexRatio = Math.max(0.05, w.flexRatio * scaleB));
+
     startY = e.clientY;
     render(false);
   });
@@ -749,9 +763,14 @@ function minimizeWidget(id) {
 }
 
 function promoteWidget(id) {
-  const w = widgets.get(id); if (!w) return;
+  const w   = widgets.get(id); if (!w) return;
   const cur = [...widgets.values()].find(x => x.zone === 'master');
-  if (cur) { cur.zone = 'stack'; cur.stackOrder = stackMaxOrder() + 1; }
+  if (cur) {
+    // Take the promoting widget's place in the stack
+    cur.zone       = 'stack';
+    cur.stackOrder = w.stackOrder;   // ← take its position
+    cur.flexRatio  = w.flexRatio;    // ← take its size
+  }
   w.zone = 'master'; w.masterHistory = Date.now();
   normalizeStackOrder(); render(true);
 }
