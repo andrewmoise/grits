@@ -1,19 +1,19 @@
 /*
  * @cell terminal-widget
- * @version 0.5
+ * @version 0.7
  * @about
- *   Gimbal shell terminal widget. REPL backed by GimbalShell.
- *   Supports command history, queued execution, per-entry status icons,
- *   and the full gsh tool dispatch pipeline.
+ *   Gimbal shell terminal widget. Classic inline-prompt layout.
+ *   Single history array is the source of truth for all state.
  */
 
-import { isVoid, makeShell } from '../gimbal/gsh.js';
+import { VOID, isVoid, makeShell } from '../gimbal/gsh.js';
 
-function escHtml(s) {
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+// ── cwd display label ─────────────────────────────────
+function cwdLabel(shell) {
+  const cwd = shell.cwd ?? '/';
+  if (cwd === '/') return `:${shell.volume ?? 'client'}`;
+  const parts = cwd.replace(/\/+$/, '').split('/');
+  return parts[parts.length - 1];
 }
 
 // ── SVG icons ─────────────────────────────────────────
@@ -32,7 +32,7 @@ const SVG_ERROR = `<svg class="gt-icon" viewBox="0 0 16 16" fill="none" stroke="
   <circle cx="8" cy="11" r="0.75" fill="currentColor" stroke="none"/>
 </svg>`;
 
-export default function createWidget({ name, evalContext = {} }) {
+export default function createWidget({ name, evalContext = {}, runOnInit = null }) {
   const shell = makeShell({
     gg:        evalContext.fs,
     serverUrl: window.location.origin,
@@ -56,7 +56,7 @@ export default function createWidget({ name, evalContext = {} }) {
         flex: 1;
         overflow-y: auto;
         overflow-x: hidden;
-        padding: 0.625rem 0.75rem 0.25rem;
+        padding: 0.625rem 0.75rem 0.375rem;
         font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
         font-size: 0.75rem;
         line-height: 1.6;
@@ -75,28 +75,23 @@ export default function createWidget({ name, evalContext = {} }) {
         display: flex;
         flex-direction: column;
         gap: 0.125rem;
-        border-bottom: 1px solid var(--border);
-        padding-bottom: 0.1875rem;
         margin-bottom: 0.125rem;
       }
-      .gt-entry:last-child { border-bottom: none; }
-
-      .gt-prompt-line {
+      .gt-cmd-line {
         display: flex; align-items: baseline; gap: 0.375rem;
       }
+      .gt-loc  { color: var(--a1); flex-shrink: 0; white-space: nowrap; }
       .gt-sep  { color: var(--text-dim); flex-shrink: 0; }
-      .gt-src  { color: var(--text-hi); flex: 1; }
+      .gt-src  { color: var(--text-hi); flex: 1; white-space: pre-wrap; }
+      .gt-cmd-line.is-queued .gt-src { color: var(--text-dim); }
 
       .gt-status {
         display: flex; align-items: center;
-        flex-shrink: 0; width: 1rem; height: 1rem;
+        flex-shrink: 0; width: 1.1rem; height: 1.1rem;
         position: relative; top: 0.1em;
+        margin-left: auto;
       }
-      .gt-status:empty { display: none; }
-
-      .gt-icon {
-        width: 0.85rem; height: 0.85rem;
-      }
+      .gt-icon { width: 0.85rem; height: 0.85rem; }
       .gt-icon.gt-spin {
         animation: gt-spin 0.9s linear infinite;
         color: var(--a1);
@@ -105,48 +100,67 @@ export default function createWidget({ name, evalContext = {} }) {
         from { transform: rotate(0deg); }
         to   { transform: rotate(360deg); }
       }
-      .gt-status.is-queued  { color: var(--text-dim); }
-      .gt-status.is-error   { color: var(--red); }
+      .gt-status.is-queued { color: var(--text-dim); }
+      .gt-status.is-error  { color: var(--red); }
 
       .gt-result {
         padding-left: 0.875rem;
         white-space: pre-wrap;
         color: var(--text);
+        margin-bottom: 0.25rem;
       }
       .gt-result.is-error { color: var(--red); }
-      .gt-result.is-info  { color: var(--text-dim); font-style: italic; }
 
-      .gt-input-row {
+      .gt-input-line {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         gap: 0.375rem;
-        padding: 0.375rem 0.625rem 0.5rem;
-        border-top: 1px solid var(--border);
-        flex-shrink: 0;
+        margin-top: 0.125rem;
+        padding-bottom: 0.375rem;
       }
-      .gt-prompt {
+      .gt-input-loc {
         color: var(--a1);
-        font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
-        font-size: 0.75rem;
-        flex-shrink: 0;
         white-space: nowrap;
-        user-select: none;
+        flex-shrink: 0;
+        line-height: 1.6;
       }
-      .gt-input {
+      .gt-input-sep {
+        color: var(--text-dim);
+        flex-shrink: 0;
+        line-height: 1.6;
+      }
+      .gt-textarea {
         flex: 1;
         background: transparent;
         border: none;
         outline: none;
+        resize: none;
+        overflow: hidden;
         color: var(--text-hi);
         font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
         font-size: 0.75rem;
+        line-height: 1.6;
         caret-color: var(--a1);
         min-width: 0;
+        padding: 0;
+        margin: 0;
+        height: 1.2em;
       }
-      .gt-input::placeholder { color: var(--text-dim); opacity: 0.5; }
+      .gt-textarea::placeholder { color: var(--text-dim); opacity: 0.5; }
     `;
     document.head.appendChild(s);
   }
+
+  // ── history — single source of truth ──────────────────
+  //
+  // Each record:
+  //   src        : string  — the command text
+  //   status     : 'queued' | 'running' | 'done' | 'error'
+  //   display    : string | null — result text (null until done)
+  //   dom        : { entry, locEl, statusEl, resultContainer } — live DOM refs
+  //
+  const history = [];
+  let running = false; // true while a command is executing
 
   // ── output area ───────────────────────────────────────
   const output = document.createElement('div');
@@ -156,179 +170,215 @@ export default function createWidget({ name, evalContext = {} }) {
   spacer.style.cssText = 'flex: 1 1 auto; min-height: 0;';
   output.appendChild(spacer);
 
-  // ── input row ─────────────────────────────────────────
-  const inputRow = document.createElement('div');
-  inputRow.className = 'gt-input-row';
-
-  const promptEl = document.createElement('span');
-  promptEl.className = 'gt-prompt';
-  promptEl.textContent = '$';
-
-  const input = document.createElement('input');
-  input.className = 'gt-input';
-  input.type = 'text';
-  input.autocomplete = 'off';
-  input.spellcheck = false;
-  input.placeholder = 'enter expression…';
-
-  inputRow.appendChild(promptEl);
-  inputRow.appendChild(input);
   el.appendChild(output);
-  el.appendChild(inputRow);
 
-  // ── output helpers ────────────────────────────────────
-  function logInfo(msg) {
+  // ── live input line ───────────────────────────────────
+  const inputLine = document.createElement('div');
+  inputLine.className = 'gt-input-line';
+
+  const inputLoc = document.createElement('span');
+  inputLoc.className = 'gt-input-loc';
+
+  const inputSep = document.createElement('span');
+  inputSep.className = 'gt-input-sep';
+  inputSep.textContent = '$';
+
+  const textarea = document.createElement('textarea');
+  textarea.className = 'gt-textarea';
+  textarea.rows = 1;
+  textarea.autocomplete = 'off';
+  textarea.spellcheck = false;
+  textarea.placeholder = 'enter expression…';
+
+  inputLine.appendChild(inputLoc);
+  inputLine.appendChild(inputSep);
+  inputLine.appendChild(textarea);
+  output.appendChild(inputLine);
+
+  // ── prompt sync ───────────────────────────────────────
+  // The live input prompt shows the current directory only when idle.
+  // When anything is running or queued we don't know where we'll land.
+  function syncInputPrompt() {
+    inputLoc.textContent = running || history.some(r => r.status === 'queued' || r.status === 'running')
+      ? ''
+      : cwdLabel(shell);
+  }
+  syncInputPrompt();
+
+  function resizeTextarea() {
+    textarea.style.height = '0';
+    textarea.style.height = textarea.scrollHeight + 'px';
+  }
+  textarea.addEventListener('input', resizeTextarea);
+
+  // ── DOM builders ──────────────────────────────────────
+  function buildEntryDOM(rec) {
     const entry = document.createElement('div');
     entry.className = 'gt-entry';
-    const r = document.createElement('div');
-    r.className = 'gt-result is-info';
-    r.textContent = msg;
-    entry.appendChild(r);
-    output.appendChild(entry);
+
+    const cmdLine = document.createElement('div');
+    cmdLine.className = 'gt-cmd-line is-queued';
+
+    const srcEl = document.createElement('span');
+    srcEl.className = 'gt-src';
+    srcEl.textContent = rec.src;
+
+    const statusEl = document.createElement('span');
+    statusEl.className = 'gt-status is-queued';
+    statusEl.innerHTML = SVG_HOURGLASS;
+
+    cmdLine.appendChild(srcEl);
+    cmdLine.appendChild(statusEl);
+    entry.appendChild(cmdLine);
+
+    output.insertBefore(entry, inputLine);
     output.scrollTop = output.scrollHeight;
+
+    // locEl and sep are inserted when command starts running
+    rec.dom = { entry, cmdLine, srcEl, statusEl, locEl: null, spinnerTimer: null };
   }
 
-  // Creates an entry DOM node and returns handles to update it
-  function createEntry(src) {
-    const entry = document.createElement('div');
-    entry.className = 'gt-entry';
+  function applyRunning(rec) {
+    const { cmdLine, srcEl, statusEl } = rec.dom;
+    cmdLine.classList.remove('is-queued');
 
-    const pline = document.createElement('div');
-    pline.className = 'gt-prompt-line';
+    const locEl = document.createElement('span');
+    locEl.className = 'gt-loc';
+    locEl.textContent = cwdLabel(shell);
+    rec.dom.locEl = locEl;  // ← store it
 
     const sep = document.createElement('span');
     sep.className = 'gt-sep';
     sep.textContent = '$';
 
-    const srcEl = document.createElement('span');
-    srcEl.className = 'gt-src';
-    srcEl.textContent = src;
+    cmdLine.insertBefore(sep, srcEl);
+    cmdLine.insertBefore(locEl, sep);
 
-    const statusEl = document.createElement('span');
     statusEl.className = 'gt-status';
+    statusEl.innerHTML = '';
+    rec.dom.spinnerTimer = setTimeout(() => {
+      statusEl.innerHTML = SVG_SPINNER;
+    }, 200);
+  }
+    
+  function applyDone(rec) {
+    const { statusEl, entry } = rec.dom;
+    clearTimeout(rec.dom.spinnerTimer);
 
-    pline.appendChild(sep);
-    pline.appendChild(srcEl);
-    pline.appendChild(statusEl);
-    entry.appendChild(pline);
+    const isError = rec.status === 'error';
+    statusEl.className = isError ? 'gt-status is-error' : 'gt-status';
+    statusEl.innerHTML = isError ? SVG_ERROR : '';
 
-    output.appendChild(entry);
-    output.scrollTop = output.scrollHeight;
-
-    let spinnerTimer = null;
-
-    return {
-      // Call when queued (not yet started)
-      setQueued() {
-        statusEl.className = 'gt-status is-queued';
-        statusEl.innerHTML = SVG_HOURGLASS;
-      },
-      // Call when execution begins
-      setRunning() {
-        statusEl.className = 'gt-status';
-        statusEl.innerHTML = '';
-        // Only show spinner if it takes more than 200ms
-        spinnerTimer = setTimeout(() => {
-          statusEl.innerHTML = SVG_SPINNER;
-        }, 350);
-      },
-      // Call on completion
-      setDone(display, isError) {
-        clearTimeout(spinnerTimer);
-        statusEl.className = isError ? 'gt-status is-error' : 'gt-status';
-        statusEl.innerHTML = isError ? SVG_ERROR : '';
-
-        if (display !== null) {
-          const result = document.createElement('div');
-          result.className = `gt-result${isError ? ' is-error' : ''}`;
-          result.textContent = display;
-          entry.appendChild(result);
-          output.scrollTop = output.scrollHeight;
-        }
-      },
-    };
+    if (rec.display !== null) {
+      const result = document.createElement('div');
+      result.className = `gt-result${isError ? ' is-error' : ''}`;
+      result.textContent = rec.display;
+      entry.appendChild(result);
+      output.scrollTop = output.scrollHeight;
+    }
   }
 
-  // ── queue & execution ─────────────────────────────────
-  // Each item: { src, entryHandle }
-  const queue = [];
-  let busy = false;
-
+  // ── execution loop ────────────────────────────────────
   async function runNext() {
-    if (busy || queue.length === 0) return;
-    busy = true;
+    if (running) return;
+    const rec = history.find(r => r.status === 'queued');
+    if (!rec) {
+      syncInputPrompt(); // queue fully drained — show directory
+      return;
+    }
 
-    const { src, entryHandle } = queue.shift();
-    entryHandle.setRunning();
+    running = true;
+    rec.status = 'running';
+    applyRunning(rec);
+    syncInputPrompt(); // still busy, clears the directory from input prompt
 
     try {
-      const { display } = await shell.eval(src);
-      entryHandle.setDone(display, false);
+      const { display } = await shell.eval(rec.src);
+      rec.status  = 'done';
+      rec.display = display;
     } catch(e) {
-      entryHandle.setDone(e.message ?? String(e), true);
+      rec.status  = 'error';
+      rec.display = e.message ?? String(e);
       console.error(e);
     }
 
-    busy = false;
+    applyDone(rec);
+    running = false;
     runNext();
   }
 
+  // ── enqueue ───────────────────────────────────────────
   function enqueue(src) {
-    const entryHandle = createEntry(src);
-    const isFirst = queue.length === 0 && !busy;
-    queue.push({ src, entryHandle });
-    if (isFirst) {
-      runNext();
-    } else {
-      entryHandle.setQueued();
-    }
+    const rec = {
+      src,
+      status:    'queued',
+      display:   null,
+      dom:       null,
+    };
+    history.push(rec);
+    buildEntryDOM(rec);
+    syncInputPrompt();
+    runNext();
   }
 
-  // ── input handling ────────────────────────────────────
+  // ── keyboard handling ─────────────────────────────────
   let historyIdx = -1;
 
-  input.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      const src = input.value.trim();
+  textarea.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      const src = textarea.value.trim();
       if (!src) return;
-      input.value = '';
+      inputLoc.textContent = '';
+      textarea.value = '';
+      resizeTextarea();
       historyIdx = -1;
       enqueue(src);
       return;
     }
+
     const h = shell.history;
     if (e.key === 'ArrowUp') {
+      const beforeCursor = textarea.value.slice(0, textarea.selectionStart);
+      if (beforeCursor.includes('\n')) return;
       if (!h.length) return;
-      historyIdx = Math.min(historyIdx + 1, h.length - 1);
-      input.value = h[h.length - 1 - historyIdx];
       e.preventDefault();
+      historyIdx = Math.min(historyIdx + 1, h.length - 1);
+      textarea.value = h[h.length - 1 - historyIdx];
+      resizeTextarea();
     }
     if (e.key === 'ArrowDown') {
-      if (historyIdx <= 0) { historyIdx = -1; input.value = ''; return; }
-      historyIdx--;
-      input.value = h[h.length - 1 - historyIdx];
+      const afterCursor = textarea.value.slice(textarea.selectionEnd);
+      if (afterCursor.includes('\n')) return;
       e.preventDefault();
+      if (historyIdx <= 0) { historyIdx = -1; textarea.value = ''; resizeTextarea(); return; }
+      historyIdx--;
+      textarea.value = h[h.length - 1 - historyIdx];
+      resizeTextarea();
     }
     if (e.key === 'l' && e.ctrlKey) {
       e.preventDefault();
-      // Clear output but keep spacer
       output.innerHTML = '';
       output.appendChild(spacer);
+      output.appendChild(inputLine);
+      syncInputPrompt();
     }
   });
 
-  // ── click to focus (without breaking text selection) ──
   output.addEventListener('click', () => {
-    if (!window.getSelection().toString()) input.focus();
+    if (!window.getSelection().toString()) textarea.focus();
   });
 
   // ── init ──────────────────────────────────────────────
-  logInfo(`${shell.volume ?? 'gimbal'} ready`);
-  input.focus();
+  shell._warmCache().then(() => {
+    syncInputPrompt();
+    if (runOnInit) enqueue(runOnInit);
+  });
+  textarea.focus();
 
   return {
     el,
-    focus()   { input.focus(); },
+    focus()   { textarea.focus(); },
     destroy() {},
   };
 }
