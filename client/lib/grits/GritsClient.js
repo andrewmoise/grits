@@ -9,6 +9,7 @@
 //
 // GritsVolume — server operations (with shared cache fallthrough)
 //   vol.lookup (path)                     → GritsFile
+//   vol.fileForCID (cidString)            → GritsFile
 //   vol.link   (file|cid, path)           → LinkResponse
 //   vol.get    (cidString)                → Response
 //   vol.put    (bytes)                    → string (content CID)
@@ -27,6 +28,7 @@
 //   file.isDir()      → boolean
 //   file.isFile()     → boolean
 //   file.meta()       → { type, size, contentHash, mode, timestamp }
+//   file.children()   → { name: GritsFile } for a directory's children
 //   file.get()        → Promise<Response>
 //   file.bytes()      → Promise<ArrayBuffer>
 //   file.text()       → Promise<string>
@@ -192,6 +194,22 @@ export class GritsFile {
   async text() { return (await this.get()).text(); }
   async json() { return this._volume.json(this._meta.contentHash); }
 
+  // Returns a Map<name, GritsFile> of this directory's children.
+  // Fetches metadata for each child; content is not fetched.
+  // Throws if called on a non-directory.
+  async children() {
+    if (!this.isDir())
+      throw new Error('children: not a directory');
+    const listing = await this.json();   // { name: metaCID, ... }
+    const entries = await Promise.all(
+      Object.entries(listing).map(async ([name, metaCID]) => {
+        const meta = await this._volume.meta(metaCID);
+        return [name, new GritsFile(metaCID, meta, this._volume)];
+      })
+    );
+    return new Map(entries);
+  }
+
   // If this is a directory, fetch the directory listing and return a GritsFile
   // for its index.html entry. Throws if not a directory or no index.html exists.
   async indexHtml() {
@@ -253,6 +271,13 @@ export class GritsVolume {
     return new GritsFile(info.metadataHash, meta, this);
   }
   
+  // Returns a GritsFile for a known metadata CID, without a path lookup.
+  async fileForCID(metaCID) {
+    _assertString(metaCID, 'fileForCID');
+    const meta = await this._fetchMeta(metaCID);
+    return new GritsFile(metaCID, meta, this);
+  }
+
   // ── Link ──────────────────────────────────────────────────────
 
   async link(fileOrCID, path) {
