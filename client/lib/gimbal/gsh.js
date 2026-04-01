@@ -223,6 +223,11 @@ export class GimbalShell {
     this._importCache    = new Map();
     this._availableTools = null;
     this._cacheWarmed    = false;
+
+    // Per-lib directory CID tracking for cache invalidation.
+    // Key: "<serverUrl>|<volume>|<path>", value: metadataCID string of the
+    // lib directory at last warm. If this changes we bust and re-warm.
+    this._libDirCIDs = new Map();
   }
 
   // ── ui accessor — reads evalContext live so timing doesn't matter ─
@@ -281,28 +286,74 @@ export class GimbalShell {
     throw new Error(`command not found: ${name}`);
   }
 
+  // ── Cache warming ─────────────────────────────────────────────
+  // Fetches each lib directory listing to populate _availableTools
+  // and records each lib dir's CID for later staleness checks.
+
   async _warmCache() {
     if (this._cacheWarmed) return;
     this._cacheWarmed = true;
+    this._availableTools = new Set();
+
     for (const lib of this.libs) {
       try {
-        const vol = this.gg.volume(lib.serverUrl, lib.volume);
+        const vol  = this.gg.volume(lib.serverUrl, lib.volume);
         const file = await vol.lookup(lib.path);
-        console.log('warmCache: got file', file, file.isDir());
         if (!file.isDir()) continue;
+
+        // Record this lib dir's CID so we can detect changes later
+        const key = _libKey(lib);
+        this._libDirCIDs.set(key, file.cid());
+
         const dir = await file.json();
-        console.log('warmCache: dir keys', Object.keys(dir));
-        if (!this._availableTools) this._availableTools = new Set();
         for (const name of Object.keys(dir)) {
           this._availableTools.add(name);
         }
       } catch (e) {
-        console.error('warmCache failed:', e);
+        console.error('warmCache failed for lib:', lib, e);
       }
     }
-    console.log('warmCache done, tools:', this._availableTools);
   }
- 
+
+  // ── Staleness check ───────────────────────────────────────────
+  // Called before each eval. Uses _tryFastLookup (in-memory only,
+  // no network) to compare current lib dir CIDs against what we saw
+  // at warm time. If any lib dir changed, bust the entire tool cache
+  // and re-warm. This is intentionally coarse — a single changed lib
+  // dir invalidates everything — because tool additions/deletions are
+  // entangled with config and it's cheaper to just re-warm than to
+  // try to surgically update.
+
+  async _checkCacheStale() {
+    let stale = false;
+
+    for (const lib of this.libs) {
+      try {
+        const vol  = this.gg.volume(lib.serverUrl, lib.volume);
+        // _tryFastLookup reads only from in-memory JSON cache — no network
+        const info = await vol._tryFastLookup(lib.path);
+        if (!info) continue; // not in memory, can't compare — skip
+
+        const key   = _libKey(lib);
+        const known = this._libDirCIDs.get(key);
+        if (known && info.metadataHash !== known) {
+          stale = true;
+          break;
+        }
+      } catch (e) {
+        // best-effort — a failed check is not an error
+      }
+    }
+
+    if (stale) {
+      this._cacheWarmed    = false;
+      this._availableTools = null;
+      this._importCache.clear();
+      this._libDirCIDs.clear();
+      await this._warmCache();
+    }
+  }
+
   // ── Help handling ─────────────────────────────────────────────
 
   _isHelpCall(args) {
@@ -328,6 +379,7 @@ export class GimbalShell {
 
   async eval(src, cols = 80) {
     await this._warmCache();
+    await this._checkCacheStale();
     this.history.push(src);
 
     const root  = this._rootResult();
@@ -361,6 +413,14 @@ export class GimbalShell {
     const display = await finalResult._display(cols);
     return { value: await finalResult, display };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────
+
+function _libKey(lib) {
+  return `${lib.serverUrl}|${lib.volume}|${lib.path}`;
 }
 
 // ─────────────────────────────────────────────────────────────────
