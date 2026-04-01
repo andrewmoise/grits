@@ -377,7 +377,7 @@ export class GimbalShell {
 
   // ── eval ──────────────────────────────────────────────────────
 
-  async eval(src, cols = 80) {
+  async eval(src, cols = 80, extraVars = {}) {
     await this._warmCache();
     await this._checkCacheStale();
     this.history.push(src);
@@ -389,10 +389,12 @@ export class GimbalShell {
       has(_, key) {
         if (typeof key === 'symbol')    return false;
         if (key in globalThis)          return false;
+        if (key in extraVars)           return true;
         return shell._availableTools?.has(key) ?? false;
       },
       get(_, key) {
         if (typeof key === 'symbol') return undefined;
+        if (key in extraVars)        return extraVars[key];
         return (...args) => _wrapResult(
           new Result(shell, shell._dispatch(key, root, args)));
       },
