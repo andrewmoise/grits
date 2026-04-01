@@ -954,16 +954,26 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	if leafNode.Metadata().Type == grits.GNodeTypeDirectory {
 		accept := r.Header.Get("Accept")
 		if strings.Contains(accept, "application/json") {
-			// Client wants the raw directory listing — fall through and serve
-			// the directory's content blob (which is already JSON).
+			// JS client wants the raw directory listing — fall through and serve
+			// the directory's content blob (which is JSON).
 		} else {
 			// Browser request — try to serve index.html instead.
 			indexPath := strings.TrimRight(path, "/") + "/index.html"
 			indexNode, err := volume.LookupNode(indexPath)
+			
+			// Fail if we don't have an index.html to serve
 			if err != nil {
 				http.Error(w, "File not found", http.StatusNotFound)
 				return
 			}
+
+			// Redirect if no trailing slash, so relative paths resolve correctly
+			if !strings.HasSuffix(r.URL.Path, "/") {
+				http.Redirect(w, r, r.URL.Path+"/", http.StatusFound)
+				return
+			}
+
+			// Otherwise, just silently serve index.html
 			path = indexPath
 			leafNode = indexNode
 			lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
