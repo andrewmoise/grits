@@ -301,17 +301,7 @@ const _vol    = 'client';
 const _libUrl = `${_origin}/grits/v1/content/${_vol}/lib`;
 const _gg     = new GritsClient();
 
-const evalContext = { fs: _gg, sh: null, ui: null };
-
-const _shell = makeShell({
-  gg:        _gg,
-  serverUrl: _origin,
-  volume:    _vol,
-  cwd:       '/',
-  libs:      [{ serverUrl: _origin, volume: _vol, path: 'lib' }],
-  evalContext,
-});
-evalContext.sh = _shell;
+const evalContext = { fs: _gg, ui: null };
 
 const CELL_REGISTRY = {
   terminal: {

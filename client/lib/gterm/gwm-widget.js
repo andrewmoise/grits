@@ -9,7 +9,7 @@
  * @implements gimbal-shell#widget
  */
 
-import { isVoid } from '../gimbal/gsh.js';
+import { isVoid, makeShell } from '../gimbal/gsh.js';
 
 function escHtml(s) {
   return String(s)
@@ -19,7 +19,14 @@ function escHtml(s) {
 }
 
 export default function createWidget({ name, evalContext = {} }) {
-  const shell = evalContext.sh;
+  const shell = makeShell({
+    gg:        evalContext.fs,
+    serverUrl: window.location.origin,
+    volume:    'client',
+    cwd:       '/',
+    libs:      [{ serverUrl: window.location.origin, volume: 'client', path: 'lib' }],
+    evalContext,
+  });
 
   // ── root element ─────────────────────────────────────
   const el = document.createElement('div');
