@@ -267,5 +267,7 @@ export default function createWidget({ name, evalContext = {} }) {
 
   loadRoot();
 
-  return { el, focus() {}, destroy() {} };
+  el.tabIndex = 0;
+  el.style.outline = 'none';
+  return { el, focus() { el.focus(); }, destroy() {} };
 }
