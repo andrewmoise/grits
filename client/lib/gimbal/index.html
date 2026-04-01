@@ -315,11 +315,11 @@ evalContext.sh = _shell;
 
 const CELL_REGISTRY = {
   terminal: {
-    name: 'terminal', icon: 'terminal', defaultZone: 'stack',
+    name: 'terminal', icon: 'terminal',
     module: `${_libUrl}/gterm/gwm-widget.js`, _cache: null,
   },
   files: {
-    name: 'files', icon: 'files', defaultZone: 'master',
+    name: 'files', icon: 'files',
     module: `${_libUrl}/files/gwm-widget.js`, _cache: null,
   },
 };
@@ -697,20 +697,18 @@ function animateOut(id) {
 async function launchCell(cellId, iconRect) {
   const entry = CELL_REGISTRY[cellId];
   if (!entry) return;
-  const id = ++widgetSeq, now = Date.now(), zone = entry.defaultZone;
+  const id = ++widgetSeq, now = Date.now();
 
-  if (zone === 'master') {
-    const cur = [...widgets.values()].find(w => w.zone === 'master');
-    if (cur) { cur.zone = 'stack'; cur.stackOrder = stackMaxOrder() + 1; }
-  }
+  const ex = [...widgets.values()].filter(w => w.zone === 'stack' || w.zone === 'master');
+  const isEmpty = ex.length === 0;
+  const zone = isEmpty ? 'master' : 'stack';
 
   let newRatio = 1;
-  if (zone === 'stack') {
-    const ex = [...widgets.values()].filter(w => w.zone === 'stack'), n = ex.length;
+  if (!isEmpty) {
+    const stackWs = ex.filter(w => w.zone === 'stack'), n = stackWs.length;
     if (n > 0) {
-      const total = ex.reduce((s,w) => s + (w.flexRatio||1), 0);
-      ex.forEach(w => w.flexRatio = (w.flexRatio||1) * n / (n+1));
-      newRatio = total / (n+1);
+      stackWs.forEach(w => w.flexRatio = (w.flexRatio||1) * n / (n+1));
+      newRatio = stackWs.reduce((s,w) => s + (w.flexRatio||1), 0) / (n+1);
     }
   }
 
