@@ -42,6 +42,8 @@ export default function createWidget({ name, evalContext = {} }) {
         word-break: break-all;
         user-select: text;
         cursor: text;
+        display: flex;          /* ← add */
+        flex-direction: column; /* ← add */
       }
       .gt-output::-webkit-scrollbar { width: 0.25rem; }
       .gt-output::-webkit-scrollbar-thumb {
@@ -109,6 +111,10 @@ export default function createWidget({ name, evalContext = {} }) {
   // ── output area ───────────────────────────────────────
   const output = document.createElement('div');
   output.className = 'gt-output';
+
+  const spacer = document.createElement('div');
+  spacer.style.cssText = 'flex: 1 1 auto; min-height: 0;';
+  output.appendChild(spacer);
 
   // ── input row ─────────────────────────────────────────
   const inputRow = document.createElement('div');
