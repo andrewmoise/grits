@@ -42,12 +42,11 @@
     --btn-size:     1.75rem;
     --icon-r:       0.5rem;
     --widget-r:     0.625rem;
-    --divider-hit:  0.5rem;
+    --gap:          0.4rem;   /* gap between widgets */
 
-    /* Sine-curve easing — slow start, fast middle, slow end */
     --ease-sine:    cubic-bezier(0.37, 0, 0.63, 1);
     --ease-in:      cubic-bezier(0.55, 0, 1, 0.45);
-    --dur:          1.5s;
+    --dur:          0.25s;
   }
 
   /* ═══════════════════════════════════════════════════
@@ -82,44 +81,104 @@
   #minimized-section::-webkit-scrollbar { display: none; }
 
   /* ═══════════════════════════════════════════════════
-     LAYOUT
+     ROOT LAYOUT — strip on the right, workspace fills rest
      ═══════════════════════════════════════════════════ */
   #root { display: flex; width: 100%; height: 100%; position: relative; z-index: 1; }
 
+  /* Workspace is position:relative so widgets can be position:absolute inside */
   #workspace {
-    flex: 1 1 0; display: flex; min-width: 0;
-    padding: 0.5rem 0.4rem 0.5rem 0.5rem; position: relative;
+    flex: 1 1 0;
+    position: relative;
+    min-width: 0;
+    /* Padding defines the inset for all widget positioning */
+    --pad: 0.5rem;
   }
-
-  #master { flex: 0 0 auto; position: relative; display: flex; flex-direction: column; }
-  #stack  { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; position: relative; }
 
   /* ═══════════════════════════════════════════════════
-     DIVIDERS
+     WIDGETS — absolutely positioned, JS controls rects
      ═══════════════════════════════════════════════════ */
-  #ms-divider {
-    width: var(--divider-hit); flex: 0 0 var(--divider-hit);
-    cursor: col-resize; z-index: 10;
-    display: flex; align-items: center; justify-content: center;
+  .widget {
+    position: absolute;
+    display: flex; flex-direction: column;
+    background: var(--bg-float);
+    border: 1px solid var(--border);
+    border-radius: var(--widget-r);
+    overflow: hidden;
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.5),
+      0 0.4rem 1.5rem rgba(0,0,0,0.45),
+      0 0.1rem 0.3rem rgba(0,0,0,0.3);
+    /* Transition layout properties + fade */
+    transition:
+      left   var(--dur) var(--ease-sine),
+      top    var(--dur) var(--ease-sine),
+      width  var(--dur) var(--ease-sine),
+      height var(--dur) var(--ease-sine),
+      opacity var(--dur) var(--ease-sine),
+      border-color 0.25s;
   }
-  #ms-divider::after {
-    content: ''; width: 1px; height: 1.75rem;
-    background: var(--border); border-radius: 1px;
-    transition: background 0.2s, height 0.2s;
+  .widget:focus-within {
+    border-color: var(--border-focus);
+    box-shadow:
+      0 0 0 1px rgba(0,0,0,0.5),
+      0 0.6rem 1.75rem rgba(0,0,0,0.55),
+      0 0.1rem 0.3rem rgba(0,0,0,0.3),
+      inset 0 1px 0 rgba(255,255,255,0.03);
   }
-  #ms-divider:hover::after, #ms-divider.dragging::after { background: var(--a1); height: 2.75rem; }
 
-  .stack-divider {
-    height: var(--divider-hit); flex: 0 0 var(--divider-hit);
-    cursor: row-resize; z-index: 5;
+  /* Empty workspace message */
+  #workspace-empty {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 0.5rem; color: var(--text-dim);
+    font-size: 0.75rem; font-family: 'Rubik', sans-serif; opacity: 0.4;
+    pointer-events: none;
+  }
+  #workspace-empty svg { width: 1.25rem; height: 1.25rem; }
+
+  /* ═══════════════════════════════════════════════════
+     WIDGET TITLE
+     ═══════════════════════════════════════════════════ */
+  .widget-title {
+    height: var(--title-h);
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; padding: 0 0.3rem;
+    flex-shrink: 0; cursor: grab;
+    border-radius: var(--widget-r) var(--widget-r) 0 0;
+    transition: background 0.15s; overflow: visible;
+  }
+  .widget:focus-within .widget-title { background: var(--bg-active); }
+  .widget-title:active { cursor: grabbing; }
+
+  .title-left  { width: 3.75rem; display: flex; align-items: center; gap: 0.1rem; flex-shrink: 0; }
+  .title-right { width: 3.75rem; display: flex; align-items: center; justify-content: flex-end; gap: 0.1rem; flex-shrink: 0; }
+
+  .widget-name {
+    flex: 1; text-align: center;
+    font-size: 0.875rem; font-weight: 400; color: var(--text-dim);
+    letter-spacing: 0.02em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-family: 'Rubik', sans-serif; transition: color 0.15s;
+  }
+  .widget:focus-within .widget-name { color: var(--text); }
+
+  .widget-btn {
+    width: var(--btn-size); height: var(--btn-size);
+    border-radius: 0.35rem; border: none;
+    background: transparent; color: var(--text-dim); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
+    padding: 0; transition: background 0.12s, color 0.12s; flex-shrink: 0;
   }
-  .stack-divider::after {
-    content: ''; height: 1px; width: 2rem;
-    background: var(--border); border-radius: 1px;
-    transition: background 0.2s, width 0.2s;
+  .widget-btn:hover { background: var(--bg-hover); color: var(--text-hi); }
+  .widget-btn.close:hover { background: var(--red-dim); color: var(--red); }
+  .widget-btn svg { width: 1.2em; height: 1.2em; stroke-width: 1.7; }
+
+  .widget-body {
+    flex: 1; overflow: auto; min-height: 0; color: var(--text);
+    font-family: 'JetBrains Mono', monospace; font-size: 0.8125rem; line-height: 1.6;
   }
-  .stack-divider:hover::after, .stack-divider.dragging::after { background: var(--a1); width: 2.75rem; }
 
   /* ═══════════════════════════════════════════════════
      ICON STRIP
@@ -152,8 +211,8 @@
   .strip-launcher:hover::after { opacity: 0.9; }
 
   #strip-separator {
-    width: var(--icon-size); display: flex; align-items: center; justify-content: center;
-    flex-shrink: 0; margin: 0.2rem 0; gap: 0.2rem;
+    width: var(--icon-size); display: flex; align-items: center;
+    justify-content: center; flex-shrink: 0; margin: 0.2rem 0; gap: 0.2rem;
   }
   #strip-separator::before, #strip-separator::after { content: ''; flex: 1; height: 1px; background: var(--border); }
   #strip-separator span {
@@ -189,60 +248,24 @@
   .strip-launcher:hover .tip, .min-thumb:hover .tip { display: block; }
 
   /* ═══════════════════════════════════════════════════
-     WIDGET CHROME
+     RESIZE HANDLES — invisible strips between widgets
      ═══════════════════════════════════════════════════ */
-  .widget {
-    display: flex; flex-direction: column;
-    background: var(--bg-float); border: 1px solid var(--border);
-    border-radius: var(--widget-r); overflow: hidden; position: relative; min-height: 0;
-    box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 0.4rem 1.5rem rgba(0,0,0,0.45), 0 0.1rem 0.3rem rgba(0,0,0,0.3);
-    transition: border-color 0.15s, box-shadow 0.15s;
-    will-change: transform;
+  .resize-handle-h {
+    position: absolute; z-index: 10;
+    cursor: col-resize;
+    width: 0.6rem;
+    /* top/height set by JS */
   }
-  .widget:focus-within {
-    border-color: var(--border-focus);
-    box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 0.6rem 1.75rem rgba(0,0,0,0.55), 0 0.1rem 0.3rem rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);
-  }
-  .widget.in-master { flex: 1; }
-
-  .widget-title {
-    height: var(--title-h); background: var(--bg-elevated);
-    border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; padding: 0 0.3rem;
-    flex-shrink: 0; cursor: grab;
-    border-radius: var(--widget-r) var(--widget-r) 0 0;
-    transition: background 0.15s; overflow: visible;
-  }
-  .widget:focus-within .widget-title { background: var(--bg-active); }
-  .widget-title:active { cursor: grabbing; }
-
-  .title-left  { width: 3.75rem; display: flex; align-items: center; gap: 0.1rem; flex-shrink: 0; }
-  .title-right { width: 3.75rem; display: flex; align-items: center; justify-content: flex-end; gap: 0.1rem; flex-shrink: 0; }
-
-  .widget-name {
-    flex: 1; text-align: center;
-    font-size: 0.875rem; font-weight: 400; color: var(--text-dim);
-    letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    font-family: 'Rubik', sans-serif; transition: color 0.15s;
-  }
-  .widget:focus-within .widget-name { color: var(--text); }
-
-  .widget-btn {
-    width: var(--btn-size); height: var(--btn-size);
-    border-radius: 0.35rem; border: none;
-    background: transparent; color: var(--text-dim); cursor: pointer;
-    display: flex; align-items: center; justify-content: center;
-    padding: 0; transition: background 0.12s, color 0.12s; flex-shrink: 0;
-  }
-  .widget-btn:hover { background: var(--bg-hover); color: var(--text-hi); }
-  .widget-btn.close:hover { background: var(--red-dim); color: var(--red); }
-  .widget-btn svg { width: 1.2em; height: 1.2em; stroke-width: 1.7; }
-
-  .widget-body {
-    flex: 1; overflow: auto; min-height: 0; color: var(--text);
-    font-family: 'JetBrains Mono', monospace; font-size: 0.8125rem; line-height: 1.6;
+  .resize-handle-v {
+    position: absolute; z-index: 10;
+    cursor: row-resize;
+    height: 0.6rem;
+    /* left/width/top set by JS */
   }
 
+  /* ═══════════════════════════════════════════════════
+     DRAG GHOST
+     ═══════════════════════════════════════════════════ */
   #drag-ghost {
     position: fixed; pointer-events: none; z-index: 9999;
     background: var(--bg-elevated); border: 1px solid var(--a1);
@@ -251,23 +274,13 @@
     color: var(--a1); opacity: 0.92; display: none;
     box-shadow: 0 0.2rem 0.8rem rgba(0,0,0,0.5);
   }
-
-  .empty-state {
-    flex: 1; display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    gap: 0.5rem; color: var(--text-dim);
-    font-size: 0.75rem; font-family: 'Rubik', sans-serif; opacity: 0.4;
-  }
-  .empty-state svg { width: 1.25rem; height: 1.25rem; }
 </style>
 </head>
 <body>
 
 <div id="root">
   <div id="workspace">
-    <div id="master"></div>
-    <div id="ms-divider"></div>
-    <div id="stack"></div>
+    <div id="workspace-empty"></div>
   </div>
   <div id="strip">
     <div id="strip-top"></div>
@@ -326,17 +339,15 @@ const ICONS = {
   close:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
 };
 
-// Easing strings — match CSS vars
 const EASE_SINE = 'cubic-bezier(0.37, 0, 0.63, 1)';
 const EASE_IN   = 'cubic-bezier(0.55, 0, 1, 0.45)';
-const DUR       = '1.5s';
+const DUR       = '0.25s';
+const PAD       = 8; // workspace padding in px — kept in px since getBoundingClientRect is px
 
 let widgetSeq  = 0;
 let masterFrac = 0.60;
-const widgets  = new Map();
-
-// Store the icon rect that spawned each new widget id
-const spawnOrigins = new Map();
+const widgets  = new Map();   // id → record
+const domCache = new Map();   // id → widget DOM element
 
 evalContext.ui = {
   openWidget({ el, focus, destroy, name = 'widget', icon = 'terminal', zone = 'stack' }) {
@@ -367,171 +378,69 @@ function visibleCount() {
 }
 
 // ─────────────────────────────────────────────────────────
-// FLIP + SPAWN ANIMATION
+// LAYOUT ENGINE
+// Returns a Map of id → { left, top, width, height } in px
+// relative to the workspace element's top-left (after padding)
 // ─────────────────────────────────────────────────────────
-function snapshotPositions() {
-  const map = new Map();
-  document.querySelectorAll('.widget[data-id]').forEach(el => {
-    map.set(el.dataset.id, el.getBoundingClientRect());
-  });
-  return map;
-}
+function computeLayout() {
+  const ws   = $('workspace');
+  const W    = ws.clientWidth  - PAD * 2;
+  const H    = ws.clientHeight - PAD * 2;
+  const GAP  = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap') || '6') * 16;
 
-function applyFlip(before) {
-  document.querySelectorAll('.widget[data-id]').forEach(el => {
-    const id  = el.dataset.id;
-    const old = before.get(id);
-
-    if (!old) {
-      // New widget — check for a spawn origin
-      const numId  = parseInt(id);
-      const origin = spawnOrigins.get(numId);
-      spawnOrigins.delete(numId);
-
-      const now = el.getBoundingClientRect();
-
-      if (origin) {
-        // Animate from icon position to final position
-        const dx = (origin.left + origin.width  / 2) - (now.left + now.width  / 2);
-        const dy = (origin.top  + origin.height / 2) - (now.top  + now.height / 2);
-        const sw = origin.width  / now.width;
-        const sh = origin.height / now.height;
-        el.style.transition    = 'none';
-        el.style.transformOrigin = 'center center';
-        el.style.transform     = `translate(${dx}px, ${dy}px) scale(${sw}, ${sh})`;
-        el.style.opacity       = '0.2';
-      } else {
-        // No origin — simple scale-in
-        el.style.transition = 'none';
-        el.style.transform  = 'scale(0.92)';
-        el.style.opacity    = '0';
-      }
-
-      requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          el.style.transition    = `transform ${DUR} ${EASE_SINE}, opacity ${DUR} ${EASE_SINE}`;
-          el.style.transform     = '';
-          el.style.transformOrigin = '';
-          el.style.opacity       = '';
-        });
-      });
-      return;
-    }
-
-    // Existing widget that moved — FLIP it
-    const now = el.getBoundingClientRect();
-    const dx  = old.left - now.left;
-    const dy  = old.top  - now.top;
-    const dw  = old.width  / now.width;
-    const dh  = old.height / now.height;
-
-    if (Math.abs(dx) < 1 && Math.abs(dy) < 1 && Math.abs(dw - 1) < 0.01 && Math.abs(dh - 1) < 0.01) return;
-
-    el.style.transition    = 'none';
-    el.style.transformOrigin = 'top left';
-    el.style.transform     = `translate(${dx}px, ${dy}px) scale(${dw}, ${dh})`;
-
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        el.style.transition    = `transform ${DUR} ${EASE_SINE}`;
-        el.style.transform     = '';
-        el.style.transformOrigin = '';
-      });
-    });
-  });
-}
-
-// ─────────────────────────────────────────────────────────
-// CLOSE / MINIMIZE ANIMATION
-// ─────────────────────────────────────────────────────────
-function animateClose(id) {
-  const el = document.querySelector(`.widget[data-id="${id}"]`);
-  if (!el) return;
-  const rect  = el.getBoundingClientRect();
-  const ghost = el.cloneNode(true);
-  ghost.querySelectorAll('input, button, textarea').forEach(i => i.disabled = true);
-  Object.assign(ghost.style, {
-    position:      'fixed',
-    left:          rect.left   + 'px',
-    top:           rect.top    + 'px',
-    width:         rect.width  + 'px',
-    height:        rect.height + 'px',
-    pointerEvents: 'none',
-    zIndex:        '9998',
-    borderRadius:  'var(--widget-r)',
-    overflow:      'hidden',
-    transition:    'none',
-    opacity:       '1',
-    transform:     'none',
-  });
-  document.body.appendChild(ghost);
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      ghost.style.transition = `transform ${DUR} ${EASE_IN}, opacity ${DUR} ${EASE_IN}`;
-      ghost.style.transform  = 'translateY(1.25rem) scale(0.96)';
-      ghost.style.opacity    = '0';
-      setTimeout(() => ghost.remove(), 200);
-    });
-  });
-}
-
-// ─────────────────────────────────────────────────────────
-// RENDER
-// ─────────────────────────────────────────────────────────
-function render(animate = false) {
-  const before = animate ? snapshotPositions() : null;
-
-  const masterEl = $('master'), stackEl = $('stack');
-  const minEl = $('minimized-section'), msd = $('ms-divider');
-
+  const layout = new Map();
   const masterW = [...widgets.values()].find(w => w.zone === 'master');
-  const stackWs = [...widgets.values()].filter(w => w.zone === 'stack').sort((a,b) => a.stackOrder - b.stackOrder);
-  const minWs   = [...widgets.values()].filter(w => w.zone === 'minimized');
+  const stackWs = [...widgets.values()].filter(w => w.zone === 'stack')
+    .sort((a,b) => a.stackOrder - b.stackOrder);
 
-  msd.style.display = (masterW && stackWs.length) ? '' : 'none';
-  masterEl.style.width = masterW && stackWs.length ? (masterFrac*100)+'%'
-    : masterW ? '100%' : stackWs.length ? '0' : '100%';
+  const hasStack  = stackWs.length > 0;
+  const hasMaster = !!masterW;
 
-  masterEl.innerHTML = '';
-  if (masterW) {
-    masterEl.appendChild(buildWidgetEl(masterW, 'master'));
-  } else {
-    const emp = mkEl('div', 'empty-state');
-    emp.innerHTML = ICONS.files + '<span>no master window</span>';
-    masterEl.appendChild(emp);
+  let masterPx = 0;
+  if (hasMaster && hasStack) {
+    masterPx = Math.round(W * masterFrac - GAP / 2);
+  } else if (hasMaster) {
+    masterPx = W;
   }
 
-  stackEl.innerHTML = '';
-  if (stackWs.length) {
-    const total = stackWs.reduce((s,w) => s + (w.flexRatio||1), 0);
-    stackWs.forEach(w => w.flexRatio = (w.flexRatio||1) / total);
+  const stackLeft = hasMaster ? masterPx + GAP : 0;
+  const stackPx   = hasMaster && hasStack ? W - masterPx - GAP : W;
+
+  if (hasMaster) {
+    layout.set(masterW.id, { left: PAD, top: PAD, width: masterPx, height: H });
+  }
+
+  if (hasStack) {
+    const totalFlex = stackWs.reduce((s,w) => s + (w.flexRatio||1), 0);
+    let y = PAD;
     stackWs.forEach((w, i) => {
-      const wEl = buildWidgetEl(w, 'stack');
-      wEl.style.flex = `${w.flexRatio} 1 0`;
-      wEl.style.minHeight = '3.5rem';
-      stackEl.appendChild(wEl);
-      if (i < stackWs.length - 1) {
-        const div = mkEl('div', 'stack-divider');
-        div.dataset.above = w.id; div.dataset.below = stackWs[i+1].id;
-        stackEl.appendChild(div);
-        bindStackDivider(div);
-      }
+      const h = Math.round((w.flexRatio / totalFlex) * (H - GAP * (stackWs.length - 1)));
+      layout.set(w.id, { left: PAD + stackLeft, top: y, width: stackPx, height: h });
+      y += h + GAP;
     });
   }
 
-  minEl.innerHTML = '';
-  minWs.forEach(w => {
-    const thumb = mkEl('div', 'min-thumb');
-    thumb.innerHTML = (ICONS[w.icon]||ICONS.terminal) + `<span class="tip">${w.name}</span>`;
-    thumb.addEventListener('click', () => restoreWidget(w.id));
-    minEl.appendChild(thumb);
-  });
-
-  if (before) applyFlip(before);
+  return layout;
 }
 
-function buildWidgetEl(w, zone) {
-  const wrap = mkEl('div', `widget in-${zone}`);
+// ─────────────────────────────────────────────────────────
+// APPLY RECT to a widget element
+// ─────────────────────────────────────────────────────────
+function applyRect(el, rect, animate) {
+  el.style.transition = animate
+    ? `left ${DUR} ${EASE_SINE}, top ${DUR} ${EASE_SINE}, width ${DUR} ${EASE_SINE}, height ${DUR} ${EASE_SINE}, opacity ${DUR} ${EASE_SINE}`
+    : 'none';
+  el.style.left   = rect.left   + 'px';
+  el.style.top    = rect.top    + 'px';
+  el.style.width  = rect.width  + 'px';
+  el.style.height = rect.height + 'px';
+}
+
+// ─────────────────────────────────────────────────────────
+// BUILD WIDGET ELEMENT (once per widget)
+// ─────────────────────────────────────────────────────────
+function buildWidgetEl(w) {
+  const wrap = mkEl('div', 'widget');
   wrap.dataset.id = w.id;
 
   const title = mkEl('div', 'widget-title');
@@ -542,6 +451,23 @@ function buildWidgetEl(w, zone) {
   title.appendChild(name);
 
   const right = mkEl('div', 'title-right');
+  wrap._rightEl = right; // store ref so we can update buttons on re-render
+  title.appendChild(right);
+
+  bindTitleDrag(title, w);
+  wrap.appendChild(title);
+
+  const body = mkEl('div', 'widget-body');
+  body.style.padding = '0';
+  wrap._bodyEl = body;
+  wrap.appendChild(body);
+
+  return wrap;
+}
+
+function updateWidgetButtons(wrap, w, zone) {
+  const right = wrap._rightEl;
+  right.innerHTML = '';
   right.appendChild(mkBtn('minimize', 'minimize', '', () => minimizeWidget(w.id)));
   if (visibleCount() > 1) {
     right.appendChild(mkBtn(
@@ -551,22 +477,204 @@ function buildWidgetEl(w, zone) {
     ));
   }
   right.appendChild(mkBtn('close', 'close', 'close', () => closeWidget(w.id)));
-  title.appendChild(right);
+}
 
-  bindTitleDrag(title, w);
-  wrap.appendChild(title);
-
-  const body = mkEl('div', 'widget-body');
-  body.style.padding = '0';
+function updateWidgetBody(wrap, w) {
+  const body = wrap._bodyEl;
+  body.innerHTML = '';
   if (w.cellEl) {
+    body.style.cssText = 'padding:0; flex:1; overflow:auto; min-height:0;';
     body.appendChild(w.cellEl);
-    if (w.cellInstance?.mount) requestAnimationFrame(() => w.cellInstance.mount());
   } else {
-    body.style.cssText += '; padding:0.75rem; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:0.75rem; font-family:"Rubik",sans-serif;';
+    body.style.cssText = 'padding:0.75rem; flex:1; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:0.75rem; font-family:"Rubik",sans-serif; overflow:auto; min-height:0;';
     body.textContent = 'loading…';
   }
-  wrap.appendChild(body);
-  return wrap;
+}
+
+// ─────────────────────────────────────────────────────────
+// RENDER — keyed: reuse existing DOM elements, create/remove as needed
+// ─────────────────────────────────────────────────────────
+function render(animate = false) {
+  const ws     = $('workspace');
+  const layout = computeLayout();
+  const minEl  = $('minimized-section');
+
+  // Remove DOM elements for widgets no longer visible
+  for (const [id, el] of domCache) {
+    if (!layout.has(id)) {
+      el.remove();
+      domCache.delete(id);
+    }
+  }
+
+  // Show/hide empty state
+  const emptyEl = $('workspace-empty');
+  emptyEl.style.display = layout.size === 0 ? 'flex' : 'none';
+  if (layout.size === 0) {
+    emptyEl.innerHTML = ICONS.files + '<span>no open windows</span>';
+  }
+
+  // Create or update each visible widget
+  for (const [id, rect] of layout) {
+    const w = widgets.get(id);
+    if (!w) continue;
+
+    let el = domCache.get(id);
+    if (!el) {
+      el = buildWidgetEl(w);
+      domCache.set(id, el);
+      ws.appendChild(el);
+      // Start invisible for spawn animation — caller sets initial position before this
+      el.style.opacity = '0';
+      el.style.transition = 'none';
+      // Place immediately at final rect with no transition, then fade in
+      applyRect(el, rect, false);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          el.style.transition = `opacity ${DUR} ${EASE_SINE}`;
+          el.style.opacity = '1';
+        });
+      });
+    } else {
+      applyRect(el, rect, animate);
+    }
+
+    // Always update buttons (zone may have changed) and body
+    const zone = w.zone;
+    updateWidgetButtons(el, w, zone);
+    updateWidgetBody(el, w);
+  }
+
+  // Minimized thumbnails
+  minEl.innerHTML = '';
+  [...widgets.values()].filter(w => w.zone === 'minimized').forEach(w => {
+    const thumb = mkEl('div', 'min-thumb');
+    thumb.dataset.id = w.id;
+    thumb.innerHTML = (ICONS[w.icon]||ICONS.terminal) + `<span class="tip">${w.name}</span>`;
+    thumb.addEventListener('click', () => restoreWidget(w.id, thumb.getBoundingClientRect()));
+    minEl.appendChild(thumb);
+  });
+
+  // Rebuild resize handles
+  buildResizeHandles(layout);
+}
+
+// ─────────────────────────────────────────────────────────
+// RESIZE HANDLES
+// ─────────────────────────────────────────────────────────
+function buildResizeHandles(layout) {
+  const ws = $('workspace');
+  ws.querySelectorAll('.resize-handle-h, .resize-handle-v').forEach(e => e.remove());
+
+  const masterW = [...widgets.values()].find(w => w.zone === 'master');
+  const stackWs = [...widgets.values()].filter(w => w.zone === 'stack')
+    .sort((a,b) => a.stackOrder - b.stackOrder);
+
+  // Vertical divider between master and stack
+  if (masterW && stackWs.length) {
+    const mRect = layout.get(masterW.id);
+    const handle = mkEl('div', 'resize-handle-h');
+    handle.style.left   = (mRect.left + mRect.width) + 'px';
+    handle.style.top    = PAD + 'px';
+    handle.style.height = (ws.clientHeight - PAD * 2) + 'px';
+    ws.appendChild(handle);
+    bindHResize(handle);
+  }
+
+  // Horizontal dividers between stack items
+  for (let i = 0; i < stackWs.length - 1; i++) {
+    const aRect = layout.get(stackWs[i].id);
+    const handle = mkEl('div', 'resize-handle-v');
+    handle.style.left  = aRect.left + 'px';
+    handle.style.width = aRect.width + 'px';
+    handle.style.top   = (aRect.top + aRect.height) + 'px';
+    handle._above = stackWs[i].id;
+    handle._below = stackWs[i+1].id;
+    ws.appendChild(handle);
+    bindVResize(handle, stackWs[i], stackWs[i+1]);
+  }
+}
+
+function bindHResize(handle) {
+  let dragging = false, startX;
+  handle.addEventListener('mousedown', e => {
+    dragging = true; startX = e.clientX; e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const ws = $('workspace');
+    const W  = ws.clientWidth - PAD * 2;
+    masterFrac = Math.max(0.15, Math.min(0.85, masterFrac + (e.clientX - startX) / W));
+    startX = e.clientX;
+    render(false);
+  });
+  document.addEventListener('mouseup', () => { dragging = false; });
+}
+
+function bindVResize(handle, above, below) {
+  let dragging = false, startY;
+  handle.addEventListener('mousedown', e => {
+    dragging = true; startY = e.clientY; e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const ws     = $('workspace');
+    const H      = ws.clientHeight - PAD * 2;
+    const stackWs = [...widgets.values()].filter(w => w.zone === 'stack');
+    const total  = stackWs.reduce((s,w) => s + (w.flexRatio||1), 0);
+    const delta  = (e.clientY - startY) / H * total;
+    above.flexRatio = Math.max(0.05, (above.flexRatio||1) + delta);
+    below.flexRatio = Math.max(0.05, (below.flexRatio||1) - delta);
+    startY = e.clientY;
+    render(false);
+  });
+  document.addEventListener('mouseup', () => { dragging = false; });
+}
+
+// ─────────────────────────────────────────────────────────
+// SPAWN FROM ORIGIN
+// Sets widget element to start at origin rect, then animates to layout rect
+// ─────────────────────────────────────────────────────────
+function spawnFromOrigin(id, originRect) {
+  const el = domCache.get(id);
+  if (!el) return;
+  const layout = computeLayout();
+  const dest   = layout.get(id);
+  if (!dest) return;
+
+  // Convert origin rect (viewport-relative) to workspace-relative
+  const ws     = $('workspace').getBoundingClientRect();
+  const oLeft  = originRect.left - ws.left;
+  const oTop   = originRect.top  - ws.top;
+
+  // Snap to origin immediately
+  el.style.transition = 'none';
+  el.style.opacity    = '0.15';
+  el.style.left       = oLeft + 'px';
+  el.style.top        = oTop  + 'px';
+  el.style.width      = originRect.width  + 'px';
+  el.style.height     = originRect.height + 'px';
+
+  // Animate to destination
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      applyRect(el, dest, true);
+      el.style.opacity = '1';
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────
+// CLOSE ANIMATION
+// ─────────────────────────────────────────────────────────
+function animateOut(id) {
+  const el = domCache.get(id);
+  if (!el) return;
+  // Animate it away in place before removing
+  el.style.transition = `opacity ${DUR} ${EASE_IN}, transform ${DUR} ${EASE_IN}`;
+  el.style.opacity    = '0';
+  el.style.transform  = 'translateY(1rem) scale(0.97)';
+  setTimeout(() => { el.remove(); domCache.delete(id); }, 200);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -592,28 +700,36 @@ async function launchCell(cellId, iconRect) {
     }
   }
 
-  const record = {
+  widgets.set(id, {
     id, name: entry.name, icon: entry.icon, zone,
     masterHistory: zone === 'master' ? now : 0,
     stackOrder: zone === 'stack' ? stackMaxOrder() + 1 : 0,
     flexRatio: newRatio, cellEl: null, cellInstance: null,
-  };
-  widgets.set(id, record);
+  });
+
+  // Render places the loading placeholder; existing widgets animate to new positions
   render(true);
 
+  // If we have an icon origin, fly the new widget from there
+  if (iconRect) {
+    spawnFromOrigin(id, iconRect);
+  }
+
   try {
+    const w = widgets.get(id);
     const createWidget = await loadCell(cellId);
     const instance = await Promise.resolve(createWidget({ name: entry.name, evalContext }));
-    record.cellEl       = instance.el;
-    record.cellInstance = instance;
-    if (iconRect) spawnOrigins.set(id, iconRect);  // ← moved here
-    render(true);                                   // ← change false to true
+    w.cellEl       = instance.el;
+    w.cellInstance = instance;
+    // Update body content without re-animating positions
+    const el = domCache.get(id);
+    if (el) updateWidgetBody(el, w);
   } catch(e) { console.error(`Failed to load cell "${cellId}":`, e); }
 }
 
 function closeWidget(id) {
   const w = widgets.get(id); if (!w) return;
-  animateClose(id);
+  animateOut(id);
   w.cellInstance?.destroy();
   const wasMaster = w.zone === 'master';
   widgets.delete(id);
@@ -624,7 +740,7 @@ function closeWidget(id) {
 
 function minimizeWidget(id) {
   const w = widgets.get(id); if (!w) return;
-  animateClose(id);
+  animateOut(id);
   const wasMaster = w.zone === 'master';
   w.zone = 'minimized';
   if (wasMaster) electNewMaster();
@@ -646,16 +762,14 @@ function demoteWidget(id) {
   electNewMaster(); normalizeStackOrder(); render(true);
 }
 
-function restoreWidget(id) {
+function restoreWidget(id, thumbRect) {
   const w = widgets.get(id); if (!w) return;
-  // Animate from the minimized thumb
-  const thumb = document.querySelector(`.min-thumb[data-restore="${id}"]`);
-  const origin = thumb ? thumb.getBoundingClientRect() : null;
-  if (origin) spawnOrigins.set(id, origin);
   const masterOccupied = [...widgets.values()].some(x => x.zone === 'master');
   if (!masterOccupied && w.masterHistory > 0) { w.zone = 'master'; w.masterHistory = Date.now(); }
   else { w.zone = 'stack'; w.stackOrder = stackMaxOrder() + 1; }
-  normalizeStackOrder(); render(true);
+  normalizeStackOrder();
+  render(true);
+  if (thumbRect) spawnFromOrigin(id, thumbRect);
 }
 
 function electNewMaster() {
@@ -676,42 +790,9 @@ function normalizeStackOrder() {
     .forEach((w,i) => w.stackOrder = i);
 }
 
-(function() {
-  const div = $('ms-divider');
-  let dragging = false, startX, startFrac;
-  div.addEventListener('mousedown', e => {
-    dragging = true; startX = e.clientX; startFrac = masterFrac;
-    div.classList.add('dragging'); e.preventDefault();
-  });
-  document.addEventListener('mousemove', e => {
-    if (!dragging) return;
-    const ws = $('workspace').getBoundingClientRect();
-    masterFrac = Math.max(0.15, Math.min(0.85, startFrac + (e.clientX - startX) / ws.width));
-    $('master').style.width = (masterFrac * 100) + '%';
-  });
-  document.addEventListener('mouseup', () => { dragging = false; div.classList.remove('dragging'); });
-})();
-
-function bindStackDivider(divEl) {
-  let dragging = false, startY, aboveW, belowW;
-  divEl.addEventListener('mousedown', e => {
-    dragging = true; startY = e.clientY;
-    aboveW = widgets.get(parseInt(divEl.dataset.above));
-    belowW = widgets.get(parseInt(divEl.dataset.below));
-    divEl.classList.add('dragging'); e.preventDefault();
-  });
-  document.addEventListener('mousemove', e => {
-    if (!dragging) return;
-    const rect = $('stack').getBoundingClientRect();
-    const total = [...widgets.values()].filter(w => w.zone === 'stack').reduce((s,w) => s + w.flexRatio, 0);
-    const delta = (e.clientY - startY) / rect.height * total;
-    aboveW.flexRatio = Math.max(0.05, aboveW.flexRatio + delta);
-    belowW.flexRatio = Math.max(0.05, belowW.flexRatio - delta);
-    startY = e.clientY; render(false);
-  });
-  document.addEventListener('mouseup', () => { dragging = false; divEl.classList.remove('dragging'); });
-}
-
+// ─────────────────────────────────────────────────────────
+// TITLE BAR DRAG
+// ─────────────────────────────────────────────────────────
 function bindTitleDrag(titleEl, w) {
   let dragging = false;
   const ghost = $('drag-ghost');
@@ -725,12 +806,27 @@ function bindTitleDrag(titleEl, w) {
   document.addEventListener('mouseup', e => {
     if (!dragging) return;
     dragging = false; ghost.style.display = 'none';
-    const mr = $('master').getBoundingClientRect();
-    const sr = $('stack').getBoundingClientRect();
-    const inM = e.clientX >= mr.left && e.clientX <= mr.right && e.clientY >= mr.top && e.clientY <= mr.bottom;
-    const inS = e.clientX >= sr.left && e.clientX <= sr.right && e.clientY >= sr.top && e.clientY <= sr.bottom;
-    if (inM && w.zone !== 'master') promoteWidget(w.id);
-    else if (inS && w.zone !== 'stack') demoteWidget(w.id);
+    // Check drop zone by comparing with computed layout rects
+    const wsEl  = $('workspace');
+    const wsRect = wsEl.getBoundingClientRect();
+    const relX   = e.clientX - wsRect.left;
+    const relY   = e.clientY - wsRect.top;
+    const layout = computeLayout();
+    const masterW = [...widgets.values()].find(x => x.zone === 'master');
+    const stackWs = [...widgets.values()].filter(x => x.zone === 'stack');
+
+    // Is cursor in master zone?
+    const masterRect = masterW ? layout.get(masterW.id) : null;
+    const inMaster = masterRect &&
+      relX >= masterRect.left && relX <= masterRect.left + masterRect.width &&
+      relY >= masterRect.top  && relY <= masterRect.top  + masterRect.height;
+
+    // Is cursor in stack zone?
+    const stackLeft = masterRect ? masterRect.left + masterRect.width : PAD;
+    const inStack   = relX >= stackLeft && stackWs.length > 0;
+
+    if (inMaster && w.zone !== 'master') promoteWidget(w.id);
+    else if (inStack && w.zone !== 'stack') demoteWidget(w.id);
   });
   function moveGhost(e) {
     ghost.style.left = (e.clientX + 14) + 'px';
@@ -739,7 +835,7 @@ function bindTitleDrag(titleEl, w) {
 }
 
 // ─────────────────────────────────────────────────────────
-// STRIP — capture icon rect on click for spawn animation
+// STRIP
 // ─────────────────────────────────────────────────────────
 function buildStrip() {
   const stripTop = $('strip-top');
@@ -747,15 +843,16 @@ function buildStrip() {
     const b = mkEl('div', 'strip-launcher');
     b.innerHTML = (ICONS[entry.icon]||ICONS.terminal) + `<span class="tip">${entry.name}</span>`;
     b.addEventListener('click', () => {
-      const iconRect = b.getBoundingClientRect();
-      launchCell(id, iconRect);
+      launchCell(id, b.getBoundingClientRect());
     });
     stripTop.appendChild(b);
   });
 }
 
+// Handle window resize
+window.addEventListener('resize', () => render(false));
+
 buildStrip();
-// Initial launch — no icon rect, just appear
 launchCell('files', null);
 launchCell('terminal', null);
 </script>
