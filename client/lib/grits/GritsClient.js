@@ -289,7 +289,7 @@ export class GritsVolume {
     return this._linkRaw(metaCID, path);
   }
 
-  async multiLink(requests) {
+  async multiLink(requests, { maxRetries = 5 } = {}) {
     const url  = `${this._serverUrl}/grits/v1/link/${this._volume}`;
     const body = JSON.stringify(requests.map(r => ({
       path:     _normalizePath(r.path),
@@ -297,17 +297,50 @@ export class GritsVolume {
       prevAddr: r.prevAddr ?? '',
       assert:   r.assert   ?? 0,
     })));
-    const resp = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
-    });
-    if (!resp.ok) {
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+
+      if (resp.ok) {
+        const result = await resp.json();
+        this._ingestLookupResponse(result);
+        return result;
+      }
+
+      if (resp.status === 422) {
+        const { error, missingAddr } = await resp.json();
+        if (error === 'missing_blob') {
+          console.log(`[multiLink] server missing ${missingAddr}, uploading...`);
+          await this._uploadMissingBlob(missingAddr);
+          continue; // retry the link
+        }
+      }
+
+      // Existing error handling
       const msg = await resp.text().catch(() => resp.statusText);
       if (resp.status === 409) throw new AssertionError(msg);
       throw new Error(`multiLink: ${resp.status} ${msg}`);
     }
-    const result = await resp.json();
-    this._ingestLookupResponse(result);
-    return result;
+
+    throw new Error(`multiLink: server kept reporting missing blobs after ${maxRetries} attempts`);
+  }
+
+  async _uploadMissingBlob(addr) {
+    const local = this._parent._local.get(addr);
+    if (!local) {
+      throw new Error(
+        `multiLink: server needs blob ${addr} but it's not in local cache. ` +
+        `Did you call vol.mkfile/mkdir to build the tree before linking?`
+      );
+    }
+    await this._uploadBlob(addr, local);
+    // Move from local to blob cache so it's not re-uploaded next time
+    await this._parent._blobCachePut(addr, new Response(local, { status: 200 }));
+    this._parent._local.delete(addr);
   }
 
   // ── Get ───────────────────────────────────────────────────────

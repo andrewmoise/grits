@@ -1883,11 +1883,19 @@ func IsNotDir(err error) bool {
 	return errors.Is(err, ErrNotDir)
 }
 
-// Blob to support this data is not found locally
-var ErrNotInStore = errors.New("blob not found in local store")
+// ErrBlobMissing is returned when a link operation needs a blob not in the local store.
+// Addr is the blob address the client should upload before retrying.
+type ErrBlobMissing struct {
+    Addr BlobAddr
+}
 
-func IsNotInStore(err error) bool {
-	return errors.Is(err, ErrNotInStore)
+func (e *ErrBlobMissing) Error() string {
+    return fmt.Sprintf("blob not in store: %s", e.Addr)
+}
+
+func IsBlobMissing(err error) (*ErrBlobMissing, bool) {
+    var e *ErrBlobMissing
+    return e, errors.As(err, &e)
 }
 
 /////
