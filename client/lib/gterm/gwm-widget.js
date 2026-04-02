@@ -67,7 +67,8 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
         font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
         font-size: 0.75rem;
         line-height: 1.6;
-        word-break: break-all;
+        word-break: break-word;
+        overflow-wrap: break-word;
         user-select: text;
         cursor: text;
         display: flex;
