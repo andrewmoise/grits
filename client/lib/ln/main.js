@@ -17,7 +17,7 @@ ln() only moves pointers — it never uploads content.
 Use to() if you want to write a bytestream to a path.`;
 
 import { isVoid, VOID } from '../gimbal/gsh.js';
-import { GritsFile, ASSERT_PREV_MATCHES } from '../grits/GritsClient.js';
+import { GritsFile, ASSERT_PREV_MATCHES, AssertionError } from '../grits/GritsClient.js';
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
