@@ -215,7 +215,7 @@ func (bs *LocalBlobStore) ReadFile(blobAddr BlobAddr) (CachedFile, error) {
 	}
 
 	if lastErr == nil {
-		lastErr = fmt.Errorf("couldn't find %v in store", blobAddr)
+		lastErr = &ErrBlobMissing{Addr: blobAddr}
 	}
 
 	return nil, lastErr

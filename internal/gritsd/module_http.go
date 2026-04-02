@@ -830,7 +830,20 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 	linkResponse, err := volume.MultiLink(allLinkRequests, true)
 	if err != nil {
 		log.Printf("HTTP API MultiLink() failed: %v", err)
-		http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
+		if missing, ok := grits.IsBlobMissing(err); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnprocessableEntity) // 422
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":       "missing_blob",
+				"missingAddr": string(missing.Addr),
+			})
+			return
+		}
+		if grits.IsAssertionFailed(err) {
+			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusConflict) // 409
+		} else {
+			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
+		}
 		return
 	}
 
