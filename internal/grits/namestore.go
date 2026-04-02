@@ -910,6 +910,14 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 			node, err := ns.actuallyLoadFileNode(metadataAddr, printDebug)
 			ns.mtx.Lock()
 
+			if err != nil {
+				// Don't cache failures — remove the entry so the next caller retries
+				delete(ns.fileCache, metadataAddr)
+				entry.inFlight = false
+				ns.cacheCond.Broadcast()
+				return nil, err
+			}
+
 			// Update and broadcast
 			entry.node = node
 			entry.inFlight = false
