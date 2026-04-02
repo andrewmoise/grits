@@ -503,7 +503,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		}
 	}
 
-	err = ns.refManager.recursiveTake(ns, newRoot)
+	err = ns.refManager.recursiveTake(ns, newRoot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -616,7 +616,7 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 		return err
 	}
 
-	err = ns.refManager.recursiveTake(ns, newRoot)
+	err = ns.refManager.recursiveTake(ns, newRoot, nil)
 	if err != nil {
 		return err
 	}
@@ -806,7 +806,7 @@ func EmptyNameStore(bs BlobStore, sparse bool) (*NameStore, error) {
 		return nil, err
 	}
 
-	err = ns.refManager.recursiveTake(ns, root)
+	err = ns.refManager.recursiveTake(ns, root, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -834,7 +834,7 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64,
 
 	//ns.refManager.recursiveRelease might be nice here, in case the thing was somehow non-empty when we started
 
-	err = ns.refManager.recursiveTake(ns, root)
+	err = ns.refManager.recursiveTake(ns, root, nil)
 	if err != nil {
 		return err
 	}
@@ -2022,7 +2022,7 @@ func (ns *NameStore) resolveFromFetchers(path string, _ *LookupResponse, origErr
 			return nil, err
 		}
 
-		err = ns.refManager.recursiveTake(ns, newRoot)
+		err = ns.refManager.recursiveTake(ns, newRoot, nil)
 		if err != nil {
 			log.Printf("Can't update with new data! Looking up %s", path)
 			return nil, err
@@ -2068,7 +2068,7 @@ func (ns *NameStore) resolveFromFetchers(path string, _ *LookupResponse, origErr
 // RefManagers
 
 type RefManager interface {
-	recursiveTake(ns *NameStore, fn FileNode) error
+	recursiveTake(ns *NameStore, fn FileNode, taken *[]BlobAddr) error
 	recursiveRelease(ns *NameStore, fn FileNode) error
 	flatTake(ns *NameStore, fn FileNode) error
 	flatRelease(ns *NameStore, fn FileNode) error
@@ -2088,7 +2088,7 @@ func NewSparseRefManager(timeout time.Duration) *SparseRefManager {
 	}
 }
 
-func (rm *SparseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
+func (rm *SparseRefManager) recursiveTake(ns *NameStore, fn FileNode, taken *[]BlobAddr) error {
 	// No-op for SparseRefManager
 	return nil
 }
@@ -2168,51 +2168,72 @@ func NewDenseRefManager(path string) *DenseRefManager {
 	}
 }
 
-func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode) error {
+func (rm *DenseRefManager) recursiveTake(ns *NameStore, fn FileNode, taken *[]BlobAddr) error {
 	if fn == nil {
 		DebugLog(DebugRefCounts, "Recursive take on nil")
-		return nil
+        return nil
+    }
+	if taken == nil {
+		t := make([]BlobAddr, 0) // Happens only on topmost level, then everything else uses the one
+		taken = &t
 	}
 
 	DebugLog(DebugRefCounts, "Recursive take on %s %p: count %d/%d", fn.MetadataBlob().GetAddress(), fn, fn.RefCount(), rm.refCount[BlobAddr(fn.MetadataBlob().GetAddress())])
 
-	metadataHash := fn.MetadataBlob().GetAddress()
+    metadataHash := fn.MetadataBlob().GetAddress()
+    refCount, exists := rm.refCount[metadataHash]
 
-	refCount, exists := rm.refCount[metadataHash]
-
-	if exists {
+    if exists {
 		DebugLog(DebugRefCounts, "  already exists")
-		if refCount <= 0 {
-			log.Fatalf("ref count for %s is nonpositive", metadataHash)
-		}
-
-		rm.refCount[metadataHash] = refCount + 1
+        if refCount <= 0 {
+            log.Fatalf("ref count for %s is nonpositive", metadataHash)
+        }
+        rm.refCount[metadataHash] = refCount + 1
+        *taken = append(*taken, metadataHash)
 		DebugLog(DebugRefCounts, "Increment count! For %s, we go to %d", metadataHash, refCount+1)
-	} else {
+    } else {
 		DebugLog(DebugRefCounts, "  doesn't exist")
 
-		children, err := fn.Children()
-		if err != nil {
-			return err
-		}
-		for _, childMetadataAddr := range children {
-			childNode, err := ns.loadFileNode(childMetadataAddr, true)
-			if err != nil {
-				log.Printf("Can't happen! Can't load %s in dense ref manager.", childMetadataAddr)
-				return err
-			}
+        children, err := fn.Children()
+        if err != nil {
+			rm.releaseTaken(ns, taken)
+            return err
+        }
+        for _, childMetadataAddr := range children {
+            childNode, err := ns.loadFileNode(childMetadataAddr, true)
+            if err != nil {
+                rm.releaseTaken(ns, taken)
+                return err
+            }
+            err = rm.recursiveTake(ns, childNode, taken)
+            if err != nil {
+                rm.releaseTaken(ns, taken)
+                return err
+            }
+        }
+        rm.refCount[metadataHash] = 1
+        *taken = append(*taken, metadataHash)
+        fn.Take()
+    }
 
-			err = rm.recursiveTake(ns, childNode)
-			if err != nil {
-				return err
-			}
-		}
+    return nil
+}
 
-		rm.refCount[metadataHash] = 1
-		fn.Take()
-	}
-
-	return nil
+func (rm *DenseRefManager) releaseTaken(ns *NameStore, taken *[]BlobAddr) {
+    for _, addr := range *taken {
+        count := rm.refCount[addr]
+        if count <= 1 {
+            delete(rm.refCount, addr)
+            ns.mtx.Lock()
+            if entry, exists := ns.fileCache[addr]; exists && entry.node != nil {
+                entry.node.Release()
+            }
+            ns.mtx.Unlock()
+        } else {
+            rm.refCount[addr] = count - 1
+        }
+    }
+    *taken = (*taken)[:0]
 }
 
 func (rm *DenseRefManager) recursiveRelease(ns *NameStore, fn FileNode) error {
