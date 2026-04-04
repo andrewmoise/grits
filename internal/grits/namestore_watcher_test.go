@@ -196,7 +196,7 @@ func TestWatcherDeleteNotification(t *testing.T) {
 	defer ns.UnregisterWatcher(watcher)
 
 	// Delete the file
-	err = ns.Link("deleteme.txt", nil)
+	err = ns.LinkByMetadata("deleteme.txt", NilAddr)
 	if err != nil {
 		t.Fatalf("Failed to delete file: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestWatcherNestedDirectoryDeletion(t *testing.T) {
 	defer ns.UnregisterWatcher(watcher)
 
 	// Delete the parent directory
-	err = ns.Link("parent", nil)
+	err = ns.LinkByMetadata("parent", NilAddr)
 	if err != nil {
 		t.Fatalf("Failed to delete parent: %v", err)
 	}

@@ -219,7 +219,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	nameStore.DebugDumpNamespace()
 
 	// Remove "/dir/subdir/file.txt" and verify it's no longer found
-	if err := nameStore.Link("dir/subdir/file.txt", nil); err != nil {
+	if err := nameStore.LinkByMetadata("dir/subdir/file.txt", NilAddr); err != nil {
 		t.Fatalf("Failed to remove dir/subdir/file.txt: %v", err)
 	}
 	nameStore.DebugDumpNamespace()
@@ -228,7 +228,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	}
 
 	// Attempt to remove "dir" and verify its contents are also removed
-	if err := nameStore.Link("dir", nil); err != nil {
+	if err := nameStore.LinkByMetadata("dir", NilAddr); err != nil {
 		t.Fatalf("Failed to remove /dir: %v", err)
 	}
 	nameStore.DebugDumpNamespace()
@@ -237,7 +237,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	}
 
 	// Verify that attempting to remove a non-existent directory does not cause errors
-	if err := nameStore.Link("nonexistent", nil); err != nil {
+	if err := nameStore.LinkByMetadata("nonexistent", NilAddr); err != nil {
 		t.Errorf("Expected no error when attempting to remove a non-existent directory, got: %v", err)
 	}
 }
@@ -305,7 +305,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	}
 
 	// Now, remove a top-level directory and verify all nested contents are also removed.
-	if err := nameStore.Link("dir1/dir2", nil); err != nil {
+	if err := nameStore.LinkByMetadata("dir1/dir2", NilAddr); err != nil {
 		t.Errorf("Failed to remove dir1/dir2: %v", err)
 	}
 
@@ -315,19 +315,20 @@ func TestComplexDirectoryStructures(t *testing.T) {
 		t.Errorf("Expected an error when looking up a file in a removed directory, but got none")
 	}
 
-	// Lastly, verify that removing the root directory clears everything.
-	if err := nameStore.Link("", nil); err != nil {
-		t.Errorf("Failed to remove the root directory: %v", err)
-	}
-
-	if nameStore.rootAddr != "" {
-		t.Errorf("Root directory was not cleared")
+	// Lastly, verify that clearing the root directory clears everything.
+	if err := nameStore.linkTree("", emptyDir.GetAddress()); err != nil {
+		t.Errorf("Failed to clear the root directory: %v", err)
 	}
 
 	// Attempt to look up any file after clearing the root directory.
 	_, err = nameStore.LookupAndOpen("dir1/file1.txt")
 	if err == nil {
 		t.Errorf("Expected an error when looking up any file after clearing the root, but got none")
+	}
+
+	// Verify that unlinking the root is disallowed.
+	if err := nameStore.LinkByMetadata("", NilAddr); err == nil {
+    	t.Errorf("Expected error when unlinking root, but got none")
 	}
 }
 
@@ -467,11 +468,6 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	emptyDirNode.Take()
 	defer emptyDirNode.Release()
 
-	emptyTfa := &TypedFileAddr{
-		BlobAddr: emptyDirNode.blob.GetAddress(),
-		Type:     Tree,
-	}
-
 	ns.DumpFileCache()
 
 	if emptyDirNode.refCount != 2 {
@@ -499,7 +495,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	// 2. Link blobs and dirs
 	dirNames := []string{"someplace", "someplace/else", "dir", "dir/sub"}
 	for _, dirName := range dirNames {
-		err := ns.Link(dirName, emptyTfa)
+		err := ns.LinkByMetadata(dirName, emptyDirNode.MetadataBlob().GetAddress())
 		if err != nil {
 			t.Fatalf("Failed to mkdir %s: %v", dirName, err)
 		}
@@ -669,7 +665,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// 5. Try unlinking a whole subdirectory
-	err = ns.Link("someplace", nil)
+	err = ns.LinkByMetadata("someplace", NilAddr)
 	if err != nil {
 		t.Fatalf("Failed to unlink someplace: %v", err)
 	}
@@ -723,9 +719,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		t.Fatalf("Failed to add new root JSON to BlobStore: %v", err)
 	}
 
-	tfa := NewTypedFileAddr(rootContent.GetAddress(), rootContent.GetSize(), Tree)
-
-	ns.Link("", tfa)
+	ns.linkTree("", rootContent.GetAddress())
 	rootContent.Release()
 
 	log.Printf("--- Verify tree setup")
@@ -743,12 +737,12 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	log.Printf("--- Scaffolding directories")
 
-	err = ns.Link("tree/someplace", emptyTfa)
+	err = ns.LinkByMetadata("tree/someplace", emptyDirNode.MetadataBlob().GetAddress())
 	if err != nil {
 		t.Fatalf("Failed to mkdir %s: %v", "tree/someplace", err)
 	}
 
-	err = ns.Link("tree/someplace/else", emptyTfa)
+	err = ns.LinkByMetadata("tree/someplace/else", emptyDirNode.MetadataBlob().GetAddress())
 	if err != nil {
 		t.Fatalf("Failed to mkdir %s: %v", "tree/someplace/else", err)
 	}
@@ -857,7 +851,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	log.Printf("--- Starting test 7, full unlink")
 	ns.DebugDumpNamespace()
 
-	err = ns.Link("", nil)
+	err = ns.LinkByMetadata("", emptyDirNode.MetadataBlob().GetAddress())
 	if err != nil {
 		t.Fatalf("Failed to unlink root: %v", err)
 	}
@@ -866,12 +860,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	log.Printf("About to check step 7.")
 
 	for i, cf := range allFiles {
-		//var expectedRefCount int
-		//if i <= 5 && i != 1 && i != 5 {
-		//	expectedRefCount := 1
-		//} else {
 		expectedRefCount := 0
-		//}
 
 		if cf.RefCount != expectedRefCount {
 			t.Fatalf("Expected ending content reference count of %d for %d, got %d",

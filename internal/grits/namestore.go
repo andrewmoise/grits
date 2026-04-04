@@ -389,11 +389,17 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 	// to allow network fetches to proceed in parallel with reads
 
 	for _, req := range requests {
-		DebugLog(DebugLinks, "Checking assertion: %d", req.Assert)
+	   if req.Path == "" || req.Path == "." {
+			if req.NewAddr == "" {
+				return nil, fmt.Errorf("cannot unlink root")
+			}
+		}
 
 		if req.Assert == 0 {
 			continue
 		}
+
+		DebugLog(DebugLinks, "Checking assertion: %d", req.Assert)
 
 		var node FileNode
 		lookupResp, err := ns.resolvePath(req.Path)
@@ -572,73 +578,20 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 	return response, nil
 }
 
-// FIXME - Remove this
-func (ns *NameStore) Link(name string, addr *TypedFileAddr) error {
-	if addr == nil {
-		return ns.LinkByMetadata(name, "")
-	}
-
-	metadataBlob, err := ns.typeToMetadata(addr)
-	if err != nil {
-		return err
-	}
-	defer metadataBlob.Release()
-
-	return ns.LinkByMetadata(name, metadataBlob.GetAddress())
-}
-
-// FIXME - This is the one we should actually be using, for everything
 func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
-	name = strings.TrimRight(name, "/")
-	if name != "" && name[0] == '/' {
-		return fmt.Errorf("name must be relative")
-	}
+    name = strings.TrimRight(name, "/")
+    if name != "" && name[0] == '/' {
+        return fmt.Errorf("name must be relative")
+    }
+    if name == "." {
+        name = ""
+    }
 
-	if name == "." {
-		name = ""
-	}
-
-	// Serialize with other link operations
-	ns.writeMtx.Lock()
-	defer ns.writeMtx.Unlock()
-
-	ns.mtx.Lock()
-	oldRootAddr := ns.rootAddr
-	ns.mtx.Unlock()
-
-	oldRoot, err := ns.loadFileNode(oldRootAddr, false)
-	if err != nil {
-		return err
-	}
-
-	newRoot, err := ns.recursiveLink("", name, metadataAddr, oldRoot)
-	if err != nil {
-		return err
-	}
-
-	err = ns.refManager.recursiveTake(ns, newRoot, nil)
-	if err != nil {
-		return err
-	}
-
-	if newRoot != nil {
-		ns.mtx.Lock()
-		ns.rootAddr = newRoot.MetadataBlob().GetAddress()
-		ns.serialNumber++
-		ns.mtx.Unlock()
-	} else {
-		ns.mtx.Lock()
-		ns.rootAddr = ""
-		ns.serialNumber++
-		ns.mtx.Unlock()
-	}
-
-	err = ns.refManager.recursiveRelease(ns, oldRoot)
-	if err != nil {
-		log.Printf("ERROR! Can't release %v, leaking references", oldRoot)
-	}
-
-	return nil
+    _, err := ns.MultiLink([]*LinkRequest{{
+        Path:    name,
+        NewAddr: metadataAddr,
+    }}, false)
+    return err
 }
 
 // linkBlob creates metadata for a blob and links it into the path
