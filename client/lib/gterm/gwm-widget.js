@@ -1,6 +1,6 @@
 /*
  * @cell terminal-widget
- * @version 0.8
+ * @version 0.9
  * @about
  *   Gimbal shell terminal widget. Classic inline-prompt layout.
  *   Single history array is the source of truth for all state.
@@ -9,7 +9,8 @@
  */
 
 import { GritsFile } from '../grits/GritsClient.js';
-import { VOID, isVoid, makeShell } from '../gimbal/gsh.js';
+import { VOID, isVoid, makeShell, _isPlainObject } from '../gimbal/gsh.js';
+import stringify from '../vendor/json-stringify-pretty-compact/index.js';
 
 // ── cwd display label ─────────────────────────────────
 function cwdLabel(shell) {
@@ -64,6 +65,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
         flex: 1;
         overflow-y: auto;
         overflow-x: hidden;
+        overflow-anchor: none;
         padding: 0.625rem 0.75rem 0.375rem;
         font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
         font-size: 0.75rem;
@@ -78,6 +80,12 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       .gt-output::-webkit-scrollbar { width: 0.25rem; }
       .gt-output::-webkit-scrollbar-thumb {
         background: var(--border-hi); border-radius: 0.125rem;
+      }
+
+      .gt-scroll-anchor {
+        overflow-anchor: auto;
+        height: 1px;
+        flex-shrink: 0;
       }
 
       .gt-entry {
@@ -122,28 +130,42 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       .gt-result {
         padding-left: 0.875rem;
         white-space: pre-wrap;
-        color: var(--text);
+        color: var(--text-hi);
         margin-bottom: 0.25rem;
       }
-      .gt-result.is-error { color: var(--red); }
+      .gt-result.is-response { color: var(--text-dim); }
+      .gt-result.is-error    { color: var(--red); }
+
+      .gt-separator {
+        height: 1px;
+        background: var(--border-hi, rgba(128,128,128,0.25));
+        flex-shrink: 0;
+        opacity: 0;
+        transition: opacity 0.15s;
+      }
+      .gt-separator.visible { opacity: 1; }
 
       .gt-input-line {
         display: flex;
         align-items: flex-start;
         gap: 0.375rem;
-        margin-top: 0.125rem;
-        padding-bottom: 0.375rem;
+        padding: 0.25rem 0.75rem 0.375rem;
+        flex-shrink: 0;
       }
       .gt-input-loc {
         color: var(--a1);
         white-space: nowrap;
         flex-shrink: 0;
         line-height: 1.6;
+        font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
+        font-size: 0.75rem;
       }
       .gt-input-sep {
         color: var(--text-dim);
         flex-shrink: 0;
         line-height: 1.6;
+        font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
+        font-size: 0.75rem;
       }
       .gt-textarea {
         flex: 1;
@@ -169,9 +191,11 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
 
   // ── history — single source of truth ──────────────────
   const history = [];
-  let running = false;
+  let running    = false;
+  let shellReady = false;
+  let pinToBottom = true;
 
-  // ── output area ───────────────────────────────────────
+  // ── output area (scrollable history) ──────────────────
   const output = document.createElement('div');
   output.className = 'gt-output';
 
@@ -179,9 +203,19 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   spacer.style.cssText = 'flex: 1 1 auto; min-height: 0;';
   output.appendChild(spacer);
 
+  // Scroll anchor — browser keeps this visible when already at bottom.
+  const scrollAnchor = document.createElement('div');
+  scrollAnchor.className = 'gt-scroll-anchor';
+  output.appendChild(scrollAnchor);
+
   el.appendChild(output);
 
-  // ── live input line ───────────────────────────────────
+  // ── separator ─────────────────────────────────────────
+  const separator = document.createElement('div');
+  separator.className = 'gt-separator';
+  el.appendChild(separator);
+
+  // ── sticky input line ─────────────────────────────────
   const inputLine = document.createElement('div');
   inputLine.className = 'gt-input-line';
 
@@ -202,13 +236,25 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   inputLine.appendChild(inputLoc);
   inputLine.appendChild(inputSep);
   inputLine.appendChild(textarea);
-  output.appendChild(inputLine);
+  el.appendChild(inputLine);
 
   function resizeTextarea() {
     textarea.style.height = '0';
     textarea.style.height = textarea.scrollHeight + 'px';
   }
   textarea.addEventListener('input', resizeTextarea);
+
+  // ── scroll management ─────────────────────────────────
+  function maybeScrollToBottom() {
+    if (!pinToBottom) return;
+    scrollAnchor.scrollIntoView();
+  }
+
+  output.addEventListener('scroll', () => {
+    const distFromBottom = output.scrollHeight - output.scrollTop - output.clientHeight;
+    pinToBottom = distFromBottom < 8;
+    separator.classList.toggle('visible', !pinToBottom);
+  }, { passive: true });
 
   // ── DOM builders ──────────────────────────────────────
   function buildEntryDOM(rec) {
@@ -230,8 +276,9 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     cmdLine.appendChild(statusEl);
     entry.appendChild(cmdLine);
 
-    output.insertBefore(entry, inputLine);
-    output.scrollTop = output.scrollHeight;
+    // Insert before the scroll anchor so anchor stays at the very bottom.
+    output.insertBefore(entry, scrollAnchor);
+    maybeScrollToBottom();
 
     rec.dom = { entry, cmdLine, srcEl, statusEl, locEl: null, spinnerTimer: null };
   }
@@ -273,22 +320,24 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       statusEl.innerHTML = '';
       statusEl.textContent = `__[${rec.refIndex}]`;
     } else {
-      // void result — no icon, no label
       statusEl.className = 'gt-status';
       statusEl.innerHTML = '';
     }
 
-    if (rec.display !== null) {
+    const { text: displayText, isResponse } = rec.display ?? { text: null, isResponse: false };
+
+    if (displayText !== null) {
       const result = document.createElement('div');
-      result.className = `gt-result${isError ? ' is-error' : ''}`;
-      result.textContent = rec.display;
+      result.className = `gt-result${isError ? ' is-error' : isResponse ? ' is-response' : ''}`;
+      result.textContent = displayText;
       entry.appendChild(result);
-      output.scrollTop = output.scrollHeight;
+      maybeScrollToBottom();
     }
   }
 
   // ── execution loop ────────────────────────────────────
-async function runNext() {
+  async function runNext() {
+    if (!shellReady) return;
     if (running) return;
     const rec = history.find(r => r.status === 'queued');
     if (!rec) {
@@ -307,19 +356,18 @@ async function runNext() {
       rec.status = 'done';
 
       if (!isVoid(value)) {
-        // Clone Response before display so the stored copy is unread.
         const stored  = value instanceof Response ? value.clone() : value;
         const display = await _display(value, 80);
         rec.display  = display;
         rec.refIndex = __.length;
         __.push(stored);
       } else {
-        rec.display  = null;
+        rec.display  = { text: null, isResponse: false };
         rec.refIndex = null;
       }
-    } catch(e) {
-      rec.status   = 'error';
-      rec.display  = e.message ?? String(e);
+    } catch (e) {
+      rec.status  = 'error';
+      rec.display = { text: e.message ?? String(e), isResponse: false };
       rec.refIndex = null;
       console.error(e);
     }
@@ -331,20 +379,28 @@ async function runNext() {
   }
 
   async function _display(value, cols = 80) {
-    if (isVoid(value))              return null;
+    if (isVoid(value))
+      return { text: null, isResponse: false };
     if (value instanceof Response) {
       try {
         const text = await value.clone().text();
-        return text.length > 2000 ? text.slice(0, 2000) + '…' : text;
-      } catch (_) { return `[Response ${value.status}]`; }
+        return {
+          text:       text.length > 2000 ? text.slice(0, 2000) + '…' : text,
+          isResponse: true,
+        };
+      } catch (_) {
+        return { text: `[Response ${value.status}]`, isResponse: true };
+      }
     }
-    if (value instanceof GritsFile) return `GritsFile(${value.cid()})`;
-    if (typeof value === 'string')  return value;
+    if (value instanceof GritsFile)
+      return { text: `GritsFile(${value.cid()})`, isResponse: false };
+    if (typeof value === 'string')
+      return { text: value, isResponse: false };
     if (value instanceof Uint8Array || value instanceof ArrayBuffer)
-      return `[${value.byteLength ?? value.length} bytes]`;
+      return { text: `[${value.byteLength ?? value.length} bytes]`, isResponse: false };
     if (_isPlainObject(value) || Array.isArray(value))
-      return stringify(value, cols);
-    return String(value);
+      return { text: stringify(value, cols), isResponse: false };
+    return { text: String(value), isResponse: false };
   }
 
   // ── enqueue ───────────────────────────────────────────
@@ -358,7 +414,6 @@ async function runNext() {
     };
     history.push(rec);
     buildEntryDOM(rec);
-    inputLoc.textContent = '';
     runNext();
   }
 
@@ -398,10 +453,13 @@ async function runNext() {
     }
     if (e.key === 'l' && e.ctrlKey) {
       e.preventDefault();
-      output.innerHTML = '';
-      output.appendChild(spacer);
-      output.appendChild(inputLine);
+      // Remove all entries, keep spacer and scroll anchor.
+      Array.from(output.children).forEach(child => {
+        if (child !== spacer && child !== scrollAnchor) child.remove();
+      });
       inputLoc.textContent = cwdLabel(shell);
+      pinToBottom = true;
+      separator.classList.remove('visible');
     }
   });
 
@@ -411,9 +469,12 @@ async function runNext() {
 
   // ── init ──────────────────────────────────────────────
   shell._warmCache().then(() => {
+    shellReady = true;
     inputLoc.textContent = cwdLabel(shell);
     if (runOnInit) enqueue(runOnInit);
+    runNext(); // drain anything queued while warming
   });
+
   textarea.focus();
 
   return {
