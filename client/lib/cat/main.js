@@ -10,7 +10,7 @@ Usage:
 
 Always returns a Response. For type-preserving single-file access use from().`;
 
-import { isVoid, _isPlainObject, coerceToBytes } from '../gimbal/gsh.js';
+import { isVoid, _isPlainObject } from '../gimbal/gsh.js';
 
 export async function invoke(shell, previous, args, cmd = 'cat') {
   const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
@@ -32,20 +32,24 @@ export async function invoke(shell, previous, args, cmd = 'cat') {
     const file = await shell._vol(serverUrl, volume).lookup(path);
     return file.get();
   }
+
   if (hasPrev && positional.length === 0) {
-    const bytes = await coerceToBytes(prev, shell);
-    const contentType = prev instanceof Response
-      ? prev.headers.get('Content-Type')
-      : null;
+    if (!(prev instanceof Response))
+      throw new Error(`${cmd}: pipeline input must be a Response`);
+    const contentType = prev.headers.get('Content-Type');
     const headers = contentType ? { 'Content-Type': contentType } : {};
+    const bytes = new Uint8Array(await prev.arrayBuffer());
     return new Response(bytes, { status: 200, headers });
   }
 
   // Multi-source — concatenate into a plain Response, no content-type.
   const chunks = [];
 
-  if (hasPrev)
-    chunks.push(await coerceToBytes(prev, shell));
+  if (hasPrev) {
+    if (!(prev instanceof Response))
+      throw new Error(`${cmd}: pipeline input must be a Response`);
+    chunks.push(new Uint8Array(await prev.arrayBuffer()));
+  }
 
   for (const pathArg of positional) {
     const { serverUrl, volume, path } = shell.resolvePath(pathArg);

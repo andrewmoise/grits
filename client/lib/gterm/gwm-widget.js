@@ -8,6 +8,7 @@
  *   __[n] labels appear in the gutter on successful completion.
  */
 
+import { GritsFile } from '../grits/GritsClient.js';
 import { VOID, isVoid, makeShell } from '../gimbal/gsh.js';
 
 // ── cwd display label ─────────────────────────────────
@@ -287,7 +288,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   }
 
   // ── execution loop ────────────────────────────────────
-  async function runNext() {
+async function runNext() {
     if (running) return;
     const rec = history.find(r => r.status === 'queued');
     if (!rec) {
@@ -302,15 +303,18 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
 
     try {
       const value = await shell.eval(rec.src, { __, _: __.length ? __[__.length - 1] : VOID });
-      const display = await _display(value, 80);
 
-      rec.status   = 'done';
-      rec.display  = display;
+      rec.status = 'done';
 
       if (!isVoid(value)) {
+        // Clone Response before display so the stored copy is unread.
+        const stored  = value instanceof Response ? value.clone() : value;
+        const display = await _display(value, 80);
+        rec.display  = display;
         rec.refIndex = __.length;
-        __.push(value);
+        __.push(stored);
       } else {
+        rec.display  = null;
         rec.refIndex = null;
       }
     } catch(e) {
@@ -328,12 +332,14 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
 
   async function _display(value, cols = 80) {
     if (isVoid(value))              return null;
-    if (typeof value === 'string')  return value;
-    if (value instanceof GritsFile) return `GritsFile(${value.cid()})`;
     if (value instanceof Response) {
-      try { return await value.clone().text(); }
-      catch (_) { return `[Response ${value.status}]`; }
+      try {
+        const text = await value.clone().text();
+        return text.length > 2000 ? text.slice(0, 2000) + '…' : text;
+      } catch (_) { return `[Response ${value.status}]`; }
     }
+    if (value instanceof GritsFile) return `GritsFile(${value.cid()})`;
+    if (typeof value === 'string')  return value;
     if (value instanceof Uint8Array || value instanceof ArrayBuffer)
       return `[${value.byteLength ?? value.length} bytes]`;
     if (_isPlainObject(value) || Array.isArray(value))

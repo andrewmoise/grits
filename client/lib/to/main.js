@@ -10,7 +10,7 @@ Usage:
 Unlike cp/ln, to() requires the full destination path including filename.
 It does not remap into a directory automatically.`;
 
-import { VOID, isVoid, _isPlainObject, coerceToBytes } from '../gimbal/gsh.js';
+import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
 import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
 export async function invoke(shell, previous, args) {
@@ -23,11 +23,13 @@ export async function invoke(shell, previous, args) {
   const prev = await previous;
   if (isVoid(prev))
     throw new Error('to: requires pipeline input');
+  if (!(prev instanceof Response))
+    throw new Error('to: pipeline input must be a Response');
 
   const destR   = shell.resolvePath(positional[0]);
   const destVol = shell._vol(destR.serverUrl, destR.volume);
 
-  const bytes      = await coerceToBytes(prev, shell);
+  const bytes      = new Uint8Array(await prev.arrayBuffer());
   const contentCID = await destVol.put(bytes);
   const metaCID    = await destVol.mkfile(contentCID, bytes.byteLength);
 
