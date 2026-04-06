@@ -13,8 +13,8 @@ export async function invoke(shell, previous, args) {
   const prev = await previous;
   if (!isVoid(prev)) throw new Error('mv: does not accept pipeline input');
 
-  const opts       = _isPlainObject(args[args.length-1]) ? args[args.length-1] : {};
-  const positional = opts === args[args.length-1] ? args.slice(0,-1) : [...args];
+  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
+  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
 
   if (positional.length !== 2 ||
       typeof positional[0] !== 'string' ||
@@ -27,30 +27,53 @@ export async function invoke(shell, previous, args) {
   const srcVol  = shell._vol(srcR.serverUrl, srcR.volume);
   const destVol = shell._vol(destR.serverUrl, destR.volume);
 
-  if (srcVol !== destVol)
-    throw new Error('mv: cross-volume move not supported — use cp then rm');
-
   const srcFile = await srcVol.lookup(srcR.path);
 
-  try {
-    await srcVol.multiLink([
-      {
+  const isCrossVolume = srcR.serverUrl !== destR.serverUrl || srcR.volume !== destR.volume;
+
+  if (isCrossVolume) {
+    try {
+      await destVol.multiLink([{
         path:     destR.path,
         addr:     srcFile.cid(),
         prevAddr: opts.f ? undefined : '',
         assert:   opts.f ? 0 : ASSERT_PREV_MATCHES,
-      },
-      {
+      }]);
+    } catch (e) {
+      if (e instanceof AssertionError)
+        throw new Error(`mv: destination already exists — use {f:1} to overwrite`);
+      throw e;
+    }
+    // Best-effort unlink of source — if this fails, data is safe at dest.
+    try {
+      await srcVol.multiLink([{
         path:     srcR.path,
         addr:     '',
         prevAddr: srcFile.cid(),
         assert:   ASSERT_PREV_MATCHES,
-      },
-    ]);
-  } catch(e) {
-    if (e instanceof AssertionError)
-      throw new Error(`mv: destination already exists or source changed — use {f:1} to overwrite`);
-    throw e;
+      }]);
+    } catch (_) {}
+  } else {
+    try {
+      await srcVol.multiLink([
+        {
+          path:     destR.path,
+          addr:     srcFile.cid(),
+          prevAddr: opts.f ? undefined : '',
+          assert:   opts.f ? 0 : ASSERT_PREV_MATCHES,
+        },
+        {
+          path:     srcR.path,
+          addr:     '',
+          prevAddr: srcFile.cid(),
+          assert:   ASSERT_PREV_MATCHES,
+        },
+      ]);
+    } catch (e) {
+      if (e instanceof AssertionError)
+        throw new Error(`mv: destination already exists or source changed — use {f:1} to overwrite`);
+      throw e;
+    }
   }
 
   return VOID;
