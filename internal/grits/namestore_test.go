@@ -951,7 +951,7 @@ func TestLookupMultiplePaths(t *testing.T) {
 	}
 
 	// Call LookupFull
-	lookupResponse, err := nameStore.LookupFull(paths)
+	lookupResponse, err := nameStore.LookupFull(paths, false)
 	if err != nil {
 		t.Fatalf("Failed to lookup paths: %v", err)
 	}
