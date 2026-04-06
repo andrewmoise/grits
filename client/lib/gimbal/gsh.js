@@ -39,9 +39,6 @@
 //   The browser's native import() handles caching and relative imports inside
 //   tool modules automatically.
 //
-// Type cascade (one direction only):
-//   GritsFile → Response → string
-//
 // Path syntax (scp-style):
 //   'lib/grits'                     — relative path, current server+volume
 //   '/lib/grits'                    — absolute path, current server+volume
@@ -82,58 +79,25 @@ export function _isPlainObject(v) {
 }
 
 // ─────────────────────────────────────────────────────────────────
-// Coercion utilities — imported by tool modules as needed
-// GritsFile → Response → ArrayBuffer → string
+// Response constructors — for tools to use explicitly
 // ─────────────────────────────────────────────────────────────────
 
-export async function coerceToFile(value, shell) {
-  if (value instanceof Result) value = await value;
-  if (value instanceof GritsFile) return value;
-  if (typeof value === 'string') {
-    const { serverUrl, volume, path } = shell.resolvePath(value);
-    return shell._vol(serverUrl, volume).lookup(path);
-  }
-  throw new TypeError(
-    `cannot coerce ${_tn(value)} to GritsFile — expected a path string or GritsFile`);
+export function responseFromText(text) {
+  return new Response(new TextEncoder().encode(String(text)), {
+    status:  200,
+    headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+  });
 }
 
-export async function coerceToResponse(value, shell) {
-  if (value instanceof Result)    value = await value;
-  if (value instanceof Response)  return value;
-  if (value instanceof GritsFile) return value.get();
-  throw new TypeError(`cannot coerce ${_tn(value)} to Response`);
+export function responseFromBytes(bytes) {
+  return new Response(bytes, { status: 200 });
 }
 
-export async function coerceToBytes(value, shell) {
-  if (value instanceof Result)      value = await value;
-  if (value instanceof Uint8Array)  return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-  if (ArrayBuffer.isView(value))    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-  if (value instanceof Response)    return new Uint8Array(await value.clone().arrayBuffer());
-  if (_isPlainObject(value) || Array.isArray(value))
-    return new TextEncoder().encode(stringify(value, { maxLength: 76 }));
-  const buf = await (await coerceToResponse(value, shell)).arrayBuffer();
-  return new Uint8Array(buf);
-}
-
-export async function coerceToText(value, shell) {
-  if (value instanceof Result)      value = await value;
-  if (typeof value === 'string')    return value;
-  if (value instanceof ArrayBuffer) return new TextDecoder().decode(value);
-  if (ArrayBuffer.isView(value))    return new TextDecoder().decode(value);
-  if (_isPlainObject(value) || Array.isArray(value))
-    return stringify(value, { maxLength: 76 });
-  return (await coerceToResponse(value, shell)).text();
-}
-
-export async function coerceToJS(value, shell) {
-  if (value instanceof Result) value = await value;
-  if (isVoid(value))  return undefined;
-  if (_isPlainObject(value) || Array.isArray(value)) return value;
-  if (typeof value === 'number'  ||
-      typeof value === 'boolean' ||
-      typeof value === 'bigint')  return value;
-  return JSON.parse(await coerceToText(value, shell));
+export function responseFromJSON(obj) {
+  return new Response(JSON.stringify(obj), {
+    status:  200,
+    headers: { 'Content-Type': 'application/json' },
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -155,30 +119,60 @@ class Result {
   catch(reject)         { return this._promise.catch(reject); }
 
   toString() {
-    if (!this._settled)         return 'Result(pending)';
-    if (this._settled.error)    return `Result(error: ${this._settled.error.message ?? this._settled.error})`;
+    if (!this._settled)      return 'Result(pending)';
+    if (this._settled.error) return `Result(error: ${this._settled.error.message ?? this._settled.error})`;
     const v = this._settled.value;
-    if (isVoid(v))              return 'Result(void)';
+    if (isVoid(v))           return 'Result(void)';
+    if (v instanceof Response)
+      return `Result(Response ${v.status} ${v.url || ''})`.trim();
+    if (v instanceof GritsFile)
+      return `Result(GritsFile ${v.cid()})`;
     if (typeof v === 'string')
-      return v.length > 20
-        ? `Result("${v.slice(0, 20)}…")`
-        : `Result("${v}")`;
-    if (v instanceof GritsFile) return `Result(GritsFile ${v.cid()})`;
-    if (v instanceof Response)  return `Result(Response ${v.status} ${v.url || ''})`.trim();
+      return v.length > 20 ? `Result("${v.slice(0, 20)}…")` : `Result("${v}")`;
     if (v instanceof Uint8Array || v instanceof ArrayBuffer)
       return `Result(${v.byteLength ?? v.length} bytes)`;
     return `Result(${_tn(v)})`;
   }
 
-  async toText()     { return coerceToText    (await this._promise, this._shell); }
-  async toBytes()    { return coerceToBytes   (await this._promise, this._shell); }
-  async toResponse() { return coerceToResponse(await this._promise, this._shell); }
+  // Terminal methods — explicit exit from pipeline world into JS world.
+  // These expect the pipeline value to be a Response.
 
-  async toJS()       { return coerceToJS      (await this._promise, this._shell); }
+  async toText() {
+    const v = await this._promise;
+    if (isVoid(v)) return '';
+    if (!(v instanceof Response))
+      throw new TypeError(`toText: expected Response in pipeline, got ${_tn(v)}`);
+    return v.clone().text();
+  }
+
+  async toBytes() {
+    const v = await this._promise;
+    if (isVoid(v)) return new Uint8Array(0);
+    if (!(v instanceof Response))
+      throw new TypeError(`toBytes: expected Response in pipeline, got ${_tn(v)}`);
+    return new Uint8Array(await v.clone().arrayBuffer());
+  }
+
+  async toJS() {
+    const v = await this._promise;
+    if (isVoid(v)) return null;
+    if (!(v instanceof Response))
+      throw new TypeError(`toJS: expected Response in pipeline, got ${_tn(v)}`);
+    return v.clone().json();
+  }
+
+  async toResponse() {
+    const v = await this._promise;
+    if (isVoid(v)) return null;
+    if (!(v instanceof Response))
+      throw new TypeError(`toResponse: expected Response in pipeline, got ${_tn(v)}`);
+    return v;
+  }
+
   async toFile() {
-    const value = await this._promise;
-    if (value instanceof GritsFile) return value;
-    throw new TypeError(`cannot coerce ${_tn(value)} to GritsFile`);
+    const v = await this._promise;
+    if (v instanceof GritsFile) return v;
+    throw new TypeError(`toFile: expected GritsFile, got ${_tn(v)}`);
   }
 }
 
@@ -252,28 +246,20 @@ export class GimbalShell {
       const serverUrl = p.slice(0, colonIdx) || this.serverUrl;
       const rest      = p.slice(colonIdx + 1);
       const slashIdx  = rest.indexOf('/');
-      const volume    = slashIdx === -1 ? rest       : rest.slice(0, slashIdx);
-      const path      = slashIdx === -1 ? ''         : rest.slice(slashIdx + 1);
+      const volume    = slashIdx === -1 ? rest            : rest.slice(0, slashIdx);
+      const path      = slashIdx === -1 ? ''              : rest.slice(slashIdx + 1);
       return { serverUrl, volume, path };
     }
 
     // Absolute path in current volume.
     if (p.startsWith('/')) {
-      return {
-        serverUrl: this.serverUrl,
-        volume:    this.volume,
-        path:      p.replace(/^\/+/, ''),
-      };
+      return { serverUrl: this.serverUrl, volume: this.volume, path: p.replace(/^\/+/, '') };
     }
 
     // Relative path — join with cwd.
     const base = this.cwd.replace(/^\/+|\/+$/g, '');
     const joined = base ? `${base}/${p}` : p;
-    return {
-      serverUrl: this.serverUrl,
-      volume:    this.volume,
-      path:      joined,
-    };
+    return { serverUrl: this.serverUrl, volume: this.volume, path: joined };
   }
 
   // ── Tool import ───────────────────────────────────────────────
@@ -284,23 +270,16 @@ export class GimbalShell {
 
   async _importTool(name) {
     if (this._importCache.has(name)) return this._importCache.get(name);
-
     for (const lib of this.libs) {
       const url = `${this._libUrl(lib)}/${name}/main.js`;
       let mod;
       try { mod = await import(url); }
-      catch (e) {
-        console.error(`_importTool: failed to import ${url}:`, e);
-        continue;
-      }
-
+      catch (e) { console.error(`_importTool: failed to import ${url}:`, e); continue; }
       if (typeof mod.invoke !== 'function')
         throw new Error(`${url} has no exported invoke()`);
-
       this._importCache.set(name, mod);
       return mod;
     }
-
     throw new Error(`command not found: ${name}`);
   }
 
@@ -310,26 +289,17 @@ export class GimbalShell {
 
   async _warmCache() {
     if (this._cacheWarmed) return;
-    this._cacheWarmed = true;
+    this._cacheWarmed    = true;
     this._availableTools = new Set();
-
     for (const lib of this.libs) {
       try {
         const vol  = this.fs.volume(lib.serverUrl, lib.volume);
         const file = await vol.lookup(lib.path);
         if (!file.isDir()) continue;
-
-        // Record this lib dir's CID so we can detect changes later
-        const key = _libKey(lib);
-        this._libDirCIDs.set(key, file.cid());
-
+        this._libDirCIDs.set(_libKey(lib), file.cid());
         const dir = await file.json();
-        for (const name of Object.keys(dir)) {
-          this._availableTools.add(name);
-        }
-      } catch (e) {
-        console.error('warmCache failed for lib:', lib, e);
-      }
+        for (const name of Object.keys(dir)) this._availableTools.add(name);
+      } catch (e) { console.error('warmCache failed for lib:', lib, e); }
     }
   }
 
@@ -344,25 +314,15 @@ export class GimbalShell {
 
   async _checkCacheStale() {
     let stale = false;
-
     for (const lib of this.libs) {
       try {
         const vol  = this.fs.volume(lib.serverUrl, lib.volume);
-        // _tryFastLookup reads only from in-memory JSON cache — no network
         const info = await vol._tryFastLookup(lib.path);
-        if (!info) continue; // not in memory, can't compare — skip
-
-        const key   = _libKey(lib);
-        const known = this._libDirCIDs.get(key);
-        if (known && info.metadataHash !== known) {
-          stale = true;
-          break;
-        }
-      } catch (e) {
-        // best-effort — a failed check is not an error
-      }
+        if (!info) continue;
+        const known = this._libDirCIDs.get(_libKey(lib));
+        if (known && info.metadataHash !== known) { stale = true; break; }
+      } catch (e) {}
     }
-
     if (stale) {
       this._cacheWarmed    = false;
       this._availableTools = null;
@@ -405,9 +365,9 @@ export class GimbalShell {
 
     const withTarget = new Proxy(Object.create(null), {
       has(_, key) {
-        if (typeof key === 'symbol')    return false;
-        if (key in globalThis)          return false;
-        if (key in extraVars)           return true;
+        if (typeof key === 'symbol') return false;
+        if (key in globalThis)       return false;
+        if (key in extraVars)        return true;
         return shell._availableTools?.has(key) ?? false;
       },
       get(_, key) {
@@ -426,24 +386,13 @@ export class GimbalShell {
       throw new Error(`eval error: ${e.message}`);
     }
 
-    if (!(finalResult instanceof Result)) {
+    if (!(finalResult instanceof Result))
       finalResult = new Result(this, Promise.resolve(finalResult));
-    }
 
     return await finalResult;
   }
 }
 
-// ─────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────
-
-function _libKey(lib) {
-  return `${lib.serverUrl}|${lib.volume}|${lib.path}`;
-}
-
-// ─────────────────────────────────────────────────────────────────
-// Entry point
-// ─────────────────────────────────────────────────────────────────
+function _libKey(lib) { return `${lib.serverUrl}|${lib.volume}|${lib.path}`; }
 
 export function makeShell(opts) { return new GimbalShell(opts); }

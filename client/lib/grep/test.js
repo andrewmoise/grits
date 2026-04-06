@@ -4,43 +4,42 @@ export const tests = [
     label: 'grep filters lines from pipeline input',
     async fn(shell, scratch) {
       const value = await shell.eval("echo('foo\\nbar\\nbaz').grep('ba')");
-      if (typeof value !== 'string')
-        throw new Error(`expected string, got ${value?.constructor?.name}`);
-      if (!value.includes('bar') || !value.includes('baz') || value.includes('foo'))
-        throw new Error(`unexpected grep output: ${value}`);
+      if (!(value instanceof Response))
+        throw new Error(`expected Response, got ${value?.constructor?.name}`);
+      const text = await value.text();
+      if (!text.includes('bar') || !text.includes('baz') || text.includes('foo'))
+        throw new Error(`unexpected grep output: ${text}`);
     },
   },
   {
     label: 'grep with {invert:true} returns non-matching lines',
     async fn(shell, scratch) {
-      const value = await shell.eval("echo('foo\\nbar\\nbaz').grep('ba', {invert:true})");
-      if (!value.includes('foo') || value.includes('bar') || value.includes('baz'))
-        throw new Error(`unexpected inverted grep output: ${value}`);
+      const text = await shell.eval("echo('foo\\nbar\\nbaz').grep('ba', {invert:true}).toText()");
+      if (!text.includes('foo') || text.includes('bar') || text.includes('baz'))
+        throw new Error(`unexpected inverted grep output: ${text}`);
     },
   },
   {
     label: 'grep with {ignoreCase:true} matches case-insensitively',
     async fn(shell, scratch) {
-      const value = await shell.eval("echo('Foo\\nbar\\nFOO').grep('foo', {ignoreCase:true})");
-      if (!value.includes('Foo') || !value.includes('FOO') || value.includes('bar'))
-        throw new Error(`unexpected case-insensitive output: ${value}`);
+      const text = await shell.eval("echo('Foo\\nbar\\nFOO').grep('foo', {ignoreCase:true}).toText()");
+      if (!text.includes('Foo') || !text.includes('FOO') || text.includes('bar'))
+        throw new Error(`unexpected case-insensitive output: ${text}`);
     },
   },
   {
     label: 'grep with {fixed:true} treats pattern as literal string',
     async fn(shell, scratch) {
-      const value = await shell.eval("echo('foo.bar\\nfooXbar').grep('foo.bar', {fixed:true})");
-      if (!value.includes('foo.bar') || value.includes('fooXbar'))
-        throw new Error(`unexpected fixed grep output: ${value}`);
+      const text = await shell.eval("echo('foo.bar\\nfooXbar').grep('foo.bar', {fixed:true}).toText()");
+      if (!text.includes('foo.bar') || text.includes('fooXbar'))
+        throw new Error(`unexpected fixed grep output: ${text}`);
     },
   },
   {
     label: 'grep on a path argument filters that file',
     async fn(shell, scratch) {
-      const value = await shell.eval("grep('invoke', ':client/lib/echo/main.js')");
-      if (typeof value !== 'string')
-        throw new Error(`expected string, got ${value?.constructor?.name}`);
-      if (!value.includes('invoke'))
+      const text = await shell.eval("grep('invoke', ':client/lib/echo/main.js').toText()");
+      if (!text.includes('invoke'))
         throw new Error('expected to find "invoke" in grep output');
     },
   },

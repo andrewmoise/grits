@@ -3,15 +3,14 @@ export const help = `\
 ls — list directory contents
 
 Usage:
-  ls()                list current directory (void input, no arg)
-  ls('some/path')     list a path (void input, path arg)
-  <dir>.ls()          list a directory passed in as input (no arg)
+  ls()                list current directory
+  ls('some/path')     list a path
+  <dir>.ls()          list a GritsFile directory passed as input
 
 Options:
-  {raw:true}   return raw { name: metadataCID } map
-  {l:true}     return { name: metadata } map (long listing)`;
+  {l:true}     long listing — { name: metadata } map`;
 
-import { isVoid, _isPlainObject } from '../gimbal/gsh.js';
+import { isVoid, _isPlainObject, responseFromJSON } from '../gimbal/gsh.js';
 import { GritsFile } from '../grits/GritsClient.js';
 
 export async function invoke(shell, previous, args) {
@@ -44,11 +43,9 @@ export async function invoke(shell, previous, args) {
   }
 
   if (!file.isDir())
-    throw new Error(`ls: not a directory`);
+    throw new Error('ls: not a directory');
 
   const dirMap = await file.json();
-
-  if (opts.raw)  return dirMap;
 
   if (opts.l || opts.long) {
     const vol     = shell._currentVol();
@@ -58,8 +55,8 @@ export async function invoke(shell, previous, args) {
         entries[name] = await vol.meta(metaCID);
       })
     );
-    return entries;
+    return responseFromJSON(entries);
   }
 
-  return Object.keys(dirMap).sort();
+  return responseFromJSON(Object.keys(dirMap).sort());
 }
