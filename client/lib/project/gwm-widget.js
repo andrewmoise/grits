@@ -120,11 +120,11 @@ function findInTree(list, id) {
 // ── Widget ────────────────────────────────────────────────────────────────────
 
 export default function createWidget({ name, evalContext = {}, opts = {} }) {
-  const gg    = evalContext.fs;
+  const fs    = evalContext.fs;
 
   let vol = null;
-  if (!vol && gg) {
-    try { vol = gg.volume(window.location.origin, 'sys'); } catch (_) {}
+  if (!vol && fs) {
+    try { vol = fs.volume(window.location.origin, 'sys'); } catch (_) {}
   }
 
   // ── Styles ───────────────────────────────────────────────────────────────────

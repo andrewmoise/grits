@@ -34,9 +34,12 @@ export async function invoke(shell, previous, args) {
     if (pathArg !== undefined) {
       if (typeof pathArg !== 'string')
         throw new Error('ls: path argument must be a string');
-      file = await shell._currentVol().lookup(shell.resolvePath(pathArg).replace(/^\//, ''));
+      const { serverUrl, volume, path } = shell.resolvePath(pathArg);
+      file = await shell._vol(serverUrl, volume).lookup(path);
     } else {
-      file = await shell._currentVol().lookup(shell.cwd.replace(/^\//, ''));
+      // No path arg — use current location directly.
+      const { serverUrl, volume, path } = shell.resolvePath('.');
+      file = await shell._vol(serverUrl, volume).lookup(path);
     }
   }
 

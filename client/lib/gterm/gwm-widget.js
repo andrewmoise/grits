@@ -36,7 +36,7 @@ const SVG_ERROR = `<svg class="gt-icon" viewBox="0 0 16 16" fill="none" stroke="
 
 export default function createWidget({ name, evalContext = {}, runOnInit = null }) {
   const shell = makeShell({
-    gg:        evalContext.fs,
+    fs:        evalContext.fs,
     serverUrl: window.location.origin,
     volume:    'client',
     cwd:       '/',
@@ -301,7 +301,9 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     inputLoc.textContent = '';
 
     try {
-      const { value, display } = await shell.eval(rec.src, 80, { __, _: __.length ? __[__.length - 1] : VOID });
+      const value = await shell.eval(rec.src, { __, _: __.length ? __[__.length - 1] : VOID });
+      const display = await _display(value, 80);
+
       rec.status   = 'done';
       rec.display  = display;
 
@@ -322,6 +324,21 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     inputLoc.textContent = cwdLabel(shell);
     running = false;
     runNext();
+  }
+
+  async function _display(value, cols = 80) {
+    if (isVoid(value))              return null;
+    if (typeof value === 'string')  return value;
+    if (value instanceof GritsFile) return `GritsFile(${value.cid()})`;
+    if (value instanceof Response) {
+      try { return await value.clone().text(); }
+      catch (_) { return `[Response ${value.status}]`; }
+    }
+    if (value instanceof Uint8Array || value instanceof ArrayBuffer)
+      return `[${value.byteLength ?? value.length} bytes]`;
+    if (_isPlainObject(value) || Array.isArray(value))
+      return stringify(value, cols);
+    return String(value);
   }
 
   // ── enqueue ───────────────────────────────────────────
