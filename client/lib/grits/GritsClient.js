@@ -1,11 +1,11 @@
 // GritsClient.js — Gimbal filesystem client
 //
-// GritsClient — cache operations (local + browser cache, no server contact)
-//   gg.cacheGet(cidString)                → Response | null
-//   gg.cachePut(bytes)                    → string (content CID, stored locally)
-//   gg.mkfile(cidString, size)            → string (metadata CID, stored locally)
-//   gg.mkdir(entries?)                    → string (metadata CID, stored locally)
-//   gg.gc(cidString?)                     → void
+// GritsClient — filesystem operations (local + browser cache, no server contact)
+//   fs.cacheGet(cidString)                → Response | null
+//   fs.cachePut(bytes)                    → string (content CID, stored locally)
+//   fs.mkfile(cidString, size)            → string (metadata CID, stored locally)
+//   fs.mkdir(entries?)                    → string (metadata CID, stored locally)
+//   fs.gc(cidString?)                     → void
 //
 // GritsVolume — server operations (with shared cache fallthrough)
 //   vol.lookup (path)                     → GritsFile
@@ -34,9 +34,9 @@
 //   file.text()       → Promise<string>
 //   file.json()       → Promise<any>
 
-import MirrorManager     from './MirrorManager.js';      // %FOR MODULE%
-import HashVerifier      from './HashVerifier.js';        // %FOR MODULE%
-import PerformanceTracker from './PerformanceTracker.js'; // %FOR MODULE%
+import MirrorManager      from './MirrorManager.js';      // %FOR MODULE%
+import HashVerifier       from './HashVerifier.js';        // %FOR MODULE%
+import PerformanceTracker from './PerformanceTracker.js';  // %FOR MODULE%
 //importScripts('/grits/v1/content/client/MirrorManager-sw.js');      // %FOR SERVICEWORKER%
 //importScripts('/grits/v1/content/client/HashVerifier-sw.js');        // %FOR SERVICEWORKER%
 //importScripts('/grits/v1/content/client/PerformanceTracker-sw.js');  // %FOR SERVICEWORKER%
@@ -46,6 +46,7 @@ const DEBUG_STATS = true;
 const JSON_CACHE_MAX_AGE          = 5 * 60 * 1000;
 const JSON_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 const DEFAULT_HARD_TIMEOUT        = 1 * 60 * 1000; // 1 minute, matches Go-side default
+const MINIROOT_TTL                = 1 * 60 * 1000; // 1 minute
 
 // ─────────────────────────────────────────────────────────────────
 // MultiLink assertion flags — mirror of Go-side constants in namestore.go
@@ -60,6 +61,14 @@ export class AssertionError extends Error {
   constructor(msg) {
     super(msg);
     this.name = 'AssertionError';
+  }
+}
+
+export class AccessDeniedError extends Error {
+  constructor(path) {
+    super(`access denied: ${path}`);
+    this.name  = 'AccessDeniedError';
+    this.path  = path;
   }
 }
 
@@ -107,7 +116,6 @@ function _assertEntriesMap(v, label) {
 function _parseDuration(s) {
   if (typeof s !== 'string' || s.length === 0) return null;
   const units = { ns: 1e-6, us: 1e-3, µs: 1e-3, ms: 1, s: 1_000, m: 60_000, h: 3_600_000 };
-  // Go duration strings are a sequence of decimal numbers each with a unit suffix.
   const re = /([0-9]*\.?[0-9]+)(ns|us|µs|ms|[smh])/g;
   let match, total = 0, matched = false;
   while ((match = re.exec(s)) !== null) {
@@ -238,9 +246,12 @@ export class GritsVolume {
     this._volume    = volume;
     this._parent    = parent; // GritsClient
 
-    this.rootHash          = null;
-    this.rootHashTimestamp = 0;
-    this.hardTimeout       = DEFAULT_HARD_TIMEOUT;
+    // _miniRoots: path → { addr: string|null, ts: number }
+    // path "" is the global root (when the server returns it).
+    // addr is null when resetRoot() has been called, forcing a server round-trip.
+    this._miniRoots = new Map();
+
+    this.hardTimeout = DEFAULT_HARD_TIMEOUT;
 
     this.serviceWorkerHash = undefined;
 
@@ -263,14 +274,14 @@ export class GritsVolume {
 
   async lookup(path) {
     if (typeof path !== 'string')
-      throw new TypeError(`lo: path must be a string, got ${_typename(path)}`);
+      throw new TypeError(`lookup: path must be a string, got ${_typename(path)}`);
     const normalized = path.replace(/^\/+/, '');
-    const info = await this.lookup_internal(normalized);
-    if (!info) throw new Error(`lo: ${this._volume}:${path}: not found`);
+    const info = await this._lookup_internal(normalized);
+    if (!info) throw new Error(`lookup: ${this._volume}:${path}: not found`);
     const meta = await this._fetchMeta(info.metadataHash);
     return new GritsFile(info.metadataHash, meta, this);
   }
-  
+
   // Returns a GritsFile for a known metadata CID, without a path lookup.
   async fileForCID(metaCID) {
     _assertString(metaCID, 'fileForCID');
@@ -281,9 +292,9 @@ export class GritsVolume {
   // ── Link ──────────────────────────────────────────────────────
 
   async link(fileOrCID, path) {
-    _assertStringOrFile(fileOrCID, 'li');
+    _assertStringOrFile(fileOrCID, 'link');
     if (typeof path !== 'string')
-      throw new TypeError(`li: path must be a string, got ${_typename(path)}`);
+      throw new TypeError(`link: path must be a string, got ${_typename(path)}`);
     const metaCID = fileOrCID instanceof GritsFile ? fileOrCID.cid() : fileOrCID;
     await this._ensureOnServer(metaCID);
     return this._linkRaw(metaCID, path);
@@ -320,7 +331,6 @@ export class GritsVolume {
         }
       }
 
-      // Existing error handling
       const msg = await resp.text().catch(() => resp.statusText);
       if (resp.status === 409) throw new AssertionError(msg);
       throw new Error(`multiLink: ${resp.status} ${msg}`);
@@ -338,7 +348,6 @@ export class GritsVolume {
       );
     }
     await this._uploadBlob(addr, local);
-    // Move from local to blob cache so it's not re-uploaded next time
     await this._parent._blobCachePut(addr, new Response(local, { status: 200 }));
     this._parent._local.delete(addr);
   }
@@ -402,8 +411,14 @@ export class GritsVolume {
 
   // ── Misc ──────────────────────────────────────────────────────
 
-  /** Reset the cached root so the next lookup forces a server round-trip. */
-  resetRoot() { this.rootHashTimestamp = 0; }
+  // Force the next lookup to go to the server by nulling all mini-root addrs.
+  // The paths are kept so they are still included in the next slow lookup request,
+  // ensuring an atomic refresh of everything we care about.
+  resetRoot() {
+    for (const entry of this._miniRoots.values()) {
+      entry.addr = null;
+    }
+  }
 
   /** Return the last seen service worker hash for this volume, or undefined. */
   getServiceWorkerHash() { return this.serviceWorkerHash; }
@@ -496,46 +511,117 @@ export class GritsVolume {
     }
   }
 
-  // ── Internal: Merkle tree lookup ──────────────────────────────
+  // ── Internal: lookup ──────────────────────────────────────────
 
-  async lookup_internal(path) {
-    const n = _normalizePath(path);
-    const fast = await this._tryFastLookup(n);
-    if (fast === null) return null;        // known not to exist
-    if (fast === undefined) return this._slowLookup(n);  // don't know, ask server
-    return fast;
+  // Find a usable mini-root for walking toward `path`.
+  // Returns { rootPath, entry } or null if nothing usable.
+  // Mini-roots should never be ancestors of each other, so the first
+  // match we find is fine.
+  _findMiniRoot(path) {
+    const now = Date.now();
+    for (const [rootPath, entry] of this._miniRoots) {
+      if (!entry.addr) continue;
+      if (now - entry.ts > this.hardTimeout) continue;
+      // "" matches everything; otherwise rootPath must be a prefix of path.
+      if (rootPath === '' || path === rootPath || path.startsWith(rootPath + '/')) {
+        return { rootPath, entry };
+      }
+    }
+    return null;
   }
 
-  async _tryFastLookup(path) {
-    if (!this.rootHash || Date.now() - this.rootHashTimestamp > this.hardTimeout) return undefined;
-    const parts = path.split('/').filter(Boolean);
-    let metaHash = this.rootHash, contentHash = null, contentSize = null;
-    for (let i = 0; i < parts.length; i++) {
-      const [meta] = await this._parent._unmarshal(metaHash);
-      if (!meta) return undefined;
-      if (meta.type !== 'dir') return null;
-      
-      const [dir] = await this._parent._unmarshal(meta.contentHash);
-      if (!dir) return undefined;
-      if (!dir?.[parts[i]]) return null;
+  async _lookup_internal(path) {
+      const n = _normalizePath(path);
+      const abort = new AbortController();
 
-      const childMetaHash = dir[parts[i]];
+      const slowPromise = this._slowLookup(n).catch(err => {
+          abort.abort();
+          if (err instanceof AccessDeniedError) {
+              // Drop any mini-root we were tracking for this path —
+              // we're not allowed to see it.
+              this._miniRoots.delete(err.path);
+          }
+          throw err; // rethrow so lookup() sees it
+      });
+
+      const miniRoot = this._findMiniRoot(n);
+      if (!miniRoot) return slowPromise;
+
+      const fastPromise = this._fastWalk(n, miniRoot, abort.signal).catch(() =>
+          new Promise(() => {}));
+
+      return Promise.race([fastPromise, slowPromise]);
+  }
+
+  // Walk down through cached blobs from miniRoot toward path.
+  // Resolves with a lookup-info object on success, rejects on any miss or abort.
+  async _fastWalk(path, { rootPath, entry }, signal) {
+    // Strip the mini-root prefix to get the remaining path segments to walk.
+    const remainder = rootPath === ''
+      ? path
+      : path.slice(rootPath.length + 1); // skip the trailing '/'
+    const parts = remainder ? remainder.split('/') : [];
+
+    let metaHash = entry.addr;
+
+    for (const part of parts) {
+      if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+
+      const [meta] = await this._parent._unmarshal(metaHash);
+      if (!meta) throw new Error('cache miss');
+      if (meta.type !== 'dir') throw new Error('not a directory');
+
+      if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+
+      const [dir] = await this._parent._unmarshal(meta.contentHash);
+      if (!dir) throw new Error('cache miss');
+      if (!dir[part]) throw new Error('not found');
+
+      const childMetaHash = dir[part];
       const [childMeta]   = await this._parent._unmarshal(childMetaHash);
-      if (!childMeta) return undefined;
-      
-      metaHash    = childMetaHash;
-      contentHash = childMeta.contentHash;
-      contentSize = childMeta.size ?? 0;
+      if (!childMeta) throw new Error('cache miss');
+
+      metaHash = childMetaHash;
     }
-    return { metadataHash: metaHash, contentHash, contentSize };
+
+    if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+
+    // We need the final meta to return contentHash and size.
+    const [finalMeta] = await this._parent._unmarshal(metaHash);
+    if (!finalMeta) throw new Error('cache miss');
+
+    this._parent._tracker.record('fastWalkHit', 0);
+    return {
+      metadataHash: metaHash,
+      contentHash:  finalMeta.contentHash,
+      contentSize:  finalMeta.size ?? 0,
+    };
   }
 
   async _slowLookup(path) {
     const startTime = performance.now();
-    const url  = `${this._serverUrl}/grits/v1/lookup/${this._volume}`;
+    const url = `${this._serverUrl}/grits/v1/lookup/${this._volume}`;
+
+    // Build path list: the thing we actually want, plus any live mini-roots
+    // (so we get an atomic refresh of everything in one round-trip).
+    const now = Date.now();
+    const paths = [path];
+    for (const [rootPath, entry] of this._miniRoots) {
+      if (now - entry.ts < MINIROOT_TTL && rootPath !== path) {
+        paths.push(rootPath);
+      }
+    }
+
     const resp = await fetch(url, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(path),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(paths),
     });
+
+    if (resp.status === 403) {
+        const { path: deniedPath } = await resp.json().catch(() => ({ path }));
+        throw new AccessDeniedError(deniedPath);
+    }
     if (!resp.ok) return null;
 
     const swHash = resp.headers.get('X-Grits-Service-Worker-Hash');
@@ -543,34 +629,61 @@ export class GritsVolume {
 
     const result = await resp.json();
     this._ingestLookupResponse(result);
-
-    const leaf = result.paths[result.paths.length - 1];
-    if (result.isPartial || leaf.path !== path) return null;
+    this._updateMiniRoots(path, result);
 
     const elapsed = performance.now() - startTime;
     this._parent._tracker.record('slowLookup', elapsed);
     this._parent._tracker.trackContentUrl(path, elapsed);
 
-    // Fire-and-forget on first successful server contact. At this point the
-    // root is warm in the JSON cache so the inner lookup_internal call inside
-    // _fetchVolumeConfig will hit _tryFastLookup rather than recurse here.
     if (!this._configFetched) this._fetchVolumeConfig();
+
+    const leaf = result.paths?.find(e => e.path === path);
+    if (!leaf || result.isPartial) return null;
 
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
   }
 
-  // ── Internal ────────────────────────────────────────
-
+  // Ingest a lookup/link response: cache all returned blobs and update
+  // any mini-root entries whose paths appear in the response.
   _ingestLookupResponse(result) {
     if (!result?.paths?.length) return;
-    const root = result.paths.find(e => e.path === '');
-    if (root && result.serialNumber >= (this._lastSerial ?? 0)) {
-      this.rootHash          = root.addr;
-      this.rootHashTimestamp = Date.now();
-      this._lastSerial       = result.serialNumber;
+
+    for (const entry of result.paths) {
+      // Update any mini-root we're already tracking.
+      if (this._miniRoots.has(entry.path)) {
+        const mr = this._miniRoots.get(entry.path);
+        mr.addr = entry.addr;
+        mr.ts   = Date.now();
+      }
     }
+
     this._startPrefetch(result.paths);
   }
+
+  // After a successful lookup, record the shallowest ancestor we received
+  // (above the requested path) as a mini-root for future refreshes.
+  _updateMiniRoots(requestedPath, result) {
+    if (!result?.paths?.length) return;
+
+    let best = null;
+    for (const entry of result.paths) {
+      if (entry.path === requestedPath) continue; // target itself, not an ancestor
+      // Is this entry an ancestor of (or equal to the root of) requestedPath?
+      if (entry.path !== '' && !requestedPath.startsWith(entry.path + '/')) continue;
+      // Keep the shallowest (shortest path = highest in tree).
+      if (best === null || entry.path.length < best.path.length) {
+        best = entry;
+      }
+    }
+
+    if (best !== null) {
+      this._miniRoots.set(best.path, { addr: best.addr, ts: Date.now() });
+      DEBUG && console.log(
+        `[miniRoot] upsert "${best.path}" → ${best.addr.slice(0, 8)}…`);
+    }
+  }
+
+  // ── Internal: prefetch ────────────────────────────────────────
 
   _startPrefetch(paths) {
     for (const e of paths) {
