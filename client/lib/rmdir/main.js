@@ -19,12 +19,12 @@ export async function invoke(shell, previous, args) {
   if (positional.length !== 1 || typeof positional[0] !== 'string')
     throw new Error('rmdir: expected rmdir(path)');
 
-  const vol      = shell._currentVol();
-  const resolved = shell.resolvePath(positional[0]).replace(/^\//, '');
+  const { serverUrl, volumeName, path } = shell.resolvePath(positional[0]);
+  vol = shell._vol(serverUrl, volumeName);
 
   if (!opts.f) {
     // Check it's a directory and is empty
-    const file = await vol.lookup(resolved);
+    const file = await vol.lookup(path);
     if (!file.isDir())
       throw new Error(`rmdir: not a directory: ${positional[0]}`);
     const entries = await file.json();
@@ -33,7 +33,7 @@ export async function invoke(shell, previous, args) {
   }
 
   await vol.multiLink([{
-    path:   resolved,
+    path:   path,
     addr:   '',
     assert: opts.f ? 0 : ASSERT_IS_TREE,
   }]);

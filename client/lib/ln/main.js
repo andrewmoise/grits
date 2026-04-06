@@ -1,71 +1,101 @@
-// lib/ln/main.js — link a GritsFile into the filesystem
-//
-// Usage:
-//   <gritsfile>.ln('dest/path')        pipe a GritsFile in as source
-//   ln('src/path', 'dest/path')        both as path strings
-//   ln(gritsFile, 'dest/path')         explicit GritsFile source
-
+// lib/ln/main.js
 export const help = `\
-ln — link a file pointer into the filesystem
+ln — link a file into the filesystem
 
 Usage:
-  <gritsfile>.ln('dest/path')        GritsFile input, one path arg
-  ln('src/path', 'dest/path')        void input, two path strings
-  ln(gritsFile, 'dest/path')         void input, GritsFile + path string
+  ln('src', 'dest')          link into dest if dir, overwrite if file
+  ln('src', 'dest/')         dest must be a directory, place inside it
+  ln('src', 'dest', {f:1})   overwrite even if dest is a directory
+  ln('src', 'dest', {i:1})   fail if dest exists at all
 
 ln() only moves pointers — it never uploads content.
-Use to() if you want to write a bytestream to a path.`;
+Use to() to write a bytestream to a path.`;
 
-import { isVoid, VOID } from '../gimbal/gsh.js';
-import { GritsFile, ASSERT_PREV_MATCHES, AssertionError } from '../grits/GritsClient.js';
+import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
+import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
-export async function invoke(shell, previous, args) {
+async function resolveDestPath(destVol, destR, srcName, cmd) {
+  if (destR.path.endsWith('/')) {
+    const dirPath = destR.path.replace(/\/+$/, '');
+    const dir = await destVol.lookup(dirPath).catch(() => null);
+    if (!dir?.isDir())
+      throw new Error(`${cmd}: destination is not a directory: '${destR.path}'`);
+    return `${dirPath}/${srcName}`;
+  }
+  const existing = await destVol.lookup(destR.path).catch(() => null);
+  if (existing?.isDir())
+    return `${destR.path}/${srcName}`;
+  return destR.path;
+}
+
+export async function invoke(shell, previous, args, cmd = 'ln') {
   const prev = await previous;
-  const hasInput = !isVoid(prev);
+  if (!isVoid(prev))
+    throw new Error(`${cmd}: does not accept pipeline input`);
 
-  let srcFile, destPath;
+  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
+  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
 
-  if (hasInput) {
-    // Pipeline mode: GritsFile input + one path arg
-    if (!(prev instanceof GritsFile))
-      throw new Error('ln: pipeline input must be a GritsFile — use to() for bytestreams');
-    if (args.length !== 1 || typeof args[0] !== 'string')
-      throw new Error('ln: expected exactly one destination path argument');
-    srcFile  = prev;
-    destPath = args[0];
-  } else {
-    // Argument mode: (GritsFile | string, string)
-    if (args.length !== 2)
-      throw new Error('ln: expected two arguments — ln(src, dest)');
-    const [src, dest] = args;
-    if (typeof dest !== 'string' || !dest)
-      throw new Error('ln: destination must be a non-empty path string');
-    destPath = dest;
+  if (positional.length !== 2 ||
+      typeof positional[0] !== 'string' ||
+      typeof positional[1] !== 'string')
+    throw new Error(`${cmd}: expected ${cmd}(src, dest)`);
 
-    if (src instanceof GritsFile) {
-      srcFile = src;
-    } else if (typeof src === 'string') {
-      const vol = shell._currentVol();
-      srcFile = await vol.lookup(shell.resolvePath(src).replace(/^\//, ''));
-    } else {
-      throw new Error(`ln: source must be a GritsFile or path string, got ${src?.constructor?.name ?? typeof src}`);
-    }
+  const [srcArg, destArg] = positional;
+  const srcR  = shell.resolvePath(srcArg);
+  const destR = shell.resolvePath(destArg);
+
+  const srcVol  = shell._vol(srcR.serverUrl, srcR.volume);
+  const destVol = shell._vol(destR.serverUrl, destR.volume);
+
+  const srcFile  = await srcVol.lookup(srcR.path);
+  const srcName  = srcR.path.split('/').at(-1);
+  const destPath = opts.f
+    ? destR.path
+    : await resolveDestPath(destVol, destR, srcName, cmd);
+
+  if (opts.f) {
+    await destVol.multiLink([{ path: destPath, addr: srcFile.cid() }]);
+    return VOID;
   }
 
-  const resolved = shell.resolvePath(destPath).replace(/^\//, '');
+  if (opts.i) {
+    try {
+      await destVol.multiLink([{
+        path:     destPath,
+        addr:     srcFile.cid(),
+        prevAddr: '',
+        assert:   ASSERT_PREV_MATCHES,
+      }]);
+    } catch (e) {
+      if (e instanceof AssertionError)
+        throw new Error(`${cmd}: destination already exists: '${destArg}'`);
+      throw e;
+    }
+    return VOID;
+  }
 
   try {
-    await vol.multiLink([{
-      path:     resolved,
-      addr:     srcFile.cid(),
-      prevAddr: opts.f ? undefined : '',
-      assert:   opts.f ? 0 : ASSERT_PREV_MATCHES,
+    await destVol.multiLink([{
+      path:   destPath,
+      addr:   srcFile.cid(),
+      assert: ASSERT_IS_BLOB,
     }]);
-  } catch(e) {
-    if (e instanceof AssertionError)
-      throw new Error(`ln: already exists: '${destPath}' — use {f:1} to overwrite`);
-    throw e;
+    return VOID;
+  } catch (e) {
+    if (!(e instanceof AssertionError)) throw e;
   }
 
-  return VOID;
+  try {
+    await destVol.multiLink([{
+      path:     destPath,
+      addr:     srcFile.cid(),
+      prevAddr: '',
+      assert:   ASSERT_PREV_MATCHES,
+    }]);
+    return VOID;
+  } catch (e) {
+    if (!(e instanceof AssertionError)) throw e;
+    throw new Error(`${cmd}: destination is a directory: '${destArg}' — use {f:1} to overwrite`);
+  }
 }

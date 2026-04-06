@@ -89,9 +89,12 @@ export function _isPlainObject(v) {
 export async function coerceToFile(value, shell) {
   if (value instanceof Result) value = await value;
   if (value instanceof GritsFile) return value;
-  if (typeof value === 'string')
-    return shell._currentVol().lookup(shell.resolvePath(value).replace(/^\//, ''));
-  throw new TypeError(`cannot coerce ${_tn(value)} to GritsFile — expected a path string or GritsFile`);
+  if (typeof value === 'string') {
+    const { serverUrl, volume, path } = shell.resolvePath(value);
+    return shell._vol(serverUrl, volume).lookup(path);
+  }
+  throw new TypeError(
+    `cannot coerce ${_tn(value)} to GritsFile — expected a path string or GritsFile`);
 }
 
 export async function coerceToResponse(value, shell) {
@@ -106,6 +109,7 @@ export async function coerceToBytes(value, shell) {
   if (value instanceof Uint8Array)  return value;
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (ArrayBuffer.isView(value))    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (value instanceof Response)    return new Uint8Array(await value.clone().arrayBuffer());
   if (_isPlainObject(value) || Array.isArray(value))
     return new TextEncoder().encode(stringify(value, { maxLength: 76 }));
   const buf = await (await coerceToResponse(value, shell)).arrayBuffer();
@@ -176,22 +180,6 @@ class Result {
     if (value instanceof GritsFile) return value;
     throw new TypeError(`cannot coerce ${_tn(value)} to GritsFile`);
   }
-
-  async _display(cols = 80) {
-    const value = await this._promise;
-    if (isVoid(value))              return null;
-    if (typeof value === 'string')  return value;
-    if (value instanceof GritsFile) return `GritsFile(${value.cid()})`;
-    if (value instanceof Response) {
-      try { return await value.clone().text(); }
-      catch (_) { return `[Response ${value.status}]`; }
-    }
-    if (value instanceof Uint8Array || value instanceof ArrayBuffer)
-      return `[${value.byteLength ?? value.length} bytes]`;
-    if (_isPlainObject(value) || Array.isArray(value))
-      return stringify(value, cols);
-    return String(value);
-  }
 }
 
 function _wrapResult(result) {
@@ -212,8 +200,8 @@ function _wrapResult(result) {
 // ─────────────────────────────────────────────────────────────────
 
 export class GimbalShell {
-  constructor({ gg, serverUrl, volume, cwd, libs, evalContext = {} }) {
-    this.gg           = gg;
+  constructor({ fs, serverUrl, volume, cwd, libs, evalContext = {} }) {
+    this.fs           = fs;
     this.serverUrl    = serverUrl;
     this.volume       = volume;
     this.cwd          = cwd || '/';
@@ -239,23 +227,53 @@ export class GimbalShell {
   _currentVol() { return this._vol(null, null); }
 
   _vol(serverUrl, vol) {
-    return this.gg.volume(
+    return this.fs.volume(
       serverUrl ?? this.serverUrl,
       vol       ?? this.volume
     );
   }
 
   // ── Path resolution ───────────────────────────────────────────
-  // Always returns a /‑prefixed absolute path.
-  // Cross-volume paths (containing ':') are returned as-is for
-  // the tool to handle via vol() directly.
-
+  // Returns { serverUrl, volume, path } always.
+  // Callers that previously did shell._currentVol().lookup(shell.resolvePath(p))
+  // should now do shell._vol(r.serverUrl, r.volume).lookup(r.path).
   resolvePath(p) {
-    if (p && p.includes(':')) return p;
-    if (!p || p === '.')      return this.cwd || '/';
-    if (p.startsWith('/'))    return p;
-    if (!this.cwd || this.cwd === '/') return '/' + p;
-    return `${this.cwd}/${p}`.replace(/\/+/g, '/');
+    if (!p || p === '.') {
+      return {
+        serverUrl: this.serverUrl,
+        volume:    this.volume,
+        path:      this.cwd.replace(/^\//, '') || '',
+      };
+    }
+
+    // scp-style cross-volume: [server]:volume[/path]
+    if (p.includes(':')) {
+      const colonIdx  = p.indexOf(':');
+      const serverUrl = p.slice(0, colonIdx) || this.serverUrl;
+      const rest      = p.slice(colonIdx + 1);
+      const slashIdx  = rest.indexOf('/');
+      const volume    = slashIdx === -1 ? rest       : rest.slice(0, slashIdx);
+      const path      = slashIdx === -1 ? ''         : rest.slice(slashIdx + 1);
+      return { serverUrl, volume, path };
+    }
+
+    // Absolute path in current volume.
+    if (p.startsWith('/')) {
+      return {
+        serverUrl: this.serverUrl,
+        volume:    this.volume,
+        path:      p.replace(/^\/+/, ''),
+      };
+    }
+
+    // Relative path — join with cwd.
+    const base = this.cwd.replace(/^\/+|\/+$/g, '');
+    const joined = base ? `${base}/${p}` : p;
+    return {
+      serverUrl: this.serverUrl,
+      volume:    this.volume,
+      path:      joined,
+    };
   }
 
   // ── Tool import ───────────────────────────────────────────────
@@ -297,7 +315,7 @@ export class GimbalShell {
 
     for (const lib of this.libs) {
       try {
-        const vol  = this.gg.volume(lib.serverUrl, lib.volume);
+        const vol  = this.fs.volume(lib.serverUrl, lib.volume);
         const file = await vol.lookup(lib.path);
         if (!file.isDir()) continue;
 
@@ -329,7 +347,7 @@ export class GimbalShell {
 
     for (const lib of this.libs) {
       try {
-        const vol  = this.gg.volume(lib.serverUrl, lib.volume);
+        const vol  = this.fs.volume(lib.serverUrl, lib.volume);
         // _tryFastLookup reads only from in-memory JSON cache — no network
         const info = await vol._tryFastLookup(lib.path);
         if (!info) continue; // not in memory, can't compare — skip
@@ -377,7 +395,7 @@ export class GimbalShell {
 
   // ── eval ──────────────────────────────────────────────────────
 
-  async eval(src, cols = 80, extraVars = {}) {
+  async eval(src, extraVars = {}) {
     await this._warmCache();
     await this._checkCacheStale();
     this.history.push(src);
@@ -412,8 +430,7 @@ export class GimbalShell {
       finalResult = new Result(this, Promise.resolve(finalResult));
     }
 
-    const display = await finalResult._display(cols);
-    return { value: await finalResult, display };
+    return await finalResult;
   }
 }
 

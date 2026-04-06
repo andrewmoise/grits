@@ -140,8 +140,8 @@ export default function createWidget({ name, evalContext = {} }) {
   el.className = 'gf-tree';
   el.style.cssText = 'overflow:auto;flex:1;min-height:0;height:100%;';
 
-  const gg     = evalContext.fs;
-  const vol    = gg.volume(window.location.origin, 'client');
+  const fs     = evalContext.fs;
+  const vol    = fs.volume(window.location.origin, 'client');
   let selected = null;
 
   // ── Toggle open/closed ──────────────────────────────────

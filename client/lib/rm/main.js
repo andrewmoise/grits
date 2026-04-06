@@ -20,11 +20,10 @@ export async function invoke(shell, previous, args) {
   if (positional.length !== 1 || typeof positional[0] !== 'string')
     throw new Error('rm: expected rm(path)');
 
-  const vol      = shell._currentVol();
-  const resolved = shell.resolvePath(positional[0]).replace(/^\//, '');
+  const { serverUrl, volume, path } = shell.resolvePath(value);
 
   try {
-    await vol.multiLink([{ path: resolved, addr: '', assert: opts.f ? 0 : ASSERT_IS_BLOB }]);
+    await shell._vol(serverUrl, volume).multiLink([{ path, addr: '', assert: opts.f ? 0 : ASSERT_IS_BLOB }]);
   } catch(e) {
     if (e instanceof AssertionError)
         throw new Error(`rm: '${positional[0]}' is a directory — use rmdir or rm({f:1})`);

@@ -6,37 +6,42 @@ Usage:
   mv('src', 'dest')          move, fail if dest exists
   mv('src', 'dest', {f:1})   overwrite dest`;
 
-import { isVoid, VOID } from '../gimbal/gsh.js';
-import { ASSERT_PREV_MATCHES, ASSERT_IS_NONEMPTY } from '../grits/GritsClient.js';
+import { isVoid, VOID, _isPlainObject } from '../gimbal/gsh.js';
+import { AssertionError, ASSERT_PREV_MATCHES } from '../grits/GritsClient.js';
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
   if (!isVoid(prev)) throw new Error('mv: does not accept pipeline input');
 
-  const opts       = _isPlainObj(args[args.length-1]) ? args[args.length-1] : {};
+  const opts       = _isPlainObject(args[args.length-1]) ? args[args.length-1] : {};
   const positional = opts === args[args.length-1] ? args.slice(0,-1) : [...args];
 
-  if (positional.length !== 2 || typeof positional[0] !== 'string' || typeof positional[1] !== 'string')
+  if (positional.length !== 2 ||
+      typeof positional[0] !== 'string' ||
+      typeof positional[1] !== 'string')
     throw new Error('mv: expected mv(src, dest)');
 
-  const vol      = shell._currentVol();
-  const srcPath  = shell.resolvePath(positional[0]).replace(/^\//, '');
-  const destPath = shell.resolvePath(positional[1]).replace(/^\//, '');
+  const srcR  = shell.resolvePath(positional[0]);
+  const destR = shell.resolvePath(positional[1]);
 
-  // Look up source first
-  const srcFile = await vol.lookup(srcPath);
+  const srcVol  = shell._vol(srcR.serverUrl, srcR.volume);
+  const destVol = shell._vol(destR.serverUrl, destR.volume);
 
-  // Atomically: assert src still exists, set dest, clear src
+  if (srcVol !== destVol)
+    throw new Error('mv: cross-volume move not supported — use cp then rm');
+
+  const srcFile = await srcVol.lookup(srcR.path);
+
   try {
-    await vol.multiLink([
+    await srcVol.multiLink([
       {
-        path:     destPath,
+        path:     destR.path,
         addr:     srcFile.cid(),
         prevAddr: opts.f ? undefined : '',
         assert:   opts.f ? 0 : ASSERT_PREV_MATCHES,
       },
       {
-        path:     srcPath,
+        path:     srcR.path,
         addr:     '',
         prevAddr: srcFile.cid(),
         assert:   ASSERT_PREV_MATCHES,
@@ -44,15 +49,9 @@ export async function invoke(shell, previous, args) {
     ]);
   } catch(e) {
     if (e instanceof AssertionError)
-        throw new Error(`mv: destination already exists or source changed — use {f:1} to overwrite`);
+      throw new Error(`mv: destination already exists or source changed — use {f:1} to overwrite`);
     throw e;
   }
-  
-  return VOID;
-}
 
-function _isPlainObj(v) {
-  if (!v || typeof v !== 'object') return false;
-  const p = Object.getPrototypeOf(v);
-  return p === Object.prototype || p === null;
+  return VOID;
 }
