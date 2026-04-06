@@ -182,8 +182,8 @@ func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
 }
 
 // LookupFull implements Volume interface
-func (rv *RemoteVolume) LookupFull(paths []string) (*grits.LookupResponse, error) {
-	return rv.localCache.LookupFull(paths)
+func (rv *RemoteVolume) LookupFull(paths []string, checkAccess bool) (*grits.LookupResponse, error) {
+	return rv.localCache.LookupFull(paths, checkAccess)
 }
 
 // GetFileNode implements Volume interface

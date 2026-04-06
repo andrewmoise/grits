@@ -369,7 +369,7 @@ func TestLookupFullAndMultiLinkResults(t *testing.T) {
 	vol.LinkByMetadata("dir1/dir3/file3.txt", node3.MetadataBlob().GetAddress())
 
 	// Test LookupFull with a single path
-	lookupResponse, _ := vol.LookupFull([]string{"dir1/file1.txt"})
+	lookupResponse, _ := vol.LookupFull([]string{"dir1/file1.txt"}, false)
 	results := lookupResponse.Paths
 	if len(results) != 3 {
 		t.Errorf("Expected 3 results, got %d", len(results))
@@ -379,7 +379,7 @@ func TestLookupFullAndMultiLinkResults(t *testing.T) {
 	checkPath(t, vol, results[2], "dir1/file1.txt", false)
 
 	// Test LookupFull with multiple paths
-	lookupResponse, _ = vol.LookupFull([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"})
+	lookupResponse, _ = vol.LookupFull([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"}, false)
 	results = lookupResponse.Paths
 	if len(results) != 7 {
 		t.Errorf("Expected 7 results, got %d", len(results))

@@ -77,6 +77,8 @@ type NameStore struct {
 	fetcherMtx    sync.RWMutex
 	lastFetch     time.Time
 	CacheDuration time.Duration
+
+	DebugWhitelist []string // If non-empty and checkAccess is true, restricts visible paths
 }
 
 // BlobFetcher provides on-demand fetching of blobs not available locally
@@ -161,46 +163,94 @@ type LookupResponse struct {
 	IsPartial    bool            `json:"partial,omitempty"`
 }
 
-// LookupFull returns a list of path and node pairs for a given path or paths
-func (ns *NameStore) LookupFull(names []string) (*LookupResponse, error) {
-	seenPaths := make(map[string]bool)
+// checkPathAccess verifies that all requested paths are covered by the whitelist.
+// Returns an ErrAccessDenied for the first path found outside the whitelist.
+// FIXME: This is not atomic with the subsequent LookupFull call — the tree could
+// change between the access check and the actual lookup.
+func (ns *NameStore) checkPathAccess(names []string) error {
+    for _, name := range names {
+        covered := false
+        for _, wp := range ns.DebugWhitelist {
+            if name == wp || strings.HasPrefix(name, wp+"/") {
+                covered = true
+                break
+            }
+        }
+        if !covered {
+            return &ErrAccessDenied{Path: name}
+        }
+    }
+    return nil
+}
 
-	// Get serial number once at the start
-	ns.mtx.Lock()
-	serialNumber := ns.serialNumber
-	ns.mtx.Unlock()
+// pruneForAccess strips path entries that are ancestors of whitelist entries,
+// so callers only see nodes at or below their permitted roots.
+func (ns *NameStore) pruneForAccess(resp *LookupResponse) *LookupResponse {
+    filtered := make([]*PathNodePair, 0, len(resp.Paths))
+    for _, pair := range resp.Paths {
+        covered := false
+        for _, wp := range ns.DebugWhitelist {
+            if pair.Path == wp || strings.HasPrefix(pair.Path, wp+"/") {
+                covered = true
+                break
+            }
+        }
+        if covered {
+            filtered = append(filtered, pair)
+        }
+    }
+    return &LookupResponse{
+        Paths:        filtered,
+        SerialNumber: resp.SerialNumber,
+        IsPartial:    resp.IsPartial,
+    }
+}
 
-	// FIXME - This isn't ideal, because the way we do it is not atomic,
-	// and may return stale serial numbers for the overall result. We should
-	// grab the root and the serial number, similar to how resolvePath()
-	// does it internally.
+// LookupFull returns a list of path and node pairs for a given path or paths.
+// If checkAccess is true and DebugWhitelist is non-empty, paths outside the
+// whitelist return ErrAccessDenied immediately, and results are pruned to
+// remove ancestors above whitelist entry points.
+func (ns *NameStore) LookupFull(names []string, checkAccess bool) (*LookupResponse, error) {
+    if checkAccess && len(ns.DebugWhitelist) > 0 {
+        if err := ns.checkPathAccess(names); err != nil {
+            return nil, err
+        }
+    }
 
-	response := &LookupResponse{
-		Paths:        make([]*PathNodePair, 0),
-		SerialNumber: serialNumber,
-		IsPartial:    false,
-	}
+    seenPaths := make(map[string]bool)
 
-	for _, name := range names {
-		name = strings.TrimRight(name, "/")
-		lookupResp, err := ns.resolvePath(name)
-		if err != nil {
-			return nil, err
-		}
-		if lookupResp.IsPartial {
-			response.IsPartial = true
-		}
+    ns.mtx.Lock()
+    serialNumber := ns.serialNumber
+    ns.mtx.Unlock()
 
-		// Add all paths from this lookup that we haven't seen yet
-		for _, pair := range lookupResp.Paths {
-			if _, exists := seenPaths[pair.Path]; !exists {
-				response.Paths = append(response.Paths, pair)
-				seenPaths[pair.Path] = true
-			}
-		}
-	}
+    response := &LookupResponse{
+        Paths:        make([]*PathNodePair, 0),
+        SerialNumber: serialNumber,
+        IsPartial:    false,
+    }
 
-	return response, nil
+    for _, name := range names {
+        name = strings.TrimRight(name, "/")
+        lookupResp, err := ns.resolvePath(name)
+        if err != nil {
+            return nil, err
+        }
+        if lookupResp.IsPartial {
+            response.IsPartial = true
+        }
+        for _, pair := range lookupResp.Paths {
+            if _, exists := seenPaths[pair.Path]; !exists {
+                response.Paths = append(response.Paths, pair)
+                seenPaths[pair.Path] = true
+            }
+        }
+    }
+
+    if checkAccess && len(ns.DebugWhitelist) > 0 {
+        response = ns.pruneForAccess(response)
+    }
+
+    return response, nil
 }
 
 // FIXME - Clean up this API a lot.
@@ -752,6 +802,10 @@ func EmptyNameStore(bs BlobStore, sparse bool) (*NameStore, error) {
 		serialNumber: 1,
 	}
 	ns.cacheCond = sync.NewCond(&ns.mtx)
+
+	// For access control debugging
+	// ns.DebugWhitelist = []string{"one", "two", "lib", "tmp", "home"}
+	ns.DebugWhitelist = []string{}
 
 	rootNodeMap := make(map[string]BlobAddr)
 	root, err := ns.CreateTreeNode(rootNodeMap)
@@ -1848,6 +1902,20 @@ func (e *ErrBlobMissing) Error() string {
 
 func IsBlobMissing(err error) (*ErrBlobMissing, bool) {
     var e *ErrBlobMissing
+    return e, errors.As(err, &e)
+}
+
+// ErrAccessDenied is returned when a path is outside what's permitted.
+type ErrAccessDenied struct {
+    Path string
+}
+
+func (e *ErrAccessDenied) Error() string {
+    return fmt.Sprintf("access denied: %s", e.Path)
+}
+
+func IsAccessDenied(err error) (*ErrAccessDenied, bool) {
+    var e *ErrAccessDenied
     return e, errors.As(err, &e)
 }
 

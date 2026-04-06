@@ -695,77 +695,102 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 
 func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
-		return
-	}
+        http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
+        return
+    }
 
-	var lookupPath string
-	if err := json.NewDecoder(r.Body).Decode(&lookupPath); err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
-		return
-	}
+    body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+    if err != nil {
+        http.Error(w, "Failed to read body", http.StatusBadRequest)
+        return
+    }
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Lookup start\n")
+    // Try array format first, fall back to bare string for curl convenience.
+    var paths []string
+    if err := json.Unmarshal(body, &paths); err != nil {
+        var single string
+        if err2 := json.Unmarshal(body, &single); err2 != nil {
+            http.Error(w, "Invalid JSON: expected array of paths or a single path string", http.StatusBadRequest)
+            return
+        }
+        paths = []string{single}
+    }
 
-	if !Validate("relativePath", lookupPath) {
-		http.Error(w, "Invalid lookup path", http.StatusBadRequest)
-		return
-	}
+    if len(paths) == 0 {
+        http.Error(w, "At least one path is required", http.StatusBadRequest)
+        return
+    }
 
-	volumeName := strings.TrimPrefix(r.URL.Path, "/grits/v1/lookup/")
-	if volumeName == "" {
-		http.Error(w, "Volume name is required", http.StatusBadRequest)
-		return
-	}
-	if !Validate("volumeName", volumeName) {
-		http.Error(w, "Invalid volume name", http.StatusBadRequest)
-		return
-	}
+    for _, p := range paths {
+        if !Validate("relativePath", p) {
+            http.Error(w, fmt.Sprintf("Invalid lookup path: %q", p), http.StatusBadRequest)
+            return
+        }
+    }
 
-	volume := s.Server.FindVolumeByName(volumeName)
-	if volume == nil {
-		http.Error(w, "Volume not found", http.StatusNotFound)
-		return
-	}
+    volumeName := strings.TrimPrefix(r.URL.Path, "/grits/v1/lookup/")
+    if volumeName == "" {
+        http.Error(w, "Volume name is required", http.StatusBadRequest)
+        return
+    }
+    if !Validate("volumeName", volumeName) {
+        http.Error(w, "Invalid volume name", http.StatusBadRequest)
+        return
+    }
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Calling LookupFull\n")
+    volume := s.Server.FindVolumeByName(volumeName)
+    if volume == nil {
+        http.Error(w, "Volume not found", http.StatusNotFound)
+        return
+    }
 
-	lookupResponse, err := volume.LookupFull([]string{lookupPath})
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
-		return
-	}
+    grits.DebugLogWithTime(grits.DebugHttpPerformance, paths[0], "Lookup start\n")
 
-	// Hold refs so blobs don't get GC'd before client fetches them
-	for _, pair := range lookupResponse.Paths {
-		node, err := volume.GetFileNode(pair.Addr)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
-			return
-		}
-		defer node.Release()
-		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
-		if node.Metadata().Type == grits.GNodeTypeDirectory {
-			contentBlob, err := node.ExportedBlob()
-			if err != nil {
-				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
-				return
-			}
-			s.refHolder.Hold(contentBlob, 45*time.Second)
-		}
-	}
+    lookupResponse, err := volume.LookupFull(paths, true)
+    if err != nil {
+        if denied, ok := grits.IsAccessDenied(err); ok {
+            w.Header().Set("Content-Type", "application/json")
+            w.WriteHeader(http.StatusForbidden)
+            json.NewEncoder(w).Encode(map[string]string{
+                "error": "access_denied",
+                "path":  denied.Path,
+            })
+            return
+        }
+        http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
+        return
+    }
 
-	w.Header().Set("Content-Type", "application/json")
-	if lookupResponse.IsPartial {
-		w.WriteHeader(http.StatusMultiStatus)
-	} else {
-		w.WriteHeader(http.StatusOK)
-	}
-	if err := json.NewEncoder(w).Encode(lookupResponse); err != nil {
-		log.Printf("Failed to encode lookup response: %v", err)
-	}
+    // Hold refs so blobs don't get GC'd before client fetches them.
+    for _, pair := range lookupResponse.Paths {
+        node, err := volume.GetFileNode(pair.Addr)
+        if err != nil {
+            http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
+            return
+        }
+        defer node.Release()
+        s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
+        if node.Metadata().Type == grits.GNodeTypeDirectory {
+            contentBlob, err := node.ExportedBlob()
+            if err != nil {
+                http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
+                return
+            }
+            s.refHolder.Hold(contentBlob, 45*time.Second)
+        }
+    }
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, lookupPath, "Lookup complete\n")
+    w.Header().Set("Content-Type", "application/json")
+    if lookupResponse.IsPartial {
+        w.WriteHeader(http.StatusMultiStatus)
+    } else {
+        w.WriteHeader(http.StatusOK)
+    }
+    if err := json.NewEncoder(w).Encode(lookupResponse); err != nil {
+        log.Printf("Failed to encode lookup response: %v", err)
+    }
+
+    grits.DebugLogWithTime(grits.DebugHttpPerformance, paths[0], "Lookup complete\n")
 }
 
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
@@ -941,7 +966,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Looking up in volume\n")
 	// Look up the resource in the volume to get its address
 
-	lookupResponse, err := volume.LookupFull([]string{path})
+	lookupResponse, err := volume.LookupFull([]string{path}, true)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return

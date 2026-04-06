@@ -19,7 +19,7 @@ type Volume interface {
 	Checkpoint() error
 
 	LookupNode(path string) (grits.FileNode, error)
-	LookupFull(name []string) (*grits.LookupResponse, error)
+	LookupFull(name []string, checkAccess bool) (*grits.LookupResponse, error)
 	GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error)
 
 	CreateTreeNode() (grits.FileNode, error)
@@ -193,8 +193,8 @@ func (v *LocalVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 	return v.ns.BlobStore.ReadFile(addr)
 }
 
-func (wv *LocalVolume) LookupFull(paths []string) (*grits.LookupResponse, error) {
-	return wv.ns.LookupFull(paths)
+func (wv *LocalVolume) LookupFull(paths []string, checkAccess bool) (*grits.LookupResponse, error) {
+	return wv.ns.LookupFull(paths, checkAccess)
 }
 
 func (wv *LocalVolume) LookupNode(path string) (grits.FileNode, error) {
