@@ -306,12 +306,12 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     }, 200);
   }
 
-  function applyDone(rec) {
-    const { statusEl, entry } = rec.dom;
+  // ── finalise the status icon once we know the outcome ────────
+  function applyFinished(rec) {
     clearTimeout(rec.dom.spinnerTimer);
 
+    const { statusEl } = rec.dom;
     const isError = rec.status === 'error';
-
     if (isError) {
       statusEl.className = 'gt-status is-error';
       statusEl.innerHTML = SVG_ERROR;
@@ -323,15 +323,57 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       statusEl.className = 'gt-status';
       statusEl.innerHTML = '';
     }
+  }
 
-    const { text: displayText, isResponse } = rec.display ?? { text: null, isResponse: false };
+  function applyDone(rec) {
+    const { text: displayText, isResponse, bodyStream } = rec.display ?? {};
 
-    if (displayText !== null) {
+    if (bodyStream) {
+      // Streaming response — create the result div now, drain the stream
+      // in the background, stamp the final icon when the stream closes.
+      // The spinner stays up during the drain.
       const result = document.createElement('div');
-      result.className = `gt-result${isError ? ' is-error' : isResponse ? ' is-response' : ''}`;
-      result.textContent = displayText;
-      entry.appendChild(result);
+      result.className = 'gt-result is-response';
+      rec.dom.entry.appendChild(result);
       maybeScrollToBottom();
+
+      const dec = new TextDecoder();
+      let text = '';
+      const reader = bodyStream.getReader();
+
+      (async () => {
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            text += dec.decode(value, { stream: true });
+            result.textContent = text;
+            maybeScrollToBottom();
+          }
+          // Flush any remaining bytes
+          text += dec.decode();
+          if (text !== result.textContent) result.textContent = text;
+        } catch (e) {
+          rec.status = 'error';
+          result.className = 'gt-result is-error';
+          result.textContent = text + '\n[stream error: ' + (e.message ?? e) + ']';
+        } finally {
+          applyFinished(rec);
+          maybeScrollToBottom();
+        }
+      })();
+
+    } else {
+      // Non-streaming — stamp icon and optionally render text immediately.
+      applyFinished(rec);
+
+      if (displayText != null) {
+        const result = document.createElement('div');
+        result.className = `gt-result${rec.status === 'error' ? ' is-error' : isResponse ? ' is-response' : ''}`;
+        result.textContent = displayText;
+        rec.dom.entry.appendChild(result);
+        maybeScrollToBottom();
+      }
     }
   }
 
@@ -355,12 +397,17 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
 
       rec.status = 'done';
 
-      if (!isVoid(value)) {
-        const stored  = value instanceof Response ? value.clone() : value;
+      if (value instanceof Response) {
+        // Return immediately — don't await the body. Store a clone in __
+        // so callers can still read it; hand the live body to applyDone.
+        rec.refIndex = __.length;
+        __.push(value.clone());
+        rec.display = { bodyStream: value.body };
+      } else if (!isVoid(value)) {
         const display = await _display(value, 80);
         rec.display  = display;
         rec.refIndex = __.length;
-        __.push(stored);
+        __.push(value);
       } else {
         rec.display  = { text: null, isResponse: false };
         rec.refIndex = null;
@@ -381,17 +428,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   async function _display(value, cols = 80) {
     if (isVoid(value))
       return { text: null, isResponse: false };
-    if (value instanceof Response) {
-      try {
-        const text = await value.clone().text();
-        return {
-          text:       text.length > 2000 ? text.slice(0, 2000) + '…' : text,
-          isResponse: true,
-        };
-      } catch (_) {
-        return { text: `[Response ${value.status}]`, isResponse: true };
-      }
-    }
     if (value instanceof GritsFile)
       return { text: `GritsFile(${value.cid()})`, isResponse: false };
     if (typeof value === 'string')
@@ -453,7 +489,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     }
     if (e.key === 'l' && e.ctrlKey) {
       e.preventDefault();
-      // Remove all entries, keep spacer and scroll anchor.
       Array.from(output.children).forEach(child => {
         if (child !== spacer && child !== scrollAnchor) child.remove();
       });
@@ -472,7 +507,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     shellReady = true;
     inputLoc.textContent = cwdLabel(shell);
     if (runOnInit) enqueue(runOnInit);
-    runNext(); // drain anything queued while warming
+    runNext();
   });
 
   textarea.focus();
