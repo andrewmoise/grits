@@ -950,8 +950,8 @@ func TestLookupMultiplePaths(t *testing.T) {
 		"dir/nonexistent/file.txt", // Middle part doesn't exist
 	}
 
-	// Call LookupFull
-	lookupResponse, err := nameStore.LookupFull(paths, false)
+	// Call Lookup
+	lookupResponse, err := nameStore.Lookup(paths, "", false, nil)
 	if err != nil {
 		t.Fatalf("Failed to lookup paths: %v", err)
 	}

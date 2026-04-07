@@ -181,9 +181,9 @@ func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
 	return rv.localCache.LookupNode(path)
 }
 
-// LookupFull implements Volume interface
-func (rv *RemoteVolume) LookupFull(paths []string, checkAccess bool) (*grits.LookupResponse, error) {
-	return rv.localCache.LookupFull(paths, checkAccess)
+// RemoteVolume implementation
+func (rv *RemoteVolume) Lookup(paths []string, startAddr grits.BlobAddr, checkAccess bool, holdRef grits.RefHoldFunc) (*grits.LookupResponse, error) {
+    return rv.localCache.Lookup(paths, startAddr, checkAccess, holdRef)
 }
 
 // GetFileNode implements Volume interface
@@ -293,17 +293,20 @@ func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error)
 }
 
 func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
-	start := time.Now()
-	grits.DebugLogWithTime(grits.DebugRemotePerformance, path, "FetchPath: requested")
+    start := time.Now()
+    grits.DebugLogWithTime(grits.DebugRemotePerformance, path, "FetchPath: requested")
 
-	url := fmt.Sprintf("%s/grits/v1/lookup/%s", rv.config.RemoteURL, rv.config.VolumeName)
+    url := fmt.Sprintf("%s/grits/v1/lookup", rv.config.RemoteURL)
 
-	pathJSON, err := json.Marshal(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode path: %v", err)
-	}
+	reqBody, err := json.Marshal(LookupRequest{
+		Volume: rv.config.VolumeName,
+		Paths:  []string{path},
+	})
+    if err != nil {
+        return nil, fmt.Errorf("failed to encode lookup request: %v", err)
+    }
 
-	resp, err := rv.httpClient.Post(url, "application/json", bytes.NewReader(pathJSON))
+    resp, err := rv.httpClient.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup path %s: %v", path, err)
 	}
