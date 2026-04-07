@@ -298,7 +298,7 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 
     url := fmt.Sprintf("%s/grits/v1/lookup", rv.config.RemoteURL)
 
-	reqBody, err := json.Marshal(LookupRequest{
+	reqBody, err := json.Marshal(LookupRequestBody{
 		Volume: rv.config.VolumeName,
 		Paths:  []string{path},
 	})

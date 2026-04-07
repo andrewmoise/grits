@@ -301,13 +301,16 @@ export class GritsVolume {
   }
 
   async multiLink(requests, { maxRetries = 5 } = {}) {
-    const url  = `${this._serverUrl}/grits/v1/link/${this._volume}`;
-    const body = JSON.stringify(requests.map(r => ({
-      path:     _normalizePath(r.path),
-      addr:     r.addr     ?? '',
-      prevAddr: r.prevAddr ?? '',
-      assert:   r.assert   ?? 0,
-    })));
+    const url  = `${this._serverUrl}/grits/v1/link`;
+    const body = JSON.stringify({
+      volume:   this._volume,
+      requests: requests.map(r => ({
+        path:     _normalizePath(r.path),
+        addr:     r.addr     ?? '',
+        prevAddr: r.prevAddr ?? '',
+        assert:   r.assert   ?? 0,
+      })),
+    });
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       const resp = await fetch(url, {
