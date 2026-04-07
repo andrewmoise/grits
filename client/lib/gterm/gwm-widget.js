@@ -15,7 +15,7 @@ import stringify from '../vendor/json-stringify-pretty-compact/index.js';
 // ── cwd display label ─────────────────────────────────
 function cwdLabel(shell) {
   const cwd = shell.cwd ?? '/';
-  if (cwd === '/') return `:${shell.volume ?? 'client'}`;
+  if (cwd === '/' || cwd === '') return `:${shell.volume ?? 'client'}`; // FIXME
   const parts = cwd.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1];
 }
