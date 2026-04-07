@@ -163,28 +163,28 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 				}
 			}
 
-			fileInfo, err := os.Stat(path)
-			if err != nil {
-				return fmt.Errorf("error obtaining file information: %s", err)
+			sysInfo := info.Sys()
+			if sysInfo == nil {
+				return fmt.Errorf("error obtaining file information: %s", path)
+			}
+			stat, ok := sysInfo.(*syscall.Stat_t)
+			if !ok {
+				return fmt.Errorf("error obtaining file information: %s", path)
 			}
 
-			isHardLink := false
-
-			// Type assertion to access the Sys() interface as *syscall.Stat_t
-			stat, ok := fileInfo.Sys().(*syscall.Stat_t)
-			if ok {
-				isHardLink = (stat.Nlink > 1)
-			}
+			// The mtime on disk is the expiration time (set by Touch).
+			// If it's in the past, the blob is already eligible for eviction
+			// but we load it anyway; the eviction worker will clean it up.
+			expiresAt := info.ModTime()
 
 			// Create a LocalCachedFile object and add it to the map
 			bs.files[blobAddr] = &LocalCachedFile{
-				Path:        path,
-				Size:        stat.Size,
-				RefCount:    0, // Initially, no references to the file
-				Address:     blobAddr,
-				LastTouched: info.ModTime(),
-				IsHardLink:  isHardLink,
-				blobStore:   bs,
+				Path:      path,
+				Size:      stat.Size,
+				RefCount:  0,
+				Address:   blobAddr,
+				ExpiresAt: expiresAt,
+				blobStore: bs,
 			}
 		}
 		return nil
@@ -194,12 +194,12 @@ func (bs *LocalBlobStore) scanAndLoadExistingFiles() error {
 func (bs *LocalBlobStore) ReadFile(blobAddr BlobAddr) (CachedFile, error) {
 	bs.mtx.Lock()
 	cachedFile, ok := bs.files[blobAddr]
-	bs.mtx.Unlock()
-
 	if ok {
-		cachedFile.Take()
+		cachedFile.RefCount++
+		bs.mtx.Unlock()
 		return cachedFile, nil
 	}
+	bs.mtx.Unlock()
 
 	bs.fetcherMtx.RLock()
 	fetchers := bs.fetchers
@@ -233,9 +233,6 @@ func (bs *LocalBlobStore) AddLocalFile(srcPath string) (CachedFile, error) {
 
 // AddReader adds a blob to the store from an io.Reader
 func (bs *LocalBlobStore) AddReader(reader io.Reader) (CachedFile, error) {
-	bs.mtx.Lock()
-	defer bs.mtx.Unlock()
-
 	// Create the temp directory if it doesn't exist
 	tmpDir := bs.config.ServerPath("var/tmp")
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
@@ -260,15 +257,16 @@ func (bs *LocalBlobStore) AddReader(reader io.Reader) (CachedFile, error) {
 	// Close the temp file as we're done writing
 	tempFile.Close()
 
-	// Create the blob address
 	blobAddr := BlobAddr(hash)
+
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
 
 	// Check if we already have this blob
 	if cachedFile, exists := bs.files[blobAddr]; exists {
 		// We already have this blob, increment ref count and clean up temp file
 		os.Remove(tempPath)
 		cachedFile.RefCount++
-		cachedFile.LastTouched = time.Now()
 		return cachedFile, nil
 	}
 
@@ -280,66 +278,52 @@ func (bs *LocalBlobStore) AddReader(reader io.Reader) (CachedFile, error) {
 		return nil, fmt.Errorf("failed to create shard directories: %w", err)
 	}
 
-	// Move the file to its final location
 	if err := os.Rename(tempPath, destPath); err != nil {
 		os.Remove(tempPath)
 		return nil, fmt.Errorf("failed to move temp file to final location: %w", err)
 	}
 
-	// Create a new CachedFile
+	// New blobs have no future expiry — zero ExpiresAt means delete immediately on release.
 	cachedFile := &LocalCachedFile{
-		Path:        destPath,
-		RefCount:    1,
-		Address:     blobAddr,
-		Size:        size,
-		LastTouched: time.Now(),
-		IsHardLink:  false,
-		blobStore:   bs,
+		Path:      destPath,
+		RefCount:  1,
+		Address:   blobAddr,
+		Size:      size,
+		ExpiresAt: time.Time{},
+		blobStore: bs,
 	}
 
-	// Add to the files map
 	bs.files[blobAddr] = cachedFile
-
 	return cachedFile, nil
 }
 
 func ComputeHash(data []byte) string {
 	mh, err := multihash.Sum(data, multihash.SHA2_256, -1)
 	if err != nil {
-		panic(err) // or handle error gracefully
+		panic(err)
 	}
 	return base58.Encode(mh)
 }
 
 // CopyAndHash reads from the source and writes to the destination, while calculating the hash
 func CopyAndHash(src io.Reader, dst io.Writer) (string, int64, error) {
-	// Create the hasher for SHA-256 (which multihash will use)
 	hasher := sha256.New()
-
-	// Use MultiWriter to simultaneously write to both the destination and hasher
 	mw := io.MultiWriter(hasher, dst)
 
-	// Copy data, writing to both hasher and destination
 	size, err := io.Copy(mw, src)
 	if err != nil {
 		return "", 0, err
 	}
 
-	// Get the SHA-256 digest
 	digest := hasher.Sum(nil)
-
-	// Create the multihash encoding with the right prefix
 	prefix := []byte{18, 32} // 18 = SHA-256, 32 = length in bytes
 	mhash := append(prefix, digest...)
-
-	// Base58 encode the multihash
 	hash := base58.Encode(mhash)
 
 	return hash, size, nil
 }
 
 func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
-	// Compute hash and size of the data
 	hash := ComputeHash(data)
 
 	bs.mtx.Lock()
@@ -347,14 +331,11 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 
 	blobAddr := BlobAddr(hash)
 
-	// Check if the data block already exists in the store
 	if cachedFile, exists := bs.files[blobAddr]; exists {
-		// Increment RefCount since the file is being accessed
 		cachedFile.RefCount++
 		return cachedFile, nil
 	}
 
-	// Since the data block does not exist, store it
 	destPath := bs.blobToPath(blobAddr)
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create shard directories: %w", err)
@@ -364,35 +345,30 @@ func (bs *LocalBlobStore) AddDataBlock(data []byte) (CachedFile, error) {
 		return nil, fmt.Errorf("error writing data block to store: %v", err)
 	}
 
-	// Create a new CachedFile for the data block
+	// New blobs have no future expiry — zero ExpiresAt means delete immediately on release.
 	cachedFile := &LocalCachedFile{
-		Path:        destPath,
-		RefCount:    1, // Initialize RefCount to 1 for new data blocks
-		Address:     blobAddr,
-		Size:        int64(len(data)),
-		LastTouched: time.Now(),
-		blobStore:   bs,
+		Path:      destPath,
+		RefCount:  1,
+		Address:   blobAddr,
+		Size:      int64(len(data)),
+		ExpiresAt: time.Time{},
+		blobStore: bs,
 	}
 
-	// Add the new data block to the files map
 	bs.files[blobAddr] = cachedFile
-
 	return cachedFile, nil
 }
 
-// Touch updates the expiration time for a blob by setting the file's modification time
-// duration specifies how long to keep the blob cached (from now)
+// Touch updates the in-memory expiry time and writes it to disk as the file's mtime.
 func (bs *LocalBlobStore) Touch(cf *LocalCachedFile, duration time.Duration) {
 	bs.mtx.Lock()
 	defer bs.mtx.Unlock()
 
 	now := time.Now()
 	expiresAt := now.Add(duration)
+	cf.ExpiresAt = expiresAt
 
-	cf.LastTouched = now
-
-	// Set the file's modification time to the expiration time
-	// This way we can check the mtime on disk to determine if a file is expired
+	// Persist to disk so the expiry survives a restart.
 	err := os.Chtimes(cf.Path, now, expiresAt)
 	if err != nil {
 		log.Printf("Warning: couldn't update timestamps for %s: %v", cf.Path, err)
@@ -401,74 +377,53 @@ func (bs *LocalBlobStore) Touch(cf *LocalCachedFile, duration time.Duration) {
 
 func (bs *LocalBlobStore) Take(cachedFile *LocalCachedFile) {
 	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
 
-	// Log the operation
 	if DebugRefCounts {
-		log.Printf("TAKE: %s (count: %d)",
-			cachedFile.Address,
-			cachedFile.RefCount)
+		log.Printf("TAKE: %s (count: %d)", cachedFile.Address, cachedFile.RefCount)
 		PrintStack()
 	}
 
-	// Perform the actual operation
 	cachedFile.RefCount++
-	bs.mtx.Unlock()
 }
 
 func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 	bs.mtx.Lock()
 
 	if DebugRefCounts {
-		log.Printf("RELEASE: %s (count: %d)",
-			cachedFile.Address,
-			cachedFile.RefCount)
+		log.Printf("RELEASE: %s (count: %d)", cachedFile.Address, cachedFile.RefCount)
 		PrintStack()
 	}
 
-	// Decrement ref count
 	cachedFile.RefCount--
 	if cachedFile.RefCount < 0 {
+		bs.mtx.Unlock()
 		log.Fatalf("Reduced ref count for %s to < 0", cachedFile.GetAddress())
 	}
 
-	// Delete file immediately if ref count is 0 AND no future expiration is set
-	if cachedFile.RefCount == 0 {
+	if cachedFile.RefCount > 0 {
 		bs.mtx.Unlock()
-
-		// Check the file's modification time (which we use as expiration time)
-		fileInfo, err := os.Stat(cachedFile.Path)
-		if err != nil {
-			log.Printf("Warning: couldn't stat file %s: %v", cachedFile.Path, err)
-			// If we can't stat it, try to delete it anyway
-			bs.mtx.Lock()
-			delete(bs.files, cachedFile.Address)
-			bs.mtx.Unlock()
-			os.Remove(cachedFile.Path)
-			bs.tryRmdirParents(cachedFile.Path)
-			return
-		}
-
-		expiresAt := fileInfo.ModTime()
-
-		// If expiration time is in the past (or very close to now), delete immediately
-		if time.Now().After(expiresAt) {
-			bs.mtx.Lock()
-			delete(bs.files, cachedFile.Address)
-			bs.mtx.Unlock()
-
-			log.Printf("We're deleting %s", cachedFile.Path)
-
-			err := os.Remove(cachedFile.Path)
-			if err != nil {
-				log.Printf("Warning: couldn't delete file %s from cache: %v", cachedFile.Path, err)
-			}
-			bs.tryRmdirParents(cachedFile.Path)
-			return
-		}
-		// Otherwise, keep it until expiration - the worker will clean it up
 		return
 	}
 
+	// RefCount just hit zero. Decide whether to delete now or defer to eviction worker.
+	// All decisions and map mutation happen under the lock, eliminating the TOCTOU race.
+	if time.Now().After(cachedFile.ExpiresAt) {
+		// No future expiry — delete immediately.
+		path := cachedFile.Path
+		addr := cachedFile.Address
+		delete(bs.files, addr)
+		bs.mtx.Unlock()
+
+		log.Printf("Deleting %s", path)
+		if err := os.Remove(path); err != nil {
+			log.Printf("Warning: couldn't delete file %s from cache: %v", path, err)
+		}
+		bs.tryRmdirParents(path)
+		return
+	}
+
+	// Has a future expiry — keep in place and let the eviction worker handle it.
 	bs.mtx.Unlock()
 }
 
@@ -501,29 +456,19 @@ type BlobStoreStat struct {
 	TotalBytes int64
 }
 
-// CollectStats gathers statistics about the blob store, broken down by reference count
-
 // Need to hold a lock while calling this
 func (bs *LocalBlobStore) collectStats() []BlobStoreStat {
-	// Map to store stats by reference count
 	statsByRef := make(map[int]*BlobStoreStat)
 
-	// Collect stats for each file
 	for _, file := range bs.files {
 		refCount := file.RefCount
-
 		if _, exists := statsByRef[refCount]; !exists {
-			statsByRef[refCount] = &BlobStoreStat{
-				RefCount: refCount,
-			}
+			statsByRef[refCount] = &BlobStoreStat{RefCount: refCount}
 		}
-
-		// Update statistics for this reference count
 		statsByRef[refCount].FileCount++
 		statsByRef[refCount].TotalBytes += file.Size
 	}
 
-	// Convert to slice and sort by reference count (descending)
 	stats := make([]BlobStoreStat, 0, len(statsByRef))
 	for _, stat := range statsByRef {
 		stats = append(stats, *stat)
@@ -535,8 +480,6 @@ func (bs *LocalBlobStore) collectStats() []BlobStoreStat {
 
 	return stats
 }
-
-// PrintStats prints statistics about the blob store to the log
 
 // Need to hold a lock while calling this
 func (bs *LocalBlobStore) printStats(currentSize int64) {
@@ -557,87 +500,35 @@ func (bs *LocalBlobStore) printStats(currentSize int64) {
 	log.Printf("=== End BlobStore Statistics ===")
 }
 
-// EvictOldFiles scans all files on disk and evicts those that are expired
+// EvictOldFiles scans the in-memory map and removes blobs that are expired and unreferenced.
+// All eviction decisions, map removal, and disk deletion happen under the lock to prevent
+// any race between eviction and concurrent blob creation for the same address.
 func (bs *LocalBlobStore) EvictOldFiles() {
-	now := time.Now()
-	var evictedCount int
-	var evictedBytes int64
-
 	if !strings.Contains(bs.storageDir, "var/blobs") {
 		log.Printf("cannot do blob cleanup! directory %s looks unsafe", bs.storageDir)
 		return
 	}
 
-	// Walk through all files in the storage directory
-	err := filepath.Walk(bs.storageDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
+	now := time.Now()
+	var evictedCount int
+	var evictedBytes int64
+
+	bs.mtx.Lock()
+	defer bs.mtx.Unlock()
+
+	for addr, cf := range bs.files {
+		if cf.RefCount > 0 {
+			continue
 		}
-		if info.IsDir() {
-			return nil
-		}
-
-		// Get the blob address from the file path, stripping shard separators
-		relativePath, err := filepath.Rel(bs.storageDir, path)
-		if err != nil {
-			log.Printf("Can't relativize %s", path)
-			return nil // Skip this file
-		}
-
-		blobAddrStr := strings.ReplaceAll(relativePath, string(filepath.Separator), "")
-		blobAddr, err := NewBlobAddrFromString(blobAddrStr)
-		if err != nil {
-			log.Printf("Found strange blob %s during cleanup", path)
-			return nil // Not a valid blob, skip
-		}
-
-		// Check if this blob is in our in-memory map
-		bs.mtx.Lock()
-		cachedFile, exists := bs.files[blobAddr]
-		if exists {
-			// If it has active references, never delete it
-			if cachedFile.RefCount > 0 {
-				bs.mtx.Unlock()
-				return nil
-			}
-		}
-		bs.mtx.Unlock()
-
-		// Check the file's modification time (our expiration time)
-		expiresAt := info.ModTime()
-
-		// If the expiration time has passed, delete it
-		if now.After(expiresAt) {
-			bs.mtx.Lock()
-			if exists {
-				delete(bs.files, blobAddr)
-			}
-			bs.mtx.Unlock()
-
-			// Track stats
-			if info.Sys() != nil {
-				if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-					isHardLink := stat.Nlink > 1
-					if !isHardLink {
-						evictedBytes += info.Size()
-					}
-				}
-			}
+		if now.After(cf.ExpiresAt) {
+			delete(bs.files, addr)
 			evictedCount++
-
-			// Delete the file
-			err := os.Remove(path)
-			if err != nil {
-				log.Printf("Warning: couldn't delete expired file %s: %v", path, err)
+			evictedBytes += cf.Size
+			if err := os.Remove(cf.Path); err != nil {
+				log.Printf("Warning: couldn't delete expired file %s: %v", cf.Path, err)
 			}
-			bs.tryRmdirParents(path)
+			bs.tryRmdirParents(cf.Path)
 		}
-
-		return nil
-	})
-
-	if err != nil {
-		log.Printf("Warning: error during eviction scan: %v", err)
 	}
 
 	if evictedCount > 0 {
@@ -655,7 +546,6 @@ func (bs *LocalBlobStore) evictionWorker() {
 	for {
 		select {
 		case <-bs.stopWorker:
-			// Do a final cleanup on shutdown
 			bs.EvictOldFiles()
 			return
 		case <-ticker.C:
@@ -668,13 +558,12 @@ func (bs *LocalBlobStore) evictionWorker() {
 // LocalCachedFile
 
 type LocalCachedFile struct {
-	Path        string
-	RefCount    int
-	Address     BlobAddr
-	Size        int64
-	LastTouched time.Time
-	IsHardLink  bool
-	blobStore   *LocalBlobStore
+	Path      string
+	RefCount  int
+	Address   BlobAddr
+	Size      int64
+	ExpiresAt time.Time // Zero value means "expire immediately when ref count hits 0"
+	blobStore *LocalBlobStore
 }
 
 // Ensure that LocalCachedFile implements CachedFile
@@ -692,17 +581,16 @@ func (c *LocalCachedFile) GetPath() string {
 	return c.Path
 }
 
-// Touch sets the expiration time for this blob
-// duration specifies how long to keep the blob cached (from now)
+// Touch sets the expiration time for this blob.
+// duration specifies how long to keep the blob cached from now.
 func (c *LocalCachedFile) Touch(duration time.Duration) {
 	c.blobStore.Touch(c, duration)
 }
 
 func (c *LocalCachedFile) Reader() (io.ReadSeekCloser, error) {
-	return os.Open(c.Path) // This opens the file and returns the file handle as an io.Reader
+	return os.Open(c.Path)
 }
 
-// Read reads a portion of the file.
 func (c *LocalCachedFile) Read(offset, length int64) ([]byte, error) {
 	file, err := os.Open(c.Path)
 	if err != nil {
@@ -739,7 +627,6 @@ func (bs *LocalBlobStore) DumpStats() {
 	log.Printf("=== BlobStore Stats ===")
 	log.Printf("Total files: %d", len(bs.files))
 
-	// Sort files by hash for consistent output
 	hashes := make([]string, 0, len(bs.files))
 	for hash := range bs.files {
 		hashes = append(hashes, string(hash))
@@ -756,10 +643,9 @@ func (bs *LocalBlobStore) DumpStats() {
 		log.Printf("  Size: %d bytes", file.Size)
 		log.Printf("  RefCount: %d", file.RefCount)
 		log.Printf("  Path: %s", file.Path)
-		log.Printf("  IsHardlink: %v", file.IsHardLink)
+		log.Printf("  ExpiresAt: %v", file.ExpiresAt)
 
 		if file.Size <= 200 {
-			// Read and print contents for small files
 			data, err := file.Read(0, file.Size)
 			if err != nil {
 				log.Printf("  Contents: <error reading: %v>", err)
@@ -775,34 +661,28 @@ func (bs *LocalBlobStore) DumpStats() {
 /////
 // Prevent concurrent access
 
-// File-based lock implementation
 type FileLock struct {
 	file *os.File
 	path string
 }
 
-// AcquireLock attempts to acquire a lock file
 func AcquireLock(lockPath string) (*FileLock, error) {
-	// Ensure directory exists
 	lockDir := filepath.Dir(lockPath)
 	if err := os.MkdirAll(lockDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create lock directory: %w", err)
 	}
 
-	// Open file with O_EXCL to ensure we create it or fail
 	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("cannot open lock file: %w", err)
 	}
 
-	// Use syscall to place an exclusive lock
 	err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 	if err != nil {
 		file.Close()
 		return nil, fmt.Errorf("cannot acquire lock, another process may be running: %w", err)
 	}
 
-	// Write PID to the file for diagnostics
 	pid := os.Getpid()
 	if _, err := fmt.Fprintf(file, "%d\n", pid); err != nil {
 		syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
@@ -813,20 +693,17 @@ func AcquireLock(lockPath string) (*FileLock, error) {
 	return &FileLock{file: file, path: lockPath}, nil
 }
 
-// Release unlocks and removes the lock file
 func (l *FileLock) Release() error {
 	if l.file == nil {
 		return nil
 	}
 
-	// First unlock the file
 	err := syscall.Flock(int(l.file.Fd()), syscall.LOCK_UN)
 	if err != nil {
 		l.file.Close()
 		return fmt.Errorf("failed to unlock file: %w", err)
 	}
 
-	// Then close it
 	if err := l.file.Close(); err != nil {
 		return fmt.Errorf("failed to close lock file: %w", err)
 	}
