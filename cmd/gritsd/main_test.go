@@ -50,8 +50,11 @@ func TestFileOperations(t *testing.T) {
 	log.Printf("Files created\n")
 
 	// 2. Get the list of files
-	lookupURL := fmt.Sprintf("%s/grits/v1/lookup/root", baseURL)
-	lookupPayload := []byte(`""`)
+	lookupURL := fmt.Sprintf("%s/grits/v1/lookup", baseURL)
+	lookupPayload, _ := json.Marshal(gritsd.LookupRequest{
+		Volume: "root",
+		Paths:  []string{""},
+	})
 	resp, err := http.Post(lookupURL, "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
 		t.Fatalf("failed to perform lookup: %v", err)

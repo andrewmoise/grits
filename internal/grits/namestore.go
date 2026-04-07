@@ -29,8 +29,8 @@ import (
 // - FileTreeWatcher: Gets notifications when something changed
 //
 // - NameStore: Main class managing the namespace and operations, main functions:
+//   - Lookup: Get all nodes along a path
 //   - LookupNode: Get a node at a specific path
-//   - LookupFull: Get all nodes along a path
 //   - Link/LinkByMetadata: Add or update a path
 //   - MultiLink: Update multiple paths atomically or only if conditions are met
 //   - CreateTreeNode: Create a new directory node
@@ -98,7 +98,7 @@ func (ns *NameStore) GetRoot() string {
 }
 
 func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
-	lookupResp, err := ns.resolvePath(name)
+	lookupResp, err := ns.resolvePath(name, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +127,7 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 	DebugLog(DebugNameStore, "LookupNode('%s')", path)
 
-	lookupResp, err := ns.resolvePath(path)
+	lookupResp, err := ns.resolvePath(path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,7 @@ type LookupResponse struct {
 
 // checkPathAccess verifies that all requested paths are covered by the whitelist.
 // Returns an ErrAccessDenied for the first path found outside the whitelist.
-// FIXME: This is not atomic with the subsequent LookupFull call — the tree could
+// FIXME: This is not atomic with the subsequent Lookup call — the tree could
 // change between the access check and the actual lookup.
 func (ns *NameStore) checkPathAccess(names []string) error {
     for _, name := range names {
@@ -206,32 +206,63 @@ func (ns *NameStore) pruneForAccess(resp *LookupResponse) *LookupResponse {
     }
 }
 
-// LookupFull returns a list of path and node pairs for a given path or paths.
-// If checkAccess is true and DebugWhitelist is non-empty, paths outside the
-// whitelist return ErrAccessDenied immediately, and results are pruned to
-// remove ancestors above whitelist entry points.
-func (ns *NameStore) LookupFull(names []string, checkAccess bool) (*LookupResponse, error) {
-    if checkAccess && len(ns.DebugWhitelist) > 0 {
-        if err := ns.checkPathAccess(names); err != nil {
+// RefHoldFunc is an optional callback passed to Lookup. If non-nil it is called
+// with the metadata address of the root node that was actually used for the
+// lookup (the volume root when startAddr is "", otherwise startAddr itself).
+// The call is made before Lookup returns, while the node is still reachable,
+// so the callback can safely snag a timed reference via a refHolder.
+type RefHoldFunc func(addr BlobAddr)
+
+// Lookup returns a LookupResponse for one or more paths.
+// If startAddr is empty all paths are resolved from the current volume root
+// and access-control checking (DebugWhitelist) applies.
+// If startAddr is non-empty all paths are resolved relative to that node
+// and access-control checking is skipped.
+// If holdRef is non-nil it is called with the address of the starting node
+// before Lookup returns.
+func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, checkAccess bool, holdRef RefHoldFunc) (*LookupResponse, error) {
+    if checkAccess && startAddr == "" && len(ns.DebugWhitelist) > 0 {
+        if err := ns.checkPathAccess(paths); err != nil {
             return nil, err
         }
     }
-
-    seenPaths := make(map[string]bool)
 
     ns.mtx.Lock()
     serialNumber := ns.serialNumber
     ns.mtx.Unlock()
 
+    // Resolve the starting node.
+    var startNode FileNode
+    var usedAddr BlobAddr
+
+    if startAddr != "" {
+        var err error
+        startNode, err = ns.loadFileNode(startAddr, false)
+        if err != nil {
+            return nil, fmt.Errorf("lookup: cannot load start node %s: %w", startAddr, err)
+        }
+        usedAddr = startAddr
+    } else {
+        ns.mtx.Lock()
+        usedAddr = ns.rootAddr
+        ns.mtx.Unlock()
+        // startNode stays nil — resolvePath will load from root itself.
+    }
+
+    if holdRef != nil {
+        holdRef(usedAddr)
+    }
+
+    seenPaths := make(map[string]bool)
     response := &LookupResponse{
         Paths:        make([]*PathNodePair, 0),
         SerialNumber: serialNumber,
         IsPartial:    false,
     }
 
-    for _, name := range names {
-        name = strings.TrimRight(name, "/")
-        lookupResp, err := ns.resolvePath(name)
+    for _, path := range paths {
+        name := strings.TrimRight(path, "/")
+        lookupResp, err := ns.resolvePath(name, startNode)
         if err != nil {
             return nil, err
         }
@@ -239,14 +270,14 @@ func (ns *NameStore) LookupFull(names []string, checkAccess bool) (*LookupRespon
             response.IsPartial = true
         }
         for _, pair := range lookupResp.Paths {
-            if _, exists := seenPaths[pair.Path]; !exists {
+            if !seenPaths[pair.Path] {
                 response.Paths = append(response.Paths, pair)
                 seenPaths[pair.Path] = true
             }
         }
     }
 
-    if checkAccess && len(ns.DebugWhitelist) > 0 {
+    if checkAccess && startAddr == "" && len(ns.DebugWhitelist) > 0 {
         response = ns.pruneForAccess(response)
     }
 
@@ -267,139 +298,144 @@ func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 	return node, nil
 }
 
-// Core lookup helper function.
-// Returns a LookupResponse with all PathNodePairs along the path.
-// If the path cannot be fully resolved, IsPartial will be true.
-//
-// This function is now lock-free for the traversal phase - it takes a snapshot
-// of the root and then traverses without holding locks.
-func (ns *NameStore) resolvePath(path string) (*LookupResponse, error) {
-	DebugLog(DebugNameStore, "We resolve path '%s'\n", path)
+// resolvePath resolves a path against the namestore.
+// If startNode is nil the current root is used (root-relative lookup).
+// If startNode is non-nil the traversal begins from that node
+// (CID-relative lookup); fetchers are not consulted.
+func (ns *NameStore) resolvePath(path string, startNode FileNode) (*LookupResponse, error) {
+    DebugLog(DebugNameStore, "We resolve path '%s'\n", path)
 
-	// Check if we should refetch
-	ns.mtx.Lock()
-	DebugLog(DebugNameStore, "  last fetch %v so we check %v > %v", ns.lastFetch, time.Since(ns.lastFetch), ns.CacheDuration)
-	forceFetch := (len(ns.fetchers) > 0 && time.Since(ns.lastFetch) > ns.CacheDuration)
-	ns.mtx.Unlock()
+    if startNode == nil {
+        ns.mtx.Lock()
+        forceFetch := len(ns.fetchers) > 0 && time.Since(ns.lastFetch) > ns.CacheDuration
+        ns.mtx.Unlock()
 
-	var resp *LookupResponse
-	var err error
+        if forceFetch {
+            DebugLog(DebugNameStore, "  from fetchers (forced)")
+            return ns.resolveFromFetchers(path, nil, nil)
+        }
+    }
 
-	if !forceFetch {
-		DebugLog(DebugNameStore, "  from local")
-		resp, err = ns.resolveFromLocal(path)
-		if err == nil {
-			DebugLog(DebugNameStore, "  we return %v %v from local", resp, err)
-			return resp, err
-		} else {
-			DebugLog(DebugNameStore, "  we fail a local lookup: %v", err)
-		}
-	}
+    DebugLog(DebugNameStore, "  from local")
+    resp, err := ns.resolveFromLocal(path, startNode)
+    if err == nil {
+        DebugLog(DebugNameStore, "  we return %v %v from local", resp, err)
+        return resp, nil
+    }
+    DebugLog(DebugNameStore, "  local lookup failed: %v", err)
 
-	DebugLog(DebugNameStore, "  from fetchers")
-	resp, err = ns.resolveFromFetchers(path, resp, err)
-	DebugLog(DebugNameStore, "  we return %v %v from fetcher", resp, err)
-	return resp, err
+    if startNode != nil {
+        return nil, err
+    }
+
+    DebugLog(DebugNameStore, "  from fetchers")
+    resp, err = ns.resolveFromFetchers(path, resp, err)
+    DebugLog(DebugNameStore, "  we return %v %v from fetcher", resp, err)
+    return resp, err
 }
 
-func (ns *NameStore) resolveFromLocal(path string) (*LookupResponse, error) {
-	path = strings.TrimRight(path, "/")
-	if path != "" && path[0] == '/' {
-		return nil, fmt.Errorf("paths must be relative")
-	}
+func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupResponse, error) {
+    path = strings.TrimRight(path, "/")
+    if path != "" && path[0] == '/' {
+        return nil, fmt.Errorf("paths must be relative")
+    }
 
-	// Snapshot root - lock just long enough to grab it and take a ref
-	ns.mtx.Lock()
-	rootAddr := ns.rootAddr
-	serialNumber := ns.serialNumber
-	ns.mtx.Unlock()
+    ns.mtx.Lock()
+    serialNumber := ns.serialNumber
+    ns.mtx.Unlock()
 
-	node, err := ns.loadFileNode(rootAddr, false)
-	if err != nil {
-		DebugLog(DebugNameStore, "  couldn't load root node")
-		return nil, err
-	}
-	if node == nil {
-		DebugLog(DebugNameStore, "  nil root")
-		return nil, fmt.Errorf("looking up in nil root")
-	}
+    var rootAddr BlobAddr
+    var node FileNode
 
-	// Take a reference to root so it doesn't get GC'd during traversal
-	node.Take()
-	defer node.Release()
+    if startNode != nil {
+        node     = startNode
+        rootAddr = startNode.MetadataBlob().GetAddress()
+    } else {
+        ns.mtx.Lock()
+        rootAddr = ns.rootAddr
+        ns.mtx.Unlock()
 
-	// From here on, we're traversing the immutable tree without locks
-	parts := strings.Split(path, "/")
+        var err error
+        node, err = ns.loadFileNode(rootAddr, false)
+        if err != nil {
+            DebugLog(DebugNameStore, "  couldn't load root node")
+            return nil, err
+        }
+        if node == nil {
+            DebugLog(DebugNameStore, "  nil root")
+            return nil, fmt.Errorf("looking up in nil root")
+        }
+    }
 
-	response := &LookupResponse{
-		Paths:        make([]*PathNodePair, 0, len(parts)+1),
-		SerialNumber: serialNumber,
-		IsPartial:    false,
-	}
+    node.Take()
+    defer node.Release()
 
-	// Add root
-	response.Paths = append(response.Paths, &PathNodePair{
-		Path:        "",
-		Addr:        rootAddr,
-		ContentHash: node.Metadata().ContentHash,
-		Size:        node.Metadata().Size,
-	})
+    parts := strings.Split(path, "/")
 
-	currentPath := ""
-	for _, part := range parts {
-		DebugLog(DebugNameStore, "  part '%s' from %s\n", part, node.Metadata().ContentHash)
+    response := &LookupResponse{
+        Paths:        make([]*PathNodePair, 0, len(parts)+1),
+        SerialNumber: serialNumber,
+        IsPartial:    false,
+    }
 
-		if part == "" {
-			continue
-		}
+    response.Paths = append(response.Paths, &PathNodePair{
+        Path:        "",
+        Addr:        rootAddr,
+        ContentHash: node.Metadata().ContentHash,
+        Size:        node.Metadata().Size,
+    })
 
-		// Only TreeNodes have children to traverse
-		treeNode, isTreeNode := node.(*TreeNode)
-		if !isTreeNode {
-			DebugLog(DebugNameStore, "    isn't tree!")
-			return nil, ErrNotDir
-		}
+    currentPath := ""
+    for _, part := range parts {
+        DebugLog(DebugNameStore, "  part '%s' from %s\n", part, node.Metadata().ContentHash)
 
-		children, err := treeNode.Children()
-		if err != nil {
-			DebugLog(DebugNameStore, "    error children!")
-			return nil, err
-		}
+        if part == "" {
+            continue
+        }
 
-		childAddr, exists := children[part]
-		if !exists {
-			// Path not found - mark as partial and return what we have
-			DebugLog(DebugNameStore, "    partial return")
-			response.IsPartial = true
-			return response, nil
-		}
+        treeNode, isTreeNode := node.(*TreeNode)
+        if !isTreeNode {
+            DebugLog(DebugNameStore, "    isn't tree!")
+            return nil, ErrNotDir
+        }
 
-		childNode, err := ns.loadFileNode(childAddr, true)
-		if err != nil {
-			DebugLog(DebugNameStore, "    can't load node!")
-			return nil, err
-		}
+        children, err := treeNode.Children()
+        if err != nil {
+            DebugLog(DebugNameStore, "    error children!")
+            return nil, err
+        }
 
-		// Update current path
-		if currentPath == "" {
-			currentPath = part
-		} else {
-			currentPath = filepath.Join(currentPath, part)
-		}
+        childAddr, exists := children[part]
+        if !exists {
+            DebugLog(DebugNameStore, "    partial return")
+            response.IsPartial = true
+            return response, nil
+        }
 
-		response.Paths = append(response.Paths, &PathNodePair{
-			Path:        currentPath,
-			Addr:        childAddr,
-			ContentHash: childNode.Metadata().ContentHash,
-			Size:        childNode.Metadata().Size,
-		})
+        childNode, err := ns.loadFileNode(childAddr, true)
+        if err != nil {
+            DebugLog(DebugNameStore, "    can't load node!")
+            return nil, err
+        }
 
-		node = childNode // Move to the next node in the path
-	}
+        if currentPath == "" {
+            currentPath = part
+        } else {
+            currentPath = filepath.Join(currentPath, part)
+        }
 
-	DebugLog(DebugNameStore, "  all done")
+        response.Paths = append(response.Paths, &PathNodePair{
+            Path:        currentPath,
+            Addr:        childAddr,
+            ContentHash: childNode.Metadata().ContentHash,
+            Size:        childNode.Metadata().Size,
+        })
 
-	return response, nil
+        node = childNode
+    }
+
+    DebugLog(DebugNameStore, "  all done")
+    return response, nil
 }
 
 /////
@@ -452,7 +488,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		DebugLog(DebugLinks, "Checking assertion: %d", req.Assert)
 
 		var node FileNode
-		lookupResp, err := ns.resolvePath(req.Path)
+		lookupResp, err := ns.resolvePath(req.Path, nil)
 		if err != nil {
 			DebugLog(DebugLinks, "  error resolving path: %v", err)
 			return nil, err
@@ -604,7 +640,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		}
 
 		// Look up this path
-		lookupResp, err := ns.resolvePath(path)
+		lookupResp, err := ns.resolvePath(path, nil)
 		if err != nil {
 			return nil, err
 		}

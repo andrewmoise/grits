@@ -349,7 +349,7 @@ export class GritsVolume {
     }
     await this._uploadBlob(addr, local);
     await this._parent._blobCachePut(addr, new Response(local, { status: 200 }));
-    this._parent._local.delete(addr);
+    this._parent._local.delete(addr); // FIXME -- Probably this is fine to leave... maybe check size
   }
 
   // ── Get ───────────────────────────────────────────────────────
@@ -600,7 +600,7 @@ export class GritsVolume {
 
   async _slowLookup(path) {
     const startTime = performance.now();
-    const url = `${this._serverUrl}/grits/v1/lookup/${this._volume}`;
+    const url = `${this._serverUrl}/grits/v1/lookup`;
 
     // Build path list: the thing we actually want, plus any live mini-roots
     // (so we get an atomic refresh of everything in one round-trip).
@@ -613,9 +613,9 @@ export class GritsVolume {
     }
 
     const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(paths),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: this._volume, paths }),
     });
 
     if (resp.status === 403) {

@@ -196,8 +196,11 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	}
 
 	// Perform a lookup on "dir/subdir/one"
-	lookupPayload, _ := json.Marshal("dir/subdir/one")
-	resp, err = http.Post(url+"/lookup/root", "application/json", bytes.NewBuffer(lookupPayload))
+	lookupPayload, _ := json.Marshal(LookupRequest{
+		Volume: "root",
+		Paths:  []string{"dir/subdir/one"},
+	})
+	resp, err = http.Post(url+"/lookup", "application/json", bytes.NewBuffer(lookupPayload))
 	if err != nil {
 		t.Fatalf("Failed to perform lookup: %v", err)
 	}

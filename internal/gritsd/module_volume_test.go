@@ -332,7 +332,7 @@ func TestSerialNumberPersistence(t *testing.T) {
 	}
 }
 
-func TestLookupFullAndMultiLinkResults(t *testing.T) {
+func TestLookupAndMultiLinkResults(t *testing.T) {
 	// Setup a test environment
 	server, cleanup := SetupTestServer(t)
 	defer cleanup()
@@ -368,8 +368,8 @@ func TestLookupFullAndMultiLinkResults(t *testing.T) {
 	vol.LinkByMetadata("dir2/file2.txt", node2.MetadataBlob().GetAddress())
 	vol.LinkByMetadata("dir1/dir3/file3.txt", node3.MetadataBlob().GetAddress())
 
-	// Test LookupFull with a single path
-	lookupResponse, _ := vol.LookupFull([]string{"dir1/file1.txt"}, false)
+	// Test Lookup with a single path
+	lookupResponse, _ := vol.Lookup([]string{"dir1/file1.txt"}, "", false, nil)
 	results := lookupResponse.Paths
 	if len(results) != 3 {
 		t.Errorf("Expected 3 results, got %d", len(results))
@@ -378,8 +378,8 @@ func TestLookupFullAndMultiLinkResults(t *testing.T) {
 	checkPath(t, vol, results[1], "dir1", true)
 	checkPath(t, vol, results[2], "dir1/file1.txt", false)
 
-	// Test LookupFull with multiple paths
-	lookupResponse, _ = vol.LookupFull([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"}, false)
+	// Test Lookup with multiple paths
+	lookupResponse, _ = vol.Lookup([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"}, "", false, nil)
 	results = lookupResponse.Paths
 	if len(results) != 7 {
 		t.Errorf("Expected 7 results, got %d", len(results))
