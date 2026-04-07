@@ -51,7 +51,7 @@ func TestFileOperations(t *testing.T) {
 
 	// 2. Get the list of files
 	lookupURL := fmt.Sprintf("%s/grits/v1/lookup", baseURL)
-	lookupPayload, _ := json.Marshal(gritsd.LookupRequest{
+	lookupPayload, _ := json.Marshal(gritsd.LookupRequestBody{
 		Volume: "root",
 		Paths:  []string{""},
 	})

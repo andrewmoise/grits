@@ -132,18 +132,17 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 	}
 
 	// Set up directory structure
-	linkData := []grits.LinkRequest{
-		{Path: "dir", NewAddr: emptyDirAddr},
-		{Path: "dir/subdir", NewAddr: emptyDirAddr},
-	}
-
-	linkPayload, _ := json.Marshal(linkData)
-	resp, err := http.Post(url+"/link/root", "application/json", bytes.NewBuffer(linkPayload))
+	linkPayload, _ := json.Marshal(LinkRequestBody{
+		Volume: "root",
+		Requests: []*grits.LinkRequest{
+			{Path: "dir", NewAddr: emptyDirAddr},
+			{Path: "dir/subdir", NewAddr: emptyDirAddr},
+		},
+	})
+	resp, err := http.Post(url+"/link", "application/json", bytes.NewBuffer(linkPayload))
 	if err != nil || resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		bodyString := string(bodyBytes)
-
-		t.Fatalf("Failed to setup dir structure: %v %d %s", err, resp.StatusCode, bodyString)
+		t.Fatalf("Failed to setup dir structure: %v %d %s", err, resp.StatusCode, string(bodyBytes))
 	}
 	resp.Body.Close()
 
@@ -164,7 +163,6 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		resp.Body.Close()
 
 		// Create metadata for the blob
-		// We can use the local volume to create and upload the metadata node
 		volume := server.FindVolumeByName("root")
 
 		contentCf, err := server.BlobStore.AddDataBlock([]byte(content))
@@ -179,24 +177,23 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		}
 
 		// Link the blob to two paths using metadata address
-		linkData := []grits.LinkRequest{
-			{Path: content, NewAddr: metadataBlob},
-			{Path: "dir/subdir/" + content, NewAddr: metadataBlob},
-		}
-
-		linkPayload, _ := json.Marshal(linkData)
-		resp, err = http.Post(url+"/link/root", "application/json", bytes.NewBuffer(linkPayload))
+		linkPayload, _ := json.Marshal(LinkRequestBody{
+			Volume: "root",
+			Requests: []*grits.LinkRequest{
+				{Path: content, NewAddr: metadataBlob},
+				{Path: "dir/subdir/" + content, NewAddr: metadataBlob},
+			},
+		})
+		resp, err = http.Post(url+"/link", "application/json", bytes.NewBuffer(linkPayload))
 		if err != nil || resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
-			bodyString := string(bodyBytes)
-
-			t.Fatalf("Failed to link blob '%s': %v %d %s", content, err, resp.StatusCode, bodyString)
+			t.Fatalf("Failed to link blob '%s': %v %d %s", content, err, resp.StatusCode, string(bodyBytes))
 		}
 		resp.Body.Close()
 	}
 
 	// Perform a lookup on "dir/subdir/one"
-	lookupPayload, _ := json.Marshal(LookupRequest{
+	lookupPayload, _ := json.Marshal(LookupRequestBody{
 		Volume: "root",
 		Paths:  []string{"dir/subdir/one"},
 	})
@@ -295,15 +292,15 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	}
 
 	linkPaths := []string{"", "test", "test/nested", "test/nested/path.txt"}
-	linkData := []grits.LinkRequest{
-		{Path: linkPaths[1], NewAddr: emptyDirAddr},
-		{Path: linkPaths[2], NewAddr: emptyDirAddr},
-		{Path: linkPaths[3], NewAddr: blobMetadataAddr},
-	}
-
-	linkPayload, _ := json.Marshal(linkData)
-	linkResp, err := http.Post(url+"/link/root", "application/json",
-		bytes.NewBuffer(linkPayload))
+	linkPayload, _ := json.Marshal(LinkRequestBody{
+		Volume: "root",
+		Requests: []*grits.LinkRequest{
+			{Path: linkPaths[1], NewAddr: emptyDirAddr},
+			{Path: linkPaths[2], NewAddr: emptyDirAddr},
+			{Path: linkPaths[3], NewAddr: blobMetadataAddr},
+		},
+	})
+	linkResp, err := http.Post(url+"/link", "application/json", bytes.NewBuffer(linkPayload))
 	if err != nil {
 		t.Fatalf("Failed to perform link: %v", err)
 	}
@@ -472,7 +469,6 @@ func TestBlobEndpoint(t *testing.T) {
 	})
 
 	t.Run("Upload with mismatched hash", func(t *testing.T) {
-		// First, let's compute hash for two different contents
 		firstContent := []byte("First content")
 		secondContent := []byte("Second content")
 		thirdContent := []byte("Third content")
@@ -552,8 +548,6 @@ func TestBlobEndpoint(t *testing.T) {
 	})
 
 	t.Run("Fetch nonexistent resource", func(t *testing.T) {
-		// Generate a valid hash format but one that shouldn't exist
-		// This assumes the hash format matches what NewBlobAddrFromString accepts
 		nonexistentHash := "abcdef1234567890"
 		resp, _, err := makeRequest(url, http.MethodGet, "/grits/v1/blob/"+nonexistentHash, nil)
 		if err != nil {
@@ -561,7 +555,6 @@ func TestBlobEndpoint(t *testing.T) {
 		}
 
 		// Could be 400 if the hash format is invalid or 404 if valid but not found
-		// The exact behavior depends on how NewBlobAddrFromString validates hashes
 		expectedStatuses := []int{http.StatusNotFound, http.StatusBadRequest}
 		statusOK := false
 		for _, status := range expectedStatuses {

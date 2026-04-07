@@ -376,7 +376,7 @@ func (s *HTTPModule) setupRoutes() {
 	s.Mux.HandleFunc("/grits/v1/blob", s.requestMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/blob/", s.requestMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/lookup", s.requestMiddleware(s.handleLookup))
-	s.Mux.HandleFunc("/grits/v1/link/", s.requestMiddleware(s.handleLink))
+	s.Mux.HandleFunc("/grits/v1/link", s.requestMiddleware(s.handleLink))
 	s.Mux.HandleFunc("/grits/v1/content/", s.requestMiddleware(s.handleContent))
 
 	s.Mux.HandleFunc("/grits/v1/service-worker.js", s.requestMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -440,6 +440,23 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 		next(w, r)
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Request complete\n")
 	}
+}
+
+/////
+// HTTP envelope types
+/////
+
+// LookupRequestBody is the body structure for POST /grits/v1/lookup.
+type LookupRequestBody struct {
+	Volume    string         `json:"volume"`
+	Paths     []string       `json:"paths"`
+	StartAddr grits.BlobAddr `json:"startAddr,omitempty"`
+}
+
+// LinkRequestBody is the body structure for POST /grits/v1/link.
+type LinkRequestBody struct {
+	Volume   string               `json:"volume"`
+	Requests []*grits.LinkRequest `json:"requests"`
 }
 
 /////
@@ -693,26 +710,19 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(actualHash)
 }
 
-// LookupRequest is the body structure for POST /grits/v1/lookup.
-type LookupRequest struct {
-    Volume    string         `json:"volume"`
-    Paths     []string       `json:"paths"`
-    StartAddr grits.BlobAddr `json:"startAddr,omitempty"`
-}
-
 func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
-    if r.Method != http.MethodPost {
-        http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
-        return
-    }
+	if r.Method != http.MethodPost {
+		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
+		return
+	}
 
-    body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-    if err != nil {
-        http.Error(w, "Failed to read body", http.StatusBadRequest)
-        return
-    }
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "Failed to read body", http.StatusBadRequest)
+		return
+	}
 
-	var req LookupRequest
+	var req LookupRequestBody
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "Invalid JSON: expected {volume, paths, startAddr?}", http.StatusBadRequest)
 		return
@@ -747,71 +757,71 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-    grits.DebugLogWithTime(grits.DebugHttpPerformance, req.Paths[0], "Lookup start\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, req.Paths[0], "Lookup start\n")
 
-    // holdRef grabs a timed reference to the starting node so blobs
-    // reachable from it aren't GC'd before the client fetches them.
-    holdRef := func(addr grits.BlobAddr) {
-        node, err := volume.GetFileNode(addr)
-        if err != nil {
-            return
-        }
-        defer node.Release()
-        s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
-        if node.Metadata().Type == grits.GNodeTypeDirectory {
-            contentBlob, err := node.ExportedBlob()
-            if err == nil {
-                s.refHolder.Hold(contentBlob, 45*time.Second)
-            }
-        }
-    }
+	// holdRef grabs a timed reference to the starting node so blobs
+	// reachable from it aren't GC'd before the client fetches them.
+	holdRef := func(addr grits.BlobAddr) {
+		node, err := volume.GetFileNode(addr)
+		if err != nil {
+			return
+		}
+		defer node.Release()
+		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
+		if node.Metadata().Type == grits.GNodeTypeDirectory {
+			contentBlob, err := node.ExportedBlob()
+			if err == nil {
+				s.refHolder.Hold(contentBlob, 45*time.Second)
+			}
+		}
+	}
 
-    lookupResponse, err := volume.Lookup(req.Paths, req.StartAddr, true, holdRef)
-    if err != nil {
-        if denied, ok := grits.IsAccessDenied(err); ok {
-            w.Header().Set("Content-Type", "application/json")
-            w.WriteHeader(http.StatusForbidden)
-            json.NewEncoder(w).Encode(map[string]string{
-                "error": "access_denied",
-                "path":  denied.Path,
-            })
-            return
-        }
-        http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
-        return
-    }
+	lookupResponse, err := volume.Lookup(req.Paths, req.StartAddr, true, holdRef)
+	if err != nil {
+		if denied, ok := grits.IsAccessDenied(err); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "access_denied",
+				"path":  denied.Path,
+			})
+			return
+		}
+		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
+		return
+	}
 
-    // Hold refs on all returned nodes so blobs don't get GC'd before
-    // the client fetches them.
-    for _, pair := range lookupResponse.Paths {
-        node, err := volume.GetFileNode(pair.Addr)
-        if err != nil {
-            http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
-            return
-        }
-        defer node.Release()
-        s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
-        if node.Metadata().Type == grits.GNodeTypeDirectory {
-            contentBlob, err := node.ExportedBlob()
-            if err != nil {
-                http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
-                return
-            }
-            s.refHolder.Hold(contentBlob, 45*time.Second)
-        }
-    }
+	// Hold refs on all returned nodes so blobs don't get GC'd before
+	// the client fetches them.
+	for _, pair := range lookupResponse.Paths {
+		node, err := volume.GetFileNode(pair.Addr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
+			return
+		}
+		defer node.Release()
+		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
+		if node.Metadata().Type == grits.GNodeTypeDirectory {
+			contentBlob, err := node.ExportedBlob()
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
+				return
+			}
+			s.refHolder.Hold(contentBlob, 45*time.Second)
+		}
+	}
 
-    w.Header().Set("Content-Type", "application/json")
-    if lookupResponse.IsPartial {
-        w.WriteHeader(http.StatusMultiStatus)
-    } else {
-        w.WriteHeader(http.StatusOK)
-    }
-    if err := json.NewEncoder(w).Encode(lookupResponse); err != nil {
-        log.Printf("Failed to encode lookup response: %v", err)
-    }
+	w.Header().Set("Content-Type", "application/json")
+	if lookupResponse.IsPartial {
+		w.WriteHeader(http.StatusMultiStatus)
+	} else {
+		w.WriteHeader(http.StatusOK)
+	}
+	if err := json.NewEncoder(w).Encode(lookupResponse); err != nil {
+		log.Printf("Failed to encode lookup response: %v", err)
+	}
 
-    grits.DebugLogWithTime(grits.DebugHttpPerformance, req.Paths[0], "Lookup complete\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, req.Paths[0], "Lookup complete\n")
 }
 
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
@@ -832,8 +842,8 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Use limited reader for body
-	// There's not a real obvious max size, but certainly 100 MB is too large
+	// Use limited reader for body.
+	// There's not a real obvious max size, but certainly 100 MB is too large.
 	limitedBody := newLimitedReader(r.Body, DefaultMaxUploadSize)
 	body, err := io.ReadAll(limitedBody)
 	if err != nil {
@@ -845,35 +855,43 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var allLinkRequests []*grits.LinkRequest
-	if err := UnmarshalAndValidate(body, &allLinkRequests); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	var req LinkRequestBody
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "Invalid JSON: expected {volume, requests: [...]}", http.StatusBadRequest)
 		return
 	}
-
-	volumeName := strings.TrimPrefix(r.URL.Path, "/grits/v1/link/")
-	if volumeName == "" {
-		http.Error(w, "Volume name is required", http.StatusBadRequest)
+	if req.Volume == "" {
+		http.Error(w, "volume is required", http.StatusBadRequest)
 		return
 	}
-	if !Validate("volumeName", volumeName) {
+	if !Validate("volumeName", req.Volume) {
 		http.Error(w, "Invalid volume name", http.StatusBadRequest)
 		return
 	}
+	if len(req.Requests) == 0 {
+		http.Error(w, "at least one request is required", http.StatusBadRequest)
+		return
+	}
+	for _, lr := range req.Requests {
+		if !Validate("relativePath", lr.Path) {
+			http.Error(w, fmt.Sprintf("Invalid path: %q", lr.Path), http.StatusBadRequest)
+			return
+		}
+	}
 
-	volume := s.Server.FindVolumeByName(volumeName)
+	volume := s.Server.FindVolumeByName(req.Volume)
 	if volume == nil {
-		http.Error(w, fmt.Sprintf("Volume %s not found", volumeName), http.StatusNotFound)
+		http.Error(w, fmt.Sprintf("Volume %s not found", req.Volume), http.StatusNotFound)
 		return
 	}
 	if volume.isReadOnly() {
-		http.Error(w, fmt.Sprintf("Volume %s is read-only", volumeName), http.StatusForbidden)
+		http.Error(w, fmt.Sprintf("Volume %s is read-only", req.Volume), http.StatusForbidden)
 		return
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Link start\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, req.Volume, "Link start\n")
 
-	linkResponse, err := volume.MultiLink(allLinkRequests, true)
+	linkResponse, err := volume.MultiLink(req.Requests, true)
 	if err != nil {
 		log.Printf("HTTP API MultiLink() failed: %v", err)
 		if missing, ok := grits.IsBlobMissing(err); ok {
@@ -893,7 +911,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hold refs so blobs don't get GC'd before client fetches them
+	// Hold refs so blobs don't get GC'd before client fetches them.
 	for _, pair := range linkResponse.Paths {
 		node, err := volume.GetFileNode(pair.Addr)
 		if err != nil {
@@ -918,7 +936,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Failed to encode link response: %v", err)
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, volumeName, "Link complete\n")
+	grits.DebugLogWithTime(grits.DebugHttpPerformance, req.Volume, "Link complete\n")
 }
 
 func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
@@ -940,7 +958,7 @@ func (s *HTTPModule) handleContent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.ResponseWriter, r *http.Request) {
-    filePath = strings.TrimRight(filePath, "/")
+	filePath = strings.TrimRight(filePath, "/")
 
 	if !Validate("relativePath", filePath) {
 		http.Error(w, "Invalid file path", http.StatusBadRequest)
@@ -1019,7 +1037,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 			// Browser request — try to serve index.html instead.
 			indexPath := strings.TrimRight(path, "/") + "/index.html"
 			indexNode, err := volume.LookupNode(indexPath)
-			
+
 			// Fail if we don't have an index.html to serve
 			if err != nil {
 				http.Error(w, "File not found", http.StatusNotFound)
@@ -1040,7 +1058,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 				Addr: indexNode.MetadataBlob().GetAddress(),
 			})
 		}
- 	}
+	}
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Building path metadata\n")
 
