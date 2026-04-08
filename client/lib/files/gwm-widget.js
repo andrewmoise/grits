@@ -1,11 +1,14 @@
 /*
  * @cell files-widget
- * @version 0.2
+ * @version 0.3
  * @about
  *   File browser for the Gimbal shell. Lazily loads directory children
  *   on expand. Expand/collapse state is preserved across collapses.
  * @implements gimbal-shell#widget
  */
+
+import { FONT_MONO, injectStyles } from '../style/style.js';
+import { plumber } from '../plumber/plumber.js';
 
 const SVG_CARET = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
@@ -17,15 +20,12 @@ const SVG_CARET = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 
 const STYLE_ID = 'gimbal-files-styles';
 
-function injectStyles() {
-  if (document.getElementById(STYLE_ID)) return;
-  const s = document.createElement('style');
-  s.id = STYLE_ID;
-  s.textContent = `
+function ensureStyles() {
+  injectStyles(STYLE_ID, `
     .gf-tree {
       padding: 0.375rem 0;
-      font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
-      font-size: 0.75rem;
+      font-family: ${FONT_MONO};
+      font-size: var(--fs-base, 0.75rem);
       line-height: 1.5;
       user-select: none;
     }
@@ -49,7 +49,7 @@ function injectStyles() {
       width: 1.2em; flex-shrink: 0; color: var(--text-dim);
     }
     .gf-caret.open svg  { transform: rotate(90deg); }
-    .gf-caret.blank     { visibility: hidden; }   /* file indentation spacer */
+    .gf-caret.blank     { visibility: hidden; }
 
     .gf-name { flex: 1; overflow: hidden; text-overflow: ellipsis; }
     .gf-name.is-dir  { color: var(--text-hi); }
@@ -61,61 +61,51 @@ function injectStyles() {
     .gf-loading {
       padding: 0.2rem 0.5rem;
       color: var(--text-dim);
-      font-size: 0.7rem;
-      font-family: 'JetBrains Mono', monospace;
+      font-size: var(--fs-sm, 0.70rem);
+      font-family: ${FONT_MONO};
     }
 
     .gf-error {
       padding: 0.2rem 0.5rem;
       color: var(--red);
-      font-size: 0.7rem;
-      font-family: 'JetBrains Mono', monospace;
+      font-size: var(--fs-sm, 0.70rem);
+      font-family: ${FONT_MONO};
     }
-  `;
-  document.head.appendChild(s);
+  `);
 }
 
 // ── Node state ────────────────────────────────────────────
-// Each node in the tree carries:
-//   file     : GritsFile
-//   name     : string
-//   open     : boolean          (dirs only)
-//   loaded   : boolean          (dirs only — children fetched at least once)
-//   children : Map<name, node>  (dirs only, populated on first expand)
-//   el       : { row, caretEl, childrenEl }  — live DOM refs once built
-
-function makeNode(name, file) {
+function makeNode(name, file, parentPath = '') {
+  const fullPath = parentPath === '/' ? `/${name}` : `${parentPath}/${name}`;
   return {
     name,
+    fullPath,
     file,
     open:     false,
     loaded:   false,
-    children: null,   // Map<name, node>, null until first expand
+    children: null,
     el:       null,
   };
 }
 
 // ── Build a row element for a node ────────────────────────
-function buildRow(node, depth, onSelect, onToggle) {
+function buildRow(node, depth, onSelect, onToggle, onPlumb) {
   const isDir = node.file.isDir();
 
   const row = document.createElement('div');
   row.className = 'gf-row';
   row.style.paddingLeft = `${0.5 + depth * 1.1}rem`;
 
-  // Caret (dirs) or blank spacer (files)
   const caretEl = document.createElement('span');
   caretEl.className = `gf-caret${isDir ? '' : ' blank'}`;
   if (isDir) caretEl.innerHTML = SVG_CARET;
   row.appendChild(caretEl);
 
-  // Name
   const nameEl = document.createElement('span');
   nameEl.className = `gf-name ${isDir ? 'is-dir' : 'is-file'}`;
   nameEl.textContent = node.name;
   row.appendChild(nameEl);
 
-  // Children container (dirs only)
   let childrenEl = null;
   if (isDir) {
     childrenEl = document.createElement('div');
@@ -128,13 +118,16 @@ function buildRow(node, depth, onSelect, onToggle) {
     if (isDir) onToggle(node);
     else       onSelect(node);
   });
+  row.addEventListener('dblclick', () => {
+    if (!isDir) onPlumb(node);
+  });
 
   return { row, childrenEl };
 }
 
 // ── Widget factory ────────────────────────────────────────
 export default function createWidget({ name, evalContext = {} }) {
-  injectStyles();
+  ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gf-tree';
@@ -144,7 +137,6 @@ export default function createWidget({ name, evalContext = {} }) {
   const vol    = fs.volume(window.location.origin, 'client');
   let selected = null;
 
-  // ── Toggle open/closed ──────────────────────────────────
   async function toggle(node) {
     if (!node.file.isDir()) return;
 
@@ -159,21 +151,18 @@ export default function createWidget({ name, evalContext = {} }) {
       return;
     }
 
-    // node.open is true from here
     caretEl.classList.add('open');
     childrenEl.classList.add('open');
-    
-    if (node.open && !node.loaded) {
-      // First expand — fetch children
+
+    if (!node.loaded) {
       node.loaded = true;
-      childrenEl.appendChild(msgEl('gf-loading', '...', depthOf(node)+1))
+      childrenEl.appendChild(msgEl('gf-loading', '...', depthOf(node) + 1));
 
       try {
-        const childFiles = await node.file.children();   // Map<name, GritsFile>
+        const childFiles = await node.file.children();
         node.children = new Map();
         childrenEl.innerHTML = '';
 
-        // Sort: dirs first, then files, both alphabetically
         const sorted = [...childFiles.entries()].sort(([an, af], [bn, bf]) => {
           const ad = af.isDir(), bd = bf.isDir();
           if (ad !== bd) return ad ? -1 : 1;
@@ -181,22 +170,22 @@ export default function createWidget({ name, evalContext = {} }) {
         });
 
         for (const [childName, childFile] of sorted) {
-          const childNode = makeNode(childName, childFile);
+          const childNode = makeNode(childName, childFile, node.fullPath);
           node.children.set(childName, childNode);
           const depth = depthOf(node) + 1;
           const { row, childrenEl: grandchildrenEl } = buildRow(
-            childNode, depth, onSelect, toggle
+            childNode, depth, onSelect, toggle, onPlumb
           );
           childrenEl.appendChild(row);
           if (grandchildrenEl) childrenEl.appendChild(grandchildrenEl);
         }
 
         if (sorted.length === 0) {
-          childrenEl.appendChild(msgEl('gf-loading', '(empty)', depthOf(node)+1));
+          childrenEl.appendChild(msgEl('gf-loading', '(empty)', depthOf(node) + 1));
         }
       } catch (e) {
         childrenEl.innerHTML = `<div class="gf-error">${e.message}</div>`;
-        node.loaded = false;   // allow retry
+        node.loaded = false;
       }
     }
   }
@@ -215,8 +204,19 @@ export default function createWidget({ name, evalContext = {} }) {
     node.el.row.classList.add('selected');
   }
 
-  // ── Depth helper ────────────────────────────────────────
-  // Since we don't store parent refs we compute depth from DOM instead.
+  function onPlumb(node) {
+    const shell = evalContext.shell;
+    if (!shell) { console.warn('[files] no shell on evalContext, cannot plumb'); return; }
+    plumber.send({
+      src:  'files',
+      dst:  '',
+      wdir: shell.cwd,
+      type: 'text',
+      attr: {},
+      data: node.fullPath,
+    }, shell);
+  }
+
   function depthOf(node) {
     let el = node.el?.row;
     let depth = 0;
@@ -227,14 +227,10 @@ export default function createWidget({ name, evalContext = {} }) {
     return depth;
   }
 
-  // ── Initial load ────────────────────────────────────────
   async function loadRoot() {
     try {
       const rootFile = await vol.lookup('/');
       const rootNode = makeNode('/', rootFile);
-
-      // Build a synthetic open root — we show its children directly,
-      // not the root row itself, to avoid a pointless top-level entry.
       rootNode.open   = true;
       rootNode.loaded = true;
 
@@ -248,9 +244,9 @@ export default function createWidget({ name, evalContext = {} }) {
       });
 
       for (const [childName, childFile] of sorted) {
-        const childNode = makeNode(childName, childFile);
+        const childNode = makeNode(childName, childFile, '/');
         rootNode.children.set(childName, childNode);
-        const { row, childrenEl } = buildRow(childNode, 0, onSelect, toggle);
+        const { row, childrenEl } = buildRow(childNode, 0, onSelect, toggle, onPlumb);
         el.appendChild(row);
         if (childrenEl) el.appendChild(childrenEl);
       }

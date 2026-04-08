@@ -1,0 +1,29 @@
+/*
+ * gimbal shared stylesheet
+ *
+ * Fonts and utility classes only.  No color or token values live here —
+ * those are owned by style.js and written onto :root via injectTheme().
+ * All var(--…) references below resolve once the host page has called
+ * injectTheme() from its module script.
+ */
+
+/* ── Fonts ───────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500&family=JetBrains+Mono:wght@300;400;500&display=swap');
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+.g-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-hi) transparent;
+}
+.g-scroll::-webkit-scrollbar        { width: 0.25rem; height: 0.25rem; }
+.g-scroll::-webkit-scrollbar-track  { background: transparent; }
+.g-scroll::-webkit-scrollbar-thumb  { background: var(--border-hi); border-radius: 0.125rem; }
+
+/* ── Loading / error messages used inside widget trees ───── */
+.g-msg {
+  font-family: var(--font-mono);
+  font-size: var(--fs-base);
+  padding: 0.2rem 0.5rem;
+  color: var(--text-dim);
+}
+.g-msg-error { color: var(--red); }
