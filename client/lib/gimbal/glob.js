@@ -1,7 +1,5 @@
 // lib/gimbal/glob.js
 
-import { _isPlainObject } from './gsh.js';
-
 function matchGlob(pattern, name) {
   const re = pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -12,39 +10,115 @@ function matchGlob(pattern, name) {
   return new RegExp(`^${re}$`).test(name);
 }
 
-async function expand(shell, r, results, parts, partial) {
-  if (parts.length === 0) {
-    results.push(partial);
+// expand — purely structural, no path resolution.
+// parentFile : GritsFile for the current directory
+// parts      : remaining pattern segments to match
+// partial    : path built so far, relative to the root passed by glob()
+// results    : string accumulator
+async function expand(parentFile, parts, partial, results) {
+  if (!parentFile.isDir()) return;
+
+  const [pattern, ...rest] = parts;
+
+  let listing;
+  try {
+    listing = await parentFile.json(); // { name: metaCID, ... }
+  } catch (e) {
     return;
   }
 
-  const [pattern, ...rest] = parts;
-  const vol = shell._vol(r.serverUrl, r.volume);
+  for (const name of Object.keys(listing)) {
+    if (!matchGlob(pattern, name)) continue;
 
-  try {
-    const { serverUrl, volume, path } =
-      (partial === '')
-      ? shell.resolvePath(shell.cwd)
-      : shell.resolvePath(partial);
-    const vol = shell.fs.volume(serverUrl, volume);
+    const childPartial = partial ? `${partial}/${name}` : name;
 
-    const file = await vol.lookup(path);
-    if (!file.isDir()) return;
-    const dir = await file.json();
-    for (const name of Object.keys(dir)) {
-      if (matchGlob(pattern, name)) {
-        const childPath = partial ? `${partial}/${name}` : name;
-        await expand(shell, r, results, rest, childPath);
+    if (rest.length === 0) {
+      results.push(childPartial);
+    } else {
+      try {
+        const childFile = await parentFile._volume.fileForCID(listing[name]);
+        await expand(childFile, rest, childPartial, results);
+      } catch (e) {
+        // skip inaccessible children
       }
     }
-  } catch (e) {
-    return;
   }
 }
 
 export async function glob(shell, pattern) {
-  const parts  = pattern.split('/').filter(Boolean);
-  const results = [];
-  await expand(shell, pattern, results, parts, '');
-  return results;
+  // ── 1. Parse prefix → serverUrl, volume, pathStr ───────────
+  //
+  // Three forms:
+  //   ':volume[/path]'         — explicit volume, current server
+  //   '[server]:volume[/path]' — explicit server + volume
+  //   '/path'                  — absolute, current volume
+  //   'path'                   — relative to cwd
+
+  let serverUrl    = shell.serverUrl;
+  let volume       = shell.volume;
+  let pathStr      = pattern;
+  let resultPrefix = ''; // prepended to each result
+
+  if (pattern.includes(':')) {
+    const colonIdx  = pattern.indexOf(':');
+    const maybeHost = pattern.slice(0, colonIdx);
+    if (maybeHost) serverUrl = maybeHost;
+    const rest     = pattern.slice(colonIdx + 1);
+    const slashIdx = rest.indexOf('/');
+    if (slashIdx === -1) {
+      volume  = rest;
+      pathStr = '';
+    } else {
+      volume  = rest.slice(0, slashIdx);
+      pathStr = rest.slice(slashIdx + 1);
+    }
+    resultPrefix = `${maybeHost ? maybeHost + ':' : ':'}${volume}/`;
+  } else if (pattern.startsWith('/')) {
+    pathStr      = pattern.slice(1);
+    resultPrefix = '/';
+  } else {
+    // Relative — root the search at cwd so expand() sees the right tree,
+    // but strip the cwd back off results.
+    const cwd = shell.cwd.replace(/^\/+|\/+$/g, '');
+    pathStr   = cwd ? `${cwd}/${pattern}` : pattern;
+    resultPrefix = null; // signals: strip cwd from results
+  }
+
+  // ── 2. Split into fixed prefix + wildcard parts ────────────
+  const allParts  = pathStr ? pathStr.split('/').filter(Boolean) : [];
+  const firstWild = allParts.findIndex(p => /[*?]/.test(p));
+
+  const fixedParts = firstWild === -1 ? allParts           : allParts.slice(0, firstWild);
+  const wildParts  = firstWild === -1 ? []                 : allParts.slice(firstWild);
+  const fixedPath  = fixedParts.join('/'); // '' = volume root
+
+  // ── 3. Resolve fixed prefix to a GritsFile ─────────────────
+  let startFile;
+  try {
+    const vol = shell.fs.volume(serverUrl, volume);
+    startFile = await vol.lookup(fixedPath);
+  } catch (e) {
+    return [];
+  }
+
+  // ── 4. No wildcards — fixed lookup is the whole answer ──────
+  if (wildParts.length === 0) {
+    const rel = fixedParts.join('/');
+    return [_applyPrefix(resultPrefix, rel, shell)];
+  }
+
+  // ── 5. Expand wildcards ─────────────────────────────────────
+  const rawResults = [];
+  await expand(startFile, wildParts, fixedPath, rawResults);
+
+  return rawResults.map(r => _applyPrefix(resultPrefix, r, shell));
+}
+
+function _applyPrefix(prefix, path, shell) {
+  if (prefix !== null) return prefix + path;
+  // relative: strip cwd prefix
+  const cwd = shell.cwd.replace(/^\/+|\/+$/g, '');
+  if (cwd && path.startsWith(cwd + '/')) return path.slice(cwd.length + 1);
+  if (path === cwd) return '.';
+  return path;
 }
