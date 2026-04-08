@@ -176,11 +176,17 @@ class Result {
   }
 }
 
+const HISTORY_NEW = Symbol('HISTORY_NEW');
+
 function _dispatchWrapped(shell, name, prevResult, args, historyIndex) {
+  if (historyIndex === HISTORY_NEW) {
+    historyIndex = shell.__.length;
+    shell.__.push(undefined);
+  }
   const promise = shell._dispatch(name, prevResult, args).then(v => {
     const result = new Result(shell, Promise.resolve(v));
-    const wrapped = _wrapResult(result, historyIndex);
-    if (historyIndex !== null) shell.__[historyIndex] = wrapped;
+    if (historyIndex !== null)
+      shell.__[historyIndex] = _wrapResult(result, HISTORY_NEW)
     return v;
   });
   return _wrapResult(new Result(shell, promise), historyIndex);
