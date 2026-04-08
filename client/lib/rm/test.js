@@ -66,10 +66,107 @@ export const tests = [
       try {
         await shell.eval('rm()');
       } catch (e) {
-        if (e.message.includes('expected rm(path)')) threw = true;
+        if (e.message.includes('expected rm(path')) threw = true;
         else throw e;
       }
       if (!threw) throw new Error('expected usage error');
+    },
+  },
+
+  // ── multi-argument tests ────────────────────────────────────────────────────
+
+  {
+    label: 'rm removes multiple files',
+    async fn(shell, scratch) {
+      await shell.eval(`echo('a').to('${scratch}/a.txt')`);
+      await shell.eval(`echo('b').to('${scratch}/b.txt')`);
+      await shell.eval(`rm('${scratch}/a.txt', '${scratch}/b.txt')`);
+      for (const name of ['a.txt', 'b.txt']) {
+        let threw = false;
+        try {
+          const r = shell.resolvePath(`${scratch}/${name}`);
+          await shell._vol(r.serverUrl, r.volume).lookup(r.path);
+        } catch (e) {
+          if (e.message.includes('not found')) threw = true;
+          else throw e;
+        }
+        if (!threw) throw new Error(`expected ${name} to be gone`);
+      }
+    },
+  },
+  {
+    label: 'rm with {f:1} removes multiple mixed paths',
+    async fn(shell, scratch) {
+      await shell.eval(`echo('x').to('${scratch}/x.txt')`);
+      await shell.eval(`mkdir('${scratch}/dirmix')`);
+      await shell.eval(`rm('${scratch}/x.txt', '${scratch}/dirmix', {f:1})`);
+      for (const p of [`${scratch}/x.txt`, `${scratch}/dirmix`]) {
+        let threw = false;
+        try {
+          const r = shell.resolvePath(p);
+          await shell._vol(r.serverUrl, r.volume).lookup(r.path);
+        } catch (e) {
+          if (e.message.includes('not found')) threw = true;
+          else throw e;
+        }
+        if (!threw) throw new Error(`expected ${p} to be gone`);
+      }
+    },
+  },
+  {
+    label: 'rm fails fast: directory listed before a file leaves the file intact',
+    async fn(shell, scratch) {
+      await shell.eval(`mkdir('${scratch}/early-dir')`);
+      await shell.eval(`echo('c').to('${scratch}/c.txt')`);
+      let threw = false;
+      try {
+        await shell.eval(`rm('${scratch}/early-dir', '${scratch}/c.txt')`);
+      } catch (e) {
+        if (e.message.includes('is a directory')) threw = true;
+        else throw e;
+      }
+      if (!threw) throw new Error('expected directory error');
+      // c.txt must still exist — rm stopped before reaching it
+      const r = shell.resolvePath(`${scratch}/c.txt`);
+      await shell._vol(r.serverUrl, r.volume).lookup(r.path);
+    },
+  },
+  {
+    label: 'rm fails fast: file before directory is removed, then throws',
+    async fn(shell, scratch) {
+      await shell.eval(`echo('d').to('${scratch}/d.txt')`);
+      await shell.eval(`mkdir('${scratch}/late-dir')`);
+      let threw = false;
+      try {
+        await shell.eval(`rm('${scratch}/d.txt', '${scratch}/late-dir')`);
+      } catch (e) {
+        if (e.message.includes('is a directory')) threw = true;
+        else throw e;
+      }
+      if (!threw) throw new Error('expected directory error');
+      // d.txt was processed first and must be gone
+      let fileMissing = false;
+      try {
+        const r = shell.resolvePath(`${scratch}/d.txt`);
+        await shell._vol(r.serverUrl, r.volume).lookup(r.path);
+      } catch (e) {
+        if (e.message.includes('not found')) fileMissing = true;
+        else throw e;
+      }
+      if (!fileMissing) throw new Error('expected d.txt to be gone');
+    },
+  },
+  {
+    label: 'rm rejects non-string arguments',
+    async fn(shell, scratch) {
+      let threw = false;
+      try {
+        await shell.eval(`rm('${scratch}/x.txt', 42)`);
+      } catch (e) {
+        if (e.message.includes('expected rm(path')) threw = true;
+        else throw e;
+      }
+      if (!threw) throw new Error('expected usage error for non-string arg');
     },
   },
 ];
