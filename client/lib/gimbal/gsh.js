@@ -53,6 +53,7 @@
 //   tool modules — there are no special built-in names.
 
 import { GritsFile } from '../grits/GritsClient.js';
+import { glob } from './glob.js';
 import stringify from '../vendor/json-stringify-pretty-compact/index.js';
 
 // ─────────────────────────────────────────────────────────────────
@@ -389,6 +390,7 @@ export class GimbalShell {
         if (typeof key === 'symbol') return false;
         if (key === '__')            return true;
         if (key === '_')             return true;
+        if (key === 'glob')          return true;
         if (key in globalThis)       return false;
         if (key in extraVars)        return true;
         if (key in shell._scriptScope) return true;
@@ -398,6 +400,7 @@ export class GimbalShell {
         if (typeof key === 'symbol') return undefined;
         if (key === '__') return __;
         if (key === '_')  return underscore;
+        if (key === 'glob') return (pattern) => glob(shell, pattern);
         if (key in extraVars)          return extraVars[key];
         if (key in shell._scriptScope) return shell._scriptScope[key];
         return (...args) => _dispatchWrapped(shell, key, root, args, historyIndex);
