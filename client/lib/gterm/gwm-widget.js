@@ -3,9 +3,6 @@
  * @version 0.9
  * @about
  *   Gimbal shell terminal widget. Classic inline-prompt layout.
- *   Single history array is the source of truth for all state.
- *   __ is a live array of result values, accessible in eval context.
- *   __[n] labels appear in the gutter on successful completion.
  */
 
 import { GritsFile } from '../grits/GritsClient.js';
@@ -45,11 +42,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     libs:      [{ serverUrl: window.location.origin, volume: 'client', path: 'lib' }],
     evalContext,
   });
-
-  // ── result history — live array passed into every eval ────────
-  // __[0] is the first result, __[n] the nth. Void results are
-  // stored as undefined so indices stay stable.
-  const __ = [];
 
   // ── root element ──────────────────────────────────────
   const el = document.createElement('div');
@@ -393,22 +385,21 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     inputLoc.textContent = '';
 
     try {
-      const value = await shell.eval(rec.src, { __, _: __.length ? __[__.length - 1] : VOID });
+      const value = await shell.eval(rec.src, { }, { doHistory: true });
 
       rec.status = 'done';
 
       if (value instanceof Response) {
         // Return immediately — don't await the body. Store a clone in __
         // so callers can still read it; hand the live body to applyDone.
-        rec.refIndex = __.length;
-        __.push(value.clone());
-        rec.display = { bodyStream: value.body };
+        rec.refIndex = shell.__.length-1;
+        rec.display = { bodyStream: value.clone().body };
       } else if (!isVoid(value)) {
         const display = await _display(value, 80);
         rec.display  = display;
-        rec.refIndex = __.length;
-        __.push(value);
+        rec.refIndex = shell.__.length-1;
       } else {
+        // is void
         rec.display  = { text: null, isResponse: false };
         rec.refIndex = null;
       }
