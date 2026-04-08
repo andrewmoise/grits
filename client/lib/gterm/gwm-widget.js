@@ -1,6 +1,6 @@
 /*
  * @cell terminal-widget
- * @version 0.9
+ * @version 1.0
  * @about
  *   Gimbal shell terminal widget. Classic inline-prompt layout.
  */
@@ -8,16 +8,17 @@
 import { GritsFile } from '../grits/GritsClient.js';
 import { VOID, isVoid, makeShell, _isPlainObject } from '../gimbal/gsh.js';
 import stringify from '../vendor/json-stringify-pretty-compact/index.js';
+import { FONT_MONO, injectStyles } from '../style/style.js';
 
-// ── cwd display label ─────────────────────────────────
+// ── cwd display label ─────────────────────────────────────
 function cwdLabel(shell) {
   const cwd = shell.cwd ?? '/';
-  if (cwd === '/' || cwd === '') return `:${shell.volume ?? 'client'}`; // FIXME
+  if (cwd === '/' || cwd === '') return `:${shell.volume ?? 'client'}`; // FIXME - rationalize "/"
   const parts = cwd.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1];
 }
 
-// ── SVG icons ─────────────────────────────────────────
+// ── SVG icons ─────────────────────────────────────────────
 const SVG_SPINNER = `<svg class="gt-icon gt-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
   <circle cx="8" cy="8" r="6" stroke-opacity="0.2"/>
   <path d="M8 2 A6 6 0 0 1 14 8" stroke-linecap="round"/>
@@ -33,6 +34,137 @@ const SVG_ERROR = `<svg class="gt-icon" viewBox="0 0 16 16" fill="none" stroke="
   <circle cx="8" cy="11" r="0.75" fill="currentColor" stroke="none"/>
 </svg>`;
 
+const STYLE_ID = 'gimbal-terminal-styles';
+
+function ensureStyles() {
+  injectStyles(STYLE_ID, `
+    .gt-output {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overflow-anchor: none;
+      padding: 0.625rem 0.75rem 0.375rem;
+      font-family: ${FONT_MONO};
+      font-size: var(--fs-base, 0.75rem);
+      line-height: 1.6;
+      word-break: break-word;
+      overflow-wrap: break-word;
+      user-select: text;
+      cursor: text;
+      display: flex;
+      flex-direction: column;
+    }
+    .gt-output::-webkit-scrollbar { width: 0.25rem; }
+    .gt-output::-webkit-scrollbar-thumb {
+      background: var(--border-hi); border-radius: 0.125rem;
+    }
+
+    .gt-scroll-anchor {
+      overflow-anchor: auto;
+      height: 1px;
+      flex-shrink: 0;
+    }
+
+    .gt-entry {
+      display: flex;
+      flex-direction: column;
+      gap: 0.125rem;
+      margin-bottom: 0.125rem;
+    }
+    .gt-cmd-line {
+      display: flex; align-items: baseline; gap: 0.375rem;
+    }
+    .gt-loc  { color: var(--a1); flex-shrink: 0; white-space: nowrap; }
+    .gt-sep  { color: var(--text-dim); flex-shrink: 0; }
+    .gt-src  { color: var(--text-hi); flex: 1; white-space: pre-wrap; }
+    .gt-cmd-line.is-queued .gt-src { color: var(--text-dim); }
+
+    .gt-status {
+      display: flex; align-items: center;
+      flex-shrink: 0; width: 1.1rem; height: 1.1rem;
+      position: relative; top: 0.1em;
+      margin-left: auto;
+    }
+    .gt-icon { width: 0.85rem; height: 0.85rem; }
+    .gt-icon.gt-spin {
+      animation: gt-spin 0.9s linear infinite;
+      color: var(--a1);
+    }
+    @keyframes gt-spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .gt-status.is-queued { color: var(--text-dim); }
+    .gt-status.is-error  { color: var(--red); }
+    .gt-status.is-ref {
+      font-family: ${FONT_MONO};
+      font-size: var(--fs-sm, 0.60rem);
+      color: var(--text-dim);
+      width: auto;
+      letter-spacing: -0.02em;
+    }
+
+    .gt-result {
+      padding-left: 0.875rem;
+      white-space: pre-wrap;
+      color: var(--text-hi);
+      margin-bottom: 0.25rem;
+    }
+    .gt-result.is-response { color: var(--text-dim); }
+    .gt-result.is-error    { color: var(--red); }
+
+    .gt-separator {
+      height: 1px;
+      background: var(--border-hi, rgba(128,128,128,0.25));
+      flex-shrink: 0;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .gt-separator.visible { opacity: 1; }
+
+    .gt-input-line {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.375rem;
+      padding: 0.25rem 0.75rem 0.375rem;
+      flex-shrink: 0;
+    }
+    .gt-input-loc {
+      color: var(--a1);
+      white-space: nowrap;
+      flex-shrink: 0;
+      line-height: 1.6;
+      font-family: ${FONT_MONO};
+      font-size: var(--fs-base, 0.75rem);
+    }
+    .gt-input-sep {
+      color: var(--text-dim);
+      flex-shrink: 0;
+      line-height: 1.6;
+      font-family: ${FONT_MONO};
+      font-size: var(--fs-base, 0.75rem);
+    }
+    .gt-textarea {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      resize: none;
+      overflow: hidden;
+      color: var(--text-hi);
+      font-family: ${FONT_MONO};
+      font-size: var(--fs-base, 0.75rem);
+      line-height: 1.6;
+      caret-color: var(--a1);
+      min-width: 0;
+      padding: 0;
+      margin: 0;
+      height: 1.2em;
+    }
+    .gt-textarea::placeholder { color: var(--text-dim); opacity: 0.5; }
+  `);
+}
+
 export default function createWidget({ name, evalContext = {}, runOnInit = null }) {
   const shell = makeShell({
     fs:        evalContext.fs,
@@ -47,139 +179,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   const el = document.createElement('div');
   el.style.cssText = 'width:100%;height:100%;display:flex;flex-direction:column;overflow:hidden;';
 
-  // ── inject scoped styles once ─────────────────────────
-  const STYLE_ID = 'gimbal-terminal-styles';
-  if (!document.getElementById(STYLE_ID)) {
-    const s = document.createElement('style');
-    s.id = STYLE_ID;
-    s.textContent = `
-      .gt-output {
-        flex: 1;
-        overflow-y: auto;
-        overflow-x: hidden;
-        overflow-anchor: none;
-        padding: 0.625rem 0.75rem 0.375rem;
-        font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
-        font-size: 0.75rem;
-        line-height: 1.6;
-        word-break: break-word;
-        overflow-wrap: break-word;
-        user-select: text;
-        cursor: text;
-        display: flex;
-        flex-direction: column;
-      }
-      .gt-output::-webkit-scrollbar { width: 0.25rem; }
-      .gt-output::-webkit-scrollbar-thumb {
-        background: var(--border-hi); border-radius: 0.125rem;
-      }
-
-      .gt-scroll-anchor {
-        overflow-anchor: auto;
-        height: 1px;
-        flex-shrink: 0;
-      }
-
-      .gt-entry {
-        display: flex;
-        flex-direction: column;
-        gap: 0.125rem;
-        margin-bottom: 0.125rem;
-      }
-      .gt-cmd-line {
-        display: flex; align-items: baseline; gap: 0.375rem;
-      }
-      .gt-loc  { color: var(--a1); flex-shrink: 0; white-space: nowrap; }
-      .gt-sep  { color: var(--text-dim); flex-shrink: 0; }
-      .gt-src  { color: var(--text-hi); flex: 1; white-space: pre-wrap; }
-      .gt-cmd-line.is-queued .gt-src { color: var(--text-dim); }
-
-      .gt-status {
-        display: flex; align-items: center;
-        flex-shrink: 0; width: 1.1rem; height: 1.1rem;
-        position: relative; top: 0.1em;
-        margin-left: auto;
-      }
-      .gt-icon { width: 0.85rem; height: 0.85rem; }
-      .gt-icon.gt-spin {
-        animation: gt-spin 0.9s linear infinite;
-        color: var(--a1);
-      }
-      @keyframes gt-spin {
-        from { transform: rotate(0deg); }
-        to   { transform: rotate(360deg); }
-      }
-      .gt-status.is-queued { color: var(--text-dim); }
-      .gt-status.is-error  { color: var(--red); }
-      .gt-status.is-ref {
-        font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
-        font-size: 0.6rem;
-        color: var(--text-dim);
-        width: auto;
-        letter-spacing: -0.02em;
-      }
-
-      .gt-result {
-        padding-left: 0.875rem;
-        white-space: pre-wrap;
-        color: var(--text-hi);
-        margin-bottom: 0.25rem;
-      }
-      .gt-result.is-response { color: var(--text-dim); }
-      .gt-result.is-error    { color: var(--red); }
-
-      .gt-separator {
-        height: 1px;
-        background: var(--border-hi, rgba(128,128,128,0.25));
-        flex-shrink: 0;
-        opacity: 0;
-        transition: opacity 0.15s;
-      }
-      .gt-separator.visible { opacity: 1; }
-
-      .gt-input-line {
-        display: flex;
-        align-items: flex-start;
-        gap: 0.375rem;
-        padding: 0.25rem 0.75rem 0.375rem;
-        flex-shrink: 0;
-      }
-      .gt-input-loc {
-        color: var(--a1);
-        white-space: nowrap;
-        flex-shrink: 0;
-        line-height: 1.6;
-        font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
-        font-size: 0.75rem;
-      }
-      .gt-input-sep {
-        color: var(--text-dim);
-        flex-shrink: 0;
-        line-height: 1.6;
-        font-family: 'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace;
-        font-size: 0.75rem;
-      }
-      .gt-textarea {
-        flex: 1;
-        background: transparent;
-        border: none;
-        outline: none;
-        resize: none;
-        overflow: hidden;
-        color: var(--text-hi);
-        font-family: 'JetBrains Mono', 'IBM Plex Mono', monospace;
-        font-size: 0.75rem;
-        line-height: 1.6;
-        caret-color: var(--a1);
-        min-width: 0;
-        padding: 0;
-        margin: 0;
-        height: 1.2em;
-      }
-      .gt-textarea::placeholder { color: var(--text-dim); opacity: 0.5; }
-    `;
-    document.head.appendChild(s);
-  }
+  ensureStyles();
 
   // ── history — single source of truth ──────────────────
   const history = [];
@@ -187,7 +187,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   let shellReady = false;
   let pinToBottom = true;
 
-  // ── output area (scrollable history) ──────────────────
+  // ── output area ────────────────────────────────────────
   const output = document.createElement('div');
   output.className = 'gt-output';
 
@@ -195,7 +195,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   spacer.style.cssText = 'flex: 1 1 auto; min-height: 0;';
   output.appendChild(spacer);
 
-  // Scroll anchor — browser keeps this visible when already at bottom.
   const scrollAnchor = document.createElement('div');
   scrollAnchor.className = 'gt-scroll-anchor';
   output.appendChild(scrollAnchor);
@@ -236,7 +235,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     maybeScrollToBottom();
   });
 
-  // ── sticky input line ─────────────────────────────────
+  // ── input line ─────────────────────────────────────────
   const inputLine = document.createElement('div');
   inputLine.className = 'gt-input-line';
 
@@ -252,7 +251,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   textarea.rows = 1;
   textarea.autocomplete = 'off';
   textarea.spellcheck = false;
-  textarea.placeholder = '';
 
   inputLine.appendChild(inputLoc);
   inputLine.appendChild(inputSep);
@@ -283,12 +281,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     const distFromBottom = output.scrollHeight - output.scrollTop - output.clientHeight;
     pinToBottom = distFromBottom < 8;
     separator.classList.toggle('visible', !pinToBottom);
-  }, { passive: true });
-
-  output.addEventListener('scroll', () => {
-    const distFromBottom = output.scrollHeight - output.scrollTop - output.clientHeight;
-    pinToBottom = distFromBottom < 8;
-    separator.classList.toggle('visible', !pinToBottom);
     scrollBtn.style.display = pinToBottom ? 'none' : 'flex';
   }, { passive: true });
 
@@ -312,7 +304,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     cmdLine.appendChild(statusEl);
     entry.appendChild(cmdLine);
 
-    // Insert before the scroll anchor so anchor stays at the very bottom.
     output.insertBefore(entry, scrollAnchor);
     maybeScrollToBottom();
 
@@ -342,10 +333,8 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     }, 200);
   }
 
-  // ── finalise the status icon once we know the outcome ────────
   function applyFinished(rec) {
     clearTimeout(rec.dom.spinnerTimer);
-
     const { statusEl } = rec.dom;
     const isError = rec.status === 'error';
     if (isError) {
@@ -365,9 +354,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     const { text: displayText, isResponse, bodyStream } = rec.display ?? {};
 
     if (bodyStream) {
-      // Streaming response — create the result div now, drain the stream
-      // in the background, stamp the final icon when the stream closes.
-      // The spinner stays up during the drain.
       const result = document.createElement('div');
       result.className = 'gt-result is-response';
       rec.dom.entry.appendChild(result);
@@ -386,7 +372,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
             result.textContent = text;
             maybeScrollToBottom();
           }
-          // Flush any remaining bytes
           text += dec.decode();
           if (text !== result.textContent) result.textContent = text;
         } catch (e) {
@@ -398,11 +383,8 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
           maybeScrollToBottom();
         }
       })();
-
     } else {
-      // Non-streaming — stamp icon and optionally render text immediately.
       applyFinished(rec);
-
       if (displayText != null) {
         const result = document.createElement('div');
         result.className = `gt-result${rec.status === 'error' ? ' is-error' : isResponse ? ' is-response' : ''}`;
@@ -429,21 +411,17 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     inputLoc.textContent = '';
 
     try {
-      const value = await shell.eval(rec.src, { }, { doHistory: true });
-
+      const value = await shell.eval(rec.src, {}, { doHistory: true });
       rec.status = 'done';
 
       if (value instanceof Response) {
-        // Return immediately — don't await the body. Store a clone in __
-        // so callers can still read it; hand the live body to applyDone.
-        rec.refIndex = shell.__.length-1;
+        rec.refIndex = shell.__.length - 1;
         rec.display = { bodyStream: value.clone().body };
       } else if (!isVoid(value)) {
         const display = await _display(value, 80);
         rec.display  = display;
-        rec.refIndex = shell.__.length-1;
+        rec.refIndex = shell.__.length - 1;
       } else {
-        // is void
         rec.display  = { text: null, isResponse: false };
         rec.refIndex = null;
       }
@@ -474,7 +452,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     return { text: String(value), isResponse: false };
   }
 
-  // ── enqueue ───────────────────────────────────────────
   function enqueue(src) {
     const rec = {
       src,
