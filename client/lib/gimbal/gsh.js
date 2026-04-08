@@ -60,7 +60,7 @@ import stringify from '../vendor/json-stringify-pretty-compact/index.js';
 // ─────────────────────────────────────────────────────────────────
 
 export const VOID = Object.freeze({ _gimbalVoid: true, toString: () => '(void)' });
-export function isVoid(v) { return v === null || v === undefined || v === VOID; }
+export function isVoid(v) { return v === null || v === undefined || v === VOID; } // FIXME
 
 // ─────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -176,16 +176,23 @@ class Result {
   }
 }
 
-function _wrapResult(result) {
+function _dispatchWrapped(shell, name, prevResult, args, historyIndex) {
+  const promise = shell._dispatch(name, prevResult, args).then(v => {
+    const result = new Result(shell, Promise.resolve(v));
+    const wrapped = _wrapResult(result, historyIndex);
+    if (historyIndex !== null) shell.__[historyIndex] = wrapped;
+    return v;
+  });
+  return _wrapResult(new Result(shell, promise), historyIndex);
+}
+
+function _wrapResult(result, historyIndex) {
   return new Proxy(result, {
     get(target, key, receiver) {
       if (typeof key === 'symbol') return Reflect.get(target, key, receiver);
       if (key in target)           return Reflect.get(target, key, receiver);
-      return (...args) => _wrapResult(
-        new Result(target._shell,
-          target._shell._dispatch(key, target, args))
-      );
-    },
+      return (...args) => _dispatchWrapped(target._shell, key, target, args, historyIndex);
+    }
   });
 }
 
@@ -195,13 +202,14 @@ function _wrapResult(result) {
 
 export class GimbalShell {
   constructor({ fs, serverUrl, volume, cwd, libs, evalContext = {} }) {
-    this.fs           = fs;
-    this.serverUrl    = serverUrl;
-    this.volume       = volume;
-    this.cwd          = cwd || '/';
-    this.libs         = libs ?? [];
-    this._evalContext = evalContext;
-    this.history      = [];
+    this.fs              = fs;
+    this.serverUrl       = serverUrl;
+    this.volume          = volume;
+    this.cwd             = cwd || '/';
+    this.libs            = libs ?? [];
+    this._evalContext    = evalContext;
+    this.history         = [];
+    this.__              = [];
     this._importCache    = new Map();
     this._availableTools = null;
     this._cacheWarmed    = false;
@@ -349,47 +357,57 @@ export class GimbalShell {
 
   // ── Root result (void input, start of every eval) ─────────────
 
-  _rootResult() {
-    return _wrapResult(new Result(this, Promise.resolve(VOID)));
+  _rootResult(initial, historyIndex) {
+    return _wrapResult(new Result(this, Promise.resolve(initial)), historyIndex);
   }
 
   // ── eval ──────────────────────────────────────────────────────
 
-  async eval(src, extraVars = {}) {
+  async eval(src, extraVars = {}, { doHistory = false } = {}) {
     await this._warmCache();
     await this._checkCacheStale();
     this.history.push(src);
 
-    const root  = this._rootResult();
+    const __ = this.__;
+    const _  = __.length ? __[__.length - 1] : VOID;
+    const historyIndex = doHistory ? __.length : null;
+    if (doHistory)
+      __.push(undefined);
+
+    const root  = this._rootResult(VOID, historyIndex);
     const shell = this;
 
     const withTarget = new Proxy(Object.create(null), {
       has(_, key) {
         if (typeof key === 'symbol') return false;
+        if (key === '__')            return true;
+        if (key === '_')             return true;
         if (key in globalThis)       return false;
         if (key in extraVars)        return true;
         return shell._availableTools?.has(key) ?? false;
       },
       get(_, key) {
         if (typeof key === 'symbol') return undefined;
+        if (key === '__') return __;
+        if (key === '_')  return _;
         if (key in extraVars)        return extraVars[key];
-        return (...args) => _wrapResult(
-          new Result(shell, shell._dispatch(key, root, args)));
+        return (...args) => _dispatchWrapped(shell, key, root, args, historyIndex);
       },
     });
 
     let finalResult;
     try {
       const fn = new Function('__w__', `with (__w__) { return (async () => (${src}))(); }`);
-      finalResult = fn(withTarget);
+      finalResult = await fn(withTarget);
     } catch (e) {
       throw new Error(`eval error: ${e.message}`);
     }
 
-    if (!(finalResult instanceof Result))
-      finalResult = new Result(this, Promise.resolve(finalResult));
+    if (doHistory && __[historyIndex] === undefined) {
+      __[historyIndex] = finalResult;
+    }
 
-    return await finalResult;
+    return finalResult;
   }
 }
 
