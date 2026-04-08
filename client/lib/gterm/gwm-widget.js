@@ -230,9 +230,17 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   inputLine.appendChild(textarea);
   el.appendChild(inputLine);
 
+  function isAnchorVisible() {
+    const rect = scrollAnchor.getBoundingClientRect();
+    const containerRect = output.getBoundingClientRect();
+    return rect.top >= containerRect.top && rect.bottom <= containerRect.bottom;
+  }
+
   function resizeTextarea() {
+    const anchorVisible = isAnchorVisible();
     textarea.style.height = '0';
     textarea.style.height = textarea.scrollHeight + 'px';
+    if (anchorVisible) maybeScrollToBottom();
   }
   textarea.addEventListener('input', resizeTextarea);
 
