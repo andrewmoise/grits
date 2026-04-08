@@ -107,6 +107,7 @@ export function responseFromJSON(obj) {
 class Result {
   constructor(shell, promise) {
     this._shell   = shell;
+
     this._promise = Promise.resolve(promise);
     this._settled = null;
     this._promise.then(
@@ -214,6 +215,7 @@ export class GimbalShell {
     this.cwd             = cwd || '/';
     this.libs            = libs ?? [];
     this._evalContext    = evalContext;
+    this._scriptScope    = Object.create(null);
     this.history         = [];
     this.__              = [];
     this._importCache    = new Map();
@@ -375,10 +377,9 @@ export class GimbalShell {
     this.history.push(src);
 
     const __ = this.__;
-    const _  = __.length ? __[__.length - 1] : VOID;
+    const underscore  = __.length ? __[__.length - 1] : VOID;
     const historyIndex = doHistory ? __.length : null;
-    if (doHistory)
-      __.push(undefined);
+    if (doHistory) __.push(undefined);
 
     const root  = this._rootResult(VOID, historyIndex);
     const shell = this;
@@ -390,20 +391,32 @@ export class GimbalShell {
         if (key === '_')             return true;
         if (key in globalThis)       return false;
         if (key in extraVars)        return true;
+        if (key in shell._scriptScope) return true;
         return shell._availableTools?.has(key) ?? false;
       },
       get(_, key) {
         if (typeof key === 'symbol') return undefined;
         if (key === '__') return __;
-        if (key === '_')  return _;
-        if (key in extraVars)        return extraVars[key];
+        if (key === '_')  return underscore;
+        if (key in extraVars)          return extraVars[key];
+        if (key in shell._scriptScope) return shell._scriptScope[key];
         return (...args) => _dispatchWrapped(shell, key, root, args, historyIndex);
+      },
+      set(_, key, value) {
+        shell._scriptScope[key] = value;
+        return true;
       },
     });
 
     let finalResult;
     try {
-      const fn = new Function('__w__', `with (__w__) { return (async () => (${src}))(); }`);
+      // Oh my God I hate this so so much
+      const fnMatch = src.match(/^\s*function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(/);
+      if (fnMatch) src = `${fnMatch[1]} = ${src}`;
+      let fn;
+      try { fn = new Function('__w__', `with (__w__) { return (async () => (${src}))(); }`); }
+      catch { fn = new Function('__w__', `with (__w__) { return (async () => { ${src} })(); }`); }
+
       finalResult = await fn(withTarget);
     } catch (e) {
       throw new Error(`eval error: ${e.message}`);
