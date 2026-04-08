@@ -207,6 +207,35 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   separator.className = 'gt-separator';
   el.appendChild(separator);
 
+  // ── scroll button ─────────────────────────────────────
+  const scrollBtn = document.createElement('button');
+  scrollBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6">
+    <path d="M5 7.5 L8 10.5 L11 7.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>`;
+  scrollBtn.style.cssText = `
+    position: absolute;
+    bottom: 3rem;
+    right: 0.75rem;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 50%;
+    border: 1px solid var(--border-hi);
+    background: var(--bg);
+    color: var(--text-dim);
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  `;
+  el.style.position = 'relative';
+  el.appendChild(scrollBtn);
+
+  scrollBtn.addEventListener('click', () => {
+    pinToBottom = true;
+    maybeScrollToBottom();
+  });
+
   // ── sticky input line ─────────────────────────────────
   const inputLine = document.createElement('div');
   inputLine.className = 'gt-input-line';
@@ -254,6 +283,13 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     const distFromBottom = output.scrollHeight - output.scrollTop - output.clientHeight;
     pinToBottom = distFromBottom < 8;
     separator.classList.toggle('visible', !pinToBottom);
+  }, { passive: true });
+
+  output.addEventListener('scroll', () => {
+    const distFromBottom = output.scrollHeight - output.scrollTop - output.clientHeight;
+    pinToBottom = distFromBottom < 8;
+    separator.classList.toggle('visible', !pinToBottom);
+    scrollBtn.style.display = pinToBottom ? 'none' : 'flex';
   }, { passive: true });
 
   // ── DOM builders ──────────────────────────────────────
