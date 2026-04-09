@@ -1,8 +1,15 @@
 /*
  * @cell terminal-widget
- * @version 1.0
+ * @version 1.1
  * @about
  *   Gimbal shell terminal widget. Classic inline-prompt layout.
+ *
+ * decoration interface:
+ *   icon    — 'gterm'
+ *   (no rightButtons, no onCloseRequest — terminal is always safely closeable)
+ *
+ * controls interface (injected by shell after mount):
+ *   controls.setTitle(str) — used to reflect the current cwd in the titlebar
  */
 
 import { GritsFile } from '../grits/GritsClient.js';
@@ -13,7 +20,7 @@ import { FONT_MONO, injectStyles } from '../style/style.js';
 // ── cwd display label ─────────────────────────────────────
 function cwdLabel(shell) {
   const cwd = shell.cwd ?? '/';
-  if (cwd === '/' || cwd === '') return `:${shell.volume ?? 'client'}`; // FIXME - rationalize "/"
+  if (cwd === '/' || cwd === '') return `:${shell.volume ?? 'client'}`;
   const parts = cwd.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1];
 }
@@ -181,6 +188,9 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
 
   ensureStyles();
 
+  // controls injected by shell after mount
+  let controls = null;
+
   // ── history — single source of truth ──────────────────
   const history = [];
   let running    = false;
@@ -283,6 +293,15 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     separator.classList.toggle('visible', !pinToBottom);
     scrollBtn.style.display = pinToBottom ? 'none' : 'flex';
   }, { passive: true });
+
+  // ── cwd sync ──────────────────────────────────────────
+  // Keeps the input prompt and the titlebar in sync with the
+  // current working directory after each command completes.
+  function syncCwd() {
+    const label = cwdLabel(shell);
+    inputLoc.textContent = label;
+    controls?.setTitle(label);
+  }
 
   // ── DOM builders ──────────────────────────────────────
   function buildEntryDOM(rec) {
@@ -401,7 +420,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     if (running) return;
     const rec = history.find(r => r.status === 'queued');
     if (!rec) {
-      inputLoc.textContent = cwdLabel(shell);
+      syncCwd();
       return;
     }
 
@@ -409,6 +428,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     rec.status = 'running';
     applyRunning(rec);
     inputLoc.textContent = '';
+    controls?.setTitle('…');
 
     try {
       const value = await shell.eval(rec.src, {}, { doHistory: true });
@@ -433,7 +453,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     }
 
     applyDone(rec);
-    inputLoc.textContent = cwdLabel(shell);
+    syncCwd();
     running = false;
     runNext();
   }
@@ -504,7 +524,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
       Array.from(output.children).forEach(child => {
         if (child !== spacer && child !== scrollAnchor) child.remove();
       });
-      inputLoc.textContent = cwdLabel(shell);
+      syncCwd();
       pinToBottom = true;
       separator.classList.remove('visible');
     }
@@ -514,10 +534,16 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     if (!window.getSelection().toString()) textarea.focus();
   });
 
+  // ── decoration declaration ────────────────────────────
+  const decoration = {
+    icon: 'gterm',
+    // No rightButtons, no onCloseRequest — terminal is always closeable
+  };
+
   // ── init ──────────────────────────────────────────────
   shell._warmCache().then(() => {
     shellReady = true;
-    inputLoc.textContent = cwdLabel(shell);
+    syncCwd();
     if (runOnInit) enqueue(runOnInit);
     runNext();
   });
@@ -526,6 +552,11 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
 
   return {
     el,
+    decoration,
+
+    get controls() { return controls; },
+    set controls(c) { controls = c; },
+
     focus()   { textarea.focus(); },
     destroy() {},
   };
