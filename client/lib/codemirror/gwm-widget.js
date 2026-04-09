@@ -85,9 +85,10 @@ async function loadCM(path) {
       highlightActiveLineGutter, drawSelection, dropCursor },
     { EditorState },
     { defaultKeymap, history, historyKeymap, indentWithTab },
-    { bracketMatching, syntaxHighlighting, defaultHighlightStyle },
+    { bracketMatching },
     { searchKeymap, highlightSelectionMatches },
     { closeBrackets, closeBracketsKeymap },
+    { syntaxTheme },
   ] = await Promise.all([
     import(`${CM_BASE}/view@6`),
     import(`${CM_BASE}/state@6`),
@@ -95,6 +96,7 @@ async function loadCM(path) {
     import(`${CM_BASE}/language@6`),
     import(`${CM_BASE}/search@6`),
     import(`${CM_BASE}/autocomplete@6`),
+    import('./theme.js'),
   ]);
 
   let lang = null;
@@ -121,9 +123,10 @@ async function loadCM(path) {
     highlightActiveLine, highlightActiveLineGutter,
     drawSelection, dropCursor,
     history, historyKeymap, defaultKeymap, indentWithTab,
-    bracketMatching, syntaxHighlighting, defaultHighlightStyle,
+    bracketMatching,
     searchKeymap, highlightSelectionMatches,
     closeBrackets, closeBracketsKeymap,
+    syntaxTheme,
     lang,
   };
 }
@@ -200,9 +203,10 @@ export default function createWidget({ name, path = null, r = null, fs }) {
       highlightActiveLine, highlightActiveLineGutter,
       drawSelection, dropCursor,
       history, historyKeymap, defaultKeymap, indentWithTab,
-      bracketMatching, syntaxHighlighting, defaultHighlightStyle,
+      bracketMatching,
       searchKeymap, highlightSelectionMatches,
       closeBrackets, closeBracketsKeymap,
+      syntaxTheme,
       lang,
     } = cm;
 
@@ -215,7 +219,7 @@ export default function createWidget({ name, path = null, r = null, fs }) {
       bracketMatching(),
       closeBrackets(),
       history(),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+      syntaxTheme,
       highlightSelectionMatches(),
       keymap.of([
         ...closeBracketsKeymap,
