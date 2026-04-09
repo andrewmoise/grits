@@ -522,9 +522,10 @@ function render(animate = false) {
   buildResizeHandles(layout);
 }
 
-function renderPositionsOnly() {
+function renderPositionsOnly(skipId) {
   const layout = computeLayout();
   for (const [id, rect] of layout) {
+    if (id === skipId) continue;
     const el = domCache.get(id);
     if (el) applyRect(el, rect, true);
   }
@@ -786,34 +787,50 @@ function bindTitleDrag(titleEl, w) {
     if (e.target.closest('.widget-btn')) return;
     e.preventDefault();
 
-    const snapshot    = computeLayout();
-    const wsRect      = document.getElementById('workspace').getBoundingClientRect();
-    let   lastTarget  = null;
+    const snapshot   = computeLayout();
+    const wsRect     = document.getElementById('workspace').getBoundingClientRect();
+    let   lastTarget = null;
 
-    // Snapshot the master/stack boundary at drag start
-    const ws     = document.getElementById('workspace');
-    const W      = ws.clientWidth - PAD * 2;
-    const GAP    = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap') || '6') * 16;
+    const ws  = document.getElementById('workspace');
+    const W   = ws.clientWidth - PAD * 2;
+    const GAP = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap') || '6') * 16;
     const hasMasterAtStart = [...widgets.values()].some(ww => ww.zone === 'master' && ww.id !== w.id);
-    const stackLeftSnap  = hasMasterAtStart
+    const stackLeftSnap = hasMasterAtStart
       ? PAD + Math.round(W * masterFrac - GAP / 2) + GAP
       : PAD;
 
-    // Snapshot stack order at drag start (excluding dragged widget)
     const stackSnap = [...widgets.values()]
       .filter(ww => ww.zone === 'stack' && ww.id !== w.id)
       .sort((a, b) => a.stackOrder - b.stackOrder)
       .map(ww => ({ id: ww.id, stackOrder: ww.stackOrder, rect: snapshot.get(ww.id) }));
 
+    // Capture starting mouse and element position
+    const startMouseX = e.clientX;
+    const startMouseY = e.clientY;
+    const dragEl = domCache.get(w.id);
+    const startElLeft = dragEl ? parseFloat(dragEl.style.left) : 0;
+    const startElTop  = dragEl ? parseFloat(dragEl.style.top)  : 0;
+
     document.body.style.cursor = 'grabbing';
+    if (dragEl) {
+      dragEl.style.opacity    = '0.5';
+      dragEl.style.transition = 'none';
+      dragEl.style.zIndex     = '1000';
+    }
 
     function onMove(e) {
       const relX = e.clientX - wsRect.left;
       const relY = e.clientY - wsRect.top;
+
+      // Move dragged element freely with the mouse
+      if (dragEl) {
+        dragEl.style.left = (startElLeft + e.clientX - startMouseX) + 'px';
+        dragEl.style.top  = (startElTop  + e.clientY - startMouseY) + 'px';
+      }
+
+      // Resolve and apply logical layout for all other windows
       const target = resolveDropTarget(relX, relY, stackLeftSnap, stackSnap, hasMasterAtStart);
-      console.log(`[drag] relX=${relX.toFixed(0)} relY=${relY.toFixed(0)} stackLeftSnap=${stackLeftSnap.toFixed(0)} → zone=${target.zone} insertAfter=${target.insertAfter ?? 'n/a'}`);
       if (!targetsEqual(target, lastTarget)) {
-        console.log(`[drag] TARGET CHANGED from`, lastTarget, `to`, target);
         lastTarget = target;
         applyDragTarget(w.id, target);
       }
@@ -823,12 +840,72 @@ function bindTitleDrag(titleEl, w) {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup',   onUp);
       document.body.style.cursor = '';
+      if (dragEl) {
+        dragEl.style.opacity = '1';
+        dragEl.style.zIndex  = '';
+      }
       render(true);
     }
 
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup',   onUp);
   });
+}
+
+function applyDragTarget(dragId, target) {
+  const dragged = widgets.get(dragId); if (!dragged) return;
+  const masterW = [...widgets.values()].find(w => w.zone === 'master');
+  const stackWs = [...widgets.values()]
+    .filter(w => w.zone === 'stack')
+    .sort((a, b) => a.stackOrder - b.stackOrder);
+
+  if (target.zone === 'master') {
+    if (dragged.zone === 'master') return;
+
+    if (masterW) {
+      masterW.zone       = 'stack';
+      masterW.stackOrder = dragged.stackOrder;
+      masterW.flexRatio  = dragged.flexRatio;
+    }
+    dragged.zone          = 'master';
+    dragged.masterHistory = Date.now();
+
+  } else {
+    const { insertAfter } = target;
+
+    if (dragged.zone === 'master') {
+      const newMaster = [...widgets.values()]
+        .filter(w => w.zone === 'stack')
+        .sort((a, b) => b.masterHistory - a.masterHistory)[0];
+
+      const savedFlex  = newMaster ? newMaster.flexRatio  : 1;
+      const savedOrder = newMaster ? newMaster.stackOrder : 0;
+
+      if (newMaster) {
+        newMaster.zone          = 'master';
+        newMaster.masterHistory = Date.now();
+      }
+
+      dragged.zone       = 'stack';
+      dragged.flexRatio  = savedFlex;
+      dragged.stackOrder = savedOrder;
+    }
+
+    const others = [...widgets.values()]
+      .filter(w => w.zone === 'stack' && w.id !== dragId)
+      .sort((a, b) => a.stackOrder - b.stackOrder);
+    const result = [];
+    let inserted = false;
+    for (const w of others) {
+      if (!inserted && w.stackOrder > insertAfter) { result.push(dragged); inserted = true; }
+      result.push(w);
+    }
+    if (!inserted) result.push(dragged);
+    result.forEach((w, i) => w.stackOrder = i);
+  }
+
+  normalizeStackOrder();
+  renderPositionsOnly(dragId);
 }
 
 function resolveDropTarget(relX, relY, stackLeftSnap, stackSnap, hasMasterAtStart) {
@@ -849,69 +926,6 @@ function targetsEqual(a, b) {
   if (a.zone !== b.zone) return false;
   if (a.zone === 'stack') return a.insertAfter === b.insertAfter;
   return true;
-}
-
-function applyDragTarget(dragId, target) {
-  const dragged = widgets.get(dragId); if (!dragged) return;
-  const masterW = [...widgets.values()].find(w => w.zone === 'master');
-  const stackWs = [...widgets.values()]
-    .filter(w => w.zone === 'stack')
-    .sort((a, b) => a.stackOrder - b.stackOrder);
-
-  console.log(`[apply] dragId=${dragId} dragged.zone=${dragged.zone} target=`, target);
-  console.log(`[apply] masterW=`, masterW ? `id=${masterW.id}` : 'none');
-  console.log(`[apply] stackWs=`, stackWs.map(w => `id=${w.id} order=${w.stackOrder} flex=${w.flexRatio.toFixed(2)}`));
-
-  if (target.zone === 'master') {
-    if (dragged.zone === 'master') return;
-
-    // Simple swap: each takes the other's slot and height
-    if (masterW) {
-      masterW.zone       = 'stack';
-      masterW.stackOrder = dragged.stackOrder;
-      masterW.flexRatio  = dragged.flexRatio;
-    }
-    dragged.zone          = 'master';
-    dragged.masterHistory = Date.now();
-
-  } else {
-    const { insertAfter } = target;
-
-    if (dragged.zone === 'master') {
-      // Find who's taking master's place
-      const newMaster = [...widgets.values()]
-        .filter(w => w.zone === 'stack')
-        .sort((a, b) => b.masterHistory - a.masterHistory)[0];
-
-      const savedFlex = newMaster ? newMaster.flexRatio : 1;
-      const savedOrder = newMaster ? newMaster.stackOrder : 0;
-
-      if (newMaster) {
-        newMaster.zone          = 'master';
-        newMaster.masterHistory = Date.now();
-      }
-
-      dragged.zone      = 'stack';
-      dragged.flexRatio = savedFlex;
-      dragged.stackOrder = savedOrder;
-    }
-
-    // Reorder stack by insertion point
-    const others = [...widgets.values()]
-      .filter(w => w.zone === 'stack' && w.id !== dragId)
-      .sort((a, b) => a.stackOrder - b.stackOrder);
-    const result = [];
-    let inserted = false;
-    for (const w of others) {
-      if (!inserted && w.stackOrder > insertAfter) { result.push(dragged); inserted = true; }
-      result.push(w);
-    }
-    if (!inserted) result.push(dragged);
-    result.forEach((w, i) => w.stackOrder = i);
-  }
-
-  normalizeStackOrder();
-  renderPositionsOnly();
 }
 
 function buildStrip() {
