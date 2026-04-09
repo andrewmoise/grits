@@ -262,22 +262,22 @@ const _shell = makeShell({
 evalContext.shell = _shell;
 
 const CELL_REGISTRY = {
-  gterm: {
-    name: 'gterm', icon: 'gterm',
-    module: `${_libUrl}/gterm/gwm-widget.js`, _cache: null,
-  },
   files: {
     name: 'files', icon: 'files',
     module: `${_libUrl}/files/gwm-widget.js`, _cache: null,
   },
-  project: {
-    name: 'project', icon: 'project',
-    module: `${_libUrl}/project/gwm-widget.js`, _cache: null,
+  gterm: {
+    name: 'gterm', icon: 'gterm',
+    module: `${_libUrl}/gterm/gwm-widget.js`, _cache: null,
   },
   editor: {
     name: 'editor', icon: 'editor',
     module: `${_libUrl}/editor/gwm-widget.js`, _cache: null,
   },
+  // project: {
+  //   name: 'project', icon: 'project',
+  //   module: `${_libUrl}/project/gwm-widget.js`, _cache: null,
+  // },
 };
 
 async function loadCell(id) {
