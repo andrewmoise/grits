@@ -147,20 +147,15 @@
 
   .strip-launcher {
     width: var(--icon-size); height: var(--icon-size);
-    border-radius: var(--icon-r); border: 1px solid var(--border);
-    background: var(--bg-float); color: var(--text-dim);
+    border-radius: var(--icon-r); border: 1px solid var(--a1-dim);
+    background: var(--bg-float); color: var(--a1);
     cursor: pointer; display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, border-color 0.15s, color 0.15s, transform 0.15s;
     position: relative;
   }
-  .strip-launcher:hover { background: var(--bg-hover); border-color: var(--border-hi); color: var(--text); transform: scale(1.06); }
+  .strip-launcher:hover { background: var(--a1-dim); border-color: var(--a1); color: var(--text-hi); transform: scale(1.06); }
   .strip-launcher:active { transform: scale(0.96); }
   .strip-launcher svg { width: 1.3em; height: 1.3em; stroke-width: 1.5; }
-  .strip-launcher::after {
-    content: '+'; position: absolute; bottom: 0.2rem; right: 0.25rem;
-    font-size: 0.45rem; line-height: 1; color: var(--text-dim); opacity: 0.55;
-    font-family: var(--font-mono); pointer-events: none; transition: opacity 0.15s;
-  }
   .strip-launcher:hover::after { opacity: 0.9; }
 
   #strip-separator {
