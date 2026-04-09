@@ -164,7 +164,6 @@
   .strip-launcher:hover { background: var(--a1-dim); border-color: var(--a1); color: var(--text-hi); transform: scale(1.06); }
   .strip-launcher:active { transform: scale(0.96); }
   .strip-launcher svg { width: 1.3em; height: 1.3em; stroke-width: 1.5; }
-  .strip-launcher:hover::after { opacity: 0.9; }
 
   #strip-separator {
     width: var(--icon-size); display: flex; align-items: center;
@@ -246,22 +245,9 @@ const _vol    = 'client';
 const _libUrl = `${_origin}/grits/v1/content/${_vol}/lib`;
 const _gg     = new GritsClient();
 
-// evalContext is created first so shell can reference it,
-// then shell and ui are attached before any widgets launch.
-const evalContext = { fs: _gg, ui: null, shell: null, plumber };
+const evalContext = { fs: _gg, shell: null, plumber };
 
-// A single shared shell for plumber dispatch and main.js tool invocations.
-const _shell = makeShell({
-  fs:        _gg,
-  serverUrl: _origin,
-  volume:    _vol,
-  cwd:       '/',
-  libs:      [{ serverUrl: _origin, volume: _vol, path: 'lib' }],
-  evalContext,
-});
-evalContext.shell = _shell;
-
-const CELL_REGISTRY = {
+const WIDGET_REGISTRY = {
   files: {
     name: 'files', icon: 'files',
     module: `${_libUrl}/files/gwm-widget.js`, _cache: null,
@@ -272,20 +258,9 @@ const CELL_REGISTRY = {
   },
   editor: {
     name: 'editor', icon: 'editor',
-    module: `${_libUrl}/editor/gwm-widget.js`, _cache: null,
+    module: `${_libUrl}/codemirror/gwm-widget.js`, _cache: null,
   },
-  // project: {
-  //   name: 'project', icon: 'project',
-  //   module: `${_libUrl}/project/gwm-widget.js`, _cache: null,
-  // },
 };
-
-async function loadCell(id) {
-  const entry = CELL_REGISTRY[id];
-  if (!entry) throw new Error(`Unknown cell: ${id}`);
-  if (!entry._cache) { const mod = await import(entry.module); entry._cache = mod.default; }
-  return entry._cache;
-}
 
 const ICONS = {
   project:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><polyline points="8 14 10 16 16 13"/></svg>`,
@@ -306,21 +281,100 @@ let masterFrac = 0.60;
 const widgets  = new Map();
 const domCache = new Map();
 
-evalContext.ui = {
-  openWidget({ el, focus, destroy, name = 'widget', icon = 'gterm', zone = 'stack', ...rest }) {
-    const id = ++widgetSeq;
-    // Store the full instance so editor's setTitleEl/setSaveIconEl are accessible
-    const cellInstance = { el, focus, destroy, ...rest };
-    widgets.set(id, {
-      id, name, icon, zone,
-      masterHistory: zone === 'master' ? Date.now() : 0,
-      stackOrder:    zone === 'stack'  ? stackMaxOrder() + 1 : 0,
-      flexRatio: 1, cellEl: el, cellInstance,
-    });
-    render(true);
-    return id;
+// ── Core widget opener ────────────────────────────────────
+// mod: ES module object with a default export factory function
+// opts: { name, icon, zone, iconRect, ...rest passed to factory }
+async function openWidget(mod, opts = {}) {
+  const {
+    zone     = 'master',
+    name     = 'widget',
+    icon     = 'editor',
+    iconRect = null,
+    ...rest
+  } = opts;
+
+  const id  = ++widgetSeq;
+  const now = Date.now();
+
+  const ex        = [...widgets.values()].filter(w => w.zone === 'stack' || w.zone === 'master');
+  const hasMaster = ex.some(w => w.zone === 'master');
+
+  let newRatio = 1;
+
+  if (zone === 'master' && hasMaster) {
+    const curMaster = ex.find(w => w.zone === 'master');
+    const stackWs   = ex.filter(w => w.zone === 'stack');
+    const n         = stackWs.length;
+    if (n > 0) {
+      stackWs.forEach(w => w.flexRatio = (w.flexRatio || 1) * n / (n + 1));
+      curMaster.flexRatio = stackWs.reduce((s, w) => s + w.flexRatio, 0) / (n + 1);
+    }
+    curMaster.zone       = 'stack';
+    curMaster.stackOrder = stackMaxOrder() + 1;
+  } else if (zone === 'stack') {
+    const stackWs = ex.filter(w => w.zone === 'stack');
+    const n       = stackWs.length;
+    if (n > 0) {
+      stackWs.forEach(w => w.flexRatio = (w.flexRatio || 1) * n / (n + 1));
+      newRatio = stackWs.reduce((s, w) => s + w.flexRatio, 0) / (n + 1);
+    }
   }
+
+  widgets.set(id, {
+    id, name, icon, zone,
+    masterHistory: zone === 'master' ? now : 0,
+    stackOrder:    zone === 'stack'  ? stackMaxOrder() + 1 : 0,
+    flexRatio: newRatio, cellEl: null, cellInstance: null,
+  });
+
+  render(true);
+  if (iconRect) spawnFromOrigin(id, iconRect);
+
+  try {
+    const createWidget = mod.default ?? mod;
+    const instance     = await Promise.resolve(createWidget({ name, evalContext, ...rest }));
+    const w            = widgets.get(id);
+    if (w) {
+      w.cellEl       = instance.el;
+      w.cellInstance = instance;
+      const el = domCache.get(id);
+      if (el) updateWidgetBody(el, w);
+    }
+  } catch (e) {
+    console.error('[openWidget] failed to create widget:', e);
+  }
+}
+
+// ── Strip launcher — loads module from registry then opens ─
+async function launchFromStrip(registryEntry, iconRect) {
+  if (!registryEntry._cache) {
+    const mod = await import(registryEntry.module);
+    registryEntry._cache = mod;
+  }
+  await openWidget(registryEntry._cache, {
+    name:     registryEntry.name,
+    icon:     registryEntry.icon,
+    iconRect,
+    zone:     'master',
+  });
+}
+
+// ── Public API ────────────────────────────────────────────
+window.gimbal = {
+  openWidget,
+  WIDGET_REGISTRY,
 };
+
+// ── Shell ─────────────────────────────────────────────────
+const _shell = makeShell({
+  fs:        _gg,
+  serverUrl: _origin,
+  volume:    _vol,
+  cwd:       '/',
+  libs:      [{ serverUrl: _origin, volume: _vol, path: 'lib' }],
+  evalContext,
+});
+evalContext.shell = _shell;
 
 const mkEl = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
 const $    = id => document.getElementById(id);
@@ -634,46 +688,6 @@ function animateOut(id) {
   setTimeout(() => { el.remove(); domCache.delete(id); }, 200);
 }
 
-async function launchCell(cellId, iconRect) {
-  const entry = CELL_REGISTRY[cellId];
-  if (!entry) return;
-  const id = ++widgetSeq, now = Date.now();
-
-  const ex = [...widgets.values()].filter(w => w.zone === 'stack' || w.zone === 'master');
-  const isEmpty = ex.length === 0;
-  const zone = isEmpty ? 'master' : 'stack';
-
-  let newRatio = 1;
-  if (!isEmpty) {
-    const stackWs = ex.filter(w => w.zone === 'stack'), n = stackWs.length;
-    if (n > 0) {
-      stackWs.forEach(w => w.flexRatio = (w.flexRatio||1) * n / (n+1));
-      newRatio = stackWs.reduce((s,w) => s + (w.flexRatio||1), 0) / (n+1);
-    }
-  }
-
-  widgets.set(id, {
-    id, name: entry.name, icon: entry.icon, zone,
-    masterHistory: zone === 'master' ? now : 0,
-    stackOrder: zone === 'stack' ? stackMaxOrder() + 1 : 0,
-    flexRatio: newRatio, cellEl: null, cellInstance: null,
-  });
-
-  render(true);
-
-  if (iconRect) spawnFromOrigin(id, iconRect);
-
-  try {
-    const w = widgets.get(id);
-    const createWidget = await loadCell(cellId);
-    const instance = await Promise.resolve(createWidget({ name: entry.name, evalContext }));
-    w.cellEl       = instance.el;
-    w.cellInstance = instance;
-    const el = domCache.get(id);
-    if (el) updateWidgetBody(el, w);
-  } catch(e) { console.error(`Failed to load cell "${cellId}":`, e); }
-}
-
 function closeWidget(id) {
   const w = widgets.get(id); if (!w) return;
   animateOut(id);
@@ -715,7 +729,6 @@ function minimizeWidget(id) {
       el.style.width   = '0px';
       el.style.height  = '0px';
       el.style.opacity = '0';
-
       setTimeout(() => el.remove(), 300);
     });
   } else {
@@ -917,12 +930,10 @@ function targetsEqual(a, b) {
 
 function buildStrip() {
   const stripTop = $('strip-top');
-  Object.entries(CELL_REGISTRY).forEach(([id, entry]) => {
+  Object.entries(WIDGET_REGISTRY).forEach(([id, entry]) => {
     const b = mkEl('div', 'strip-launcher');
-    b.innerHTML = (ICONS[entry.icon]||ICONS.gterm) + `<span class="tip">${entry.name}</span>`;
-    b.addEventListener('click', () => {
-      launchCell(id, b.getBoundingClientRect());
-    });
+    b.innerHTML = (ICONS[entry.icon] || ICONS.gterm) + `<span class="tip">${entry.name}</span>`;
+    b.addEventListener('click', () => launchFromStrip(entry, b.getBoundingClientRect()));
     stripTop.appendChild(b);
   });
 }
@@ -930,8 +941,15 @@ function buildStrip() {
 window.addEventListener('resize', () => render(false));
 
 buildStrip();
-launchCell('files', null);
-launchCell('gterm', null);
+
+// Launch initial widgets
+(async () => {
+  const filesMod = await import(`${_libUrl}/files/gwm-widget.js`);
+  await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', evalContext });
+  const gtermMod = await import(`${_libUrl}/gterm/gwm-widget.js`);
+  await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', evalContext });
+})();
+
 </script>
 </body>
 </html>
