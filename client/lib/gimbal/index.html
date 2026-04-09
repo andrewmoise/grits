@@ -81,12 +81,21 @@
   }
 
   .widget-icon {
-    width: 0.82em; height: 0.82em;
+    width: var(--btn-size); height: var(--btn-size);
     display: flex; align-items: center; justify-content: center;
-    color: var(--text-dim); flex-shrink: 0; margin-left: 0.15rem;
+    color: var(--text-dim); flex-shrink: 0;
   }
-  .widget-icon svg { width: 0.82em; height: 0.82em; stroke-width: 1.5; }
+  .widget-icon svg { width: 0.82em; height: 0.82em; stroke-width: 1.7; }
   .widget:focus-within .widget-icon { color: var(--text); }
+
+  /* clickable main icon */
+  .widget-icon.is-action {
+    cursor: pointer;
+    border-radius: 0.3rem;
+    padding: 0.1rem;
+    transition: background 0.12s, color 0.12s;
+  }
+  .widget-icon.is-action:hover { background: var(--bg-hover); color: var(--text-hi); }
 
   #workspace-empty {
     position: absolute; inset: 0;
@@ -113,8 +122,12 @@
   .widget:focus-within .widget-title { background: var(--bg-active); }
   .widget-title:active { cursor: grabbing; }
 
-  .title-left  { width: 3.75rem; display: flex; align-items: center; gap: 0.1rem; flex-shrink: 0; }
-  .title-right { width: 3.75rem; display: flex; align-items: center; justify-content: flex-end; gap: 0.1rem; flex-shrink: 0; }
+  /* dirty state — title text and left-side btn icons shift to accent green */
+  .widget-title.is-dirty .widget-name          { color: var(--a2, #4ade80) !important; }
+  .widget-title.is-dirty .title-left .widget-btn { color: var(--a2, #4ade80); }
+
+  .title-left  { display: flex; align-items: center; gap: 0.1rem; flex-shrink: 0; }
+  .title-right { display: flex; align-items: center; justify-content: flex-end; gap: 0.1rem; flex-shrink: 0; }
 
   .widget-name {
     flex: 1; text-align: center;
@@ -122,6 +135,7 @@
     letter-spacing: 0.02em;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     font-family: var(--font-ui); transition: color 0.15s;
+    padding: 0 0.25rem;
   }
   .widget:focus-within .widget-name { color: var(--text); }
 
@@ -134,7 +148,7 @@
   }
   .widget-btn:hover { background: var(--bg-hover); color: var(--text-hi); }
   .widget-btn.close:hover { background: var(--red-dim); color: var(--red); }
-  .widget-btn svg { width: 1.2em; height: 1.2em; stroke-width: 1.7; }
+  .widget-btn svg { width: 0.82em; height: 0.82em; stroke-width: 1.7; }
 
   .widget-body {
     flex: 1; overflow: auto; min-height: 0; color: var(--text);
@@ -267,11 +281,13 @@ const ICONS = {
   gterm:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
   files:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
   editor:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
-  minimize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/></svg>`,
+  minimize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="5" y1="19" x2="19" y2="19"/></svg>`,
   promote:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`,
   demote:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`,
   close:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
   save:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`,
+  back:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>`,
+  forward:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`,
 };
 
 const PAD = 8;
@@ -334,11 +350,51 @@ async function openWidget(mod, opts = {}) {
     const createWidget = mod.default ?? mod;
     const instance     = await Promise.resolve(createWidget({ name, evalContext, ...rest }));
     const w            = widgets.get(id);
-    if (w) {
-      w.cellEl       = instance.el;
-      w.cellInstance = instance;
-      const el = domCache.get(id);
-      if (el) updateWidgetBody(el, w);
+    if (!w) return;
+
+    w.cellEl       = instance.el;
+    w.cellInstance = instance;
+
+    // ── Read initial decoration from the instance ─────────
+    const dec = instance.decoration ?? {};
+
+    // Override name/icon if the widget declares them
+    if (dec.title !== undefined) w.name = dec.title;
+    if (dec.icon  !== undefined) w.icon = dec.icon;
+
+    // ── Build and inject the controls object ──────────────
+    // The widget mutates its own decoration object then calls controls.update()
+    // to tell the shell to re-read it. setTitle / setDirty are thin helpers
+    // that do exactly that — widgets can also just mutate + update() directly.
+    const controls = {
+      update() {
+        const el = domCache.get(id); if (!el) return;
+        const ww = widgets.get(id); if (!ww) return;
+        syncDecoration(el, ww);
+      },
+      setTitle(str) {
+        const ww = widgets.get(id); if (!ww) return;
+        const dec = ww.cellInstance?.decoration ?? {};
+        dec.title = str;
+        ww.name   = str;
+        controls.update();
+      },
+      // Convenience: flips dec.dirty then re-syncs
+      setDirty(isDirty) {
+        const ww = widgets.get(id); if (!ww) return;
+        const dec = ww.cellInstance?.decoration ?? {};
+        dec.dirty = isDirty;
+        controls.update();
+      },
+    };
+
+    instance.controls = controls;
+
+    const el = domCache.get(id);
+    if (el) {
+      syncDecoration(el, w);
+      updateWidgetBody(el, w);
+      updateWidgetButtons(el, w, w.zone);
     }
   } catch (e) {
     console.error('[openWidget] failed to create widget:', e);
@@ -381,8 +437,27 @@ const $    = id => document.getElementById(id);
 
 function mkBtn(iconName, label, extraClass, onClick) {
   const b = mkEl('button', `widget-btn${extraClass ? ' '+extraClass : ''}`);
-  b.innerHTML = ICONS[iconName]; b.title = label;
+  b.innerHTML = ICONS[iconName] ?? ICONS.gterm; b.title = label;
   b.addEventListener('click', e => { e.stopPropagation(); onClick(); });
+  return b;
+}
+
+// Create a button from a decoration button descriptor:
+// { icon, label, action, enabled? }
+function mkDecBtn(desc) {
+  const svgContent = typeof desc.icon === 'object' && desc.icon.svg
+    ? desc.icon.svg
+    : (ICONS[desc.icon] ?? ICONS.gterm);
+  const b = mkEl('button', 'widget-btn');
+  b.innerHTML = svgContent;
+  b.title = desc.label ?? '';
+  if (desc.enabled === false) {
+    b.disabled = true;
+    b.style.opacity = '0.3';
+  }
+  b.addEventListener('click', e => { e.stopPropagation(); desc.action?.(); });
+  // Expose a handle so the widget can update enabled state
+  desc._el = b;
   return b;
 }
 
@@ -441,25 +516,50 @@ function applyRect(el, rect, animate) {
   el.style.height = rect.height + 'px';
 }
 
+// ── Decoration sync ───────────────────────────────────────
+// Single function that reads decoration fresh from the instance
+// and updates the existing title DOM in-place. Called by render()
+// on every pass and by controls.update() on demand.
+function syncDecoration(wrap, w) {
+  const dec = w.cellInstance?.decoration ?? {};
+
+  // Title text
+  if (wrap._nameEl) wrap._nameEl.textContent = dec.title ?? w.name;
+
+  // Dirty class (drives green accent via CSS)
+  if (wrap._titleEl) wrap._titleEl.classList.toggle('is-dirty', !!dec.dirty);
+
+  // Left-side icon + buttons — rebuild only when the button set may have changed.
+  // Keyed on icon + actionability + button count so incidental re-renders don't thrash listeners.
+  const leftSig = `${dec.icon ?? w.icon}|${dec.iconAction ? '1' : '0'}|${(dec.leftButtons ?? []).length}`;
+  if (wrap._leftSig !== leftSig) {
+    wrap._leftSig = leftSig;
+    const left = wrap._leftEl;
+    left.innerHTML = '';
+
+    const iconEl = mkEl('div', `widget-icon${dec.iconAction ? ' is-action' : ''}`);
+    iconEl.innerHTML = (() => {
+      if (dec.icon && typeof dec.icon === 'object' && dec.icon.svg) return dec.icon.svg;
+      return ICONS[dec.icon ?? w.icon] ?? ICONS.gterm;
+    })();
+    if (dec.iconAction) {
+      iconEl.addEventListener('click', e => { e.stopPropagation(); dec.iconAction(); });
+    }
+    left.appendChild(iconEl);
+
+    (dec.leftButtons ?? []).forEach(desc => left.appendChild(mkDecBtn(desc)));
+  }
+}
+
 function buildWidgetEl(w) {
   const wrap = mkEl('div', 'widget');
   wrap.dataset.id = w.id;
 
   const title = mkEl('div', 'widget-title');
+  wrap._titleEl = title;
+
   const left = mkEl('div', 'title-left');
-
-  const iconEl = mkEl('div', 'widget-icon');
-  iconEl.innerHTML = ICONS[w.icon] || ICONS.gterm;
-  left.appendChild(iconEl);
-
-  // Save button — only for editor widgets
-  // if (w.icon === 'editor') {
-  //   const saveBtn = mkBtn('save', 'save', '', () => w.cellInstance?.save?.());
-  //   saveBtn.style.opacity = '0.35';
-  //   left.appendChild(saveBtn);
-  //   wrap._saveBtnEl = saveBtn;
-  // }
-
+  wrap._leftEl = left;
   title.appendChild(left);
 
   const name = mkEl('span', 'widget-name');
@@ -485,6 +585,8 @@ function buildWidgetEl(w) {
 function updateWidgetButtons(wrap, w, zone) {
   const right = wrap._rightEl;
   right.innerHTML = '';
+
+  // Shell-owned system buttons only — widget decoration buttons live on the left
   right.appendChild(mkBtn('minimize', 'minimize', '', () => minimizeWidget(w.id)));
   if (visibleCount() > 1 && zone === 'stack') {
     right.appendChild(mkBtn('promote', 'make master', '',
@@ -499,8 +601,6 @@ function updateWidgetBody(wrap, w) {
   if (w.cellEl) {
     body.style.cssText = 'padding:0; flex:1; overflow:auto; min-height:0;';
     body.appendChild(w.cellEl);
-    if (w.cellInstance?.setTitleEl)   w.cellInstance.setTitleEl(wrap._nameEl);
-    if (w.cellInstance?.setSaveIconEl) w.cellInstance.setSaveIconEl(wrap._saveBtnEl);
   } else {
     body.style.cssText = 'padding:0.75rem; flex:1; display:flex; align-items:center; justify-content:center; color:var(--text-dim); font-size:var(--fs-base); font-family:var(--font-ui); overflow:auto; min-height:0;';
     body.textContent = 'loading…';
@@ -547,6 +647,7 @@ function render(animate = false) {
       applyRect(el, rect, animate);
     }
 
+    syncDecoration(el, w);
     updateWidgetButtons(el, w, w.zone);
     updateWidgetBody(el, w);
   }
@@ -688,8 +789,16 @@ function animateOut(id) {
   setTimeout(() => { el.remove(); domCache.delete(id); }, 200);
 }
 
-function closeWidget(id) {
+// ── Close with optional onCloseRequest hook ───────────────
+async function closeWidget(id) {
   const w = widgets.get(id); if (!w) return;
+
+  const onCloseRequest = w.cellInstance?.decoration?.onCloseRequest;
+  if (onCloseRequest) {
+    const allowed = await Promise.resolve(onCloseRequest());
+    if (!allowed) return;
+  }
+
   animateOut(id);
   w.cellInstance?.destroy();
   const wasMaster = w.zone === 'master';
@@ -784,7 +893,7 @@ function normalizeStackOrder() {
 
 function bindTitleDrag(titleEl, w) {
   titleEl.addEventListener('mousedown', e => {
-    if (e.target.closest('.widget-btn')) return;
+    if (e.target.closest('.widget-btn') || e.target.closest('.widget-icon.is-action')) return;
     e.preventDefault();
 
     const snapshot   = computeLayout();
@@ -804,7 +913,6 @@ function bindTitleDrag(titleEl, w) {
       .sort((a, b) => a.stackOrder - b.stackOrder)
       .map(ww => ({ id: ww.id, stackOrder: ww.stackOrder, rect: snapshot.get(ww.id) }));
 
-    // Capture starting mouse and element position
     const startMouseX = e.clientX;
     const startMouseY = e.clientY;
     const dragEl = domCache.get(w.id);
@@ -822,13 +930,11 @@ function bindTitleDrag(titleEl, w) {
       const relX = e.clientX - wsRect.left;
       const relY = e.clientY - wsRect.top;
 
-      // Move dragged element freely with the mouse
       if (dragEl) {
         dragEl.style.left = (startElLeft + e.clientX - startMouseX) + 'px';
         dragEl.style.top  = (startElTop  + e.clientY - startMouseY) + 'px';
       }
 
-      // Resolve and apply logical layout for all other windows
       const target = resolveDropTarget(relX, relY, stackLeftSnap, stackSnap, hasMasterAtStart);
       if (!targetsEqual(target, lastTarget)) {
         lastTarget = target;

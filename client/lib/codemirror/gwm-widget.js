@@ -1,11 +1,22 @@
 /*
  * @cell codemirror-widget
- * @version 0.3
+ * @version 0.4
  * @about
  *   CodeMirror 6 editor widget for the Gimbal shell.
  *   Reads files via r (resolved path) + fs.volume().lookup().
  *   Saves via vol.put() + vol.mkfile() + vol.link().
  * @implements gimbal-shell#widget
+ *
+ * decoration interface:
+ *   icon         — 'editor'
+ *   title        — filename (set after load)
+ *   rightButtons — [save button]
+ *   onCloseRequest — warns when dirty
+ *
+ * controls interface (injected by shell after mount):
+ *   controls.setTitle(str)
+ *   controls.setTitlebarColor(css)
+ *   controls.setDirty(bool)
  */
 
 import { FONT_MONO, injectStyles } from '../style/style.js';
@@ -132,31 +143,65 @@ async function loadCM(path) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-// r  : { serverUrl, volume, path } — resolved by main.js before widget creation
-// fs : GritsClient instance
+// name : display name passed by the shell
+// path : string file path (used for language detection)
+// r    : { serverUrl, volume, path } — resolved path object
+// fs   : GritsClient instance
 export default function createWidget({ name, path = null, r = null, fs }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'ge-wrap';
 
-  let view        = null;
-  let dirty       = false;
-  let _titleEl    = null;
-  let _saveIconEl = null;
+  let view  = null;
+  let dirty = false;
 
-  function setTitleEl(e)    { _titleEl    = e; }
-  function setSaveIconEl(e) { _saveIconEl = e; }
+  // controls is injected by the shell after mount
+  let controls = null;
 
+  // ── save button descriptor ────────────────────────────
+  // Kept as an object so we can mutate .enabled and the shell
+  // re-reads it on the next render cycle, but we also update
+  // the live DOM element directly via _el for instant feedback.
+  const saveBtn = {
+    icon:    'save',
+    label:   'save  (⌘S)',
+    enabled: false,
+    action() { save(); },
+  };
+
+  // ── decoration declaration ────────────────────────────
+  // The shell reads this once after the factory resolves,
+  // then keeps controls in sync via the controls object.
+  const decoration = {
+    icon: 'editor',
+
+    // title is left as undefined here; the shell uses the
+    // name passed to the factory until we call controls.setTitle()
+
+    leftButtons:  [saveBtn],
+
+    // Called by the shell before closing — return false to cancel
+    onCloseRequest() {
+      if (!dirty) return true;
+      return confirm(`"${name}" has unsaved changes. Close anyway?`);
+    },
+  };
+
+  // ── helpers ───────────────────────────────────────────
   function markDirty(isDirty) {
+    if (dirty === isDirty) return;
     dirty = isDirty;
-    if (_titleEl) {
-      const base = name ?? 'editor';
-      _titleEl.textContent = isDirty ? `· ${base}` : base;
+
+    // Update the save button's appearance immediately via its live DOM element
+    if (saveBtn._el) {
+      saveBtn._el.style.opacity = isDirty ? '1' : '0.3';
+      saveBtn._el.disabled = !isDirty;
     }
-    if (_saveIconEl) {
-      _saveIconEl.style.opacity = isDirty ? '1' : '0.35';
-    }
+    saveBtn.enabled = isDirty;
+
+    // Push title color + save button state through the controls interface
+    controls?.setDirty(isDirty);
   }
 
   function vol() {
@@ -164,7 +209,7 @@ export default function createWidget({ name, path = null, r = null, fs }) {
     return fs.volume(r.serverUrl, r.volume);
   }
 
-  // ── load ──────────────────────────────────────────────────
+  // ── load ──────────────────────────────────────────────
   async function load() {
     if (!r) { mountCM(''); return; }
     try {
@@ -179,7 +224,7 @@ export default function createWidget({ name, path = null, r = null, fs }) {
     }
   }
 
-  // ── save ──────────────────────────────────────────────────
+  // ── save ──────────────────────────────────────────────
   async function save() {
     if (!r || !view) return;
     try {
@@ -195,7 +240,7 @@ export default function createWidget({ name, path = null, r = null, fs }) {
     }
   }
 
-  // ── mount ─────────────────────────────────────────────────
+  // ── mount ─────────────────────────────────────────────
   async function mountCM(initialText) {
     const cm = await loadCM(path);
     const {
@@ -253,10 +298,14 @@ export default function createWidget({ name, path = null, r = null, fs }) {
 
   return {
     el,
+    decoration,
+
+    // The shell writes to this after mount
+    get controls() { return controls; },
+    set controls(c) { controls = c; },
+
     focus()   { view?.focus(); },
     destroy() { view?.destroy(); },
     save,
-    setTitleEl,
-    setSaveIconEl,
   };
 }
