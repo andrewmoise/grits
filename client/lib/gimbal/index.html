@@ -217,33 +217,20 @@
     cursor: row-resize;
     height: 0.6rem;
   }
-
-  /* ═══════════════════════════════════════════════════
-     DRAG GHOST
-     ═══════════════════════════════════════════════════ */
-  #drag-ghost {
-    position: fixed; pointer-events: none; z-index: 9999;
-    background: var(--bg-elevated); border: 1px solid var(--a1);
-    border-radius: 0.4rem; padding: 0.25rem 0.7rem;
-    font-size: var(--fs-base); font-family: var(--font-ui);
-    color: var(--a1); opacity: 0.92; display: none;
-    box-shadow: 0 0.2rem 0.8rem rgba(0,0,0,0.5);
-  }
 </style>
 </head>
 <body>
 
 <div id="root">
-  <div id="workspace">
-    <div id="workspace-empty"></div>
-  </div>
   <div id="strip">
     <div id="strip-top"></div>
     <div id="strip-separator"><span>open</span></div>
     <div id="minimized-section"></div>
   </div>
+  <div id="workspace">
+    <div id="workspace-empty"></div>
+  </div>
 </div>
-<div id="drag-ghost"></div>
 
 <script type="module">
 
