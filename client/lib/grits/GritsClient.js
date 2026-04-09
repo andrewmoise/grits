@@ -296,7 +296,6 @@ export class GritsVolume {
     if (typeof path !== 'string')
       throw new TypeError(`link: path must be a string, got ${_typename(path)}`);
     const metaCID = fileOrCID instanceof GritsFile ? fileOrCID.cid() : fileOrCID;
-    await this._ensureOnServer(metaCID);
     return this._linkRaw(metaCID, path);
   }
 
