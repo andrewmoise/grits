@@ -522,6 +522,15 @@ function render(animate = false) {
   buildResizeHandles(layout);
 }
 
+function renderPositionsOnly() {
+  const layout = computeLayout();
+  for (const [id, rect] of layout) {
+    const el = domCache.get(id);
+    if (el) applyRect(el, rect, true);
+  }
+  buildResizeHandles(layout);
+}
+
 function buildResizeHandles(layout) {
   const ws = $('workspace');
   ws.querySelectorAll('.resize-handle-h, .resize-handle-v').forEach(e => e.remove());
@@ -773,41 +782,136 @@ function normalizeStackOrder() {
 }
 
 function bindTitleDrag(titleEl, w) {
-  let dragging = false;
-  const ghost = $('drag-ghost');
   titleEl.addEventListener('mousedown', e => {
     if (e.target.closest('.widget-btn')) return;
-    dragging = true;
-    ghost.textContent = `↳ ${w.name}`; ghost.style.display = 'block';
-    moveGhost(e); e.preventDefault();
+    e.preventDefault();
+
+    const snapshot    = computeLayout();
+    const wsRect      = document.getElementById('workspace').getBoundingClientRect();
+    let   lastTarget  = null;
+
+    // Snapshot the master/stack boundary at drag start
+    const ws     = document.getElementById('workspace');
+    const W      = ws.clientWidth - PAD * 2;
+    const GAP    = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap') || '6') * 16;
+    const hasMasterAtStart = [...widgets.values()].some(ww => ww.zone === 'master' && ww.id !== w.id);
+    const stackLeftSnap  = hasMasterAtStart
+      ? PAD + Math.round(W * masterFrac - GAP / 2) + GAP
+      : PAD;
+
+    // Snapshot stack order at drag start (excluding dragged widget)
+    const stackSnap = [...widgets.values()]
+      .filter(ww => ww.zone === 'stack' && ww.id !== w.id)
+      .sort((a, b) => a.stackOrder - b.stackOrder)
+      .map(ww => ({ id: ww.id, stackOrder: ww.stackOrder, rect: snapshot.get(ww.id) }));
+
+    document.body.style.cursor = 'grabbing';
+
+    function onMove(e) {
+      const relX = e.clientX - wsRect.left;
+      const relY = e.clientY - wsRect.top;
+      const target = resolveDropTarget(relX, relY, stackLeftSnap, stackSnap, hasMasterAtStart);
+      console.log(`[drag] relX=${relX.toFixed(0)} relY=${relY.toFixed(0)} stackLeftSnap=${stackLeftSnap.toFixed(0)} → zone=${target.zone} insertAfter=${target.insertAfter ?? 'n/a'}`);
+      if (!targetsEqual(target, lastTarget)) {
+        console.log(`[drag] TARGET CHANGED from`, lastTarget, `to`, target);
+        lastTarget = target;
+        applyDragTarget(w.id, target);
+      }
+    }
+
+    function onUp() {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+      document.body.style.cursor = '';
+      render(true);
+    }
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
   });
-  document.addEventListener('mousemove', e => { if (dragging) moveGhost(e); });
-  document.addEventListener('mouseup', e => {
-    if (!dragging) return;
-    dragging = false; ghost.style.display = 'none';
-    const wsEl  = $('workspace');
-    const wsRect = wsEl.getBoundingClientRect();
-    const relX   = e.clientX - wsRect.left;
-    const relY   = e.clientY - wsRect.top;
-    const layout = computeLayout();
-    const masterW = [...widgets.values()].find(x => x.zone === 'master');
-    const stackWs = [...widgets.values()].filter(x => x.zone === 'stack');
+}
 
-    const masterRect = masterW ? layout.get(masterW.id) : null;
-    const inMaster = masterRect &&
-      relX >= masterRect.left && relX <= masterRect.left + masterRect.width &&
-      relY >= masterRect.top  && relY <= masterRect.top  + masterRect.height;
-
-    const stackLeft = masterRect ? masterRect.left + masterRect.width : PAD;
-    const inStack   = relX >= stackLeft && stackWs.length > 0;
-
-    if (inMaster && w.zone !== 'master') promoteWidget(w.id);
-    else if (inStack && w.zone !== 'stack') demoteWidget(w.id);
-  });
-  function moveGhost(e) {
-    ghost.style.left = (e.clientX + 14) + 'px';
-    ghost.style.top  = (e.clientY + 10) + 'px';
+function resolveDropTarget(relX, relY, stackLeftSnap, stackSnap, hasMasterAtStart) {
+  if (hasMasterAtStart && relX < stackLeftSnap) {
+    return { zone: 'master' };
   }
+
+  let insertAfter = -1;
+  for (const { stackOrder, rect } of stackSnap) {
+    if (rect && relY >= rect.top + rect.height / 2) insertAfter = stackOrder;
+  }
+
+  return { zone: 'stack', insertAfter };
+}
+
+function targetsEqual(a, b) {
+  if (!a || !b) return false;
+  if (a.zone !== b.zone) return false;
+  if (a.zone === 'stack') return a.insertAfter === b.insertAfter;
+  return true;
+}
+
+function applyDragTarget(dragId, target) {
+  const dragged = widgets.get(dragId); if (!dragged) return;
+  const masterW = [...widgets.values()].find(w => w.zone === 'master');
+  const stackWs = [...widgets.values()]
+    .filter(w => w.zone === 'stack')
+    .sort((a, b) => a.stackOrder - b.stackOrder);
+
+  console.log(`[apply] dragId=${dragId} dragged.zone=${dragged.zone} target=`, target);
+  console.log(`[apply] masterW=`, masterW ? `id=${masterW.id}` : 'none');
+  console.log(`[apply] stackWs=`, stackWs.map(w => `id=${w.id} order=${w.stackOrder} flex=${w.flexRatio.toFixed(2)}`));
+
+  if (target.zone === 'master') {
+    if (dragged.zone === 'master') return;
+
+    // Simple swap: each takes the other's slot and height
+    if (masterW) {
+      masterW.zone       = 'stack';
+      masterW.stackOrder = dragged.stackOrder;
+      masterW.flexRatio  = dragged.flexRatio;
+    }
+    dragged.zone          = 'master';
+    dragged.masterHistory = Date.now();
+
+  } else {
+    const { insertAfter } = target;
+
+    if (dragged.zone === 'master') {
+      // Find who's taking master's place
+      const newMaster = [...widgets.values()]
+        .filter(w => w.zone === 'stack')
+        .sort((a, b) => b.masterHistory - a.masterHistory)[0];
+
+      const savedFlex = newMaster ? newMaster.flexRatio : 1;
+      const savedOrder = newMaster ? newMaster.stackOrder : 0;
+
+      if (newMaster) {
+        newMaster.zone          = 'master';
+        newMaster.masterHistory = Date.now();
+      }
+
+      dragged.zone      = 'stack';
+      dragged.flexRatio = savedFlex;
+      dragged.stackOrder = savedOrder;
+    }
+
+    // Reorder stack by insertion point
+    const others = [...widgets.values()]
+      .filter(w => w.zone === 'stack' && w.id !== dragId)
+      .sort((a, b) => a.stackOrder - b.stackOrder);
+    const result = [];
+    let inserted = false;
+    for (const w of others) {
+      if (!inserted && w.stackOrder > insertAfter) { result.push(dragged); inserted = true; }
+      result.push(w);
+    }
+    if (!inserted) result.push(dragged);
+    result.forEach((w, i) => w.stackOrder = i);
+  }
+
+  normalizeStackOrder();
+  renderPositionsOnly();
 }
 
 function buildStrip() {
