@@ -48,6 +48,10 @@ const JSON_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 const DEFAULT_HARD_TIMEOUT        = 1 * 60 * 1000; // 1 minute, matches Go-side default
 const MINIROOT_TTL                = 1 * 60 * 1000; // 1 minute
 
+// When true, link() returns immediately and flushes to the server in the background.
+// Lookups consult a local override map so reads see writes immediately.
+const DESYNC_MODE = true;
+
 // ─────────────────────────────────────────────────────────────────
 // MultiLink assertion flags — mirror of Go-side constants in namestore.go
 // ─────────────────────────────────────────────────────────────────
@@ -237,6 +241,140 @@ export class GritsFile {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// DesyncQueue — background link flusher for DESYNC_MODE
+//
+// Maintains an ordered list of pending override entries:
+//   { path, addr, assert, prevAddr, seq }
+//
+// _overrides is a Map<path, entry> holding the *most recent* override
+// for each path. It is the authoritative local view for lookups.
+//
+// _queue is the FIFO list of all pending entries waiting to be flushed.
+// Entries in _queue that have been superseded (their path's current
+// override seq no longer matches their own seq) are skipped when dequeued.
+// ─────────────────────────────────────────────────────────────────
+
+class DesyncQueue {
+  constructor(volume) {
+    this._volume    = volume; // GritsVolume back-reference
+    this._overrides = new Map();  // path → { addr, assert, prevAddr, seq }
+    this._queue     = [];         // [{ path, addr, assert, prevAddr, seq }, ...]
+    this._seq       = 0;
+    this._flushing  = false;
+  }
+
+  // ── Override map queries (used by lookup) ─────────────────────
+
+  // Find the most recently enqueued override whose path is a proper ancestor
+  // of (or exactly equal to) `targetPath`. Returns { path, addr } or null.
+  findAncestorOverride(targetPath) {
+    let best = null;
+    for (const [path, entry] of this._overrides) {
+      if (!_isAncestorOrSelf(path, targetPath)) continue;
+      if (best === null || entry.seq > best.seq) {
+        best = { path, addr: entry.addr };
+      }
+    }
+    if (best) {
+      console.log(`[desync] findAncestorOverride("${targetPath}") → override at "${best.path}" addr=${best.addr?.slice(0,8)}…`);
+    }
+    return best;
+  }
+
+  // ── Enqueueing ────────────────────────────────────────────────
+
+  // Enqueue a link operation. Returns immediately.
+  // `addr` may be null/'' to represent an unlink.
+  enqueue(path, addr, assert = 0, prevAddr = '') {
+    const seq = ++this._seq;
+    const entry = { addr, assert, prevAddr, seq };
+    this._overrides.set(path, entry);
+    this._queue.push({ path, addr, assert, prevAddr, seq });
+    console.log(`[desync] enqueue seq=${seq} path="${path}" addr=${addr?.slice(0,8) ?? 'null'}… queue depth=${this._queue.length}`);
+    this._kick();
+  }
+
+  // ── Background flush ──────────────────────────────────────────
+
+  _kick() {
+    if (!this._flushing) {
+      console.log(`[desync] flush worker starting (queue depth=${this._queue.length})`);
+      this._flushing = true;
+      this._flush().catch(err => {
+        // Should never reach here since _flush handles its own errors,
+        // but guard against _flushing staying true forever if something escapes.
+        console.error(`[desync] unexpected error escaping _flush:`, err);
+        this._flushing = false;
+      });
+    }
+  }
+
+  async _flush() {
+    while (this._queue.length > 0) {
+      const item = this._queue[0]; // peek, don't shift yet
+
+      // Skip if this entry has been superseded by a later enqueue for the same path.
+      const current = this._overrides.get(item.path);
+      if (!current || current.seq !== item.seq) {
+        this._queue.shift();
+        console.log(`[desync] skipping superseded seq=${item.seq} for "${item.path}" (current seq=${current?.seq ?? 'gone'})`);
+        continue;
+      }
+
+      console.log(`[desync] flushing seq=${item.seq} path="${item.path}" addr=${item.addr?.slice(0,8) ?? 'null'}…`);
+
+      try {
+        // Call _serverMultiLink directly to bypass the desync interception in multiLink().
+        await this._volume._serverMultiLink([{
+          path:     item.path,
+          addr:     item.addr     ?? '',
+          prevAddr: item.prevAddr ?? '',
+          assert:   item.assert   ?? 0,
+        }]);
+
+        this._queue.shift(); // success — now remove from queue
+
+        // Remove from override map only if still the current entry.
+        if (this._overrides.get(item.path)?.seq === item.seq) {
+          this._overrides.delete(item.path);
+          console.log(`[desync] flushed seq=${item.seq} path="${item.path}" — override cleared`);
+        } else {
+          console.log(`[desync] flushed seq=${item.seq} path="${item.path}" — override already superseded, leaving`);
+        }
+
+      } catch (err) {
+        if (err instanceof AssertionError) {
+          // Assertion failed on server — drop the entry and warn the user.
+          this._queue.shift();
+          if (this._overrides.get(item.path)?.seq === item.seq) {
+            this._overrides.delete(item.path);
+          }
+          console.warn(
+            `[Grits] Background link assertion failed for "${item.path}" — ` +
+            `the change was not saved. You may need to retry your operation.\n` +
+            `Detail: ${err.message}`
+          );
+        } else {
+          // Transient error — leave item at front of queue and pause before retrying.
+          console.error(`[desync] transient error flushing seq=${item.seq} path="${item.path}", retrying in 2s:`, err);
+          await new Promise(r => setTimeout(r, 2_000));
+        }
+      }
+    }
+    console.log(`[desync] flush worker done, queue empty`);
+    this._flushing = false;
+  }
+}
+
+// Returns true if `ancestorPath` is a prefix ancestor of (or identical to) `targetPath`.
+// Both paths should already be normalized (no leading/trailing slashes).
+function _isAncestorOrSelf(ancestorPath, targetPath) {
+  if (ancestorPath === targetPath) return true;
+  if (ancestorPath === '') return true; // root covers everything
+  return targetPath.startsWith(ancestorPath + '/');
+}
+
+// ─────────────────────────────────────────────────────────────────
 // GritsVolume — server operations + convenience wrappers
 // ─────────────────────────────────────────────────────────────────
 
@@ -268,6 +406,9 @@ export class GritsVolume {
     });
     this.mirrorManager.initialize().catch(err =>
       console.error(`[GritsVolume] mirror init (${this._volume}):`, err));
+
+    // Desync support — only allocated when DESYNC_MODE is on.
+    this._desync = DESYNC_MODE ? new DesyncQueue(this) : null;
   }
 
   // ── Lookup ────────────────────────────────────────────────────
@@ -300,6 +441,15 @@ export class GritsVolume {
   }
 
   async multiLink(requests, { maxRetries = 5 } = {}) {
+    if (DESYNC_MODE) {
+      return this._desyncMultiLink(requests);
+    }
+    return this._serverMultiLink(requests, maxRetries);
+  }
+
+  // Direct-to-server link path. Used by the background flush and by multiLink
+  // when DESYNC_MODE is off. Never intercepted by desync logic.
+  async _serverMultiLink(requests, maxRetries = 5) {
     const url  = `${this._serverUrl}/grits/v1/link`;
     const body = JSON.stringify({
       volume:   this._volume,
@@ -339,6 +489,46 @@ export class GritsVolume {
     }
 
     throw new Error(`multiLink: server kept reporting missing blobs after ${maxRetries} attempts`);
+  }
+
+  // Desync path for multiLink: validate assertions locally, enqueue each
+  // request, then do a real lookup so the caller gets a proper full-path
+  // response (with correct ancestor chain for miniroot updates etc.).
+  async _desyncMultiLink(requests) {
+    for (const r of requests) {
+      const path     = _normalizePath(r.path);
+      const addr     = r.addr     ?? '';
+      const prevAddr = r.prevAddr ?? '';
+      const assert   = r.assert   ?? 0;
+
+      // If assertions are requested, evaluate them locally before enqueuing.
+      if (assert !== 0) {
+        console.log(`[desync] checking assertions for "${path}" assert=${assert}`);
+        let currentFile = null;
+        try { currentFile = await this.lookup(path); } catch (_) {}
+        const assertErr = _checkAssertions(assert, prevAddr, currentFile);
+        if (assertErr) {
+          console.warn(`[desync] local assertion failed for "${path}": ${assertErr}`);
+          throw new AssertionError(assertErr);
+        }
+        console.log(`[desync] assertions passed for "${path}"`);
+      }
+
+      this._desync.enqueue(path, addr, assert, prevAddr);
+    }
+
+    // Do a real lookup of the first (usually only) path now that the override
+    // is in the map. _lookup_internal will route through _desyncLookup and
+    // return a proper result with a full ancestor chain.
+    const primaryPath = _normalizePath(requests[0].path);
+    console.log(`[desync] post-enqueue lookup for "${primaryPath}"`);
+    const info = await this._lookup_internal(primaryPath);
+    if (!info) {
+      console.log(`[desync] post-enqueue lookup for "${primaryPath}" returned null (unlink?)`);
+      return { paths: [] };
+    }
+    console.log(`[desync] post-enqueue lookup for "${primaryPath}" → ${info.metadataHash?.slice(0,8)}…`);
+    return { paths: [{ path: primaryPath, addr: info.metadataHash, size: info.contentSize }] };
   }
 
   async _uploadMissingBlob(addr) {
@@ -533,26 +723,96 @@ export class GritsVolume {
   }
 
   async _lookup_internal(path) {
-      const n = _normalizePath(path);
-      const abort = new AbortController();
+    const n = _normalizePath(path);
 
-      const slowPromise = this._slowLookup(n).catch(err => {
-          abort.abort();
-          if (err instanceof AccessDeniedError) {
-              // Drop any mini-root we were tracking for this path —
-              // we're not allowed to see it.
-              this._miniRoots.delete(err.path);
-          }
-          throw err; // rethrow so lookup() sees it
-      });
+    // ── Desync override check ──────────────────────────────────
+    // If desync mode is active and there is a pending local override whose
+    // path is an ancestor of (or equal to) what we're looking up, we use
+    // that override's CID as a starting point and do a server lookup with
+    // startAddr, bypassing the mini-root cache entirely.
+    if (DESYNC_MODE && this._desync) {
+      const override = this._desync.findAncestorOverride(n);
+      if (override) {
+        console.log(`[desync] lookup "${n}" routing via override at "${override.path}"`);
+        return this._desyncLookup(n, override);
+      }
+    }
 
-      const miniRoot = this._findMiniRoot(n);
-      if (!miniRoot) return slowPromise;
+    // ── Normal path ───────────────────────────────────────────
+    const abort = new AbortController();
 
-      const fastPromise = this._fastWalk(n, miniRoot, abort.signal).catch(() =>
-          new Promise(() => {}));
+    const slowPromise = this._slowLookup(n).catch(err => {
+      abort.abort();
+      if (err instanceof AccessDeniedError) {
+        // Drop any mini-root we were tracking for this path —
+        // we're not allowed to see it.
+        this._miniRoots.delete(err.path);
+      }
+      throw err; // rethrow so lookup() sees it
+    });
 
-      return Promise.race([fastPromise, slowPromise]);
+    const miniRoot = this._findMiniRoot(n);
+    if (!miniRoot) return slowPromise;
+
+    const fastPromise = this._fastWalk(n, miniRoot, abort.signal).catch(() =>
+      new Promise(() => {}));
+
+    return Promise.race([fastPromise, slowPromise]);
+  }
+
+  // Lookup that uses a desync override CID as the starting point.
+  // If the override path is exactly the target path, the override addr IS the answer.
+  // If the override is an ancestor, we ask the server to walk down from startAddr.
+  async _desyncLookup(targetPath, override) {
+    // If the override covers the exact path, its addr is the metadata CID directly.
+    if (override.path === targetPath) {
+      if (!override.addr) {
+        console.log(`[desync] _desyncLookup("${targetPath}") — exact match, addr is null (unlinked)`);
+        return null;
+      }
+      console.log(`[desync] _desyncLookup("${targetPath}") — exact match, returning override addr directly`);
+      return {
+        metadataHash: override.addr,
+        contentHash:  null,  // will be resolved by _fetchMeta in lookup()
+        contentSize:  0,
+      };
+    }
+
+    // The override is a proper ancestor — ask the server to walk from startAddr.
+    const relativePath = targetPath.slice(override.path === '' ? 0 : override.path.length + 1);
+    console.log(`[desync] _desyncLookup("${targetPath}") — ancestor override at "${override.path}", server walk for "${relativePath}" from ${override.addr?.slice(0,8)}…`);
+
+    const url  = `${this._serverUrl}/grits/v1/lookup`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        volume:    this._volume,
+        paths:     [relativePath],
+        startAddr: override.addr,
+      }),
+    });
+
+    if (resp.status === 403) {
+      const { path: deniedPath } = await resp.json().catch(() => ({ path: targetPath }));
+      throw new AccessDeniedError(deniedPath);
+    }
+    if (!resp.ok) {
+      console.log(`[desync] _desyncLookup server walk failed: ${resp.status}`);
+      return null;
+    }
+
+    const result = await resp.json();
+    console.log(`[desync] _desyncLookup server walk returned ${result.paths?.length ?? 0} paths`);
+
+    // Cache any blobs the server sent back via prefetch.
+    // Mini-roots are not updated here since we're operating off a local override.
+    this._startPrefetch(result.paths ?? []);
+
+    const leaf = result.paths?.find(e => e.path === relativePath);
+    if (!leaf || result.isPartial) return null;
+
+    return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
   }
 
   // Walk down through cached blobs from miniRoot toward path.
@@ -722,6 +982,34 @@ export class GritsVolume {
     }
     this._isProcessingQueue = false;
   }
+}
+
+// ─────────────────────────────────────────────────────────────────
+// Assertion checking (client-side, for desync mode)
+//
+// Returns an error string if the assertion fails, or null if it passes.
+// `currentFile` is the GritsFile at `path` right now, or null if absent.
+// ─────────────────────────────────────────────────────────────────
+
+function _checkAssertions(assert, prevAddr, currentFile) {
+  if (assert & ASSERT_PREV_MATCHES) {
+    const actualAddr = currentFile ? currentFile.cid() : '';
+    if (actualAddr !== prevAddr)
+      return `ASSERT_PREV_MATCHES failed: expected prev=${prevAddr}, got ${actualAddr}`;
+  }
+  if (assert & ASSERT_IS_BLOB) {
+    if (!currentFile || !currentFile.isFile())
+      return `ASSERT_IS_BLOB failed: path is not a blob`;
+  }
+  if (assert & ASSERT_IS_TREE) {
+    if (!currentFile || !currentFile.isDir())
+      return `ASSERT_IS_TREE failed: path is not a directory`;
+  }
+  if (assert & ASSERT_IS_NONEMPTY) {
+    if (!currentFile || currentFile.size() === 0)
+      return `ASSERT_IS_NONEMPTY failed: path is absent or empty`;
+  }
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────
