@@ -50,7 +50,7 @@ const MINIROOT_TTL                = 1 * 60 * 1000; // 1 minute
 
 // When true, link() returns immediately and flushes to the server in the background.
 // Lookups consult a local override map so reads see writes immediately.
-const DESYNC_MODE = true;
+const DESYNC_MODE = false;
 
 // ─────────────────────────────────────────────────────────────────
 // MultiLink assertion flags — mirror of Go-side constants in namestore.go
@@ -184,10 +184,11 @@ function _isoNow() {
 // ─────────────────────────────────────────────────────────────────
 
 export class GritsFile {
-  constructor(metaCID, meta, volume) {
+  constructor(metaCID, meta, volume, path = null) {
     this._metaCID = metaCID;
     this._meta    = meta;
     this._volume  = volume; // GritsVolume, for content fetching
+    this._path    = path;   // normalized path, set when obtained via lookup()
   }
 
   // Metadata CID — stable node identifier. Use with vol.li().
@@ -212,11 +213,15 @@ export class GritsFile {
   async children() {
     if (!this.isDir())
       throw new Error('children: not a directory');
+    // In desync mode, wait for any pending writes inside this directory to flush
+    // before fetching the listing, so callers see a consistent view.
+    if (this._path) await this._volume._waitForDescendants(this._path);
     const listing = await this.json();   // { name: metaCID, ... }
     const entries = await Promise.all(
       Object.entries(listing).map(async ([name, metaCID]) => {
         const meta = await this._volume.meta(metaCID);
-        return [name, new GritsFile(metaCID, meta, this._volume)];
+        const childPath = this._path ? `${this._path}/${name}` : null;
+        return [name, new GritsFile(metaCID, meta, this._volume, childPath)];
       })
     );
     return new Map(entries);
@@ -227,6 +232,8 @@ export class GritsFile {
   async indexHtml() {
     if (!this.isDir())
       throw new Error('indexHtml: not a directory');
+    // Same desync wait as children().
+    if (this._path) await this._volume._waitForDescendants(this._path);
     const listing = await this.json();
     const indexCID = listing['index.html'];
     if (!indexCID)
@@ -261,24 +268,48 @@ class DesyncQueue {
     this._queue     = [];         // [{ path, addr, assert, prevAddr, seq }, ...]
     this._seq       = 0;
     this._flushing  = false;
+    this._waiters   = new Map();  // seq → [{ resolve, reject }, ...]
   }
 
   // ── Override map queries (used by lookup) ─────────────────────
 
   // Find the most recently enqueued override whose path is a proper ancestor
-  // of (or exactly equal to) `targetPath`. Returns { path, addr } or null.
+  // of (or exactly equal to) `targetPath`. Returns { path, addr, seq } or null.
   findAncestorOverride(targetPath) {
     let best = null;
     for (const [path, entry] of this._overrides) {
       if (!_isAncestorOrSelf(path, targetPath)) continue;
       if (best === null || entry.seq > best.seq) {
-        best = { path, addr: entry.addr };
+        best = { path, addr: entry.addr, seq: entry.seq };
       }
     }
     if (best) {
-      console.log(`[desync] findAncestorOverride("${targetPath}") → override at "${best.path}" addr=${best.addr?.slice(0,8)}…`);
+      console.log(`[desync] findAncestorOverride("${targetPath}") → override at "${best.path}" addr=${best.addr?.slice(0,8)}… seq=${best.seq}`);
     }
     return best;
+  }
+
+  // Find the highest seq among all pending overrides that are proper descendants
+  // of (or exactly equal to) `targetPath`. Returns the seq number, or -1 if none.
+  findDescendantSeq(targetPath) {
+    let highestSeq = -1;
+    for (const [path, entry] of this._overrides) {
+      if (!_isAncestorOrSelf(targetPath, path)) continue;
+      if (entry.seq > highestSeq) highestSeq = entry.seq;
+    }
+    if (highestSeq >= 0) {
+      console.log(`[desync] findDescendantSeq("${targetPath}") → must wait for seq=${highestSeq}`);
+    }
+    return highestSeq;
+  }
+
+  // Return a promise that resolves (with the flush result) or rejects when
+  // seq `targetSeq` has been processed (successfully or not).
+  waitForSeq(targetSeq) {
+    return new Promise((resolve, reject) => {
+      if (!this._waiters.has(targetSeq)) this._waiters.set(targetSeq, []);
+      this._waiters.get(targetSeq).push({ resolve, reject });
+    });
   }
 
   // ── Enqueueing ────────────────────────────────────────────────
@@ -309,6 +340,16 @@ class DesyncQueue {
     }
   }
 
+  _notifyWaiters(seq, result, err) {
+    const waiters = this._waiters.get(seq);
+    if (!waiters) return;
+    this._waiters.delete(seq);
+    for (const { resolve, reject } of waiters) {
+      if (err) reject(err);
+      else resolve(result);
+    }
+  }
+
   async _flush() {
     while (this._queue.length > 0) {
       const item = this._queue[0]; // peek, don't shift yet
@@ -318,6 +359,7 @@ class DesyncQueue {
       if (!current || current.seq !== item.seq) {
         this._queue.shift();
         console.log(`[desync] skipping superseded seq=${item.seq} for "${item.path}" (current seq=${current?.seq ?? 'gone'})`);
+        this._notifyWaiters(item.seq, null, null); // superseded — resolve with null
         continue;
       }
 
@@ -325,7 +367,7 @@ class DesyncQueue {
 
       try {
         // Call _serverMultiLink directly to bypass the desync interception in multiLink().
-        await this._volume._serverMultiLink([{
+        const result = await this._volume._serverMultiLink([{
           path:     item.path,
           addr:     item.addr     ?? '',
           prevAddr: item.prevAddr ?? '',
@@ -342,6 +384,8 @@ class DesyncQueue {
           console.log(`[desync] flushed seq=${item.seq} path="${item.path}" — override already superseded, leaving`);
         }
 
+        this._notifyWaiters(item.seq, result, null);
+
       } catch (err) {
         if (err instanceof AssertionError) {
           // Assertion failed on server — drop the entry and warn the user.
@@ -354,6 +398,17 @@ class DesyncQueue {
             `the change was not saved. You may need to retry your operation.\n` +
             `Detail: ${err.message}`
           );
+          this._notifyWaiters(item.seq, null, null); // assertion fail — resolve with null (drop)
+        } else if (err.message?.includes('file does not exist')) {
+          // Permanent server error — parent path was deleted before this child
+          // could be written (e.g. rmdir race). Drop silently; the parent unlink
+          // already cleaned up the subtree.
+          this._queue.shift();
+          if (this._overrides.get(item.path)?.seq === item.seq) {
+            this._overrides.delete(item.path);
+          }
+          console.warn(`[desync] dropping seq=${item.seq} path="${item.path}" — parent no longer exists on server`);
+          this._notifyWaiters(item.seq, null, null);
         } else {
           // Transient error — leave item at front of queue and pause before retrying.
           console.error(`[desync] transient error flushing seq=${item.seq} path="${item.path}", retrying in 2s:`, err);
@@ -420,7 +475,7 @@ export class GritsVolume {
     const info = await this._lookup_internal(normalized);
     if (!info) throw new Error(`lookup: ${this._volume}:${path}: not found`);
     const meta = await this._fetchMeta(info.metadataHash);
-    return new GritsFile(info.metadataHash, meta, this);
+    return new GritsFile(info.metadataHash, meta, this, normalized);
   }
 
   // Returns a GritsFile for a known metadata CID, without a path lookup.
@@ -615,6 +670,18 @@ export class GritsVolume {
   /** Return the last seen service worker hash for this volume, or undefined. */
   getServiceWorkerHash() { return this.serviceWorkerHash; }
 
+  // In desync mode, wait until all pending writes whose path is at or below
+  // `dirPath` have been flushed to the server. Used by children() and indexHtml()
+  // so directory listings reflect locally-committed writes.
+  async _waitForDescendants(dirPath) {
+    if (!DESYNC_MODE || !this._desync) return;
+    const seq = this._desync.findDescendantSeq(dirPath);
+    if (seq < 0) return;
+    console.log(`[desync] _waitForDescendants("${dirPath}") waiting for seq=${seq}`);
+    await this._desync.waitForSeq(seq);
+    console.log(`[desync] _waitForDescendants("${dirPath}") done`);
+  }
+
   // ── Internal: server communication ───────────────────────────
 
   async _uploadBlob(cid, bytes) {
@@ -725,16 +792,26 @@ export class GritsVolume {
   async _lookup_internal(path) {
     const n = _normalizePath(path);
 
-    // ── Desync override check ──────────────────────────────────
-    // If desync mode is active and there is a pending local override whose
-    // path is an ancestor of (or equal to) what we're looking up, we use
-    // that override's CID as a starting point and do a server lookup with
-    // startAddr, bypassing the mini-root cache entirely.
     if (DESYNC_MODE && this._desync) {
+      // ── Ancestor override: we know better than the server ──────
+      // Use our local override CID as the starting point and walk down.
       const override = this._desync.findAncestorOverride(n);
       if (override) {
         console.log(`[desync] lookup "${n}" routing via override at "${override.path}"`);
         return this._desyncLookup(n, override);
+      }
+
+      // ── Descendant override: server is behind us ───────────────
+      // There's a pending write somewhere below the path we're looking up.
+      // The server's directory CID for `n` would be stale (wrong Merkle
+      // commitment), so we must wait for all descendants to flush first,
+      // then ask the server for a fresh answer.
+      const descendantSeq = this._desync.findDescendantSeq(n);
+      if (descendantSeq >= 0) {
+        console.log(`[desync] lookup "${n}" waiting for descendant seq=${descendantSeq} to flush`);
+        await this._desync.waitForSeq(descendantSeq);
+        console.log(`[desync] lookup "${n}" descendant seq=${descendantSeq} flushed, proceeding with server lookup`);
+        // Fall through to normal server lookup below — no desync routing.
       }
     }
 
@@ -754,17 +831,23 @@ export class GritsVolume {
     const miniRoot = this._findMiniRoot(n);
     if (!miniRoot) return slowPromise;
 
-    const fastPromise = this._fastWalk(n, miniRoot, abort.signal).catch(() =>
-      new Promise(() => {}));
+    const fastPromise = this._fastWalk(n, miniRoot, abort.signal).then(result => {
+      // If the fast walk returned a partial result, let the slow lookup win instead.
+      if (result?.partial) {
+        console.log(`[fastWalk] partial result for "${n}", deferring to slowLookup`);
+        return new Promise(() => {}); // stay pending so slowPromise wins the race
+      }
+      return result;
+    }).catch(() => new Promise(() => {}));
 
     return Promise.race([fastPromise, slowPromise]);
   }
 
   // Lookup that uses a desync override CID as the starting point.
-  // If the override path is exactly the target path, the override addr IS the answer.
-  // If the override is an ancestor, we ask the server to walk down from startAddr.
+  // First walks as far as possible through local caches (_fastWalk), then asks
+  // the server to continue from wherever we got to (if needed).
   async _desyncLookup(targetPath, override) {
-    // If the override covers the exact path, its addr is the metadata CID directly.
+    // Exact match — the override addr IS the metadata CID for the target.
     if (override.path === targetPath) {
       if (!override.addr) {
         console.log(`[desync] _desyncLookup("${targetPath}") — exact match, addr is null (unlinked)`);
@@ -773,14 +856,42 @@ export class GritsVolume {
       console.log(`[desync] _desyncLookup("${targetPath}") — exact match, returning override addr directly`);
       return {
         metadataHash: override.addr,
-        contentHash:  null,  // will be resolved by _fetchMeta in lookup()
+        contentHash:  null,  // resolved by _fetchMeta in lookup()
         contentSize:  0,
       };
     }
 
-    // The override is a proper ancestor — ask the server to walk from startAddr.
-    const relativePath = targetPath.slice(override.path === '' ? 0 : override.path.length + 1);
-    console.log(`[desync] _desyncLookup("${targetPath}") — ancestor override at "${override.path}", server walk for "${relativePath}" from ${override.addr?.slice(0,8)}…`);
+    // Ancestor match — walk locally first, then fall back to server for the rest.
+    const relativePath = override.path === ''
+      ? targetPath
+      : targetPath.slice(override.path.length + 1);
+
+    console.log(`[desync] _desyncLookup("${targetPath}") — ancestor override at "${override.path}", local walk for "${relativePath}" from ${override.addr?.slice(0,8)}…`);
+
+    // Use a never-aborting signal since we own this walk (no race with slowLookup).
+    const signal = new AbortController().signal;
+    const walkResult = await this._fastWalk(
+      relativePath,
+      { rootPath: '', entry: { addr: override.addr } },
+      signal
+    ).catch(err => {
+      // A structural error (non-dir in path, entry not found) — propagate as not-found.
+      console.log(`[desync] _desyncLookup local walk error: ${err.message}`);
+      return null;
+    });
+
+    if (!walkResult) return null;
+
+    if (!walkResult.partial) {
+      // Full cache hit — no server needed.
+      console.log(`[desync] _desyncLookup("${targetPath}") — full local hit`);
+      return walkResult;
+    }
+
+    // Partial walk — ask the server to continue from where we got to.
+    const startAddr     = walkResult.metadataHash;
+    const serverRelPath = walkResult.remainingPath;
+    console.log(`[desync] _desyncLookup("${targetPath}") — partial local walk, server walk for "${serverRelPath}" from ${startAddr?.slice(0,8)}…`);
 
     const url  = `${this._serverUrl}/grits/v1/lookup`;
     const resp = await fetch(url, {
@@ -788,8 +899,8 @@ export class GritsVolume {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         volume:    this._volume,
-        paths:     [relativePath],
-        startAddr: override.addr,
+        paths:     [serverRelPath],
+        startAddr: startAddr,
       }),
     });
 
@@ -805,18 +916,19 @@ export class GritsVolume {
     const result = await resp.json();
     console.log(`[desync] _desyncLookup server walk returned ${result.paths?.length ?? 0} paths`);
 
-    // Cache any blobs the server sent back via prefetch.
-    // Mini-roots are not updated here since we're operating off a local override.
     this._startPrefetch(result.paths ?? []);
 
-    const leaf = result.paths?.find(e => e.path === relativePath);
+    const leaf = result.paths?.find(e => e.path === serverRelPath);
     if (!leaf || result.isPartial) return null;
 
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
   }
 
   // Walk down through cached blobs from miniRoot toward path.
-  // Resolves with a lookup-info object on success, rejects on any miss or abort.
+  // Returns one of:
+  //   { metadataHash, contentHash, contentSize }            — full hit
+  //   { metadataHash, remainingPath, partial: true }        — walked as far as cache allows
+  // Throws only on abort or a genuine structural error (e.g. non-dir in path).
   async _fastWalk(path, { rootPath, entry }, signal) {
     // Strip the mini-root prefix to get the remaining path segments to walk.
     const remainder = rootPath === ''
@@ -826,22 +938,42 @@ export class GritsVolume {
 
     let metaHash = entry.addr;
 
-    for (const part of parts) {
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
       if (signal.aborted) throw new DOMException('aborted', 'AbortError');
 
       const [meta] = await this._parent._unmarshal(metaHash);
-      if (!meta) throw new Error('cache miss');
-      if (meta.type !== 'dir') throw new Error('not a directory');
+      if (!meta) {
+        // Can't read the current node's metadata — return partial from parent.
+        const remaining = parts.slice(i).join('/');
+        console.log(`[fastWalk] cache miss on meta of "${metaHash.slice(0,8)}…", partial at remaining="${remaining}"`);
+        return { metadataHash: metaHash, remainingPath: remaining, partial: true };
+      }
+      if (meta.type !== 'dir') throw new Error(`fastWalk: expected dir at "${part}", got ${meta.type}`);
 
       if (signal.aborted) throw new DOMException('aborted', 'AbortError');
 
       const [dir] = await this._parent._unmarshal(meta.contentHash);
-      if (!dir) throw new Error('cache miss');
-      if (!dir[part]) throw new Error('not found');
+      if (!dir) {
+        // Have the dir metadata but not its content listing — return partial from here.
+        const remaining = parts.slice(i).join('/');
+        console.log(`[fastWalk] cache miss on dir content of "${meta.contentHash.slice(0,8)}…", partial at remaining="${remaining}"`);
+        return { metadataHash: metaHash, remainingPath: remaining, partial: true };
+      }
+
+      if (!dir[part]) {
+        // Entry genuinely not present in this directory listing.
+        throw new Error(`fastWalk: "${part}" not found in directory`);
+      }
 
       const childMetaHash = dir[part];
       const [childMeta]   = await this._parent._unmarshal(childMetaHash);
-      if (!childMeta) throw new Error('cache miss');
+      if (!childMeta) {
+        // Have the child's CID but not its metadata yet — return partial pointing at child.
+        const remaining = parts.slice(i + 1).join('/');
+        console.log(`[fastWalk] cache miss on child meta "${childMetaHash.slice(0,8)}…", partial at remaining="${remaining}"`);
+        return { metadataHash: childMetaHash, remainingPath: remaining, partial: true };
+      }
 
       metaHash = childMetaHash;
     }
@@ -850,7 +982,10 @@ export class GritsVolume {
 
     // We need the final meta to return contentHash and size.
     const [finalMeta] = await this._parent._unmarshal(metaHash);
-    if (!finalMeta) throw new Error('cache miss');
+    if (!finalMeta) {
+      console.log(`[fastWalk] cache miss on final meta "${metaHash.slice(0,8)}…", partial with empty remaining`);
+      return { metadataHash: metaHash, remainingPath: '', partial: true };
+    }
 
     this._parent._tracker.record('fastWalkHit', 0);
     return {
@@ -1147,8 +1282,30 @@ export default class GritsClient {
   // ── Internal: JSON cache (used by GritsVolume) ────────────────
 
   async _unmarshal(hash) {
+    // 1. Hot JSON cache — fastest path.
     const cached = this._jsonCache.get(hash);
     if (cached) { cached.lastAccessed = Date.now(); return [cached.data, 'memory']; }
+
+    // 2. Local synthesized blobs (mkfile/mkdir output not yet uploaded).
+    const local = this._local.get(hash);
+    if (local) {
+      try {
+        const data = JSON.parse(new TextDecoder().decode(local));
+        this._jsonCache.set(hash, { data, lastAccessed: Date.now() });
+        return [data, 'local'];
+      } catch (_) {}
+    }
+
+    // 3. Browser blob cache — no network I/O, just IndexedDB.
+    const blobResp = await this._blobCacheGet(hash);
+    if (blobResp) {
+      try {
+        const data = await blobResp.json();
+        this._jsonCache.set(hash, { data, lastAccessed: Date.now() });
+        return [data, 'blobCache'];
+      } catch (_) {}
+    }
+
     return [null, null];
   }
 
