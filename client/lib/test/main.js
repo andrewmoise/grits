@@ -3,7 +3,8 @@ testing — run all test.js suites found in :client/lib
 
 Usage:
   testing()
-  testing({v:1})    show full stack traces on failure`;
+  testing({v:1})       show full stack traces on failure
+  testing({ff:1})    fail fast (immediately on first failure)`;
 
 import { isVoid, _isPlainObject } from '../gimbal/gsh.js';
 
@@ -40,8 +41,10 @@ export async function invoke(shell, previous, args) {
 
       let totalPassed = 0, totalFailed = 0;
       const systemVol = shell.fs.volume(shell.serverUrl, 'sys');
+      let bail = false;
 
       for (const { name } of suites) {
+        if (bail) break;
         push(`\n[${name}]`);
 
         let mod;
@@ -51,6 +54,7 @@ export async function invoke(shell, previous, args) {
           push(`  IMPORT ERROR: ${e.message}`);
           if (opts.v) push(e.stack ?? '  (no stack)');
           totalFailed++;
+          if (opts.ff) { bail = true; break; }
           continue;
         }
 
@@ -76,12 +80,18 @@ export async function invoke(shell, previous, args) {
             push(`  ✗ ${label}: ${e.message}`);
             if (opts.v) push((e.stack ?? '  (no stack)').split('\n').map(l => `    ${l}`).join('\n'));
             failed++;
+            if (opts.ff) { bail = true; break; }
           }
         }
 
         push(`  ${passed} passed, ${failed} failed`);
         totalPassed += passed;
         totalFailed += failed;
+
+        if (bail) {
+          push(`\n(bailed after first failure)`);
+          break;
+        }
       }
 
       push(`\n=== ${totalPassed} passed, ${totalFailed} failed ===`);
