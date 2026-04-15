@@ -5,7 +5,6 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"golang.org/x/sync/singleflight"
 	"grits/internal/grits"
 	"io"
 	"log"
@@ -17,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 /////
@@ -78,8 +79,9 @@ type HTTPModule struct {
 	Config *HTTPModuleConfig
 	Server *Server
 
-	HTTPServer *http.Server
-	Mux        *http.ServeMux
+	HTTPServer          *http.Server
+	Mux                 *http.ServeMux
+	contentHandlerChain http.HandlerFunc
 
 	serviceWorkerModule *ServiceWorkerModule
 	activeMirrorModule  *MirrorModule
@@ -351,8 +353,6 @@ func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 		log.Printf("Registering ServiceWorkerModule in HTTP module")
 	}
 	hm.serviceWorkerModule = swModule
-	hm.Mux.HandleFunc("/grits-bootstrap.js", hm.requestMiddleware(swModule.serveTemplate))
-	hm.Mux.HandleFunc("/grits-serviceworker.js", hm.requestMiddleware(swModule.serveTemplate))
 }
 
 func (hm *HTTPModule) addMirrorModule(module Module) {
@@ -366,12 +366,19 @@ func (hm *HTTPModule) addMirrorModule(module Module) {
 	hm.activeMirrorModule = mirror
 }
 
+func (hm *HTTPModule) WrapContentHandler(wrapper func(http.HandlerFunc) http.HandlerFunc) {
+	hm.contentHandlerChain = wrapper(hm.contentHandlerChain)
+}
+
 /////
 // Routes
 /////
 
 func (s *HTTPModule) setupRoutes() {
-	s.Mux.HandleFunc("/", s.requestMiddleware(s.handleDeployedContent))
+	s.contentHandlerChain = s.handleDeployedContent // default with no module hooks
+	s.Mux.HandleFunc("/", s.requestMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		s.contentHandlerChain(w, r)
+	}))
 
 	s.Mux.HandleFunc("/grits/v1/blob", s.requestMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/blob/", s.requestMiddleware(s.handleBlob))
