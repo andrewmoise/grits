@@ -9,7 +9,7 @@
 //   const result   = await verifier.verify(response, expectedCID);
 //   // result: { ok: true, response } | { ok: false, error: string }
 
-const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'; // %FOR MODULE%
 
 function _base58Encode(buffer) {
   let zeros = 0;
@@ -43,7 +43,7 @@ async function _computeCID(buffer) {
   return _base58Encode(multihash);
 }
 
-export default class HashVerifier {
+class HashVerifier {
   constructor({ debug = false } = {}) {
     this._debug = debug;
   }
@@ -103,3 +103,5 @@ export default class HashVerifier {
     );
   }
 }
+
+export default HashVerifier; // %FOR MODULE%

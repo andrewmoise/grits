@@ -4,6 +4,10 @@
 
 const debugMirrors = true;
 
+// True when running inside the service worker itself.
+const IN_SERVICE_WORKER = false; // %FOR MODULE%
+//const IN_SERVICE_WORKER = true;  // %FOR SERVICEWORKER%
+
 class MirrorManager {
   constructor(config = {}) {
     // Mirror configuration
@@ -244,7 +248,7 @@ async refreshMirrorList() {
         if (extension) {
           url += `.${extension}`;
         }
-        return await fetch(url);
+        return await fetch(url, IN_SERVICE_WORKER ? { headers: { 'X-Grits-Client': 'sw' } } : {});
       } finally {
         this.activeRequests--;
       }
@@ -295,7 +299,7 @@ async refreshMirrorList() {
       const fetchStartTime = performance.now();
       //console.log(`[DEBUG:TIMING] about to fetch at: ${fetchStartTime}, elapsed since tracking obj creation: ${fetchStartTime - trackingObj.startTime}ms`);
       
-      const response = await fetch(url);
+      const response = await fetch(url, IN_SERVICE_WORKER ? { headers: { 'X-Grits-Client': 'sw' } } : {});
       
       const fetchEndTime = performance.now();
       //console.log(`[DEBUG:TIMING] fetch completed at: ${fetchEndTime}, took: ${fetchEndTime - fetchStartTime}ms`);
@@ -337,7 +341,7 @@ async refreshMirrorList() {
       if (extension) {
         url += `.${extension}`;
       }
-      return await fetch(url);
+      return await fetch(url, IN_SERVICE_WORKER ? { headers: { 'X-Grits-Client': 'sw' } } : {});
     } finally {
       this.activeRequests--;
       //console.log(`[DEBUG:TIMING] fetchBlob finally block at: ${performance.now()}`);

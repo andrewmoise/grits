@@ -12,7 +12,7 @@
 
 const DEFAULT_LOG_INTERVAL = 10_000; // ms
 
-export default class PerformanceTracker {
+class PerformanceTracker {
   /**
    * @param {Object}  opts
    * @param {number}  [opts.interval=10000]  - Logging interval in ms (0 = disabled)
@@ -150,3 +150,5 @@ function _avg(arr) {
   if (!arr.length) return 'N/A';
   return (arr.reduce((s, v) => s + v, 0) / arr.length).toFixed(2);
 }
+
+export default PerformanceTracker; // %FOR MODULE%

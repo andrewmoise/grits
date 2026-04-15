@@ -1,47 +1,41 @@
-// grits-serviceworker.js
 const swDirHash = "{{SW_DIR_HASH}}";
 const swScriptHash = "{{SW_SCRIPT_HASH}}";
 
-const debugServiceworker = false;
+const debugServiceworker = true;
 
-// Import GritsClient
-importScripts('/grits/v1/content/client/GritsClient-sw.js');
+importScripts('/grits-GritsClient-sw.js');
 
-// One client per volume, keyed by volume name.
-// We always need one for 'content' (user content) and one for 'client' (our own JS).
-const gritsClients = new Map();
+const gritsClient = new GritsClient();
 
-function getClient(volume) {
-    if (!gritsClients.has(volume)) {
-        const client = new GritsClient({
-            serverUrl: self.location.origin,
-            volume: volume,
-        });
-        gritsClients.set(volume, client);
-    }
-    return gritsClients.get(volume);
+function getVolume(volumeName) {
+    return gritsClient.volume(self.location.origin, volumeName);
 }
 
-function cleanupClients() {
-    for (const [, client] of gritsClients) {
-        if (typeof client.destroy === 'function') client.destroy();
-    }
-    gritsClients.clear();
+function cleanupClient() {
+    gritsClient.destroy();
 }
 
-// Check whether the server has pushed a new service worker version.
-// Returns true if an update was triggered (caller should stop handling the request).
-function checkForUpdate(response) {
-    const serverHash = response?.headers?.get('X-Grits-Service-Worker-Hash');
-    if (serverHash && serverHash !== swDirHash) {
-        if (debugServiceworker) {
-            console.log(`[Grits] SW update needed: have ${swDirHash}, server has ${serverHash}`);
-        }
-        cleanupClients();
+function checkForUpdate() {
+    const serverHash = gritsClient.getServiceWorkerHash();
+    console.log(`[Grits] checkForUpdate: serverHash=${JSON.stringify(serverHash)}, swDirHash=${swDirHash}`);
+    if (serverHash === undefined) {
+        console.log('[Grits] checkForUpdate: no server contact yet, doing nothing');
+        return false;
+    }
+    if (serverHash === null) {
+        console.log('[Grits] checkForUpdate: server returned no SW hash header, unregistering');
+        cleanupClient();
+        self.registration.unregister();
+        return true;
+    }
+    if (serverHash !== swDirHash) {
+        console.log(`[Grits] checkForUpdate: hash mismatch, updating`);
+        cleanupClient();
         self.registration.update().catch(err =>
             console.error('[Grits] Failed to trigger SW update:', err));
         return true;
     }
+    console.log('[Grits] checkForUpdate: hash matches, no action');
     return false;
 }
 
@@ -58,48 +52,65 @@ self.addEventListener('activate', event => {
 self.addEventListener('message', event => {
     if (event.data?.type === 'NAVIGATE') {
         if (debugServiceworker) console.log('[Grits] Navigation: resetting roots');
-        for (const [, client] of gritsClients) client.resetRoot();
+        getVolume('sites').resetRoot();
     }
 });
 
 self.addEventListener('fetch', event => {
     const url = event.request.url;
 
-    // Only intercept GET requests.
     if (event.request.method !== 'GET') return;
 
-    // Never intercept our own API calls.
-    if (url.includes('/grits/v1/') || url.includes('/grits-')) return;
-
-    // Only intercept same-origin requests.
     const parsed = new URL(url);
     if (parsed.origin !== self.location.origin) return;
 
-    event.respondWith((async () => {
-        // Map the URL path to content/{hostname}/public/{path} in the content volume.
-        const hostname = parsed.hostname;
-        const path = `${hostname}/public${parsed.pathname}`;
+    // Pass lookup/link requests through to the server unchanged, but tag the
+    // response so the page-side GritsClient knows a SW is active.
+    if (url.includes('/grits/v1/lookup') || url.includes('/grits/v1/link')) {
+        event.respondWith((async () => {
+            const resp = await fetch(event.request);
+            // GritsClient will have updated _serviceWorkerHash via _updateServiceWorkerHash
+            // inside _slowLookup / _serverMultiLink. The SW itself doesn't need to act
+            // here — checkForUpdate() is called after vol.lookup() in the content path.
+            const headers = new Headers(resp.headers);
+            headers.set('X-Grits-Served-By', 'sw');
+            return new Response(resp.body, {
+                status:     resp.status,
+                statusText: resp.statusText,
+                headers,
+            });
+        })());
+        return;
+    }
 
-        if (debugServiceworker) {
-            console.debug(`[Grits] Intercepting ${parsed.pathname} → content:${path}`);
-        }
+    // Don't intercept other grits API or SW script fetches.
+    if (url.includes('/grits/v1/') || url.includes('/grits-')) return;
+
+    event.respondWith((async () => {
+        const hostname = parsed.hostname;
+        const path = `${hostname}/content${parsed.pathname}`;
+
+        console.log(`[Grits] fetch: intercepting ${url} → lookup path "${path}"`);
 
         try {
-            const client = getClient('content');
-            const response = await client.fetchFile(path);
+            const vol = getVolume('sites');
+            console.log(`[Grits] fetch: calling vol.lookup("${path}")`);
+            const file = await vol.lookup(path);
+            console.log(`[Grits] fetch: lookup done, file=${file}, calling checkForUpdate`);
 
-            // Piggyback update detection on real responses.
-            checkForUpdate(response);
+            if (checkForUpdate()) {
+                console.log(`[Grits] fetch: checkForUpdate triggered action, falling back to fetch`);
+                return fetch(event.request);
+            }
 
-            return response;
+            return file.get();
         } catch (err) {
-            console.error(`[Grits] Fetch failed for ${path}:`, err);
-            // Fall back to network on error.
+            console.error(`[Grits] fetch: lookup/get failed for "${path}":`, err);
             return fetch(event.request);
         }
     })());
 });
 
 self.addEventListener('unload', () => {
-    cleanupClients();
+    cleanupClient();
 });

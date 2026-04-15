@@ -37,9 +37,9 @@
 import MirrorManager      from './MirrorManager.js';      // %FOR MODULE%
 import HashVerifier       from './HashVerifier.js';        // %FOR MODULE%
 import PerformanceTracker from './PerformanceTracker.js';  // %FOR MODULE%
-//importScripts('/grits/v1/content/client/MirrorManager-sw.js');      // %FOR SERVICEWORKER%
-//importScripts('/grits/v1/content/client/HashVerifier-sw.js');        // %FOR SERVICEWORKER%
-//importScripts('/grits/v1/content/client/PerformanceTracker-sw.js');  // %FOR SERVICEWORKER%
+//importScripts('/grits-MirrorManager-sw.js');      // %FOR SERVICEWORKER%
+//importScripts('/grits-HashVerifier-sw.js');        // %FOR SERVICEWORKER%
+//importScripts('/grits-PerformanceTracker-sw.js');  // %FOR SERVICEWORKER%
 
 const DEBUG       = false;
 const DEBUG_STATS = true;
@@ -52,23 +52,29 @@ const MINIROOT_TTL                = 1 * 60 * 1000; // 1 minute
 // Lookups consult a local override map so reads see writes immediately.
 const DESYNC_MODE = false;
 
+// True when a SW is controlling this window context. Starts false, switches
+// permanently to true the first time a lookup response carries X-Grits-Served-By: sw.
+// In this mode GritsClient skips all local caching and passes fetches straight
+// through, letting the SW be the single cache layer.
+let SW_CONTROLLED = false;
+
 // ─────────────────────────────────────────────────────────────────
 // MultiLink assertion flags — mirror of Go-side constants in namestore.go
 // ─────────────────────────────────────────────────────────────────
 
-export const ASSERT_PREV_MATCHES = 1;
-export const ASSERT_IS_BLOB      = 2;
-export const ASSERT_IS_TREE      = 4;
-export const ASSERT_IS_NONEMPTY  = 8;
+const ASSERT_PREV_MATCHES = 1;
+const ASSERT_IS_BLOB      = 2;
+const ASSERT_IS_TREE      = 4;
+const ASSERT_IS_NONEMPTY  = 8;
 
-export class AssertionError extends Error {
+class AssertionError extends Error {
   constructor(msg) {
     super(msg);
     this.name = 'AssertionError';
   }
 }
 
-export class AccessDeniedError extends Error {
+class AccessDeniedError extends Error {
   constructor(path) {
     super(`access denied: ${path}`);
     this.name  = 'AccessDeniedError';
@@ -183,7 +189,7 @@ function _isoNow() {
 // GritsFile
 // ─────────────────────────────────────────────────────────────────
 
-export class GritsFile {
+class GritsFile {
   constructor(metaCID, meta, volume, path = null) {
     this._metaCID = metaCID;
     this._meta    = meta;
@@ -433,7 +439,7 @@ function _isAncestorOrSelf(ancestorPath, targetPath) {
 // GritsVolume — server operations + convenience wrappers
 // ─────────────────────────────────────────────────────────────────
 
-export class GritsVolume {
+class GritsVolume {
   constructor(serverUrl, volume, parent) {
     this._serverUrl = serverUrl.replace(/\/$/, '');
     this._volume    = volume;
@@ -446,15 +452,12 @@ export class GritsVolume {
 
     this.hardTimeout = DEFAULT_HARD_TIMEOUT;
 
-    this.serviceWorkerHash = undefined;
-
     this._configFetched      = false;
     this._inFlightPrefetches = new Map();
     this._prefetchQueue      = [];
     this._isProcessingQueue  = false;
 
-    this.mirrorManager = new MirrorManager({ // %FOR MODULE%
-    //self.MirrorManager({                   // %FOR SERVICEWORKER%
+    this.mirrorManager = new MirrorManager({
       serverUrl: this._serverUrl,
       volume:    this._volume,
       debug:     DEBUG,
@@ -522,6 +525,8 @@ export class GritsVolume {
         headers: { 'Content-Type': 'application/json' },
         body,
       });
+
+      this._parent._updateServiceWorkerHash(resp);
 
       if (resp.ok) {
         const result = await resp.json();
@@ -603,6 +608,11 @@ export class GritsVolume {
 
   async get(cid) {
     _assertString(cid, 'get');
+
+    if (this._parent._serviceWorkerHash !== null && this._parent._serviceWorkerHash !== undefined) {
+      return fetch(`${this._serverUrl}/grits/v1/blob/${cid}`);
+    }
+
     const startTime = performance.now();
 
     const local = this._parent._local.get(cid);
@@ -666,9 +676,6 @@ export class GritsVolume {
       entry.addr = null;
     }
   }
-
-  /** Return the last seen service worker hash for this volume, or undefined. */
-  getServiceWorkerHash() { return this.serviceWorkerHash; }
 
   // In desync mode, wait until all pending writes whose path is at or below
   // `dirPath` have been flushed to the server. Used by children() and indexHtml()
@@ -904,6 +911,8 @@ export class GritsVolume {
       }),
     });
 
+    this._parent._updateServiceWorkerHash(resp);
+
     if (resp.status === 403) {
       const { path: deniedPath } = await resp.json().catch(() => ({ path: targetPath }));
       throw new AccessDeniedError(deniedPath);
@@ -1010,19 +1019,18 @@ export class GritsVolume {
     }
 
     const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ volume: this._volume, paths }),
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volume: this._volume, paths }),
     });
+
+    this._parent._updateServiceWorkerHash(resp);
 
     if (resp.status === 403) {
         const { path: deniedPath } = await resp.json().catch(() => ({ path }));
         throw new AccessDeniedError(deniedPath);
     }
     if (!resp.ok) return null;
-
-    const swHash = resp.headers.get('X-Grits-Service-Worker-Hash');
-    if (swHash) this.serviceWorkerHash = swHash;
 
     const result = await resp.json();
     this._ingestLookupResponse(result);
@@ -1151,12 +1159,18 @@ function _checkAssertions(assert, prevAddr, currentFile) {
 // GritsClient — cache operations only, no server contact
 // ─────────────────────────────────────────────────────────────────
 
-export default class GritsClient {
+class GritsClient {
   constructor() {
     this._local     = new Map(); // cid → Uint8Array  (synthesized, pending upload)
     this._jsonCache = new Map(); // cid → { data, lastAccessed }
     this._blobCache = null;      // browser Cache API
     this._volumes   = new Map(); // volKey → GritsVolume
+
+    // Last SW hash seen in any server response header.
+    // undefined = never heard from server yet
+    // null      = server responded but header was absent (SW module not installed)
+    // string    = hash value from server
+    this._serviceWorkerHash = undefined;
 
     this._verifier = new HashVerifier({ debug: DEBUG });
     this._tracker  = new PerformanceTracker({
@@ -1176,6 +1190,37 @@ export default class GritsClient {
 
   /** Access the performance tracker (for custom recording or snapshots). */
   get tracker() { return this._tracker; }
+
+  /**
+   * Returns the last SW hash seen from the server:
+   *   undefined — no server contact yet
+   *   null      — server has no SW module (header absent)
+   *   string    — hash value
+   */
+  getServiceWorkerHash() { return this._serviceWorkerHash; }
+
+  // Called by GritsVolume after every real server fetch (lookup, link).
+  // Stores null if the header is absent (server has no SW module).
+  _updateServiceWorkerHash(resp) {
+    const prev = this._serviceWorkerHash;
+    const hash = resp.headers.get('X-Grits-Service-Worker-Hash');
+    const wasControlled = prev !== undefined && prev !== null;
+    const isControlled  = hash !== null;
+
+    this._serviceWorkerHash = hash;
+
+    if (isControlled !== wasControlled) {
+      console.log(`[GritsClient] SW control changed: ${wasControlled} → ${isControlled}, flushing caches`);
+      this._flushCaches();
+    }
+  }
+
+  _flushCaches() {
+    this._local.clear();
+    this._jsonCache.clear();
+    if (this._blobCache) this._blobCache.keys().then(keys => 
+        keys.forEach(key => this._blobCache.delete(key)));
+  }
 
   // ── Volume registration ───────────────────────────────────────
 
@@ -1315,7 +1360,7 @@ export default class GritsClient {
       if (v.lastAccessed < cutoff) this._jsonCache.delete(k);
   }
 
-  // ── Internal: browser blob cache (used by GritsVolume) ───────
+  // ── Internal: Browser blob cache (used by GritsVolume) ───────
 
   async _initBlobCache() {
     try { this._blobCache = await caches.open('grits-blobs-v1'); }
@@ -1330,7 +1375,7 @@ export default class GritsClient {
     if (this._blobCache && resp.ok) this._blobCache.put(cid, resp).catch(() => {});
   }
 
-  // ── Internal: aggregate mirror stats across all volumes ───────
+  // ── Internal: Misc ───────------------------------------------
 
   _collectMirrorStats() {
     const all = [];
@@ -1351,3 +1396,15 @@ function _volKey(serverUrl, volume) {
 function _normalizePath(path) {
   return path.replace(/^\/+|\/+$/g, '');
 }
+
+function _updateSwMode(swControlled) {
+    if (SW_CONTROLLED === swControlled) return;
+    SW_CONTROLLED = swControlled;
+    console.log(`[GritsClient] SW_CONTROLLED → ${swControlled}`);
+}
+
+// ── Exports ───────------------------------------------
+
+export { ASSERT_PREV_MATCHES, ASSERT_IS_BLOB, ASSERT_IS_TREE, ASSERT_IS_NONEMPTY }; // %FOR MODULE%
+export { AssertionError, AccessDeniedError, GritsFile, GritsVolume };  // %FOR MODULE%
+export default GritsClient;                                            // %FOR MODULE%
