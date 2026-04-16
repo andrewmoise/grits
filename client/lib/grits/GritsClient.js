@@ -732,24 +732,6 @@ class GritsVolume {
     return data;
   }
 
-  async _ensureOnServer(cid, visited = new Set()) {
-    if (visited.has(cid)) return;
-    visited.add(cid);
-
-    const local = this._parent._local.get(cid);
-    if (!local) return;
-
-    try {
-      const meta = JSON.parse(new TextDecoder().decode(local));
-      if (meta?.contentHash)
-        await this._ensureOnServer(meta.contentHash, visited);
-    } catch (_) {}
-
-    await this._uploadBlob(cid, local);
-    this._parent._local.delete(cid);
-    await this._parent._blobCachePut(cid, new Response(local, { status: 200 }));
-  }
-
   // ── Internal: volume config ───────────────────────────────────
 
   // Reads .grits/volume.json from the volume (using the already-warm root from
