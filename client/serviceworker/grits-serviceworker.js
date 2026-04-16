@@ -56,6 +56,25 @@ self.addEventListener('message', event => {
     }
 });
 
+function mimeFromPath(pathname) {
+    const ext = pathname.split('.').pop().toLowerCase();
+    const mimeTypes = {
+        'html':  'text/html',
+        'css':   'text/css',
+        'js':    'application/javascript',
+        'json':  'application/json',
+        'png':   'image/png',
+        'jpg':   'image/jpeg',
+        'jpeg':  'image/jpeg',
+        'svg':   'image/svg+xml',
+        'woff':  'font/woff',
+        'woff2': 'font/woff2',
+        'ttf':   'font/ttf',
+        'eot':   'application/vnd.ms-fontobject',
+    };
+    return mimeTypes[ext] ?? 'application/octet-stream';
+}
+
 self.addEventListener('fetch', event => {
     const url = event.request.url;
 
@@ -88,25 +107,40 @@ self.addEventListener('fetch', event => {
 
     event.respondWith((async () => {
         const hostname = parsed.hostname;
-        const path = `${hostname}/content${parsed.pathname}`;
+        let path = `${hostname}/content${decodeURIComponent(parsed.pathname)}`;
 
         console.log(`[Grits] fetch: intercepting ${url} → lookup path "${path}"`);
 
         try {
             const vol = getVolume('sites');
             console.log(`[Grits] fetch: calling vol.lookup("${path}")`);
-            const file = await vol.lookup(path);
+            let file = await vol.lookup(path);
             console.log(`[Grits] fetch: lookup done, file=${file}, calling checkForUpdate`);
 
-            if (checkForUpdate()) {
-                console.log(`[Grits] fetch: checkForUpdate triggered action, falling back to fetch`);
-                return fetch(event.request);
+            let headers = {}
+
+            if (file.isDir()) {
+                console.log("Getting index");
+                file = await file.indexHtml();
+                path += "/index.html";
             }
 
-            return file.get();
+            const rawResponse = await file.get();
+            return new Response(rawResponse.body, {
+                status: rawResponse.status,
+                statusText: rawResponse.statusText,
+                headers: {
+                    ...Object.fromEntries(rawResponse.headers),
+                    'Content-Type': mimeFromPath(parsed.pathname),
+                    'Cache-Control': 'no-store',
+                },
+            });
         } catch (err) {
-            console.error(`[Grits] fetch: lookup/get failed for "${path}":`, err);
-            return fetch(event.request);
+            console.error(`[Grits] fetch: failed for "${path}":`, err);
+            return new Response(`<h1>Error</h1><pre>${err.message}</pre>`, {
+                status: 500,
+                headers: { 'Content-Type': 'text/html' },
+            });
         }
     })());
 });
