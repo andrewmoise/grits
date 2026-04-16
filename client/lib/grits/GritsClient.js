@@ -609,6 +609,10 @@ class GritsVolume {
   async get(cid) {
     _assertString(cid, 'get');
 
+    if (this._parent._swControlled) {
+        return fetch(`${this._serverUrl}/grits/v1/blob/${cid}`);
+    }
+
     if (this._parent._serviceWorkerHash !== null && this._parent._serviceWorkerHash !== undefined) {
       return fetch(`${this._serverUrl}/grits/v1/blob/${cid}`);
     }
@@ -798,6 +802,10 @@ class GritsVolume {
 
   async _lookup_internal(path) {
     const n = _normalizePath(path);
+
+    if (this._parent._swControlled) {
+      return this._slowLookup(n);
+    }
 
     if (DESYNC_MODE && this._desync) {
       // ── Ancestor override: we know better than the server ──────
@@ -1100,6 +1108,8 @@ class GritsVolume {
   // ── Internal: prefetch ────────────────────────────────────────
 
   _startPrefetch(paths) {
+    if (this._parent._swControlled) return;
+
     for (const e of paths) {
       if (e.addr && !this._inFlightPrefetches.has(e.addr)) {
         this._prefetchQueue.push(e.addr);
@@ -1170,6 +1180,8 @@ function _checkAssertions(assert, prevAddr, currentFile) {
 
 class GritsClient {
   constructor() {
+    this._swControlled = false;
+
     this._local     = new Map(); // cid → Uint8Array  (synthesized, pending upload)
     this._jsonCache = new Map(); // cid → { data, lastAccessed }
     this._blobCache = null;      // browser Cache API
@@ -1212,19 +1224,24 @@ class GritsClient {
   // Stores null if the header is absent (server has no SW module).
   _updateServiceWorkerHash(resp) {
     const hash = resp.headers.get('X-Grits-SW-Hash');
+    const swControlled = resp.headers.get('X-Grits-SW-Controlled') === '1';
       
-    // If header is present, SW didn't intercept this response — we may need to load it
-    if (hash !== null && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
-      const hasCooldown = document.cookie.split(';').some(c => 
+    if (swControlled && !this._parent._swControlled) {
+      console.log('[GritsClient] SW control detected, switching to pass-through mode');
+      this._parent._flushCaches();
+      this._parent._swControlled = true;
+    }
+    if (hash !== null && !swControlled) {
+      // Server has SW module, but SW didn't handle this — may need to register
+      const hasCooldown = document.cookie.split(';').some(c =>
         c.trim().startsWith('grits-sw-loading='));
       if (!hasCooldown) {
-        console.log('[GritsClient] SW hash header present without SW — registering SW');
+        console.log('[GritsClient] SW hash present without SW control — registering SW');
         document.cookie = 'grits-sw-loading=1; path=/; max-age=30; SameSite=Lax';
         navigator.serviceWorker.register('/grits-serviceworker.js').catch(err =>
           console.warn('[GritsClient] SW registration failed:', err));
-        }
+      }
     }
-
     this._serviceWorkerHash = hash;
   }
 
