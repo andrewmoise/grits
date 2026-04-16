@@ -847,8 +847,21 @@ class GritsVolume {
       return result;
     }).catch(() => new Promise(() => {}));
 
-    return Promise.race([fastPromise, slowPromise]);
-  }
+    const raceStart = performance.now();
+    const result = await Promise.race([fastPromise, slowPromise]);
+    const elapsed = performance.now() - raceStart;
+    if (result?._source) {
+      this._parent._tracker.record(
+        result._source === 'fast' ? 'fastWalkHit' : 'slowLookup',
+        elapsed
+      );
+      if (result._source === 'slow') {
+        this._parent._tracker.trackContentUrl(n, elapsed);
+      }
+      delete result._source;
+    }
+    return result;
+ }
 
   // Lookup that uses a desync override CID as the starting point.
   // First walks as far as possible through local caches (_fastWalk), then asks
@@ -996,11 +1009,11 @@ class GritsVolume {
       return { metadataHash: metaHash, remainingPath: '', partial: true };
     }
 
-    this._parent._tracker.record('fastWalkHit', 0);
     return {
       metadataHash: metaHash,
       contentHash:  finalMeta.contentHash,
       contentSize:  finalMeta.size ?? 0,
+      _source: 'fast',
     };
   }
 
@@ -1036,16 +1049,12 @@ class GritsVolume {
     this._ingestLookupResponse(result);
     this._updateMiniRoots(path, result);
 
-    const elapsed = performance.now() - startTime;
-    this._parent._tracker.record('slowLookup', elapsed);
-    this._parent._tracker.trackContentUrl(path, elapsed);
-
     if (!this._configFetched) this._fetchVolumeConfig();
 
     const leaf = result.paths?.find(e => e.path === path);
     if (!leaf || result.isPartial) return null;
 
-    return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
+    return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0, _source: 'slow' };
   }
 
   // Ingest a lookup/link response: cache all returned blobs and update
