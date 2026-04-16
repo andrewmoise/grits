@@ -1211,17 +1211,21 @@ class GritsClient {
   // Called by GritsVolume after every real server fetch (lookup, link).
   // Stores null if the header is absent (server has no SW module).
   _updateServiceWorkerHash(resp) {
-    const prev = this._serviceWorkerHash;
-    const hash = resp.headers.get('X-Grits-Service-Worker-Hash');
-    const wasControlled = prev !== undefined && prev !== null;
-    const isControlled  = hash !== null;
+    const hash = resp.headers.get('X-Grits-SW-Hash');
+      
+    // If header is present, SW didn't intercept this response — we may need to load it
+    if (hash !== null && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      const hasCooldown = document.cookie.split(';').some(c => 
+        c.trim().startsWith('grits-sw-loading='));
+      if (!hasCooldown) {
+        console.log('[GritsClient] SW hash header present without SW — registering SW');
+        document.cookie = 'grits-sw-loading=1; path=/; max-age=30; SameSite=Lax';
+        navigator.serviceWorker.register('/grits-serviceworker.js').catch(err =>
+          console.warn('[GritsClient] SW registration failed:', err));
+        }
+    }
 
     this._serviceWorkerHash = hash;
-
-    if (isControlled !== wasControlled) {
-      console.log(`[GritsClient] SW control changed: ${wasControlled} → ${isControlled}, flushing caches`);
-      this._flushCaches();
-    }
   }
 
   _flushCaches() {

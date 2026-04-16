@@ -3,6 +3,7 @@ package gritsd
 import (
 	"fmt"
 	"grits/internal/grits"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -42,13 +43,39 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 
 		httpModule.WrapContentHandler(func(next http.HandlerFunc) http.HandlerFunc {
 			return func(w http.ResponseWriter, r *http.Request) {
-				if r.Header.Get("X-Grits-Client") != "sw" {
-					if _, err := r.Cookie("grits-sw-bypass"); err != nil {
-						if r.Header.Get("Sec-Fetch-Mode") == "navigate" {
-							swm.serveInterstitial(w, r)
-							return
-						}
+				sentinel := r.Header.Get("X-Grits-SW-Sentinel")
+				bypassCookie, bypassErr := r.Cookie("grits-sw-bypass")
+				loadingCookie, loadingErr := r.Cookie("grits-sw-loading")
+				fetchMode := r.Header.Get("Sec-Fetch-Mode")
+
+				log.Printf("[SW] content handler: path=%s method=%s fetch-mode=%s sentinel=%q bypass-cookie=%v loading-cookie=%v",
+					r.URL.Path, r.Method, fetchMode,
+					sentinel,
+					bypassErr == nil, // true means cookie present
+					loadingErr == nil,
+				)
+				_ = bypassCookie
+				_ = loadingCookie
+
+				if sentinel != "" {
+					log.Printf("[SW] → sentinel present, serving normally")
+					next(w, r)
+					return
+				}
+				if bypassErr == nil {
+					log.Printf("[SW] → bypass cookie present, serving normally")
+					next(w, r)
+					return
+				}
+				if fetchMode == "navigate" {
+					if loadingErr != nil {
+						log.Printf("[SW] → navigate without SW and no cooldown cookie, serving interstitial")
+						swm.serveInterstitial(w, r)
+						return
 					}
+					log.Printf("[SW] → navigate but cooldown cookie present, serving normally")
+				} else {
+					log.Printf("[SW] → non-navigate request without sentinel, serving normally")
 				}
 				next(w, r)
 			}
@@ -213,6 +240,14 @@ func (swm *ServiceWorkerModule) serveInterstitial(w http.ResponseWriter, r *http
 	originalURL := r.URL.RequestURI()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
+	// Set cooldown cookie — prevents interstitial loop if SW fails to load
+	http.SetCookie(w, &http.Cookie{
+		Name:     "grits-sw-loading",
+		Value:    "1",
+		Path:     "/",
+		MaxAge:   30,
+		SameSite: http.SameSiteLaxMode,
+	})
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
@@ -221,34 +256,51 @@ func (swm *ServiceWorkerModule) serveInterstitial(w http.ResponseWriter, r *http
 <script>
 (function() {
   var target = %q;
+
+  // Listen for SW telling us to delete the cooldown cookie (hash mismatch unregister)
+  navigator.serviceWorker.addEventListener('message', function(event) {
+    if (event.data?.type === 'DELETE_COOLDOWN_COOKIE') {
+      document.cookie = 'grits-sw-loading=; path=/; max-age=0; SameSite=Lax';
+    }
+  });
+
   if (!('serviceWorker' in navigator)) {
     document.cookie = 'grits-sw-bypass=1; path=/; max-age=28800; SameSite=Lax';
+    document.cookie = 'grits-sw-loading=; path=/; max-age=0; SameSite=Lax';
     window.location.replace(target);
     return;
   }
-  navigator.serviceWorker.register('/grits-serviceworker.js')
-    .then(function(reg) {
-      if (navigator.serviceWorker.controller) {
-        window.location.replace(target);
-        return;
-      }
-      navigator.serviceWorker.addEventListener('controllerchange', function() {
-        window.location.replace(target);
-      });
-      var sw = reg.installing || reg.waiting || reg.active;
-      if (sw && sw.state !== 'activated') {
-        sw.addEventListener('statechange', function() {
-          if (this.state === 'activated' && navigator.serviceWorker.controller) {
-            window.location.replace(target);
-          }
-        });
-      }
-    })
-    .catch(function(err) {
-      console.error('[Grits] SW registration failed:', err);
-      document.cookie = 'grits-sw-bypass=1; path=/; max-age=28800; SameSite=Lax';
+
+  // Unregister any existing SW first to ensure clean state
+  navigator.serviceWorker.getRegistrations().then(function(registrations) {
+    return Promise.all(registrations.map(r => r.unregister()));
+  }).then(function() {
+    return navigator.serviceWorker.register('/grits-serviceworker.js');
+  }).then(function(reg) {
+    // Delete cooldown cookie on successful registration
+    document.cookie = 'grits-sw-loading=; path=/; max-age=0; SameSite=Lax';
+
+    function proceed() {
       window.location.replace(target);
-    });
+    }
+
+    if (navigator.serviceWorker.controller) {
+      proceed();
+      return;
+    }
+    navigator.serviceWorker.addEventListener('controllerchange', proceed);
+    var sw = reg.installing || reg.waiting || reg.active;
+    if (sw) {
+      sw.addEventListener('statechange', function() {
+        if (this.state === 'activated') proceed();
+      });
+    }
+  }).catch(function(err) {
+    console.error('[Grits] SW registration failed:', err);
+    document.cookie = 'grits-sw-bypass=1; path=/; max-age=28800; SameSite=Lax';
+    document.cookie = 'grits-sw-loading=; path=/; max-age=0; SameSite=Lax';
+    window.location.replace(target);
+  });
 })();
 </script>
 </body>
