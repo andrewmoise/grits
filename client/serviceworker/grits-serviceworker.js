@@ -1,150 +1,72 @@
-const swDirHash = "{{SW_DIR_HASH}}";
-const swScriptHash = "{{SW_SCRIPT_HASH}}";
+const DEBUG = true;
 
-const debugServiceworker = true;
+self.addEventListener('install', e => e.waitUntil(self.skipWaiting()));
+self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
 
-importScripts('/grits-GritsClient-sw.js');
+self.addEventListener('fetch', event => {
+    const parsed = new URL(event.request.url);
+    if (event.request.method !== 'GET') return;
+    if (parsed.origin !== self.location.origin) return;
+    if (parsed.pathname.startsWith('/grits/')) return;
 
-const gritsClient = new GritsClient();
-
-function getVolume(volumeName) {
-    return gritsClient.volume(self.location.origin, volumeName);
-}
-
-function cleanupClient() {
-    gritsClient.destroy();
-}
-
-function checkForUpdate() {
-    const serverHash = gritsClient.getServiceWorkerHash();
-    console.log(`[Grits] checkForUpdate: serverHash=${JSON.stringify(serverHash)}, swDirHash=${swDirHash}`);
-    if (serverHash === undefined) {
-        console.log('[Grits] checkForUpdate: no server contact yet, doing nothing');
-        return false;
-    }
-    if (serverHash === null) {
-        console.log('[Grits] checkForUpdate: server returned no SW hash header, unregistering');
-        cleanupClient();
-        self.registration.unregister();
-        return true;
-    }
-    if (serverHash !== swDirHash) {
-        console.log(`[Grits] checkForUpdate: hash mismatch, updating`);
-        cleanupClient();
-        self.registration.update().catch(err =>
-            console.error('[Grits] Failed to trigger SW update:', err));
-        return true;
-    }
-    console.log('[Grits] checkForUpdate: hash matches, no action');
-    return false;
-}
-
-self.addEventListener('install', event => {
-    console.log('[Grits] Installing');
-    event.waitUntil(self.skipWaiting());
+    event.respondWith(handleRequest(parsed));
 });
 
-self.addEventListener('activate', event => {
-    console.log('[Grits] Activating');
-    event.waitUntil(self.clients.claim());
-});
-
-self.addEventListener('message', event => {
-    if (event.data?.type === 'NAVIGATE') {
-        if (debugServiceworker) console.log('[Grits] Navigation: resetting roots');
-        getVolume('sites').resetRoot();
-    }
-});
+const mimeTypes = {
+    'html':  'text/html',
+    'css':   'text/css',
+    'js':    'application/javascript',
+    'json':  'application/json',
+    'png':   'image/png',
+    'jpg':   'image/jpeg',
+    'jpeg':  'image/jpeg',
+    'svg':   'image/svg+xml',
+    'ico':   'image/x-icon',
+    'woff':  'font/woff',
+    'woff2': 'font/woff2',
+    'ttf':   'font/ttf',
+    'eot':   'application/vnd.ms-fontobject',
+};
 
 function mimeFromPath(pathname) {
     const ext = pathname.split('.').pop().toLowerCase();
-    const mimeTypes = {
-        'html':  'text/html',
-        'css':   'text/css',
-        'js':    'application/javascript',
-        'json':  'application/json',
-        'png':   'image/png',
-        'jpg':   'image/jpeg',
-        'jpeg':  'image/jpeg',
-        'svg':   'image/svg+xml',
-        'woff':  'font/woff',
-        'woff2': 'font/woff2',
-        'ttf':   'font/ttf',
-        'eot':   'application/vnd.ms-fontobject',
-    };
     return mimeTypes[ext] ?? 'application/octet-stream';
 }
 
-self.addEventListener('fetch', event => {
-    const url = event.request.url;
+async function handleRequest(parsed) {
+    const hostname = parsed.hostname;
+    const path = `${hostname}/content${decodeURIComponent(parsed.pathname)}`;
 
-    if (event.request.method !== 'GET') return;
+    if (DEBUG) console.log(`[SW] lookup: ${path}`);
 
-    const parsed = new URL(url);
-    if (parsed.origin !== self.location.origin) return;
+    const lookupResp = await fetch(`${self.location.origin}/grits/v1/lookup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ volume: 'sites', paths: [path] }),
+    });
 
-    // Pass lookup/link requests through to the server unchanged, but tag the
-    // response so the page-side GritsClient knows a SW is active.
-    if (url.includes('/grits/v1/lookup') || url.includes('/grits/v1/link')) {
-        event.respondWith((async () => {
-            const resp = await fetch(event.request);
-            // GritsClient will have updated _serviceWorkerHash via _updateServiceWorkerHash
-            // inside _slowLookup / _serverMultiLink. The SW itself doesn't need to act
-            // here — checkForUpdate() is called after vol.lookup() in the content path.
-            const headers = new Headers(resp.headers);
-            headers.set('X-Grits-Served-By', 'sw');
-            return new Response(resp.body, {
-                status:     resp.status,
-                statusText: resp.statusText,
-                headers,
-            });
-        })());
-        return;
-    }
+    if (!lookupResp.ok) return new Response('Not found', { status: 404 });
 
-    // Don't intercept other grits API or SW script fetches.
-    if (url.includes('/grits/v1/') || url.includes('/grits-')) return;
+    const result = await lookupResp.json();
+    const leaf = result.paths?.find(e => e.path === path);
+    if (!leaf || result.isPartial) return new Response('Not found', { status: 404 });
 
-    event.respondWith((async () => {
-        const hostname = parsed.hostname;
-        let path = `${hostname}/content${decodeURIComponent(parsed.pathname)}`;
+    if (DEBUG) console.log(`[SW] metadata CID: ${leaf.addr}`);
 
-        console.log(`[Grits] fetch: intercepting ${url} → lookup path "${path}"`);
+    const metaResp = await fetch(`${self.location.origin}/grits/v1/blob/${leaf.addr}`);
+    if (!metaResp.ok) return new Response('Metadata not found', { status: 404 });
 
-        try {
-            const vol = getVolume('sites');
-            console.log(`[Grits] fetch: calling vol.lookup("${path}")`);
-            let file = await vol.lookup(path);
-            console.log(`[Grits] fetch: lookup done, file=${file}, calling checkForUpdate`);
+    const meta = await metaResp.json();
+    if (DEBUG) console.log(`[SW] content CID: ${meta.contentHash}`);
 
-            let headers = {}
+    const blobResp = await fetch(`${self.location.origin}/grits/v1/blob/${meta.contentHash}`);
+    if (!blobResp.ok) return new Response('Blob not found', { status: 404 });
 
-            if (file.isDir()) {
-                console.log("Getting index");
-                file = await file.indexHtml();
-                path += "/index.html";
-            }
-
-            const rawResponse = await file.get();
-            return new Response(rawResponse.body, {
-                status: rawResponse.status,
-                statusText: rawResponse.statusText,
-                headers: {
-                    ...Object.fromEntries(rawResponse.headers),
-                    'Content-Type': mimeFromPath(parsed.pathname),
-                    'Cache-Control': 'no-store',
-                },
-            });
-        } catch (err) {
-            console.error(`[Grits] fetch: failed for "${path}":`, err);
-            return new Response(`<h1>Error</h1><pre>${err.message}</pre>`, {
-                status: 500,
-                headers: { 'Content-Type': 'text/html' },
-            });
-        }
-    })());
-});
-
-self.addEventListener('unload', () => {
-    cleanupClient();
-});
+    return new Response(blobResp.body, {
+        status: 200,
+        headers: {
+            'Content-Type': mimeFromPath(parsed.pathname),
+            'Cache-Control': 'no-store',
+        },
+    });
+}
