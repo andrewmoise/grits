@@ -6,7 +6,6 @@ import (
 	"grits/internal/grits"
 	"log"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
@@ -55,9 +54,8 @@ var _ = (Volume)((*LocalVolume)(nil))
 
 // LocalVolumeConfig
 type LocalVolumeConfig struct {
-    VolumeName    string `json:"volumeName"`
-    BootstrapFrom string `json:"bootstrapFrom,omitempty"`
-    ReadOnly      bool   `json:"readOnly,omitempty"`
+	VolumeName string `json:"volumeName"`
+	ReadOnly   bool   `json:"readOnly,omitempty"`
 }
 
 func NewLocalVolume(config *LocalVolumeConfig, server *Server, sparse bool, persist bool) (*LocalVolume, error) {
@@ -87,23 +85,6 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, sparse bool, pers
 func (wv *LocalVolume) Start() error {
 	if grits.DebugBlobStorage {
 		wv.server.AddPeriodicTask(time.Second*10, wv.ns.PrintBlobStorageDebugging)
-	}
-
-	if wv.volumeConfig.BootstrapFrom != "" {
-		prevReadOnly := wv.volumeConfig.ReadOnly
-		wv.volumeConfig.ReadOnly = false
-		defer func() { wv.volumeConfig.ReadOnly = prevReadOnly }()
-
-		localPath := wv.volumeConfig.BootstrapFrom
-		if !filepath.IsAbs(localPath) {
-			localPath = wv.server.Config.ServerPath(localPath)
-		}
-
-		log.Printf("Volume %q: bootstrapping from %s", wv.name, wv.volumeConfig.BootstrapFrom)
-		if err := ImportLocalDir(wv, localPath, ""); err != nil {
-			return fmt.Errorf("volume %q: bootstrap from %s failed: %w", wv.name, localPath, err)
-		}
-		log.Printf("Volume %q: bootstrap complete", wv.name)
 	}
 
 	return nil
@@ -195,7 +176,7 @@ func (v *LocalVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 
 // LocalVolume implementation
 func (wv *LocalVolume) Lookup(paths []string, startAddr grits.BlobAddr, checkAccess bool, holdRef grits.RefHoldFunc) (*grits.LookupResponse, error) {
-    return wv.ns.Lookup(paths, startAddr, checkAccess, holdRef)
+	return wv.ns.Lookup(paths, startAddr, checkAccess, holdRef)
 }
 
 func (wv *LocalVolume) LookupNode(path string) (grits.FileNode, error) {

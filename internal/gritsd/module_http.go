@@ -107,10 +107,8 @@ func (*HTTPModule) GetModuleName() string {
 
 func (*HTTPModule) GetDependencies() []*Dependency {
 	return []*Dependency{
-		{
-			ModuleType: "peer",
-			Type:       DependOptional,
-		},
+		{ModuleType: "peer", Type: DependOptional},
+		{ModuleType: "startup", Type: DependOptional},
 	}
 }
 

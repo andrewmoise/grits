@@ -441,7 +441,6 @@ func checkPathInResults(t *testing.T, v Volume, results []*grits.PathNodePair, p
 	t.Errorf("Path %s not found in results", path)
 }
 
-
 // makeTestFile writes content to a temp file and returns its path.
 // The file is removed when the test ends.
 func makeTestFile(t *testing.T, content string) string {
@@ -643,20 +642,21 @@ func TestBootstrap_PopulatesVolume(t *testing.T) {
 	srcDir := makeTestDir(t)
 
 	vol, err := NewLocalVolume(
-		&LocalVolumeConfig{
-			VolumeName:    "client",
-			BootstrapFrom: srcDir,
-		},
+		&LocalVolumeConfig{VolumeName: "client"},
 		server, false, false,
 	)
 	if err != nil {
 		t.Fatalf("NewLocalVolume: %v", err)
 	}
-	server.AddModule(vol)
+	server.AddVolume(vol)
 	server.Start()
 	defer server.Stop()
 
-	// Check root is a directory.
+	resp := server.ExecuteCommand([]string{"import", srcDir, "//client"})
+	if resp.Status != 0 {
+		t.Fatalf("import failed: %s", resp.Output)
+	}
+
 	root, err := vol.LookupNode("")
 	if err != nil {
 		t.Fatalf("LookupNode root: %v", err)
@@ -666,7 +666,6 @@ func TestBootstrap_PopulatesVolume(t *testing.T) {
 		t.Errorf("expected directory at root, got %v", root.Metadata().Type)
 	}
 
-	// Check hello.txt content.
 	hello, err := vol.LookupNode("hello.txt")
 	if err != nil {
 		t.Fatalf("LookupNode hello.txt: %v", err)
@@ -676,7 +675,6 @@ func TestBootstrap_PopulatesVolume(t *testing.T) {
 		t.Errorf("hello.txt: expected %q, got %q", "hello", got)
 	}
 
-	// Check sub/world.txt content.
 	world, err := vol.LookupNode("sub/world.txt")
 	if err != nil {
 		t.Fatalf("LookupNode sub/world.txt: %v", err)
@@ -693,37 +691,36 @@ func TestBootstrap_ReadOnlyVolumeCanBootstrap(t *testing.T) {
 
 	srcDir := makeTestDir(t)
 
-	// ReadOnly: true + BootstrapFrom set — Start() must temporarily unlock.
-	vol, err := NewLocalVolume(
-		&LocalVolumeConfig{
-			VolumeName:    "client",
-			BootstrapFrom: srcDir,
-			ReadOnly:      true,
-		},
-		server, false, false,
-	)
+	cfg := &LocalVolumeConfig{VolumeName: "client"}
+	vol, err := NewLocalVolume(cfg, server, false, false)
 	if err != nil {
 		t.Fatalf("NewLocalVolume: %v", err)
 	}
-	server.AddModule(vol)
+	server.AddVolume(vol)
 	if err := server.Start(); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
 	defer server.Stop()
 
-	// Content should be present.
+	resp := server.ExecuteCommand([]string{"import", srcDir, "//client"})
+	if resp.Status != 0 {
+		t.Fatalf("import failed: %s", resp.Output)
+	}
+
+	// Now flip to read-only.
+	cfg.ReadOnly = true
+
 	hello, err := vol.LookupNode("hello.txt")
 	if err != nil {
-		t.Fatalf("LookupNode hello.txt after read-only bootstrap: %v", err)
+		t.Fatalf("LookupNode hello.txt: %v", err)
 	}
 	defer hello.Release()
 	if got := readNodeContent(t, hello); got != "hello" {
 		t.Errorf("hello.txt: expected %q, got %q", "hello", got)
 	}
 
-	// And writes should now be rejected.
 	if err := vol.LinkByMetadata("new.txt", hello.MetadataBlob().GetAddress()); err == nil {
-		t.Error("expected write to fail on read-only volume post-bootstrap, got nil")
+		t.Error("expected write to fail on read-only volume, got nil")
 	}
 }
 
@@ -733,48 +730,45 @@ func TestBootstrap_StableHashesOnRestart(t *testing.T) {
 
 	srcDir := makeTestDir(t)
 
-	newVol := func() *LocalVolume {
-		v, err := NewLocalVolume(
-			&LocalVolumeConfig{
-				VolumeName:    "client",
-				BootstrapFrom: srcDir,
-			},
-			server, false, false,
-		)
-		if err != nil {
-			t.Fatalf("NewLocalVolume: %v", err)
+	vol, err := NewLocalVolume(
+		&LocalVolumeConfig{VolumeName: "client"},
+		server, false, false,
+	)
+	if err != nil {
+		t.Fatalf("NewLocalVolume: %v", err)
+	}
+	server.AddVolume(vol)
+	server.Start()
+	defer server.Stop()
+
+	doImport := func() {
+		resp := server.ExecuteCommand([]string{"import", srcDir, "//client"})
+		if resp.Status != 0 {
+			t.Fatalf("import failed: %s", resp.Output)
 		}
-		if err := v.Start(); err != nil {
-			t.Fatalf("Start: %v", err)
-		}
-		return v
 	}
 
-	v1 := newVol()
-	v2 := newVol()
-
-	for _, rel := range []string{
-		"",
-		"hello.txt",
-		"sub",
-		"sub/world.txt",
-	} {
-		n1, err := v1.LookupNode(rel)
+	doImport()
+	addrs1 := map[string]grits.BlobAddr{}
+	for _, rel := range []string{"", "hello.txt", "sub", "sub/world.txt"} {
+		n, err := vol.LookupNode(rel)
 		if err != nil {
-			t.Fatalf("v1 LookupNode %s: %v", rel, err)
+			t.Fatalf("first import LookupNode %q: %v", rel, err)
 		}
-		defer n1.Release()
+		addrs1[rel] = n.MetadataBlob().GetAddress()
+		n.Release()
+	}
 
-		n2, err := v2.LookupNode(rel)
+	doImport()
+	for _, rel := range []string{"", "hello.txt", "sub", "sub/world.txt"} {
+		n, err := vol.LookupNode(rel)
 		if err != nil {
-			t.Fatalf("v2 LookupNode %s: %v", rel, err)
+			t.Fatalf("second import LookupNode %q: %v", rel, err)
 		}
-		defer n2.Release()
-
-		addr1 := n1.MetadataBlob().GetAddress()
-		addr2 := n2.MetadataBlob().GetAddress()
-		if addr1 != addr2 {
-			t.Errorf("%s: hash changed between bootstraps: %s vs %s", rel, addr1, addr2)
+		addr2 := n.MetadataBlob().GetAddress()
+		n.Release()
+		if addrs1[rel] != addr2 {
+			t.Errorf("%s: hash changed between imports: %s vs %s", rel, addrs1[rel], addr2)
 		}
 	}
 }
@@ -785,50 +779,47 @@ func TestBootstrap_ChangedFileUpdatesHash(t *testing.T) {
 
 	srcDir := makeTestDir(t)
 
-	boot := func() *LocalVolume {
-		v, err := NewLocalVolume(
-			&LocalVolumeConfig{
-				VolumeName:    "client",
-				BootstrapFrom: srcDir,
-			},
-			server, false, false,
-		)
-		if err != nil {
-			t.Fatalf("NewLocalVolume: %v", err)
-		}
-		if err := v.Start(); err != nil {
-			t.Fatalf("Start: %v", err)
-		}
-		return v
-	}
-
-	v1 := boot()
-
-	n1, err := v1.LookupNode("hello.txt")
+	vol, err := NewLocalVolume(
+		&LocalVolumeConfig{VolumeName: "client"},
+		server, false, false,
+	)
 	if err != nil {
-		t.Fatalf("v1 LookupNode: %v", err)
+		t.Fatalf("NewLocalVolume: %v", err)
 	}
-	defer n1.Release()
-	addr1 := n1.MetadataBlob().GetAddress()
+	server.AddVolume(vol)
+	server.Start()
+	defer server.Stop()
 
-	// Modify the source file.
+	resp := server.ExecuteCommand([]string{"import", srcDir, "//client"})
+	if resp.Status != 0 {
+		t.Fatalf("first import failed: %s", resp.Output)
+	}
+
+	n1, err := vol.LookupNode("hello.txt")
+	if err != nil {
+		t.Fatalf("LookupNode before change: %v", err)
+	}
+	addr1 := n1.MetadataBlob().GetAddress()
+	n1.Release()
+
 	if err := os.WriteFile(filepath.Join(srcDir, "hello.txt"), []byte("goodbye"), 0644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	v2 := boot()
+	resp = server.ExecuteCommand([]string{"import", srcDir, "//client"})
+	if resp.Status != 0 {
+		t.Fatalf("second import failed: %s", resp.Output)
+	}
 
-	n2, err := v2.LookupNode("hello.txt")
+	n2, err := vol.LookupNode("hello.txt")
 	if err != nil {
-		t.Fatalf("v2 LookupNode: %v", err)
+		t.Fatalf("LookupNode after change: %v", err)
 	}
 	defer n2.Release()
-	addr2 := n2.MetadataBlob().GetAddress()
 
-	if addr1 == addr2 {
+	if addr1 == n2.MetadataBlob().GetAddress() {
 		t.Error("expected hash to change after file modification, but it stayed the same")
 	}
-
 	if got := readNodeContent(t, n2); got != "goodbye" {
 		t.Errorf("expected %q after modification, got %q", "goodbye", got)
 	}

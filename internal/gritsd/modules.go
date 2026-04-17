@@ -188,6 +188,13 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return swModule, nil
 
+	case "startup":
+		var startupConfig StartupModuleConfig
+		if err := json.Unmarshal(rawConfig, &startupConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal startup module config: %v", err)
+		}
+		return NewStartupModule(s, &startupConfig), nil
+
 	case "tracker":
 		var trackerConfig TrackerModuleConfig
 		if err := json.Unmarshal(rawConfig, &trackerConfig); err != nil {
