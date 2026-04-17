@@ -930,8 +930,8 @@ class GritsVolume {
 
     this._startPrefetch(result.paths ?? []);
 
-    const leaf = result.paths?.find(e => e.path === serverRelPath);
-    if (!leaf || result.isPartial) return null;
+    const leaf = result.paths?.find(e => e.path === path);
+    if (!leaf || leaf.error) return null;
 
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0 };
   }
@@ -1037,12 +1037,11 @@ class GritsVolume {
 
     const result = await resp.json();
     this._ingestLookupResponse(result);
-    this._updateMiniRoots(path, result);
 
     if (!this._configFetched) this._fetchVolumeConfig();
 
     const leaf = result.paths?.find(e => e.path === path);
-    if (!leaf || result.isPartial) return null;
+    if (!leaf || leaf.error) return null;
 
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0, _source: 'slow' };
   }
@@ -1052,39 +1051,21 @@ class GritsVolume {
   _ingestLookupResponse(result) {
     if (!result?.paths?.length) return;
 
-    for (const entry of result.paths) {
-      // Update any mini-root we're already tracking.
-      if (this._miniRoots.has(entry.path)) {
-        const mr = this._miniRoots.get(entry.path);
-        mr.addr = entry.addr;
-        mr.ts   = Date.now();
+    // Rebuild mini-roots from scratch: keep only successful entries that have
+    // no successful ancestor also present in this response.
+    const successPaths = result.paths.filter(e => !e.error);
+    this._miniRoots = new Map();
+    for (const entry of successPaths) {
+      const hasSuccessfulAncestor = successPaths.some(
+        other => other.path !== entry.path && _isAncestorOrSelf(other.path, entry.path)
+      );
+      if (!hasSuccessfulAncestor) {
+        this._miniRoots.set(entry.path, { addr: entry.addr, ts: Date.now() });
+        DEBUG && console.log(`[miniRoot] upsert "${entry.path}" → ${entry.addr.slice(0,8)}…`);
       }
     }
 
-    this._startPrefetch(result.paths);
-  }
-
-  // After a successful lookup, record the shallowest ancestor we received
-  // (above the requested path) as a mini-root for future refreshes.
-  _updateMiniRoots(requestedPath, result) {
-    if (!result?.paths?.length) return;
-
-    let best = null;
-    for (const entry of result.paths) {
-      if (entry.path === requestedPath) continue; // target itself, not an ancestor
-      // Is this entry an ancestor of (or equal to the root of) requestedPath?
-      if (entry.path !== '' && !requestedPath.startsWith(entry.path + '/')) continue;
-      // Keep the shallowest (shortest path = highest in tree).
-      if (best === null || entry.path.length < best.path.length) {
-        best = entry;
-      }
-    }
-
-    if (best !== null) {
-      this._miniRoots.set(best.path, { addr: best.addr, ts: Date.now() });
-      DEBUG && console.log(
-        `[miniRoot] upsert "${best.path}" → ${best.addr.slice(0, 8)}…`);
-    }
+    this._startPrefetch(successPaths);
   }
 
   // ── Internal: prefetch ────────────────────────────────────────

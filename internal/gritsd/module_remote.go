@@ -349,8 +349,6 @@ func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
 			pair.Path, pair.Addr, pair.ContentHash)
 	}
 
-	lookupResponse.IsPartial = resp.StatusCode == http.StatusMultiStatus
-
 	grits.DebugLogWithTime(grits.DebugRemotePerformance, path,
 		"FetchPath: complete (%.1fms total)",
 		float64(time.Since(start).Microseconds())/1000.0)

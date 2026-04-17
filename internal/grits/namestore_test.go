@@ -956,18 +956,22 @@ func TestLookupMultiplePaths(t *testing.T) {
 		t.Fatalf("Failed to lookup paths: %v", err)
 	}
 
-	// We expect some paths to fail, so wasPartialFailure should be true
-	if !lookupResponse.IsPartial {
-		t.Error("Expected partial failure flag to be true, but it was false")
+	// We expect some paths to have errors — the leaf of the last requested path doesn't exist
+	if lookupResponse.Leaf().Error == "" {
+		t.Error("Expected lookup failure on last path, but got no error")
 	}
 
-	// Build a map of path -> node for easier verification
+	// Build a map of path -> node for easier verification, skipping error entries
 	resultsByPath := make(map[string]FileNode)
 	for _, pair := range lookupResponse.Paths {
-		resultsByPath[pair.Path], err = nameStore.GetFileNode(pair.Addr)
-		if err != nil {
-			t.Fatalf("Error trying to fetch %s: %v", pair.Addr, err)
+		if pair.Error != "" {
+			continue
 		}
+		node, err := nameStore.GetFileNode(pair.Addr)
+		if err != nil {
+			t.Fatalf("Error trying to fetch node for %s (%s): %v", pair.Path, pair.Addr, err)
+		}
+		resultsByPath[pair.Path] = node
 	}
 
 	// 1. Verify we got results for existing paths

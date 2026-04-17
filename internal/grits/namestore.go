@@ -102,15 +102,12 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 	if err != nil {
 		return nil, err
 	}
-	if lookupResp.IsPartial {
-		return nil, ErrNotExist
-	}
-	if len(lookupResp.Paths) == 0 {
+	leaf := lookupResp.Leaf()
+	if leaf == nil || leaf.Error != "" {
 		return nil, ErrNotExist
 	}
 
-	finalAddr := lookupResp.Paths[len(lookupResp.Paths)-1].Addr
-	node, err := ns.loadFileNode(finalAddr, true)
+	node, err := ns.loadFileNode(leaf.Addr, true)
 	if err != nil {
 		return nil, err
 	}
@@ -131,15 +128,12 @@ func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	if lookupResp.IsPartial {
-		return nil, ErrNotExist
-	}
-	if len(lookupResp.Paths) == 0 {
+	leaf := lookupResp.Leaf()
+	if leaf == nil || leaf.Error != "" {
 		return nil, ErrNotExist
 	}
 
-	finalAddr := lookupResp.Paths[len(lookupResp.Paths)-1].Addr
-	node, err := ns.loadFileNode(finalAddr, true)
+	node, err := ns.loadFileNode(leaf.Addr, true)
 	if err != nil {
 		return nil, err
 	}
@@ -148,19 +142,34 @@ func (ns *NameStore) LookupNode(path string) (FileNode, error) {
 	return node, nil
 }
 
-// PathNodePair represents a path and its corresponding address
+// PathNodePair represents a path and its corresponding address, or an error
+// for that path. Addr/ContentHash/Size are populated on success; Error is
+// populated (and Addr is empty) when the path could not be resolved.
+//
+// Error values: "not_found", "not_dir", "access_denied", "internal"
 type PathNodePair struct {
 	Path        string   `json:"path"`
-	Addr        BlobAddr `json:"addr"`
-	ContentHash BlobAddr `json:"contentHash"`
-	Size        int64    `json:"size"`
+	Addr        BlobAddr `json:"addr,omitempty"`
+	ContentHash BlobAddr `json:"contentHash,omitempty"`
+	Size        int64    `json:"size,omitempty"`
+	Error       string   `json:"error,omitempty"`
 }
 
-// LookupResponse represents a full response to a lookup request
+// LookupResponse represents a full response to a lookup request.
+// Every requested path has an entry in Paths, either with Addr set
+// (success) or Error set (failure). Ancestor entries always have Addr set.
 type LookupResponse struct {
 	Paths        []*PathNodePair `json:"paths"`
 	SerialNumber int64           `json:"serialNumber"`
-	IsPartial    bool            `json:"partial,omitempty"`
+}
+
+// Leaf returns the last entry in Paths, which corresponds to the deepest
+// path that was resolved. Returns nil if Paths is empty.
+func (r *LookupResponse) Leaf() *PathNodePair {
+	if len(r.Paths) == 0 {
+		return nil
+	}
+	return r.Paths[len(r.Paths)-1]
 }
 
 // checkPathAccess verifies that all requested paths are covered by the whitelist.
@@ -202,7 +211,6 @@ func (ns *NameStore) pruneForAccess(resp *LookupResponse) *LookupResponse {
 	return &LookupResponse{
 		Paths:        filtered,
 		SerialNumber: resp.SerialNumber,
-		IsPartial:    resp.IsPartial,
 	}
 }
 
@@ -257,7 +265,6 @@ func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, checkAccess bool
 	response := &LookupResponse{
 		Paths:        make([]*PathNodePair, 0),
 		SerialNumber: serialNumber,
-		IsPartial:    false,
 	}
 
 	for _, path := range paths {
@@ -265,9 +272,6 @@ func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, checkAccess bool
 		lookupResp, err := ns.resolvePath(name, startNode)
 		if err != nil {
 			return nil, err
-		}
-		if lookupResp.IsPartial {
-			response.IsPartial = true
 		}
 		for _, pair := range lookupResp.Paths {
 			if !seenPaths[pair.Path] {
@@ -302,6 +306,11 @@ func (ns *NameStore) GetFileNode(metadataAddr BlobAddr) (FileNode, error) {
 // If startNode is nil the current root is used (root-relative lookup).
 // If startNode is non-nil the traversal begins from that node
 // (CID-relative lookup); fetchers are not consulted.
+//
+// Unlike old callers, this never returns a Go error for "not found" or
+// "not a directory" — those conditions are encoded as PathNodePair.Error
+// entries in the returned LookupResponse. A non-nil Go error means
+// something structural failed (e.g. blob store I/O error).
 func (ns *NameStore) resolvePath(path string, startNode FileNode) (*LookupResponse, error) {
 	DebugLog(DebugNameStore, "We resolve path '%s'\n", path)
 
@@ -375,9 +384,7 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 	response := &LookupResponse{
 		Paths:        make([]*PathNodePair, 0, len(parts)+1),
 		SerialNumber: serialNumber,
-		IsPartial:    false,
 	}
-
 	response.Paths = append(response.Paths, &PathNodePair{
 		Path:        "",
 		Addr:        rootAddr,
@@ -385,6 +392,8 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 		Size:        node.Metadata().Size,
 	})
 
+	// Build the target path string incrementally so error entries use the
+	// full path up to (and including) the component that failed.
 	currentPath := ""
 	for _, part := range parts {
 		DebugLog(DebugNameStore, "  part '%s' from %s\n", part, node.Metadata().ContentHash)
@@ -393,35 +402,50 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 			continue
 		}
 
+		if currentPath == "" {
+			currentPath = part
+		} else {
+			currentPath = filepath.Join(currentPath, part)
+		}
+
 		treeNode, isTreeNode := node.(*TreeNode)
 		if !isTreeNode {
 			DebugLog(DebugNameStore, "    isn't tree!")
-			return nil, ErrNotDir
+			response.Paths = append(response.Paths, &PathNodePair{
+				Path:  currentPath,
+				Error: "not_dir",
+			})
+			return response, nil
 		}
 
 		children, err := treeNode.Children()
 		if err != nil {
-			DebugLog(DebugNameStore, "    error children!")
-			return nil, err
+			log.Printf("resolveFromLocal: error loading children of %s: %v", treeNode.MetadataBlob().GetAddress(), err)
+			response.Paths = append(response.Paths, &PathNodePair{
+				Path:  currentPath,
+				Error: "internal",
+			})
+			return response, nil
 		}
 
 		childAddr, exists := children[part]
 		if !exists {
-			DebugLog(DebugNameStore, "    partial return")
-			response.IsPartial = true
+			DebugLog(DebugNameStore, "    not found")
+			response.Paths = append(response.Paths, &PathNodePair{
+				Path:  currentPath,
+				Error: "not_found",
+			})
 			return response, nil
 		}
 
 		childNode, err := ns.loadFileNode(childAddr, true)
 		if err != nil {
-			DebugLog(DebugNameStore, "    can't load node!")
-			return nil, err
-		}
-
-		if currentPath == "" {
-			currentPath = part
-		} else {
-			currentPath = filepath.Join(currentPath, part)
+			log.Printf("resolveFromLocal: error loading child node %s: %v", childAddr, err)
+			response.Paths = append(response.Paths, &PathNodePair{
+				Path:  currentPath,
+				Error: "internal",
+			})
+			return response, nil
 		}
 
 		response.Paths = append(response.Paths, &PathNodePair{
@@ -497,38 +521,28 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 			return nil, fmt.Errorf("empty return from resolvePath()")
 		}
 
-		if lookupResp.IsPartial {
-			// We didn't find the exact value we were looking for... might be fine if
-			// we're asserting nil
-
-			// FIXME - Some duplication here, not ideal
-			name := strings.TrimRight(req.Path, "/")
-			var pathParts []string
-			if name == "" {
-				pathParts = []string{}
-			} else {
-				pathParts = strings.Split(name, "/")
+		leaf := lookupResp.Leaf()
+		if leaf.Error == "not_found" {
+			// Check if the parent was actually reachable
+			parentReachable := false
+			if len(lookupResp.Paths) >= 2 {
+				parent := lookupResp.Paths[len(lookupResp.Paths)-2]
+				parentReachable = parent.Error == ""
+			} else if len(lookupResp.Paths) == 1 {
+				// Only the root entry — root is the parent for a top-level path
+				parentReachable = lookupResp.Paths[0].Error == ""
 			}
-			expectedPaths := len(pathParts) + 1 // +1 for root
-
-			if len(lookupResp.Paths) < expectedPaths-1 {
-				// We failed before we got to the dir we're trying to link into
+			if !parentReachable {
 				return nil, ErrNotExist
-			} else if len(lookupResp.Paths) == expectedPaths-1 {
-				// We found the parent, but not the requested file
-				node = nil
-			} else {
-				return nil, fmt.Errorf("can't happen")
 			}
+			node = nil
+		} else if leaf.Error != "" {
+			return nil, ErrNotExist
 		} else {
-			// We found a previous value
-			if len(lookupResp.Paths) == 0 {
-				return nil, fmt.Errorf("empty lookup response")
-			}
-			finalAddr := lookupResp.Paths[len(lookupResp.Paths)-1].Addr
-			node, err = ns.loadFileNode(finalAddr, true)
-			if err != nil {
-				return nil, err
+			var loadErr error
+			node, loadErr = ns.loadFileNode(leaf.Addr, true)
+			if loadErr != nil {
+				return nil, loadErr
 			}
 		}
 
@@ -566,7 +580,9 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 	}
 
 	// Phase 2: Perform the actual linking
-	// Brief locks to read root, then lock-free tree manipulation, then brief lock to update root
+	// Brief locks to read root, then lock-free setup for the new tree, then brief lock to update root
+	// The write mutex ensures that only one of these is happening at once, but reads can still be
+	// proceeding as normal while we're doing it.
 
 	ns.mtx.Lock()
 	oldRootAddr := ns.rootAddr
@@ -627,7 +643,6 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 	response := &LookupResponse{
 		Paths:        make([]*PathNodePair, 0),
 		SerialNumber: newSerialNumber,
-		IsPartial:    false,
 	}
 
 	// Gather all paths we need to look up
@@ -644,15 +659,12 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		if err != nil {
 			return nil, err
 		}
-		if lookupResp.IsPartial {
-			// We don't care about IsPartial; it's okay for it to happen but the
-			// only way it can happen without some kind of internal error is if one
-			// part of the link overwrites an earlier part with nil. It's a little
-			// weird, so we log a warning.
-			log.Printf("Found partial lookup in MultiLink for %s", path)
+
+		// An error leaf after a link is unexpected but not fatal — log and continue.
+		if leaf := lookupResp.Leaf(); leaf != nil && leaf.Error != "" {
+			log.Printf("Unexpected error leaf in MultiLink result for %s: %s", path, leaf.Error)
 		}
 
-		// Add all paths from this lookup that we haven't seen yet
 		for _, pair := range lookupResp.Paths {
 			if _, exists := seenPaths[pair.Path]; !exists {
 				response.Paths = append(response.Paths, pair)
@@ -1103,8 +1115,6 @@ func (ns *NameStore) createMetadataBlob(contentHash BlobAddr, size int64, isDir 
 
 func (ns *NameStore) CreateTreeNode(children map[string]BlobAddr) (*TreeNode, error) {
 	DebugLog(DebugNameStore, "Creating tree node for map with %d children", len(children))
-
-	//ns.BlobStore.DumpStats()
 
 	tn := &TreeNode{
 		ChildrenMap: children,
