@@ -1206,13 +1206,19 @@ class GritsClient {
   // Stores null if the header is absent (server has no SW module).
   _updateServiceWorkerHash(resp) {
     const hash = resp.headers.get('X-Grits-SW-Hash');
+    this._serviceWorkerHash = hash;
+    if (typeof window === 'undefined') {
+      // We're inside the SW itself — nothing to do here
+      return;
+    }
+
     const swControlled = resp.headers.get('X-Grits-SW-Controlled') === '1';
-      
     if (swControlled && !this._parent._swControlled) {
       console.log('[GritsClient] SW control detected, switching to pass-through mode');
       this._parent._flushCaches();
       this._parent._swControlled = true;
     }
+
     if (hash !== null && !swControlled) {
       // Server has SW module, but SW didn't handle this — may need to register
       const hasCooldown = document.cookie.split(';').some(c =>
@@ -1224,7 +1230,6 @@ class GritsClient {
           console.warn('[GritsClient] SW registration failed:', err));
       }
     }
-    this._serviceWorkerHash = hash;
   }
 
   _flushCaches() {
