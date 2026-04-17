@@ -742,7 +742,7 @@ class GritsVolume {
     if (this._configFetched) return;
     this._configFetched = true;
     try {
-      const info = await this.lookup_internal('.grits/volume.json');
+      const info = await this._lookup_internal('.grits/volume.json');
       if (!info) {
         // file absent — keep default hardTimeout
         this.hardTimeout = DEFAULT_HARD_TIMEOUT;
