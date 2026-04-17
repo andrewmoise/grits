@@ -5,9 +5,7 @@
   "modules": [
     {
       "type": "volume",
-      "volumeName": "client",
-      "readOnly": true,
-      "bootstrapFrom": "client"
+      "volumeName": "client"
     },
     {
       "type": "mount",
@@ -52,6 +50,13 @@
       "readOnly": true,
       "autoCertificate": true,
       "certbotEmail": "%EMAIL%"
+    },
+
+    {
+      "type": "startup",
+      "commands": [
+        ["import", "./client", "//client"]
+      ]
     }
   ]
 }

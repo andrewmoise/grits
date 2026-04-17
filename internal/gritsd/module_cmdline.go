@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"grits/internal/grits"
 )
@@ -54,7 +55,7 @@ func (cm *CommandLineModule) Start() error {
 	if grits.DebugServerLifecycle {
 		log.Printf("Starting CommandLineModule with socket at %s", cm.Config.SocketPath)
 	}
-	
+
 	// Create directory if needed
 	if err := os.MkdirAll(filepath.Dir(cm.Config.SocketPath), 0755); err != nil {
 		return fmt.Errorf("failed to create socket directory: %v", err)
@@ -163,27 +164,63 @@ func (cm *CommandLineModule) GetConfig() any {
 
 // executeCommand handles the actual command processing
 func (cm *CommandLineModule) executeCommand(request CommandRequest) CommandResponse {
-	if len(request.Command) == 0 {
-		return CommandResponse{
-			Status: 1,
-			Output: "Empty command",
+	return cm.Server.ExecuteCommand(request.Command)
+}
+
+func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
+	if len(cmd) == 0 {
+		return CommandResponse{Status: 1, Output: "empty command"}
+	}
+
+	switch cmd[0] {
+
+	case "ping":
+		return CommandResponse{Status: 0, Output: "pong"}
+
+	case "import":
+		// import //volume/dest/path  local/src/path
+		if len(cmd) != 3 {
+			return CommandResponse{Status: 1, Output: "usage: import //volume/dest/path local/src/path"}
 		}
-	}
 
-	log.Printf("Received command: %s", request.Command[0])
-
-	if request.Command[0] == "ping" {
-		return CommandResponse{
-			Status: 0,
-			Output: "pong",
+		srcPath := cmd[1]
+		if !filepath.IsAbs(srcPath) {
+			srcPath = s.Config.ServerPath(srcPath)
 		}
-	}
 
-	// Handle other commands here...
+		volumeName, destPath, err := parseVolumePath(cmd[2])
+		if err != nil {
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("invalid destination: %v", err)}
+		}
+		volume := s.FindVolumeByName(volumeName)
+		if volume == nil {
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("volume %q not found", volumeName)}
+		}
 
-	// Unknown command
-	return CommandResponse{
-		Status: 1,
-		Output: fmt.Sprintf("Unknown command: %s", request.Command[0]),
+		if err := ImportLocalDir(volume, srcPath, destPath); err != nil {
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("import failed: %v", err)}
+		}
+		return CommandResponse{Status: 0, Output: fmt.Sprintf("imported %s into //%s/%s", cmd[2], volumeName, destPath)}
+
+	default:
+		return CommandResponse{Status: 1, Output: fmt.Sprintf("unknown command: %s", cmd[0])}
 	}
+}
+
+// parseVolumePath parses //volume/path into (volumeName, path).
+func parseVolumePath(s string) (volume, path string, err error) {
+	if !strings.HasPrefix(s, "//") {
+		return "", "", fmt.Errorf("volume path must start with //")
+	}
+	s = strings.TrimPrefix(s, "//")
+	parts := strings.SplitN(s, "/", 2)
+	volume = parts[0]
+	if volume == "" {
+		return "", "", fmt.Errorf("missing volume name")
+	}
+	if len(parts) == 2 {
+		path = strings.TrimRight(parts[1], "/")
+	}
+	// path stays "" if no slash, or if everything after the slash was trimmed
+	return volume, path, nil
 }
