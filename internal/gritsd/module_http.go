@@ -798,7 +798,12 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 
 	// Hold refs on all returned nodes so blobs don't get GC'd before
 	// the client fetches them.
+	hasErrors := false
 	for _, pair := range lookupResponse.Paths {
+		if pair.Error != "" {
+			hasErrors = true
+			continue
+		}
 		node, err := volume.GetFileNode(pair.Addr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
@@ -817,7 +822,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if lookupResponse.IsPartial {
+	if hasErrors {
 		w.WriteHeader(http.StatusMultiStatus)
 	} else {
 		w.WriteHeader(http.StatusOK)
@@ -1008,19 +1013,23 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET start\n")
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Looking up in volume\n")
-	// Look up the resource in the volume to get its address
 
 	lookupResponse, err := volume.Lookup([]string{path}, "", true, nil)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return
 	}
-	if lookupResponse.IsPartial {
+	leaf := lookupResponse.Leaf()
+	if leaf == nil {
+		http.Error(w, "No nodes returned", http.StatusInternalServerError)
+		return
+	}
+	if leaf.Error == "not_found" {
 		http.Error(w, "File not found", http.StatusNotFound)
 		return
 	}
-	if len(lookupResponse.Paths) <= 0 {
-		http.Error(w, "No nodes returned", http.StatusInternalServerError)
+	if leaf.Error != "" {
+		http.Error(w, fmt.Sprintf("Unexpected error resolving path: %s", leaf.Error), http.StatusInternalServerError)
 		return
 	}
 
