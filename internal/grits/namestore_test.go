@@ -328,7 +328,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 
 	// Verify that unlinking the root is disallowed.
 	if err := nameStore.LinkByMetadata("", NilAddr); err == nil {
-    	t.Errorf("Expected error when unlinking root, but got none")
+		t.Errorf("Expected error when unlinking root, but got none")
 	}
 }
 

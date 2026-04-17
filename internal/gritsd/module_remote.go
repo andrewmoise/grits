@@ -86,7 +86,7 @@ func NewRemoteVolume(config *RemoteVolumeConfig, server *Server) (*RemoteVolume,
 	// Create a local volume to handle the actual tree/namespace management
 	localConfig := &LocalVolumeConfig{
 		VolumeName: config.VolumeName,
-		ReadOnly: true,
+		ReadOnly:   true,
 	}
 	localCache, err := NewLocalVolume(localConfig, server, true, false) // readOnly=true, sparse=true, persist=false
 	if err != nil {
@@ -183,7 +183,7 @@ func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
 
 // RemoteVolume implementation
 func (rv *RemoteVolume) Lookup(paths []string, startAddr grits.BlobAddr, checkAccess bool, holdRef grits.RefHoldFunc) (*grits.LookupResponse, error) {
-    return rv.localCache.Lookup(paths, startAddr, checkAccess, holdRef)
+	return rv.localCache.Lookup(paths, startAddr, checkAccess, holdRef)
 }
 
 // GetFileNode implements Volume interface
@@ -293,20 +293,20 @@ func (rv *RemoteVolume) FetchBlob(addr grits.BlobAddr) (grits.CachedFile, error)
 }
 
 func (rv *RemoteVolume) FetchPath(path string) (*grits.LookupResponse, error) {
-    start := time.Now()
-    grits.DebugLogWithTime(grits.DebugRemotePerformance, path, "FetchPath: requested")
+	start := time.Now()
+	grits.DebugLogWithTime(grits.DebugRemotePerformance, path, "FetchPath: requested")
 
-    url := fmt.Sprintf("%s/grits/v1/lookup", rv.config.RemoteURL)
+	url := fmt.Sprintf("%s/grits/v1/lookup", rv.config.RemoteURL)
 
 	reqBody, err := json.Marshal(LookupRequestBody{
 		Volume: rv.config.VolumeName,
 		Paths:  []string{path},
 	})
-    if err != nil {
-        return nil, fmt.Errorf("failed to encode lookup request: %v", err)
-    }
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode lookup request: %v", err)
+	}
 
-    resp, err := rv.httpClient.Post(url, "application/json", bytes.NewReader(reqBody))
+	resp, err := rv.httpClient.Post(url, "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		return nil, fmt.Errorf("failed to lookup path %s: %v", path, err)
 	}
