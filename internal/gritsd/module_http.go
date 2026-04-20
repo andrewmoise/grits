@@ -378,6 +378,10 @@ func (s *HTTPModule) setupRoutes() {
 		s.contentHandlerChain(w, r)
 	}))
 
+	s.Mux.HandleFunc("/grits/", s.requestMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "Not found", http.StatusNotFound)
+	}))
+
 	s.Mux.HandleFunc("/grits/v1/blob", s.requestMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/blob/", s.requestMiddleware(s.handleBlob))
 	s.Mux.HandleFunc("/grits/v1/lookup", s.requestMiddleware(s.handleLookup))
