@@ -49,6 +49,8 @@ type LocalVolume struct {
 
 	persistMtx sync.Mutex
 	doPersist  bool
+
+	permissionsModule *PermissionsModule // set by permissions module hook; nil if not loaded
 }
 
 var _ = (Volume)((*LocalVolume)(nil))
@@ -294,6 +296,12 @@ func (wv *LocalVolume) RegisterWatcher(watcher grits.FileTreeWatcher) {
 
 func (wv *LocalVolume) UnregisterWatcher(watcher grits.FileTreeWatcher) {
 	wv.ns.UnregisterWatcher(watcher)
+}
+
+func (wv *LocalVolume) SetPermissionsModule(m *PermissionsModule) {
+	wv.permissionsModule = m
+	wv.ns.AddLookupCallback(m.MakeLookupCallback(wv.ns))
+	wv.ns.AddLinkCallback(m.MakeLinkCallback(wv.ns))
 }
 
 // RootState represents the serialized state of a NameStore root
