@@ -284,7 +284,7 @@ func TestExternalModificationsWithInvalidation(t *testing.T) {
 
 	// 2. Rename file2.txt to file2_renamed.txt
 	t.Log("  Renaming testdir/file2.txt...")
-	file2Node, err := vol.LookupNode("testdir/file2.txt")
+	file2Node, err := vol.LookupNode("testdir/file2.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to lookup file2: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestExternalModificationsWithInvalidation(t *testing.T) {
 		{Path: "testdir/file2.txt", NewAddr: grits.NilAddr},
 		{Path: "testdir/file2_renamed.txt", NewAddr: file2Addr},
 	}
-	_, err = vol.MultiLink(linkRequests, false)
+	_, err = vol.MultiLink(linkRequests, false, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to rename file2 via volume: %v", err)
 	}

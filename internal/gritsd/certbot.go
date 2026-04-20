@@ -275,7 +275,7 @@ func (hm *HTTPModule) WarmUpCert(hostname string) error {
 
 // listContentHostnames returns the top-level directory names in the content volume.
 func (hm *HTTPModule) listContentHostnames(volume Volume) ([]string, error) {
-	node, err := volume.LookupNode("")
+	node, err := volume.LookupNode("", grits.BackendPrincipal)
 	if err != nil {
 		return nil, fmt.Errorf("failed to look up content volume root: %v", err)
 	}

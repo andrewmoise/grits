@@ -59,7 +59,7 @@ func TestLocalVolumePersistenceDirect(t *testing.T) {
 	}
 
 	// Verify the content persisted by looking up the previously linked path.
-	testNode, err := localVolumeReloaded.LookupNode(testPath)
+	testNode, err := localVolumeReloaded.LookupNode(testPath, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to lookup content in local volume: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 	anotherTreeNode.Release() // Release our reference now that it's linked
 
 	// Verify we can look up the blob we linked in scenario 1
-	retrievedBlobNode, err := localVolume.LookupNode(blobPath)
+	retrievedBlobNode, err := localVolume.LookupNode(blobPath, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to lookup blob path: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 	}
 
 	// Verify we can access the tree we linked in scenario 3
-	retrievedTreeNode, err := localVolume.LookupNode(treePath)
+	retrievedTreeNode, err := localVolume.LookupNode(treePath, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to lookup tree path: %v", err)
 	}
@@ -256,7 +256,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 	childNode.Release() // Release our reference now that it's linked
 
 	// Verify we can access the child
-	retrievedChild, err := localVolume.LookupNode(childPath)
+	retrievedChild, err := localVolume.LookupNode(childPath, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to lookup child path: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestLookupAndMultiLinkResults(t *testing.T) {
 	vol.LinkByMetadata("dir1/dir3/file3.txt", node3.MetadataBlob().GetAddress())
 
 	// Test Lookup with a single path
-	lookupResponse, _ := vol.Lookup([]string{"dir1/file1.txt"}, "", false, nil)
+	lookupResponse, _ := vol.Lookup([]string{"dir1/file1.txt"}, "", nil, grits.BackendPrincipal)
 	results := lookupResponse.Paths
 	if len(results) != 3 {
 		t.Errorf("Expected 3 results, got %d", len(results))
@@ -379,7 +379,7 @@ func TestLookupAndMultiLinkResults(t *testing.T) {
 	checkPath(t, vol, results[2], "dir1/file1.txt", false)
 
 	// Test Lookup with multiple paths
-	lookupResponse, _ = vol.Lookup([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"}, "", false, nil)
+	lookupResponse, _ = vol.Lookup([]string{"dir1/file1.txt", "dir2/file2.txt", "dir1/dir3/file3.txt"}, "", nil, grits.BackendPrincipal)
 	results = lookupResponse.Paths
 	if len(results) != 7 {
 		t.Errorf("Expected 7 results, got %d", len(results))
@@ -400,7 +400,7 @@ func TestLookupAndMultiLinkResults(t *testing.T) {
 		{Path: "newdir2/newfile2.txt", NewAddr: node2.MetadataBlob().GetAddress()},
 		{Path: "newdir1/newdir3/newfile3.txt", NewAddr: node3.MetadataBlob().GetAddress()},
 	}
-	linkResponse, err := vol.MultiLink(linkRequests, true)
+	linkResponse, err := vol.MultiLink(linkRequests, true, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Error return from link: %v", err)
 	}
@@ -539,7 +539,7 @@ func TestReadOnlyVolume_RejectsAllWrites(t *testing.T) {
 	t.Run("MultiLink", func(t *testing.T) {
 		_, err := vol.MultiLink([]*grits.LinkRequest{
 			{Path: "x", NewAddr: rawCF.GetAddress()},
-		}, false)
+		}, false, grits.BackendPrincipal)
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
@@ -620,7 +620,7 @@ func TestReadOnlyVolume_ReadsStillWork(t *testing.T) {
 	cfg.ReadOnly = true
 
 	// Reads should still work.
-	found, err := vol.LookupNode("file.txt")
+	found, err := vol.LookupNode("file.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestBootstrap_PopulatesVolume(t *testing.T) {
 		t.Fatalf("import failed: %s", resp.Output)
 	}
 
-	root, err := vol.LookupNode("")
+	root, err := vol.LookupNode("", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode root: %v", err)
 	}
@@ -666,7 +666,7 @@ func TestBootstrap_PopulatesVolume(t *testing.T) {
 		t.Errorf("expected directory at root, got %v", root.Metadata().Type)
 	}
 
-	hello, err := vol.LookupNode("hello.txt")
+	hello, err := vol.LookupNode("hello.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode hello.txt: %v", err)
 	}
@@ -675,7 +675,7 @@ func TestBootstrap_PopulatesVolume(t *testing.T) {
 		t.Errorf("hello.txt: expected %q, got %q", "hello", got)
 	}
 
-	world, err := vol.LookupNode("sub/world.txt")
+	world, err := vol.LookupNode("sub/world.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode sub/world.txt: %v", err)
 	}
@@ -710,7 +710,7 @@ func TestBootstrap_ReadOnlyVolumeCanBootstrap(t *testing.T) {
 	// Now flip to read-only.
 	cfg.ReadOnly = true
 
-	hello, err := vol.LookupNode("hello.txt")
+	hello, err := vol.LookupNode("hello.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode hello.txt: %v", err)
 	}
@@ -751,7 +751,7 @@ func TestBootstrap_StableHashesOnRestart(t *testing.T) {
 	doImport()
 	addrs1 := map[string]grits.BlobAddr{}
 	for _, rel := range []string{"", "hello.txt", "sub", "sub/world.txt"} {
-		n, err := vol.LookupNode(rel)
+		n, err := vol.LookupNode(rel, grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("first import LookupNode %q: %v", rel, err)
 		}
@@ -761,7 +761,7 @@ func TestBootstrap_StableHashesOnRestart(t *testing.T) {
 
 	doImport()
 	for _, rel := range []string{"", "hello.txt", "sub", "sub/world.txt"} {
-		n, err := vol.LookupNode(rel)
+		n, err := vol.LookupNode(rel, grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("second import LookupNode %q: %v", rel, err)
 		}
@@ -795,7 +795,7 @@ func TestBootstrap_ChangedFileUpdatesHash(t *testing.T) {
 		t.Fatalf("first import failed: %s", resp.Output)
 	}
 
-	n1, err := vol.LookupNode("hello.txt")
+	n1, err := vol.LookupNode("hello.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode before change: %v", err)
 	}
@@ -811,7 +811,7 @@ func TestBootstrap_ChangedFileUpdatesHash(t *testing.T) {
 		t.Fatalf("second import failed: %s", resp.Output)
 	}
 
-	n2, err := vol.LookupNode("hello.txt")
+	n2, err := vol.LookupNode("hello.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode after change: %v", err)
 	}

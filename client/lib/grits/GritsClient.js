@@ -1040,8 +1040,21 @@ class GritsVolume {
 
     if (!this._configFetched) this._fetchVolumeConfig();
 
-    const leaf = result.paths?.find(e => e.path === path);
-    if (!leaf || leaf.error) return null;
+    // Find the deepest path entry — it corresponds to what we actually asked for.
+    if (!result.paths || result.paths.length <= 0) {
+      throw new Error(`lookup: No paths returned looking up ${path}`);   
+    }
+
+    const leaf = result.paths[result.paths.length - 1];
+
+    if (!leaf || leaf.path !== path) {
+      // Path wasn't reached — treat as not found.
+      return null;
+    }
+
+    if (leaf.error === 'not_found') return null;
+    if (leaf.error === 'access_denied') throw new AccessDeniedError(leaf.path ?? path);
+    if (leaf.error) throw new Error(`lookup: unexpected error at ${leaf.path}: ${leaf.error}`);
 
     return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0, _source: 'slow' };
   }
@@ -1053,7 +1066,7 @@ class GritsVolume {
 
     // Rebuild mini-roots from scratch: keep only successful entries that have
     // no successful ancestor also present in this response.
-    const successPaths = result.paths.filter(e => !e.error);
+    const successPaths = result.paths.filter(e => !e.error && e.addr);
     this._miniRoots = new Map();
     for (const entry of successPaths) {
       const hasSuccessfulAncestor = successPaths.some(
@@ -1061,8 +1074,7 @@ class GritsVolume {
       );
       if (!hasSuccessfulAncestor) {
         this._miniRoots.set(entry.path, { addr: entry.addr, ts: Date.now() });
-        DEBUG && console.log(`[miniRoot] upsert "${entry.path}" → ${entry.addr.slice(0,8)}…`);
-      }
+        DEBUG && console.log(`[miniRoot] upsert "${entry.path}" → ${entry.addr?.slice(0,8)}…`);      }
     }
 
     this._startPrefetch(successPaths);

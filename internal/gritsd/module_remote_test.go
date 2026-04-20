@@ -181,7 +181,7 @@ func TestRemoteVolumeLookup(t *testing.T) {
 
 	// Test looking up a file
 	t.Run("LookupFile", func(t *testing.T) {
-		node, err := remoteVolume.LookupNode("testdir/file1.txt")
+		node, err := remoteVolume.LookupNode("testdir/file1.txt", grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("Failed to lookup file1.txt: %v", err)
 		}
@@ -217,7 +217,7 @@ func TestRemoteVolumeLookup(t *testing.T) {
 
 	// Test looking up a directory
 	t.Run("LookupDirectory", func(t *testing.T) {
-		node, err := remoteVolume.LookupNode("testdir")
+		node, err := remoteVolume.LookupNode("testdir", grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("Failed to lookup testdir: %v", err)
 		}
@@ -248,7 +248,7 @@ func TestRemoteVolumeLookup(t *testing.T) {
 
 	// Test looking up nested file
 	t.Run("LookupNestedFile", func(t *testing.T) {
-		node, err := remoteVolume.LookupNode("testdir/subdir/file3.txt")
+		node, err := remoteVolume.LookupNode("testdir/subdir/file3.txt", grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("Failed to lookup nested file: %v", err)
 		}
@@ -279,7 +279,7 @@ func TestRemoteVolumeLookup(t *testing.T) {
 
 	// Test non-existent file
 	t.Run("LookupNonExistent", func(t *testing.T) {
-		_, err := remoteVolume.LookupNode("nonexistent/file.txt")
+		_, err := remoteVolume.LookupNode("nonexistent/file.txt", grits.BackendPrincipal)
 		if err != grits.ErrNotExist {
 			t.Errorf("Expected ErrNotExist, got %v", err)
 		}
@@ -287,7 +287,7 @@ func TestRemoteVolumeLookup(t *testing.T) {
 
 	// Test root level file
 	t.Run("LookupRootFile", func(t *testing.T) {
-		node, err := remoteVolume.LookupNode("root.txt")
+		node, err := remoteVolume.LookupNode("root.txt", grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("Failed to lookup root.txt: %v", err)
 		}
@@ -347,7 +347,7 @@ func TestRemoteVolumeLookup(t *testing.T) {
 	// Test GetFileNode with metadata address
 	t.Run("GetFileNode", func(t *testing.T) {
 		// First lookup to get the metadata address
-		node, err := remoteVolume.LookupNode("testdir/file2.txt")
+		node, err := remoteVolume.LookupNode("testdir/file2.txt", grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("Failed to lookup file2.txt: %v", err)
 		}
@@ -429,7 +429,7 @@ func TestRemoteVolumeMultipleFiles(t *testing.T) {
 	// Test accessing multiple files
 	for i := 0; i < 10; i++ {
 		path := fmt.Sprintf("testdir/file%d.txt", i)
-		node, err := remoteVolume.LookupNode(path)
+		node, err := remoteVolume.LookupNode(path, grits.BackendPrincipal)
 		if err != nil {
 			t.Errorf("Failed to lookup %s: %v", path, err)
 			continue
@@ -473,7 +473,7 @@ func TestRemoteVolumeCheckpoint(t *testing.T) {
 	defer clientCleanup()
 
 	// Fetch some data to populate the local cache
-	node, err := remoteVolume.LookupNode("testdir/file1.txt")
+	node, err := remoteVolume.LookupNode("testdir/file1.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to lookup file: %v", err)
 	}

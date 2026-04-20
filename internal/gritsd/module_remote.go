@@ -176,14 +176,12 @@ func (rv *RemoteVolume) Checkpoint() error {
 	return rv.localCache.Checkpoint()
 }
 
-// LookupNode implements Volume interface
-func (rv *RemoteVolume) LookupNode(path string) (grits.FileNode, error) {
-	return rv.localCache.LookupNode(path)
+func (rv *RemoteVolume) LookupNode(path string, principal *grits.Principal) (grits.FileNode, error) {
+	return rv.localCache.LookupNode(path, principal)
 }
 
-// RemoteVolume implementation
-func (rv *RemoteVolume) Lookup(paths []string, startAddr grits.BlobAddr, checkAccess bool, holdRef grits.RefHoldFunc) (*grits.LookupResponse, error) {
-	return rv.localCache.Lookup(paths, startAddr, checkAccess, holdRef)
+func (rv *RemoteVolume) Lookup(paths []string, startAddr grits.BlobAddr, holdRef grits.RefHoldFunc, principal *grits.Principal) (*grits.LookupResponse, error) {
+	return rv.localCache.Lookup(paths, startAddr, holdRef, principal)
 }
 
 // GetFileNode implements Volume interface
@@ -201,13 +199,11 @@ func (rv *RemoteVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (
 	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
-// LinkByMetadata implements Volume interface
 func (rv *RemoteVolume) LinkByMetadata(_ string, _ grits.BlobAddr) error {
 	return fmt.Errorf("cannot write to remote volume")
 }
 
-// MultiLink implements Volume interface
-func (rv *RemoteVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (*grits.LookupResponse, error) {
+func (rv *RemoteVolume) MultiLink(_ []*grits.LinkRequest, _ bool, _ *grits.Principal) (*grits.LookupResponse, error) {
 	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
@@ -399,7 +395,7 @@ func (rv *RemoteVolume) fetchVolumeConfig() {
 		return
 	}
 
-	node, err := rv.localCache.LookupNode(".grits/volume.json")
+	node, err := rv.localCache.LookupNode(".grits/volume.json", grits.AnonPrincipal)
 	if err != nil {
 		// File absent is normal; anything else is worth noting.
 		if !grits.IsNotExist(err) {

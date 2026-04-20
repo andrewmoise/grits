@@ -78,6 +78,9 @@ type NameStore struct {
 	lastFetch     time.Time
 	CacheDuration time.Duration
 
+	lookupCallbacks []LookupCallback
+	linkCallbacks   []LinkCallback
+
 	DebugWhitelist []string // If non-empty and checkAccess is true, restricts visible paths
 }
 
@@ -121,23 +124,29 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 	return cf, nil
 }
 
-func (ns *NameStore) LookupNode(path string) (FileNode, error) {
-	DebugLog(DebugNameStore, "LookupNode('%s')", path)
-
-	lookupResp, err := ns.resolvePath(path, nil)
+func (ns *NameStore) LookupNode(path string, principal *Principal) (FileNode, error) {
+	path = strings.TrimRight(path, "/") // FIXME
+	resp, err := ns.Lookup([]string{path}, "", nil, principal)
 	if err != nil {
 		return nil, err
 	}
-	leaf := lookupResp.Leaf()
-	if leaf == nil || leaf.Error != "" {
+	leaf := resp.Leaf()
+	if leaf == nil {
+		return nil, fmt.Errorf("LookupNode: no paths returned for %q", path)
+	}
+	if leaf.Error == "not_found" {
 		return nil, ErrNotExist
 	}
-
+	if leaf.Error == "access_denied" {
+		return nil, &ErrAccessDenied{Path: leaf.Path}
+	}
+	if leaf.Error != "" {
+		return nil, fmt.Errorf("LookupNode: unexpected error at %q: %s", leaf.Path, leaf.Error)
+	}
 	node, err := ns.loadFileNode(leaf.Addr, true)
 	if err != nil {
 		return nil, err
 	}
-
 	node.Take()
 	return node, nil
 }
@@ -172,48 +181,6 @@ func (r *LookupResponse) Leaf() *PathNodePair {
 	return r.Paths[len(r.Paths)-1]
 }
 
-// checkPathAccess verifies that all requested paths are covered by the whitelist.
-// Returns an ErrAccessDenied for the first path found outside the whitelist.
-// FIXME: This is not atomic with the subsequent Lookup call — the tree could
-// change between the access check and the actual lookup.
-func (ns *NameStore) checkPathAccess(names []string) error {
-	for _, name := range names {
-		covered := false
-		for _, wp := range ns.DebugWhitelist {
-			if name == wp || strings.HasPrefix(name, wp+"/") {
-				covered = true
-				break
-			}
-		}
-		if !covered {
-			return &ErrAccessDenied{Path: name}
-		}
-	}
-	return nil
-}
-
-// pruneForAccess strips path entries that are ancestors of whitelist entries,
-// so callers only see nodes at or below their permitted roots.
-func (ns *NameStore) pruneForAccess(resp *LookupResponse) *LookupResponse {
-	filtered := make([]*PathNodePair, 0, len(resp.Paths))
-	for _, pair := range resp.Paths {
-		covered := false
-		for _, wp := range ns.DebugWhitelist {
-			if pair.Path == wp || strings.HasPrefix(pair.Path, wp+"/") {
-				covered = true
-				break
-			}
-		}
-		if covered {
-			filtered = append(filtered, pair)
-		}
-	}
-	return &LookupResponse{
-		Paths:        filtered,
-		SerialNumber: resp.SerialNumber,
-	}
-}
-
 // RefHoldFunc is an optional callback passed to Lookup. If non-nil it is called
 // with the metadata address of the root node that was actually used for the
 // lookup (the volume root when startAddr is "", otherwise startAddr itself).
@@ -221,20 +188,46 @@ func (ns *NameStore) pruneForAccess(resp *LookupResponse) *LookupResponse {
 // so the callback can safely snag a timed reference via a refHolder.
 type RefHoldFunc func(addr BlobAddr)
 
+// Principal represents the entity making a request. Still stubbed for now.
+// BackendPrincipal bypasses all permission checks, AnonPrinciple follows permission whitelists.
+
+type Principal struct {
+	User   string // "" means unauthenticated
+	Origin string // "" means server-internal
+}
+
+var BackendPrincipal = &Principal{User: "backend", Origin: ""}
+var AnonPrincipal = &Principal{}
+
+// LookupCallback is called just before Lookup returns its response.
+// It may prune paths or return an error to reject the entire lookup.
+// Called with no locks held.
+type LookupCallback func(*LookupResponse, *Principal) (*LookupResponse, error)
+
+func (ns *NameStore) AddLookupCallback(cb LookupCallback) {
+	ns.lookupCallbacks = append(ns.lookupCallbacks, cb)
+}
+
+// LinkCallback is called after all recursiveLink calls succeed but before
+// references are committed. Both oldRoot and newRoot are live at this point.
+// writeMtx IS held; ns.mtx is NOT held (so the callback may safely read the tree).
+// Return a non-nil error to abort the commit with no tree changes.
+type LinkCallback func(oldRoot, newRoot FileNode, requests []*LinkRequest, principal *Principal) error
+
+func (ns *NameStore) AddLinkCallback(cb LinkCallback) {
+	ns.linkCallbacks = append(ns.linkCallbacks, cb)
+}
+
 // Lookup returns a LookupResponse for one or more paths.
+
 // If startAddr is empty all paths are resolved from the current volume root
-// and access-control checking (DebugWhitelist) applies.
+
 // If startAddr is non-empty all paths are resolved relative to that node
-// and access-control checking is skipped.
+
 // If holdRef is non-nil it is called with the address of the starting node
 // before Lookup returns.
-func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, checkAccess bool, holdRef RefHoldFunc) (*LookupResponse, error) {
-	if checkAccess && startAddr == "" && len(ns.DebugWhitelist) > 0 {
-		if err := ns.checkPathAccess(paths); err != nil {
-			return nil, err
-		}
-	}
 
+func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, holdRef RefHoldFunc, principal *Principal) (*LookupResponse, error) {
 	ns.mtx.Lock()
 	serialNumber := ns.serialNumber
 	ns.mtx.Unlock()
@@ -281,8 +274,12 @@ func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, checkAccess bool
 		}
 	}
 
-	if checkAccess && startAddr == "" && len(ns.DebugWhitelist) > 0 {
-		response = ns.pruneForAccess(response)
+	for _, cb := range ns.lookupCallbacks {
+		var err error
+		response, err = cb(response, principal)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return response, nil
@@ -343,6 +340,14 @@ func (ns *NameStore) resolvePath(path string, startNode FileNode) (*LookupRespon
 	return resp, err
 }
 
+// resolveFromLocal resolves a path against the namestore.
+// If startNode is nil the current root is used (root-relative lookup).
+// If startNode is non-nil the traversal begins from that node.
+//
+// Always returns one PathNodePair per path component, including the root ("").
+// If the walk stops early (not_found, not_dir, internal error), subsequent
+// components are still emitted with Error: "not_found". The shape of the
+// response is always the same regardless of where the walk stopped.
 func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupResponse, error) {
 	path = strings.TrimRight(path, "/")
 	if path != "" && path[0] == '/' {
@@ -392,12 +397,12 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 		Size:        node.Metadata().Size,
 	})
 
-	// Build the target path string incrementally so error entries use the
-	// full path up to (and including) the component that failed.
+	// current tracks the live node as we walk down.
+	// Once set to nil, we've lost the walk and emit not_found for all remaining parts.
+	current := node
 	currentPath := ""
-	for _, part := range parts {
-		DebugLog(DebugNameStore, "  part '%s' from %s\n", part, node.Metadata().ContentHash)
 
+	for _, part := range parts {
 		if part == "" {
 			continue
 		}
@@ -408,14 +413,24 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 			currentPath = filepath.Join(currentPath, part)
 		}
 
-		treeNode, isTreeNode := node.(*TreeNode)
+		// If we've already lost the walk, emit not_found for remaining parts.
+		if current == nil {
+			response.Paths = append(response.Paths, &PathNodePair{
+				Path:  currentPath,
+				Error: "not_found",
+			})
+			continue
+		}
+
+		treeNode, isTreeNode := current.(*TreeNode)
 		if !isTreeNode {
 			DebugLog(DebugNameStore, "    isn't tree!")
 			response.Paths = append(response.Paths, &PathNodePair{
 				Path:  currentPath,
 				Error: "not_dir",
 			})
-			return response, nil
+			current = nil
+			continue
 		}
 
 		children, err := treeNode.Children()
@@ -425,7 +440,8 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 				Path:  currentPath,
 				Error: "internal",
 			})
-			return response, nil
+			current = nil
+			continue
 		}
 
 		childAddr, exists := children[part]
@@ -435,7 +451,8 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 				Path:  currentPath,
 				Error: "not_found",
 			})
-			return response, nil
+			current = nil
+			continue
 		}
 
 		childNode, err := ns.loadFileNode(childAddr, true)
@@ -445,7 +462,8 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 				Path:  currentPath,
 				Error: "internal",
 			})
-			return response, nil
+			current = nil
+			continue
 		}
 
 		response.Paths = append(response.Paths, &PathNodePair{
@@ -454,8 +472,7 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 			ContentHash: childNode.Metadata().ContentHash,
 			Size:        childNode.Metadata().Size,
 		})
-
-		node = childNode
+		current = childNode
 	}
 
 	DebugLog(DebugNameStore, "  all done")
@@ -487,7 +504,7 @@ func matchesAddr(a FileNode, b BlobAddr) bool {
 	}
 }
 
-func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*LookupResponse, error) {
+func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool, principal *Principal) (*LookupResponse, error) {
 	DebugLog(DebugLinks, "MultiLink - %d elements", len(requests))
 
 	// Serialize all link operations
@@ -579,13 +596,11 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		}
 	}
 
-	// Phase 2: Perform the actual linking
-	// Brief locks to read root, then lock-free setup for the new tree, then brief lock to update root
-	// The write mutex ensures that only one of these is happening at once, but reads can still be
-	// proceeding as normal while we're doing it.
+	// Phase 2: Build new tree
 
 	ns.mtx.Lock()
 	oldRootAddr := ns.rootAddr
+	newSerialNumber := ns.serialNumber + 1
 	ns.mtx.Unlock()
 
 	oldRoot, err := ns.loadFileNode(oldRootAddr, false)
@@ -599,17 +614,77 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		if name != "" && name[0] == '/' {
 			return nil, fmt.Errorf("name must be relative")
 		}
-
 		if name == "." {
 			name = ""
 		}
 
-		var err error
 		newRoot, err = ns.recursiveLink("", name, req.NewAddr, newRoot)
 		if err != nil {
 			return nil, err
 		}
 	}
+
+	// Phase 3: Link callback — veto the write before anything that'd be hard to undo.
+	// Both oldRoot and newRoot have refs held. writeMtx held, ns.mtx NOT held.
+
+	for _, cb := range ns.linkCallbacks {
+		if err := cb(oldRoot, newRoot, requests, principal); err != nil {
+			return nil, err
+		}
+	}
+
+	// Phase 4: Build response against newRoot (before swapping, so we pass
+	// newRoot explicitly as the start node rather than relying on the current root).
+
+	var response *LookupResponse
+	if returnResults {
+		seenPaths := make(map[string]bool)
+		response = &LookupResponse{
+			Paths:        make([]*PathNodePair, 0),
+			SerialNumber: newSerialNumber,
+		}
+
+		for _, req := range requests {
+			path := strings.TrimRight(req.Path, "/")
+			if _, exists := seenPaths[path]; exists {
+				continue
+			}
+
+			lookupResp, err := ns.resolvePath(path, newRoot)
+			if err != nil {
+				return nil, err
+			}
+
+			if leaf := lookupResp.Leaf(); leaf != nil && leaf.Error == "not_found" {
+				// Path was deleted — emit a clean nil entry, not an error.
+				if !seenPaths[path] {
+					response.Paths = append(response.Paths, &PathNodePair{Path: path})
+					seenPaths[path] = true
+				}
+				continue
+			} else if leaf != nil && leaf.Error != "" {
+				log.Printf("Unexpected error leaf in MultiLink result for %s: %s", path, leaf.Error)
+			}
+
+			for _, pair := range lookupResp.Paths {
+				if _, exists := seenPaths[pair.Path]; !exists {
+					response.Paths = append(response.Paths, pair)
+					seenPaths[pair.Path] = true
+				}
+			}
+		}
+
+		// Lookup callback — veto or prune the response before committing.
+		for _, cb := range ns.lookupCallbacks {
+			response, err = cb(response, principal)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Phase 5: Commit — expensive and hard to undo, so we only reach here
+	// after both callbacks have approved.
 
 	err = ns.refManager.recursiveTake(ns, newRoot, nil)
 	if err != nil {
@@ -627,56 +702,15 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool) (*Lo
 		return nil, err
 	}
 
-	// Update root with brief lock
 	ns.mtx.Lock()
 	ns.rootAddr = newRoot.MetadataBlob().GetAddress()
 	ns.serialNumber++
-	newSerialNumber := ns.serialNumber
 	ns.mtx.Unlock()
-
-	if !returnResults {
-		return nil, nil
-	}
-
-	// Build up the lookup results
-	seenPaths := make(map[string]bool)
-	response := &LookupResponse{
-		Paths:        make([]*PathNodePair, 0),
-		SerialNumber: newSerialNumber,
-	}
-
-	// Gather all paths we need to look up
-	for _, req := range requests {
-		path := strings.TrimRight(req.Path, "/")
-
-		// Skip paths we've already processed
-		if _, exists := seenPaths[path]; exists {
-			continue
-		}
-
-		// Look up this path
-		lookupResp, err := ns.resolvePath(path, nil)
-		if err != nil {
-			return nil, err
-		}
-
-		// An error leaf after a link is unexpected but not fatal — log and continue.
-		if leaf := lookupResp.Leaf(); leaf != nil && leaf.Error != "" {
-			log.Printf("Unexpected error leaf in MultiLink result for %s: %s", path, leaf.Error)
-		}
-
-		for _, pair := range lookupResp.Paths {
-			if _, exists := seenPaths[pair.Path]; !exists {
-				response.Paths = append(response.Paths, pair)
-				seenPaths[pair.Path] = true
-			}
-		}
-	}
 
 	return response, nil
 }
 
-func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
+func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr, principal *Principal) error {
 	name = strings.TrimRight(name, "/")
 	if name != "" && name[0] == '/' {
 		return fmt.Errorf("name must be relative")
@@ -688,7 +722,7 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 	_, err := ns.MultiLink([]*LinkRequest{{
 		Path:    name,
 		NewAddr: metadataAddr,
-	}}, false)
+	}}, false, principal)
 	return err
 }
 
@@ -696,7 +730,7 @@ func (ns *NameStore) LinkByMetadata(name string, metadataAddr BlobAddr) error {
 func (ns *NameStore) linkBlob(name string, addr BlobAddr, size int64) error {
 	if addr == "" {
 		// If addr is "", we're unlinking
-		return ns.LinkByMetadata(name, "")
+		return ns.LinkByMetadata(name, "", BackendPrincipal)
 	}
 
 	// Create metadata for the blob
@@ -707,14 +741,14 @@ func (ns *NameStore) linkBlob(name string, addr BlobAddr, size int64) error {
 	defer metadataBlob.Release()
 
 	// Link using the metadata address
-	return ns.LinkByMetadata(name, metadataBlob.GetAddress())
+	return ns.LinkByMetadata(name, metadataBlob.GetAddress(), BackendPrincipal)
 }
 
 // linkTree creates metadata for a tree and links it into the path
 func (ns *NameStore) linkTree(name string, addr BlobAddr) error {
 	if addr == "" {
 		// If addr is nil, we're unlinking
-		return ns.LinkByMetadata(name, "")
+		return ns.LinkByMetadata(name, "", BackendPrincipal)
 	}
 
 	// For a tree node, we don't have size information readily available
@@ -735,7 +769,7 @@ func (ns *NameStore) linkTree(name string, addr BlobAddr) error {
 	defer metadataBlob.Release()
 
 	// Link using the metadata address
-	return ns.LinkByMetadata(name, metadataBlob.GetAddress())
+	return ns.LinkByMetadata(name, metadataBlob.GetAddress(), BackendPrincipal)
 }
 
 // Core link function helper.
@@ -2423,34 +2457,3 @@ func (rm *DenseRefManager) cleanup(ns *NameStore) {
 
 	DebugLog(DebugBlobStorage, "NS cleanup complete. Removed %d unreferenced nodes", len(nodesToRemove))
 }
-
-////////////////////////
-// Internal notes for API transition / cleanup:
-
-// Link() can start to take a FileNode as the target, instead of an address. If you want to link
-// by address, you need to fetch the FileNode for that address, then do your Link(), then release
-// the ref count after.
-
-// Same for MultiLink().
-
-// LinkBlob() and LinkTree() should go away. What that should look like instead is a
-// helper method that constructs a metadata node for a given blob or tree, and then another thing
-// that gives you the FileNode for the metadata you constructed. This stuff shouldn't really be
-// needed but there are places where I think we're doing it for compatibility. (Ugh - we don't even
-// use it outside of tests. Okay, whatever, it can stay, maybe uncapitalized, and help keep the
-// tests running but be deprecated for everything else, maybe even become helper methods within
-// the test scaffold. It shouldn't be a main interface.)
-//
-// recursiveLink() can work in exactly the same fashion with mutable nodes as with immutable
-// ones. It's just going to be winding up making mutable copies of any immutable stuff it finds,
-// or modifying in-place any mutable stuff it finds and then returning it unchanged. We just have
-// to keep our invariant that if a mutable node ever gets a reference count taken (taking its
-// refCount to 2), it needs to become immutable before returning. That means it's being linked
-// in two places and the second one shouldn't change because the first did.
-
-// LookupAndOpen() should go away I think. We should be able to Open() and do I/O on the file
-// nodes directly, since they are getting more capable and stateful now.
-
-// LookupNode() is perfect, no change
-
-// Likewise resolvePath() is already converted, nothing to do for now.

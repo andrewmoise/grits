@@ -75,7 +75,7 @@ func TestImportLocalDir(t *testing.T) {
 	// --- Structure checks ---
 
 	// Root of import should be a directory.
-	importedNode, err := vol.LookupNode("imported")
+	importedNode, err := vol.LookupNode("imported", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode imported: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestImportLocalDir(t *testing.T) {
 	}
 
 	// file1.txt should exist with correct content.
-	file1Node, err := vol.LookupNode("imported/file1.txt")
+	file1Node, err := vol.LookupNode("imported/file1.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode file1.txt: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestImportLocalDir(t *testing.T) {
 	}
 
 	// subdir should be a directory.
-	subdirNode, err := vol.LookupNode("imported/subdir")
+	subdirNode, err := vol.LookupNode("imported/subdir", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode subdir: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestImportLocalDir(t *testing.T) {
 	}
 
 	// file2.txt should exist with correct content.
-	file2Node, err := vol.LookupNode("imported/subdir/file2.txt")
+	file2Node, err := vol.LookupNode("imported/subdir/file2.txt", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LookupNode file2.txt: %v", err)
 	}
@@ -193,13 +193,13 @@ func TestImportLocalDirStability(t *testing.T) {
 
 	check := func(rel string) {
 		t.Helper()
-		n1, err := vol.LookupNode("first/" + rel)
+		n1, err := vol.LookupNode("first/"+rel, grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("LookupNode first/%s: %v", rel, err)
 		}
 		defer n1.Release()
 
-		n2, err := vol.LookupNode("second/" + rel)
+		n2, err := vol.LookupNode("second/"+rel, grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("LookupNode second/%s: %v", rel, err)
 		}

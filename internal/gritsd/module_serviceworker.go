@@ -97,7 +97,7 @@ func (swm *ServiceWorkerModule) serveFromClientVolume(volumePath string, applyTe
 			return
 		}
 
-		fileNode, err := vol.LookupNode(volumePath)
+		fileNode, err := vol.LookupNode(volumePath, grits.BackendPrincipal)
 		if err != nil || fileNode == nil {
 			http.Error(w, "File not found", http.StatusInternalServerError)
 			return
@@ -121,7 +121,7 @@ func (swm *ServiceWorkerModule) serveFromClientVolume(volumePath string, applyTe
 			result = processTemplateForSW(result)
 			result = strings.ReplaceAll(result, "{{SW_DIR_HASH}}", string(swm.getClientDirHash()))
 
-			swNode, err := vol.LookupNode("serviceworker/grits-serviceworker.js")
+			swNode, err := vol.LookupNode("serviceworker/grits-serviceworker.js", grits.BackendPrincipal)
 			if err != nil || swNode == nil {
 				http.Error(w, "Service worker script not found", http.StatusInternalServerError)
 				return
@@ -141,7 +141,7 @@ func (swm *ServiceWorkerModule) getClientDirHash() grits.BlobAddr {
 	if vol == nil {
 		return "(no client volume)"
 	}
-	node, err := vol.LookupNode("serviceworker")
+	node, err := vol.LookupNode("serviceworker", grits.BackendPrincipal)
 	if err != nil || node == nil {
 		return grits.BlobAddr(fmt.Sprintf("(error: %v)", err))
 	}
@@ -167,14 +167,14 @@ func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Req
 	}
 
 	// For the SW hash injection we always need the serviceworker.js node.
-	swNode, err := vol.LookupNode("serviceworker/grits-serviceworker.js")
+	swNode, err := vol.LookupNode("serviceworker/grits-serviceworker.js", grits.BackendPrincipal)
 	if err != nil || swNode == nil {
 		http.Error(w, "Service worker script not found", http.StatusInternalServerError)
 		return
 	}
 	defer swNode.Release()
 
-	fileNode, err := vol.LookupNode(filePath)
+	fileNode, err := vol.LookupNode(filePath, grits.BackendPrincipal)
 	if err != nil || fileNode == nil {
 		http.Error(w, "File not found", http.StatusInternalServerError)
 		return

@@ -219,7 +219,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	nameStore.DebugDumpNamespace()
 
 	// Remove "/dir/subdir/file.txt" and verify it's no longer found
-	if err := nameStore.LinkByMetadata("dir/subdir/file.txt", NilAddr); err != nil {
+	if err := nameStore.LinkByMetadata("dir/subdir/file.txt", NilAddr, BackendPrincipal); err != nil {
 		t.Fatalf("Failed to remove dir/subdir/file.txt: %v", err)
 	}
 	nameStore.DebugDumpNamespace()
@@ -228,7 +228,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	}
 
 	// Attempt to remove "dir" and verify its contents are also removed
-	if err := nameStore.LinkByMetadata("dir", NilAddr); err != nil {
+	if err := nameStore.LinkByMetadata("dir", NilAddr, BackendPrincipal); err != nil {
 		t.Fatalf("Failed to remove /dir: %v", err)
 	}
 	nameStore.DebugDumpNamespace()
@@ -237,7 +237,7 @@ func TestRemoveFilesAndDirectories(t *testing.T) {
 	}
 
 	// Verify that attempting to remove a non-existent directory does not cause errors
-	if err := nameStore.LinkByMetadata("nonexistent", NilAddr); err != nil {
+	if err := nameStore.LinkByMetadata("nonexistent", NilAddr, BackendPrincipal); err != nil {
 		t.Errorf("Expected no error when attempting to remove a non-existent directory, got: %v", err)
 	}
 }
@@ -305,7 +305,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	}
 
 	// Now, remove a top-level directory and verify all nested contents are also removed.
-	if err := nameStore.LinkByMetadata("dir1/dir2", NilAddr); err != nil {
+	if err := nameStore.LinkByMetadata("dir1/dir2", NilAddr, BackendPrincipal); err != nil {
 		t.Errorf("Failed to remove dir1/dir2: %v", err)
 	}
 
@@ -327,7 +327,7 @@ func TestComplexDirectoryStructures(t *testing.T) {
 	}
 
 	// Verify that unlinking the root is disallowed.
-	if err := nameStore.LinkByMetadata("", NilAddr); err == nil {
+	if err := nameStore.LinkByMetadata("", NilAddr, BackendPrincipal); err == nil {
 		t.Errorf("Expected error when unlinking root, but got none")
 	}
 }
@@ -495,7 +495,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	// 2. Link blobs and dirs
 	dirNames := []string{"someplace", "someplace/else", "dir", "dir/sub"}
 	for _, dirName := range dirNames {
-		err := ns.LinkByMetadata(dirName, emptyDirNode.MetadataBlob().GetAddress())
+		err := ns.LinkByMetadata(dirName, emptyDirNode.MetadataBlob().GetAddress(), BackendPrincipal)
 		if err != nil {
 			t.Fatalf("Failed to mkdir %s: %v", dirName, err)
 		}
@@ -665,7 +665,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	}
 
 	// 5. Try unlinking a whole subdirectory
-	err = ns.LinkByMetadata("someplace", NilAddr)
+	err = ns.LinkByMetadata("someplace", NilAddr, BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to unlink someplace: %v", err)
 	}
@@ -737,12 +737,12 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 
 	log.Printf("--- Scaffolding directories")
 
-	err = ns.LinkByMetadata("tree/someplace", emptyDirNode.MetadataBlob().GetAddress())
+	err = ns.LinkByMetadata("tree/someplace", emptyDirNode.MetadataBlob().GetAddress(), BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to mkdir %s: %v", "tree/someplace", err)
 	}
 
-	err = ns.LinkByMetadata("tree/someplace/else", emptyDirNode.MetadataBlob().GetAddress())
+	err = ns.LinkByMetadata("tree/someplace/else", emptyDirNode.MetadataBlob().GetAddress(), BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to mkdir %s: %v", "tree/someplace/else", err)
 	}
@@ -753,7 +753,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 		newRoot := make(map[string]string)
 		newRoot["prev"] = string(ns.rootAddr)
 
-		treeNode, err := ns.LookupNode("tree")
+		treeNode, err := ns.LookupNode("tree", BackendPrincipal)
 		if err != nil {
 			t.Fatalf("Failed to lookup tree: %v", err)
 		}
@@ -851,7 +851,7 @@ func TestFileNodeReferenceCounting(t *testing.T) {
 	log.Printf("--- Starting test 7, full unlink")
 	ns.DebugDumpNamespace()
 
-	err = ns.LinkByMetadata("", emptyDirNode.MetadataBlob().GetAddress())
+	err = ns.LinkByMetadata("", emptyDirNode.MetadataBlob().GetAddress(), BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to unlink root: %v", err)
 	}
@@ -951,7 +951,7 @@ func TestLookupMultiplePaths(t *testing.T) {
 	}
 
 	// Call Lookup
-	lookupResponse, err := nameStore.Lookup(paths, "", false, nil)
+	lookupResponse, err := nameStore.Lookup(paths, "", nil, BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to lookup paths: %v", err)
 	}

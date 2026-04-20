@@ -6,6 +6,7 @@ import (
 	"grits/internal/grits"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,15 +18,15 @@ type Volume interface {
 	isReadOnly() bool
 	Checkpoint() error
 
-	Lookup(paths []string, startAddr grits.BlobAddr, checkAccess bool, holdRef grits.RefHoldFunc) (*grits.LookupResponse, error)
-	LookupNode(path string) (grits.FileNode, error)
+	Lookup(paths []string, startAddr grits.BlobAddr, holdRef grits.RefHoldFunc, principal *grits.Principal) (*grits.LookupResponse, error)
+	LookupNode(path string, principal *grits.Principal) (grits.FileNode, error)
 	GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error)
 
 	CreateTreeNode() (grits.FileNode, error)
 	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (grits.FileNode, error)
 
 	LinkByMetadata(path string, metadataAddr grits.BlobAddr) error
-	MultiLink([]*grits.LinkRequest, bool) (*grits.LookupResponse, error)
+	MultiLink(requests []*grits.LinkRequest, returnResults bool, principal *grits.Principal) (*grits.LookupResponse, error)
 
 	AddBlob(path string) (grits.CachedFile, error)
 	AddOpenBlob(*os.File) (grits.CachedFile, error)
@@ -175,20 +176,49 @@ func (v *LocalVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 }
 
 // LocalVolume implementation
-func (wv *LocalVolume) Lookup(paths []string, startAddr grits.BlobAddr, checkAccess bool, holdRef grits.RefHoldFunc) (*grits.LookupResponse, error) {
-	return wv.ns.Lookup(paths, startAddr, checkAccess, holdRef)
+func (wv *LocalVolume) Lookup(paths []string, startAddr grits.BlobAddr, holdRef grits.RefHoldFunc, principal *grits.Principal) (*grits.LookupResponse, error) {
+	return wv.ns.Lookup(paths, startAddr, holdRef, principal)
 }
 
-func (wv *LocalVolume) LookupNode(path string) (grits.FileNode, error) {
-	return wv.ns.LookupNode(path)
+func (wv *LocalVolume) LookupNode(path string, principal *grits.Principal) (grits.FileNode, error) {
+	path = strings.TrimRight(path, "/") // FIXME
+
+	resp, err := wv.Lookup([]string{path}, "", nil, principal)
+	if err != nil {
+		return nil, err
+	}
+
+	paths := resp.Paths
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("LookupNode: no paths returned for %q", path)
+	}
+	leaf := paths[len(paths)-1]
+
+	if leaf.Error == "not_found" {
+		return nil, grits.ErrNotExist
+	}
+	if leaf.Error == "access_denied" {
+		return nil, &grits.ErrAccessDenied{Path: leaf.Path}
+	}
+	if leaf.Error != "" {
+		return nil, fmt.Errorf("LookupNode: unexpected error at %q: %s", leaf.Path, leaf.Error)
+	}
+	if leaf.Path != path {
+		return nil, fmt.Errorf("LookupNode: expected leaf at %q, got %q", path, leaf.Path)
+	}
+
+	node, err := wv.ns.GetFileNode(leaf.Addr)
+	if err != nil {
+		return nil, err
+	}
+	return node, nil
 }
 
-func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (*grits.LookupResponse, error) {
+func (wv *LocalVolume) MultiLink(requests []*grits.LinkRequest, returnResults bool, principal *grits.Principal) (*grits.LookupResponse, error) {
 	if wv.isReadOnly() {
 		return nil, fmt.Errorf("cannot write to read-only volume")
 	}
-
-	result, err := wv.ns.MultiLink(req, returnResults)
+	result, err := wv.ns.MultiLink(requests, returnResults, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -202,19 +232,11 @@ func (wv *LocalVolume) MultiLink(req []*grits.LinkRequest, returnResults bool) (
 }
 
 func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) error {
-	if wv.isReadOnly() {
-		return fmt.Errorf("cannot write to read-only volume")
-	}
-
-	if err := wv.ns.LinkByMetadata(name, metadataAddr); err != nil {
-		return err
-	}
-	if wv.doPersist {
-		if saveErr := wv.save(); saveErr != nil {
-			log.Printf("Warning: failed to checkpoint after LinkByMetadata: %v", saveErr)
-		}
-	}
-	return nil
+	_, err := wv.MultiLink([]*grits.LinkRequest{{
+		Path:    name,
+		NewAddr: metadataAddr,
+	}}, false, grits.BackendPrincipal)
+	return err
 }
 
 func (wv *LocalVolume) AddBlob(path string) (grits.CachedFile, error) {
