@@ -1092,40 +1092,6 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		}
 	}
 
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Building path metadata\n")
-
-	pathMetadata := make([]map[string]any, 0, len(lookupResponse.Paths))
-	for _, pathResponse := range lookupResponse.Paths {
-		pathComponent := ""
-		if pathResponse.Path != "" { // Skip this logic for root
-			pathParts := strings.Split(pathResponse.Path, "/")
-			if len(pathParts) > 0 {
-				pathComponent = pathParts[len(pathParts)-1]
-			}
-		}
-		node, err := volume.GetFileNode(pathResponse.Addr)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Couldn't read %s: %v", pathComponent, err), http.StatusInternalServerError)
-			return
-		}
-		defer node.Release()
-		pathMetadata = append(pathMetadata, map[string]any{
-			"path":         pathComponent,
-			"metadataHash": node.MetadataBlob().GetAddress(),
-			"contentHash":  node.Metadata().ContentHash,
-			"contentSize":  node.Metadata().Size,
-		})
-	}
-
-	// Encode the entire array as JSON and set in a single header
-	jsonData, err := json.Marshal(pathMetadata)
-	if err != nil {
-		// Handle error appropriately
-		log.Printf("Failed to encode path metadata: %v", err)
-	} else {
-		w.Header().Set("X-Path-Metadata-JSON", string(jsonData))
-	}
-
 	// Use the address hash as the ETag
 	etag := fmt.Sprintf("\"%s\"", leafNode.MetadataBlob().GetAddress())
 	w.Header().Set("ETag", etag)
