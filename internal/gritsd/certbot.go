@@ -202,13 +202,13 @@ func (hm *HTTPModule) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certifica
 	}
 
 	log.Printf("HTTP: no cert for %s, acquiring on demand", hostname)
-v, err, _ := hm.certGroup.Do(hostname, func() (any, error) {
-    return hm.acquireAndCacheCert(hostname)
-})
-if err != nil {
-    return nil, err
-}
-return v.(*tls.Certificate), nil
+	v, err, _ := hm.certGroup.Do(hostname, func() (any, error) {
+		return hm.acquireAndCacheCert(hostname)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*tls.Certificate), nil
 }
 
 func (hm *HTTPModule) acquireAndCacheCert(hostname string) (*tls.Certificate, error) {
