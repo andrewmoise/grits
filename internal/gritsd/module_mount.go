@@ -351,7 +351,7 @@ var _ = (fs.NodeReaddirer)((*gritsNode)(nil))
 func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	// FIXME: Lock gn
 
-	node, err := gn.module.volume.LookupNode(gn.path)
+	node, err := gn.module.volume.LookupNode(gn.path, grits.BackendPrincipal)
 	if grits.IsNotExist(err) {
 		return nil, syscall.ENOENT
 	} else if err != nil {
@@ -518,7 +518,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 		gn.module.dirtyNodesMtx.Unlock()
 	}
 
-	node, err := gn.module.volume.LookupNode(fullPath)
+	node, err := gn.module.volume.LookupNode(fullPath, grits.BackendPrincipal)
 	if grits.IsNotExist(err) {
 		return nil, syscall.ENOENT
 	} else if err != nil {
@@ -580,7 +580,7 @@ func (gn *gritsNode) Getattr(ctx context.Context, f fs.FileHandle, out *fuse.Att
 		if grits.DebugFuse {
 			log.Printf("  no tmpfile")
 		}
-		node, err := gn.module.volume.LookupNode(gn.path)
+		node, err := gn.module.volume.LookupNode(gn.path, grits.BackendPrincipal)
 		if grits.IsNotExist(err) {
 			if grits.DebugFuse {
 				log.Printf("    no lookup success on %s", gn.path)
@@ -730,7 +730,7 @@ func fillAttr(cacheFile string, out *fuse.AttrOut, isDir bool) error {
 var _ = (fs.NodeStatxer)((*gritsNode)(nil))
 
 func (gn *gritsNode) Statx(ctx context.Context, f fs.FileHandle, flags uint32, mask uint32, out *fuse.StatxOut) syscall.Errno {
-    return syscall.ENOSYS
+	return syscall.ENOSYS
 }
 
 /////
@@ -752,7 +752,7 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 			return fs.OK
 		}
 
-		fileNode, err := gn.module.volume.LookupNode(gn.path)
+		fileNode, err := gn.module.volume.LookupNode(gn.path, grits.BackendPrincipal)
 		if grits.IsNotExist(err) {
 			return syscall.ENOENT
 		} else if err != nil {
@@ -967,7 +967,7 @@ func (gn *gritsNode) flush() syscall.Errno {
 		NewAddr: metadataBlob.GetAddress(),
 	}
 
-	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false)
+	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false, grits.BackendPrincipal)
 	if err != nil {
 		return fs.ToErrno(err)
 	}
@@ -1075,7 +1075,7 @@ func (gn *gritsNode) Create(ctx context.Context, name string, flags uint32, mode
 	fullPath := filepath.Join(gn.path, name)
 	//log.Printf("Create(%s)", fullPath)
 	if flags&uint32(os.O_EXCL) != 0 {
-		node, _ := gn.module.volume.LookupNode(fullPath)
+		node, _ := gn.module.volume.LookupNode(fullPath, grits.BackendPrincipal)
 		if node != nil {
 			node.Release()
 			return nil, nil, 0, syscall.EEXIST
@@ -1342,7 +1342,7 @@ func (gn *gritsNode) Mkdir(ctx context.Context, name string, mode uint32, out *f
 		Assert:   grits.AssertPrevValueMatches,
 	}
 
-	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false)
+	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false, grits.BackendPrincipal)
 	if grits.IsAssertionFailed(err) {
 		return nil, syscall.EEXIST
 	} else if err != nil {
@@ -1387,7 +1387,7 @@ func (gn *gritsNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		Assert:  grits.AssertIsNonEmpty | grits.AssertIsBlob,
 	}
 
-	_, err := gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false)
+	_, err := gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false, grits.BackendPrincipal)
 	if err != nil {
 		log.Printf("4 NGN fail %v", err)
 		return syscall.EIO
@@ -1412,7 +1412,7 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 
 	fullPath := filepath.Join(gn.path, name)
 
-	dirNode, err := gn.module.volume.LookupNode(fullPath)
+	dirNode, err := gn.module.volume.LookupNode(fullPath, grits.BackendPrincipal)
 	if grits.IsNotExist(err) {
 		return syscall.EEXIST
 	} else if err != nil {
@@ -1433,7 +1433,7 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		Assert:   grits.AssertIsTree | grits.AssertPrevValueMatches,
 	}
 
-	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false)
+	_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{req}, false, grits.BackendPrincipal)
 	if err != nil {
 		log.Printf("5 NGN fail %v", err)
 		return syscall.EIO
@@ -1515,7 +1515,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 			log.Printf("  lookup node")
 		}
 
-		prevNode, err := gn.module.volume.LookupNode(fullPath)
+		prevNode, err := gn.module.volume.LookupNode(fullPath, grits.BackendPrincipal)
 		if grits.IsNotExist(err) {
 			return syscall.ENOENT
 		} else if err != nil {
@@ -1537,7 +1537,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 			//Assert:   grits.AssertPrevValueMatches,
 		}
 
-		_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq}, false)
+		_, err = gn.module.volume.MultiLink([]*grits.LinkRequest{oldNameReq, newNameReq}, false, grits.BackendPrincipal)
 		prevNode.Release()
 		if grits.IsNotDir(err) {
 			return syscall.ENOTDIR

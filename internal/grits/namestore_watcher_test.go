@@ -196,7 +196,7 @@ func TestWatcherDeleteNotification(t *testing.T) {
 	defer ns.UnregisterWatcher(watcher)
 
 	// Delete the file
-	err = ns.LinkByMetadata("deleteme.txt", NilAddr)
+	err = ns.LinkByMetadata("deleteme.txt", NilAddr, BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to delete file: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestWatcherMultiLinkNotifications(t *testing.T) {
 		},
 	}
 
-	_, err = ns.MultiLink(requests, false)
+	_, err = ns.MultiLink(requests, false, BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to MultiLink: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestWatcherNestedDirectoryDeletion(t *testing.T) {
 	defer ns.UnregisterWatcher(watcher)
 
 	// Delete the parent directory
-	err = ns.LinkByMetadata("parent", NilAddr)
+	err = ns.LinkByMetadata("parent", NilAddr, BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to delete parent: %v", err)
 	}

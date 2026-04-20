@@ -327,7 +327,7 @@ func (hm *HTTPModule) hostnameHasContent(hostname string) bool {
 	if volume == nil {
 		return false
 	}
-	node, err := volume.LookupNode(hostname)
+	node, err := volume.LookupNode(hostname, grits.BackendPrincipal)
 	if err != nil || node == nil {
 		return false
 	}
@@ -781,7 +781,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	lookupResponse, err := volume.Lookup(req.Paths, req.StartAddr, true, holdRef)
+	lookupResponse, err := volume.Lookup(req.Paths, req.StartAddr, holdRef, grits.AnonPrincipal)
 	if err != nil {
 		if denied, ok := grits.IsAccessDenied(err); ok {
 			w.Header().Set("Content-Type", "application/json")
@@ -802,6 +802,10 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	for _, pair := range lookupResponse.Paths {
 		if pair.Error != "" {
 			hasErrors = true
+			continue
+		}
+		if pair.Addr == "" {
+			// Mapping to nil node, nothing to hold
 			continue
 		}
 		node, err := volume.GetFileNode(pair.Addr)
@@ -901,7 +905,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, req.Volume, "Link start\n")
 
-	linkResponse, err := volume.MultiLink(req.Requests, true)
+	linkResponse, err := volume.MultiLink(req.Requests, true, grits.BackendPrincipal)
 	if err != nil {
 		log.Printf("HTTP API MultiLink() failed: %v", err)
 		if missing, ok := grits.IsBlobMissing(err); ok {
@@ -923,6 +927,10 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 
 	// Hold refs so blobs don't get GC'd before client fetches them.
 	for _, pair := range linkResponse.Paths {
+		if pair.Addr == "" {
+			continue // deleted path or error, nothing to ref-hold
+		}
+
 		node, err := volume.GetFileNode(pair.Addr)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Couldn't load node for %s: %v", pair.Path, err), http.StatusInternalServerError)
@@ -1014,18 +1022,27 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET start\n")
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Looking up in volume\n")
 
-	lookupResponse, err := volume.Lookup([]string{path}, "", true, nil)
+	lookupResponse, err := volume.Lookup([]string{path}, "", nil, grits.AnonPrincipal)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return
 	}
+
 	leaf := lookupResponse.Leaf()
 	if leaf == nil {
 		http.Error(w, "No nodes returned", http.StatusInternalServerError)
 		return
 	}
+	if leaf.Path != path {
+		http.Error(w, fmt.Sprintf("Internal error: expected leaf at %q, got %q", path, leaf.Path), http.StatusInternalServerError)
+		return
+	}
 	if leaf.Error == "not_found" {
 		http.Error(w, "File not found", http.StatusNotFound)
+		return
+	}
+	if leaf.Error == "access_denied" {
+		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 	if leaf.Error != "" {
@@ -1035,7 +1052,8 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Getting leaf node\n")
 
-	leafNode, err := volume.GetFileNode(lookupResponse.Paths[len(lookupResponse.Paths)-1].Addr)
+	leafNode, err := volume.GetFileNode(leaf.Addr)
+
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Can't read leaf node: %v", err), http.StatusInternalServerError)
 		return
@@ -1050,7 +1068,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		} else {
 			// Browser request — try to serve index.html instead.
 			indexPath := strings.TrimRight(path, "/") + "/index.html"
-			indexNode, err := volume.LookupNode(indexPath)
+			indexNode, err := volume.LookupNode(indexPath, grits.AnonPrincipal)
 
 			// Fail if we don't have an index.html to serve
 			if err != nil {
