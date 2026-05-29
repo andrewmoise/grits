@@ -469,6 +469,88 @@ class GritsVolume {
     this._desync = DESYNC_MODE ? new DesyncQueue(this) : null;
   }
 
+  // ── SW hash ───────────────────────────────────────────────────
+
+  // Returns the last SW hash seen from this volume's server:
+  //   undefined — no server contact yet
+  //   null      — server responded but header was absent (SW module not installed)
+  //   string    — hash value
+  getServiceWorkerHash() {
+    return this._parent._serviceWorkerHashes.get(this._serverUrl);
+  }
+
+  _updateServiceWorkerHash(resp) {
+    const serverHash = resp.headers.get('X-Grits-Sw-Hash');
+    const swControlled = resp.headers.get('X-Grits-SW-Controlled') === '1';
+    const swSelfHash = resp.headers.get('X-Grits-SW-Self-Hash');
+
+    // Record what the server thinks its current SW hash is.
+    //   undefined  never heard from this server
+    //   null       server responded but SW module not installed
+    //   string     server's current SW dir hash
+    this._parent._serviceWorkerHashes.set(this._serverUrl, serverHash ?? null);
+
+    // All of the behavior below only makes sense in a window context.
+    if (typeof window === 'undefined') return;
+
+    DEBUG && console.log(
+      `[GritsVolume:${this._serverUrl}] SW hash update: ` +
+      `server=${serverHash ?? '(absent)'} controlled=${swControlled} ` +
+      `self=${swSelfHash ?? '(absent)'}`
+    );
+
+    // Case 1: response came from a SW, and that SW's baked-in hash doesn't
+    // match the server's current hash. We reload once — the SW will detect
+    // the mismatch on its own navigate event and redirect us through the
+    // interstitial, which registers a fresh SW.
+    if (swControlled && swSelfHash && serverHash && swSelfHash !== serverHash) {
+      if (!this._parent._swReloadTriggered) {
+        this._parent._swReloadTriggered = true;
+        console.log(
+          `[GritsVolume:${this._serverUrl}] stale SW detected ` +
+          `(self=${swSelfHash} server=${serverHash}) — reloading page`
+        );
+        window.location.reload();
+      }
+      return;
+    }
+
+    // Case 2: response came direct from the server, server has a SW module,
+    // but nothing is controlling this page. Register the SW so it's ready
+    // for the next navigation. Doesn't affect this page.
+    if (!swControlled && serverHash) {
+      const hasCooldown = document.cookie.split(';').some(c =>
+        c.trim().startsWith('grits-sw-loading='));
+      if (hasCooldown) {
+        DEBUG && console.log(
+          `[GritsVolume:${this._serverUrl}] cooldown cookie present, skipping SW registration`
+        );
+        return;
+      }
+      // Only try once per client lifetime.
+      if (this._parent._swRegistrationAttempted) return;
+      this._parent._swRegistrationAttempted = true;
+
+      console.log(`[GritsVolume:${this._serverUrl}] SW available but not controlling, registering`);
+      document.cookie = 'grits-sw-loading=1; path=/; max-age=30; SameSite=Lax';
+      navigator.serviceWorker.register('/grits-serviceworker.js').catch(err =>
+        console.warn(`[GritsVolume:${this._serverUrl}] SW registration failed:`, err));
+      return;
+    }
+
+    // Case 3: nothing to do. Either the server has no SW, or SW is
+    // controlling and the hashes match, or we've already triggered a reload.
+  }
+
+  // ── Server headers helper ─────────────────────────────────────
+
+  // Returns headers for outgoing server requests, merging any extraHeaders
+  // set on the parent GritsClient. Used by the SW test harness to forward
+  // hash override headers onto lookup/link/upload requests.
+  _serverHeaders(extra = {}) {
+    return { ...this._parent.extraHeaders, ...extra };
+  }
+
   // ── Lookup ────────────────────────────────────────────────────
 
   async lookup(path) {
@@ -521,12 +603,12 @@ class GritsVolume {
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method:  'POST',
+        headers: this._serverHeaders({ 'Content-Type': 'application/json' }),
         body,
       });
 
-      this._parent._updateServiceWorkerHash(resp);
+      this._updateServiceWorkerHash(resp);
 
       if (resp.ok) {
         const result = await resp.json();
@@ -610,10 +692,13 @@ class GritsVolume {
     _assertString(cid, 'get');
 
     if (this._parent._swControlled) {
-        return fetch(`${this._serverUrl}/grits/v1/blob/${cid}`);
+      return fetch(`${this._serverUrl}/grits/v1/blob/${cid}`);
     }
 
-    if (this._parent._serviceWorkerHash !== null && this._parent._serviceWorkerHash !== undefined) {
+    // If we've heard from this server and it has a SW module installed, let the
+    // SW handle blob fetches rather than caching them ourselves.
+    const swHash = this.getServiceWorkerHash();
+    if (swHash !== null && swHash !== undefined) {
       return fetch(`${this._serverUrl}/grits/v1/blob/${cid}`);
     }
 
@@ -697,7 +782,9 @@ class GritsVolume {
 
   async _uploadBlob(cid, bytes) {
     const resp = await fetch(`${this._serverUrl}/grits/v1/blob/${cid}`, {
-      method: 'PUT', body: bytes,
+      method:  'PUT',
+      headers: this._serverHeaders(),
+      body:    bytes,
     });
     if (resp.status === 204 || resp.ok) return cid;
     throw new Error(`uploadBlob ${cid}: ${resp.status} ${resp.statusText}`);
@@ -851,7 +938,7 @@ class GritsVolume {
       delete result._source;
     }
     return result;
- }
+  }
 
   // Lookup that uses a desync override CID as the starting point.
   // First walks as far as possible through local caches (_fastWalk), then asks
@@ -905,16 +992,16 @@ class GritsVolume {
 
     const url  = `${this._serverUrl}/grits/v1/lookup`;
     const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+      method:  'POST',
+      headers: this._serverHeaders({ 'Content-Type': 'application/json' }),
+      body:    JSON.stringify({
         volume:    this._volume,
         paths:     [serverRelPath],
         startAddr: startAddr,
       }),
     });
 
-    this._parent._updateServiceWorkerHash(resp);
+    this._updateServiceWorkerHash(resp);
 
     if (resp.status === 403) {
       const { path: deniedPath } = await resp.json().catch(() => ({ path: targetPath }));
@@ -1022,16 +1109,16 @@ class GritsVolume {
     }
 
     const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ volume: this._volume, paths }),
+      method:  'POST',
+      headers: this._serverHeaders({ 'Content-Type': 'application/json' }),
+      body:    JSON.stringify({ volume: this._volume, paths }),
     });
 
-    this._parent._updateServiceWorkerHash(resp);
+    this._updateServiceWorkerHash(resp);
 
     if (resp.status === 403) {
-        const { path: deniedPath } = await resp.json().catch(() => ({ path }));
-        throw new AccessDeniedError(deniedPath);
+      const { path: deniedPath } = await resp.json().catch(() => ({ path }));
+      throw new AccessDeniedError(deniedPath);
     }
     if (!resp.ok) return null;
 
@@ -1042,7 +1129,7 @@ class GritsVolume {
 
     // Find the deepest path entry — it corresponds to what we actually asked for.
     if (!result.paths || result.paths.length <= 0) {
-      throw new Error(`lookup: No paths returned looking up ${path}`);   
+      throw new Error(`lookup: No paths returned looking up ${path}`);
     }
 
     const leaf = result.paths[result.paths.length - 1];
@@ -1074,7 +1161,8 @@ class GritsVolume {
       );
       if (!hasSuccessfulAncestor) {
         this._miniRoots.set(entry.path, { addr: entry.addr, ts: Date.now() });
-        DEBUG && console.log(`[miniRoot] upsert "${entry.path}" → ${entry.addr?.slice(0,8)}…`);      }
+        DEBUG && console.log(`[miniRoot] upsert "${entry.path}" → ${entry.addr?.slice(0,8)}…`);
+      }
     }
 
     this._startPrefetch(successPaths);
@@ -1156,17 +1244,24 @@ function _checkAssertions(assert, prevAddr, currentFile) {
 class GritsClient {
   constructor() {
     this._swControlled = false;
+    this._swReloadTriggered = false;   // one-shot guard for navigate-reload on stale SW
+    this._swRegistrationAttempted  = false;
 
     this._local     = new Map(); // cid → Uint8Array  (synthesized, pending upload)
     this._jsonCache = new Map(); // cid → { data, lastAccessed }
     this._blobCache = null;      // browser Cache API
     this._volumes   = new Map(); // volKey → GritsVolume
 
-    // Last SW hash seen in any server response header.
-    // undefined = never heard from server yet
-    // null      = server responded but header was absent (SW module not installed)
-    // string    = hash value from server
-    this._serviceWorkerHash = undefined;
+    // SW hash seen per server URL.
+    //   undefined — no contact with that server yet
+    //   null      — server responded but header was absent (SW module not installed)
+    //   string    — hash value
+    this._serviceWorkerHashes = new Map(); // serverUrl → string | null | undefined
+
+    // Extra headers merged into every outgoing server request.
+    // Used by the SW test harness to forward hash override headers onto
+    // lookup/link/upload requests without modifying GritsClient internals.
+    this.extraHeaders = {};
 
     this._verifier = new HashVerifier({ debug: DEBUG });
     this._tracker  = new PerformanceTracker({
@@ -1187,49 +1282,11 @@ class GritsClient {
   /** Access the performance tracker (for custom recording or snapshots). */
   get tracker() { return this._tracker; }
 
-  /**
-   * Returns the last SW hash seen from the server:
-   *   undefined — no server contact yet
-   *   null      — server has no SW module (header absent)
-   *   string    — hash value
-   */
-  getServiceWorkerHash() { return this._serviceWorkerHash; }
-
-  // Called by GritsVolume after every real server fetch (lookup, link).
-  // Stores null if the header is absent (server has no SW module).
-  _updateServiceWorkerHash(resp) {
-    const hash = resp.headers.get('X-Grits-SW-Hash');
-    this._serviceWorkerHash = hash;
-    if (typeof window === 'undefined') {
-      // We're inside the SW itself — nothing to do here
-      return;
-    }
-
-    const swControlled = resp.headers.get('X-Grits-SW-Controlled') === '1';
-    if (swControlled && !this._parent._swControlled) {
-      console.log('[GritsClient] SW control detected, switching to pass-through mode');
-      this._parent._flushCaches();
-      this._parent._swControlled = true;
-    }
-
-    if (hash !== null && !swControlled) {
-      // Server has SW module, but SW didn't handle this — may need to register
-      const hasCooldown = document.cookie.split(';').some(c =>
-        c.trim().startsWith('grits-sw-loading='));
-      if (!hasCooldown) {
-        console.log('[GritsClient] SW hash present without SW control — registering SW');
-        document.cookie = 'grits-sw-loading=1; path=/; max-age=30; SameSite=Lax';
-        navigator.serviceWorker.register('/grits-serviceworker.js').catch(err =>
-          console.warn('[GritsClient] SW registration failed:', err));
-      }
-    }
-  }
-
   _flushCaches() {
     this._local.clear();
     this._jsonCache.clear();
-    if (this._blobCache) this._blobCache.keys().then(keys => 
-        keys.forEach(key => this._blobCache.delete(key)));
+    if (this._blobCache) this._blobCache.keys().then(keys =>
+      keys.forEach(key => this._blobCache.delete(key)));
   }
 
   // ── Volume registration ───────────────────────────────────────
@@ -1385,7 +1442,7 @@ class GritsClient {
     if (this._blobCache && resp.ok) this._blobCache.put(cid, resp).catch(() => {});
   }
 
-  // ── Internal: Misc ───────------------------------------------
+  // ── Internal: Misc ────────────────────────────────────────────
 
   _collectMirrorStats() {
     const all = [];
@@ -1408,12 +1465,12 @@ function _normalizePath(path) {
 }
 
 function _updateSwMode(swControlled) {
-    if (SW_CONTROLLED === swControlled) return;
-    SW_CONTROLLED = swControlled;
-    console.log(`[GritsClient] SW_CONTROLLED → ${swControlled}`);
+  if (SW_CONTROLLED === swControlled) return;
+  SW_CONTROLLED = swControlled;
+  console.log(`[GritsClient] SW_CONTROLLED → ${swControlled}`);
 }
 
-// ── Exports ───────------------------------------------
+// ── Exports ───────────────────────────────────────────────────────
 
 export { ASSERT_PREV_MATCHES, ASSERT_IS_BLOB, ASSERT_IS_TREE, ASSERT_IS_NONEMPTY }; // %FOR MODULE%
 export { AssertionError, AccessDeniedError, GritsFile, GritsVolume };  // %FOR MODULE%
