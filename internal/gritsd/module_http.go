@@ -69,7 +69,7 @@ type HTTPModuleConfig struct {
 	KeyPath  string `json:"keyPath,omitempty"`
 
 	// Which volume holds deployed content. Defaults to "sites".
-	// Content is served from {volume}/{hostname}/content/{path}.
+	// Content is served from //{volume}/{hostname}/content/{path}.
 	ContentVolume string `json:"contentVolume,omitempty"`
 
 	MaxUploadSize int64 `json:"maxUploadSize,omitempty"`
@@ -441,8 +441,16 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 		}
 
 		if srv.serviceWorkerModule != nil {
-			clientDirHash := srv.serviceWorkerModule.getClientDirHash()
-			w.Header().Set("X-Grits-Service-Worker-Hash", string(clientDirHash))
+			override := r.Header.Get("X-Grits-Sw-Hash-Override")
+			switch override {
+			case "none":
+				// omit X-Grits-Sw-Hash entirely
+
+			case "":
+				w.Header().Set("X-Grits-Sw-Hash", string(srv.serviceWorkerModule.getClientDirHash()))
+			default:
+				w.Header().Set("X-Grits-Sw-Hash", override)
+			}
 		}
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Calling handler\n")

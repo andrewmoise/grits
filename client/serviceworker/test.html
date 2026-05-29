@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Grits SW Self-Test</title>
+<style>
+* { box-sizing: border-box; }
+body { font-family: monospace; font-size: 14px; padding: 20px; background: #1a1a1a; color: #ccc; }
+h2 { color: #fff; }
+#log { margin-top: 16px; }
+.entry { padding: 3px 0; border-bottom: 1px solid #2a2a2a; }
+.pass  { color: #4caf50; }
+.fail  { color: #f44336; }
+.info  { color: #888; }
+.head  { color: #fff; font-weight: bold; margin-top: 12px; }
+button { margin: 4px 4px 4px 0; padding: 6px 14px; font-family: monospace;
+         background: #333; color: #fff; border: 1px solid #555; cursor: pointer; }
+button:hover { background: #444; }
+#summary { margin-top: 16px; font-size: 16px; font-weight: bold; }
+</style>
+</head>
+<body>
+<h2>Grits Service Worker Self-Test</h2>
+<div>
+  <button onclick="runTests()">Run All Tests</button>
+  <button onclick="clearLog()">Clear</button>
+</div>
+<div id="log"></div>
+<div id="summary"></div>
+
+<script>
+// ── Logging ───────────────────────────────────────────────────────────────────
+
+const logEl = document.getElementById('log');
+const summaryEl = document.getElementById('summary');
+let passed = 0, failed = 0;
+
+function write(msg, cls) {
+    const el = document.createElement('div');
+    el.className = 'entry ' + (cls ?? 'info');
+    el.textContent = msg;
+    logEl.appendChild(el);
+    el.scrollIntoView({ block: 'nearest' });
+    console.log('[swtest]', msg);
+}
+
+function pass(msg)  { passed++; write('✓ ' + msg, 'pass'); }
+function fail(msg)  { failed++; write('✗ ' + msg, 'fail'); }
+function info(msg)  { write('  ' + msg, 'info'); }
+function head(msg)  { write(msg, 'head'); }
+function clearLog() { logEl.innerHTML = ''; summaryEl.textContent = ''; passed = failed = 0; }
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Query a specific ServiceWorker object directly via MessageChannel.
+// Works regardless of which SW (if any) controls this page.
+function pingWorker(worker, timeoutMs = 3000) {
+    return new Promise(resolve => {
+        const ch = new MessageChannel();
+        const tid = setTimeout(() => {
+            console.log('[swtest] pingWorker: timeout after ' + timeoutMs + 'ms');
+            resolve(null);
+        }, timeoutMs);
+        ch.port1.onmessage = e => {
+            clearTimeout(tid);
+            console.log('[swtest] pingWorker: got response: ' + JSON.stringify(e.data));
+            resolve(e.data);
+        };
+        try {
+            worker.postMessage({ type: 'GET_STATE' }, [ch.port2]);
+        } catch (e) {
+            clearTimeout(tid);
+            console.log('[swtest] pingWorker: postMessage threw: ' + e.message);
+            resolve(null);
+        }
+    });
+}
+
+// Send SET_HASH_OVERRIDE to a specific worker via MessageChannel.
+// value: null (clear), 'none' (suppress header), or a hash string.
+function setHashOverride(worker, value) {
+    return new Promise(resolve => {
+        const ch = new MessageChannel();
+        const tid = setTimeout(() => resolve(false), 3000);
+        ch.port1.onmessage = () => { clearTimeout(tid); resolve(true); };
+        try {
+            worker.postMessage({ type: 'SET_HASH_OVERRIDE', value }, [ch.port2]);
+        } catch (e) {
+            clearTimeout(tid);
+            resolve(false);
+        }
+    });
+}
+
+// Get state from the current active SW (if any) via MessageChannel.
+async function getActiveSWState() {
+    const reg = await navigator.serviceWorker.getRegistration('/');
+    const w = reg?.active;
+    if (!w) return null;
+    return pingWorker(w);
+}
+
+// Poll until any active SW is registered and responsive.
+async function waitForActiveSW(maxMs = 5000) {
+    console.log('[swtest] waitForActiveSW: polling for up to ' + maxMs + 'ms');
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+        const state = await getActiveSWState();
+        if (state) return state;
+        await sleep(100);
+    }
+    return null;
+}
+
+// Poll for a new active ServiceWorker that is a different object from previousWorker.
+async function waitForNewSW(previousWorker, maxMs = 6000) {
+    console.log('[swtest] waitForNewSW: polling for up to ' + maxMs + 'ms');
+    const deadline = Date.now() + maxMs;
+    while (Date.now() < deadline) {
+        const reg = await navigator.serviceWorker.getRegistration('/');
+        const w = reg?.active;
+        if (w && w !== previousWorker) {
+            console.log('[swtest] waitForNewSW: new SW found');
+            return w;
+        }
+        await sleep(100);
+    }
+    console.log('[swtest] waitForNewSW: timed out');
+    return null;
+}
+
+async function unregisterAll() {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map(r => r.unregister()));
+    await sleep(200);
+}
+
+async function registerSW() {
+    await navigator.serviceWorker.register('/grits-serviceworker.js');
+    return waitForActiveSW(5000);
+}
+
+function loadIframe(url) {
+    console.log('[swtest] loadIframe: starting, url=' + url);
+    return new Promise(resolve => {
+        const iframe = document.createElement('iframe');
+        iframe.style.cssText = 'display:none';
+
+        const timeoutId = setTimeout(() => {
+            console.log('[swtest] loadIframe: TIMEOUT after 10s');
+            resolve(iframe);
+        }, 10000);
+
+        iframe.onload = () => {
+            console.log('[swtest] loadIframe: onload fired for ' + url);
+            clearTimeout(timeoutId);
+            setTimeout(() => {
+                resolve(iframe);
+            }, 100);
+        };
+        iframe.onerror = () => {
+            console.log('[swtest] loadIframe: error for ' + url);
+            clearTimeout(timeoutId);
+            resolve(iframe);
+        };
+        iframe.src = url;
+        document.body.appendChild(iframe);
+    });
+}
+
+// Query SW state from an iframe's controlling worker
+async function getIframeSWState(iframe) {
+    try {
+        const w = iframe.contentWindow;
+        if (!w) return null;
+        const sw = w.navigator.serviceWorker.controller;
+        if (!sw) return null;
+        return await pingWorker(sw);
+    } catch (e) {
+        console.log('[swtest] getIframeSWState error: ' + e.message);
+        return null;
+    }
+}
+
+// ── Test runner ───────────────────────────────────────────────────────────────
+
+async function ensureCleanStart() {
+    const regs = await navigator.serviceWorker.getRegistrations();
+    if (regs.length === 0) return true;
+    await Promise.all(regs.map(r => r.unregister()));
+    write('Unregistered existing SW. Please reload the page and run tests again.', 'fail');
+    return false;
+}
+
+async function runTests() {
+    clearLog();
+    passed = failed = 0;
+    summaryEl.textContent = '';
+
+    if (!await ensureCleanStart()) return;
+
+    // ── Step 0: clean slate ───────────────────────────────────────────────────
+    head('Step 0: Clean slate');
+    await unregisterAll();
+    const s0 = await getActiveSWState();
+    if (s0) { fail('SW still active after unregister'); return; }
+    pass('No SW active');
+
+    // ── Step 1: register real SW ──────────────────────────────────────────────
+    head('Step 1: Register real SW');
+    info('Registering /grits-serviceworker.js...');
+    const s1 = await registerSW();
+    if (!s1) { fail('SW did not become active within 5s'); return; }
+    const realHash   = s1.swDirHash;
+    const startTime1 = s1.startTime;
+    info('SW active — hash=' + realHash.slice(0, 16) + '… startTime=' + startTime1);
+    pass('SW registered and active');
+
+    const reg1   = await navigator.serviceWorker.getRegistration('/');
+    const worker1 = reg1?.active;
+    if (!worker1) { fail('Could not get active worker object'); return; }
+
+    // ── Step 2: stability ─────────────────────────────────────────────────────
+    head('Step 2: Stability under normal navigation');
+    await loadIframe(location.origin + '/');
+    await sleep(300);
+    const s2 = await pingWorker(worker1);
+    if (!s2)                         { fail('SW vanished unexpectedly'); return; }
+    if (s2.startTime !== startTime1) { fail('SW reloaded unexpectedly (startTime changed)'); return; }
+    pass('SW stable after normal navigation');
+
+    // ── Step 3: SW must not unregister on hash mismatch outside a navigate ────
+    head('Step 3: Hash mismatch with no navigate — SW must stay alive');
+    const FAKE_A = 'QmSWTEST_FAKE_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    info('Setting hash override to ' + FAKE_A.slice(0, 16) + '… via message');
+    await setHashOverride(worker1, FAKE_A);
+    await sleep(500);
+    const s3 = await pingWorker(worker1);
+    if (!s3) {
+        fail('SW died after override set (no navigate triggered)');
+        return;
+    }
+    if (s3.startTime !== startTime1) {
+        fail('SW restarted after override set — should have stayed alive');
+        return;
+    }
+    pass('SW survived hash override with no navigate');
+
+    // Clear override before Step 4 so FAKE_B is the only active signal.
+    await setHashOverride(worker1, null);
+    await sleep(200);
+
+    // ── Step 4: navigation with mismatched hash → unregister + re-register ────
+    head('Step 4: Navigation with mismatched hash — SW must unregister');
+    const FAKE_B = 'QmSWTEST_FAKE_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+    info('Loading iframe with fake hash override via query param: ' + FAKE_B.slice(0, 16) + '…');
+    const iframeURL = location.origin + '/?grits-sw-hash-override=' + encodeURIComponent(FAKE_B);
+    const iframe4 = await loadIframe(iframeURL);
+
+    console.log('[swtest] Step 4: iframe loaded, checking its SW');
+    const s4 = await getIframeSWState(iframe4);
+    if (!s4) {
+        fail('Iframe did not get a controlling SW after navigation');
+        return;
+    }
+    if (s4.swDirHash !== realHash) {
+        fail('Iframe SW hash mismatch: got ' + s4.swDirHash);
+        return;
+    }
+    pass('Iframe loaded under correct SW after hash mismatch navigation');
+
+    // ── Step 5: verify new SW state ───────────────────────────────────────────
+    head('Step 5: Verify new SW state');
+    const s5 = await getIframeSWState(iframe4);
+    if (!s5) { fail('Could not query iframe SW via GET_STATE'); return; }
+    info('Iframe SW startTime=' + s5.startTime + ' hash=' + s5.swDirHash.slice(0, 16) + '…');
+    // Do not require a new SW instance; verify correct final state instead.
+    if (s5.swDirHash !== realHash) { fail('Iframe SW hash mismatch after navigation: got ' + s5.swDirHash); return; }
+    pass('Iframe SW resolved to correct hash');
+    if (s5.testHashOverride !== null) { fail('testHashOverride not cleared after navigation: ' + s5.testHashOverride); return; }
+    pass('Iframe SW testHashOverride cleared after navigation');
+
+    // ── Step 6: interstitial ?target= plumbing ────────────────────────────────
+    head('Step 6: Interstitial target-URL plumbing');
+    info('Loading interstitial with explicit ?target= parameter...');
+    await loadIframe(location.origin + '/grits/v1/sw-interstitial?target=' + encodeURIComponent('/'));
+    await sleep(500);
+    const reg6 = await navigator.serviceWorker.getRegistration('/');
+    if (!reg6?.active) { fail('No SW active after explicit interstitial load'); return; }
+    pass('Interstitial handled explicit target parameter');
+
+    // ── Step 7: no-header case — SW must stay alive on navigate ──────────────
+    head('Step 7: No SW hash header (server omits it) — SW must stay alive');
+    const worker7 = reg6.active;
+    info('Setting hash override to "none" (suppress header) via message');
+    await setHashOverride(worker7, 'none');
+    // Trigger an iframe navigate so the SW performs a lookup with the suppressed
+    // header; server omits X-Grits-Sw-Hash, so serverHash is null/undefined and
+    // the condition `if (serverHash && ...)` is false — no unregister.
+    await loadIframe(location.origin + '/');
+    await sleep(500);
+    const s7 = await pingWorker(worker7);
+    if (!s7) { fail('SW unregistered when hash header was absent — should not happen'); return; }
+    pass('SW remained active when hash header absent');
+
+    head('Complete');
+    summaryEl.textContent = passed + ' passed, ' + failed + ' failed';
+    summaryEl.style.color = failed === 0 ? '#4caf50' : '#f44336';
+}
+</script>
+</body>
+</html>

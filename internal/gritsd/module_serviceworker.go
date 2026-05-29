@@ -35,11 +35,30 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 				swm.serveFromClientVolume(volumePath, tmpl)))
 		}
 
+		// JS bundles that get the module/SW template substitution.
 		serve("/grits-serviceworker.js", "serviceworker/grits-serviceworker.js", true)
 		serve("/grits-GritsClient-sw.js", "lib/grits/GritsClient.js", true)
 		serve("/grits-MirrorManager-sw.js", "lib/grits/MirrorManager.js", true)
 		serve("/grits-HashVerifier-sw.js", "lib/grits/HashVerifier.js", true)
 		serve("/grits-PerformanceTracker-sw.js", "lib/grits/PerformanceTracker.js", true)
+
+		// Self-test HTML — served verbatim from the client volume, no templating.
+		serve("/grits/v1/swtest", "serviceworker/swtest.html", false)
+		serve("/grits/v1/swtest/", "serviceworker/swtest.html", false)
+
+		// Self-test ping endpoint. The SW intercepts this when active;
+		// when absent, the server responds 404 so the test can detect
+		// "SW not currently controlling".
+		httpModule.Mux.HandleFunc("/grits/v1/swtest/ping", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"sw-not-active"}`, http.StatusNotFound)
+		})
+
+		// Explicit interstitial endpoint. The SW redirects here with ?target=
+		// when it detects its own hash is stale on a navigation.
+		httpModule.Mux.HandleFunc("/grits/v1/sw-interstitial",
+			httpModule.requestMiddleware(swm.serveExplicitInterstitial))
 
 		httpModule.WrapContentHandler(func(next http.HandlerFunc) http.HandlerFunc {
 			return func(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +70,7 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 				log.Printf("[SW] content handler: path=%s method=%s fetch-mode=%s sentinel=%q bypass-cookie=%v loading-cookie=%v",
 					r.URL.Path, r.Method, fetchMode,
 					sentinel,
-					bypassErr == nil, // true means cookie present
+					bypassErr == nil,
 					loadingErr == nil,
 				)
 				_ = bypassCookie
@@ -130,9 +149,25 @@ func (swm *ServiceWorkerModule) serveFromClientVolume(volumePath string, applyTe
 			result = strings.ReplaceAll(result, "{{SW_SCRIPT_HASH}}", string(swNode.Metadata().ContentHash))
 		}
 
-		w.Header().Set("Content-Type", "application/javascript")
+		w.Header().Set("Content-Type", contentTypeForVolumePath(volumePath))
 		w.Header().Set("Cache-Control", "no-cache")
 		fmt.Fprint(w, result)
+	}
+}
+
+// contentTypeForVolumePath returns an appropriate Content-Type for files
+// served through serveFromClientVolume. Kept small — we only serve a handful
+// of file types through this path.
+func contentTypeForVolumePath(volumePath string) string {
+	switch {
+	case strings.HasSuffix(volumePath, ".html"):
+		return "text/html; charset=utf-8"
+	case strings.HasSuffix(volumePath, ".css"):
+		return "text/css"
+	case strings.HasSuffix(volumePath, ".json"):
+		return "application/json"
+	default:
+		return "application/javascript"
 	}
 }
 
@@ -147,62 +182,6 @@ func (swm *ServiceWorkerModule) getClientDirHash() grits.BlobAddr {
 	}
 	defer node.Release()
 	return node.Metadata().ContentHash
-}
-
-func (swm *ServiceWorkerModule) serveTemplate(w http.ResponseWriter, r *http.Request) {
-	var filePath string
-	if strings.HasSuffix(r.URL.Path, "grits-bootstrap.js") {
-		filePath = "serviceworker/grits-bootstrap.js"
-	} else if strings.HasSuffix(r.URL.Path, "grits-serviceworker.js") {
-		filePath = "serviceworker/grits-serviceworker.js"
-	} else {
-		http.Error(w, "Unknown file requested", http.StatusBadRequest)
-		return
-	}
-
-	vol := swm.clientVolume()
-	if vol == nil {
-		http.Error(w, "Client volume not found", http.StatusInternalServerError)
-		return
-	}
-
-	// For the SW hash injection we always need the serviceworker.js node.
-	swNode, err := vol.LookupNode("serviceworker/grits-serviceworker.js", grits.BackendPrincipal)
-	if err != nil || swNode == nil {
-		http.Error(w, "Service worker script not found", http.StatusInternalServerError)
-		return
-	}
-	defer swNode.Release()
-
-	fileNode, err := vol.LookupNode(filePath, grits.BackendPrincipal)
-	if err != nil || fileNode == nil {
-		http.Error(w, "File not found", http.StatusInternalServerError)
-		return
-	}
-	defer fileNode.Release()
-
-	blob, err := fileNode.ExportedBlob()
-	if err != nil {
-		http.Error(w, "Error loading file", http.StatusInternalServerError)
-		return
-	}
-
-	data, err := blob.Read(0, blob.GetSize())
-	if err != nil {
-		http.Error(w, "Error reading file", http.StatusInternalServerError)
-		return
-	}
-
-	// Do the SW/module variant substitution live.
-	result := processTemplateForSW(string(data))
-
-	// Inject the hashes.
-	result = strings.ReplaceAll(result, "{{SW_DIR_HASH}}", string(swm.getClientDirHash()))
-	result = strings.ReplaceAll(result, "{{SW_SCRIPT_HASH}}", string(swNode.Metadata().ContentHash))
-
-	w.Header().Set("Content-Type", "application/javascript")
-	w.Header().Set("Cache-Control", "no-cache")
-	fmt.Fprint(w, result)
 }
 
 // processTemplateForSW converts a shared JS file into its service worker variant
@@ -236,11 +215,47 @@ func processTemplateForSW(src string) string {
 	return strings.Join(out, "\n")
 }
 
+// serveInterstitial is the content-handler fallback path: a navigation
+// arrived without a sentinel header and without a bypass cookie, so we
+// assume no SW is installed and inject one via the interstitial, bouncing
+// the user back to whatever URL they originally requested.
 func (swm *ServiceWorkerModule) serveInterstitial(w http.ResponseWriter, r *http.Request) {
-	originalURL := r.URL.RequestURI()
+	swm.writeInterstitialHTML(w, r.URL.RequestURI())
+}
+
+// serveExplicitInterstitial is reached when the SW itself redirects here
+// after detecting a stale hash on a navigate event. The target URL is
+// carried in the ?target= query parameter.
+func (swm *ServiceWorkerModule) serveExplicitInterstitial(w http.ResponseWriter, r *http.Request) {
+	target := r.URL.Query().Get("target")
+	target = sanitizeInterstitialTarget(target)
+	swm.writeInterstitialHTML(w, target)
+}
+
+// sanitizeInterstitialTarget enforces that the target is a same-origin
+// relative path, guarding against open-redirect abuse. Rejects anything
+// that looks like a scheme or protocol-relative URL and ensures a leading
+// slash. Defaults to "/" on anything suspect or missing.
+func sanitizeInterstitialTarget(target string) string {
+	if target == "" {
+		return "/"
+	}
+	if strings.HasPrefix(target, "//") || strings.Contains(target, "://") {
+		return "/"
+	}
+	if !strings.HasPrefix(target, "/") {
+		return "/" + target
+	}
+	return target
+}
+
+// writeInterstitialHTML emits the registration-and-redirect HTML page.
+// Shared between serveInterstitial (content-handler fallback) and
+// serveExplicitInterstitial (SW-redirected) so there's exactly one place
+// the registration dance lives.
+func (swm *ServiceWorkerModule) writeInterstitialHTML(w http.ResponseWriter, target string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	// Set cooldown cookie — prevents interstitial loop if SW fails to load
 	http.SetCookie(w, &http.Cookie{
 		Name:     "grits-sw-loading",
 		Value:    "1",
@@ -304,7 +319,7 @@ func (swm *ServiceWorkerModule) serveInterstitial(w http.ResponseWriter, r *http
 })();
 </script>
 </body>
-</html>`, originalURL)
+</html>`, target)
 }
 
 func (swm *ServiceWorkerModule) Start() error { return nil }
