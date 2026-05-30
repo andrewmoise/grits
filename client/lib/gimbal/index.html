@@ -884,7 +884,7 @@ function stackMaxOrder() {
   const orders = [...widgets.values()].filter(w => w.zone === 'stack').map(w => w.stackOrder);
   return orders.length ? Math.max(...orders) : 0;
 }
-
+     
 function normalizeStackOrder() {
   [...widgets.values()].filter(w => w.zone === 'stack')
     .sort((a,b) => a.stackOrder - b.stackOrder)
