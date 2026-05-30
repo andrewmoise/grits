@@ -227,6 +227,15 @@ export class GimbalShell {
     // Key: "<serverUrl>|<volume>|<path>", value: metadataCID string of the
     // lib directory at last warm. If this changes we bust and re-warm.
     this._libDirCIDs = new Map();
+
+    // Expose direct command calls: shell.<cmd>()
+    return new Proxy(this, {
+      get: (target, key, receiver) => {
+        if (typeof key === 'symbol') return Reflect.get(target, key, receiver);
+        if (key in target) return Reflect.get(target, key, receiver);
+        return (...args) => target.runCommand(key, args);
+      }
+    });
   }
 
   // ── ui accessor — reads evalContext live so timing doesn't matter ─
@@ -364,6 +373,48 @@ export class GimbalShell {
     return mod.invoke(this, prevResult, args);
   }
 
+  // Run a command outside eval(), starting from VOID root
+  async runCommand(name, args = [], { doHistory = true } = {}) {
+    await this._warmCache();
+    await this._checkCacheStale();
+
+    const historyIndex = doHistory ? this.__.length : null;
+    if (doHistory) this.__.push(undefined);
+
+    const root = this._rootResult(VOID, historyIndex);
+
+    try {
+      // Try as a normal shell command first
+      return await _dispatchWrapped(this, name, root, args, historyIndex);
+    } catch (e) {
+      // Only fall back for "command not found"
+      if (!/command not found/.test(e?.message)) throw e;
+
+      // Try loading as a widget: <lib>/<name>/gwm-widget.js
+      for (const lib of this.libs) {
+        const base = `${this._libUrl(lib)}/${name}`;
+        const url = `${base}/gwm-widget.js`;
+        try {
+          const mod = await import(url);
+          const gimbal = globalThis.gimbal;
+          if (!gimbal?.openWidget) {
+            throw new Error('gimbal.openWidget is not available');
+          }
+          await gimbal.openWidget(mod, {
+            name,
+            evalContext: this._evalContext,
+          });
+          return VOID;
+        } catch (e2) {
+          // ignore and continue to next lib
+        }
+      }
+
+      // Nothing matched; rethrow original error
+      throw e;
+    }
+  }
+
   // ── Root result (void input, start of every eval) ─────────────
 
   _rootResult(initial, historyIndex) {
@@ -403,7 +454,8 @@ export class GimbalShell {
         if (key === 'glob') return (pattern) => glob(shell, pattern);
         if (key in extraVars)          return extraVars[key];
         if (key in shell._scriptScope) return shell._scriptScope[key];
-        return (...args) => _dispatchWrapped(shell, key, root, args, historyIndex);
+        // Route through runCommand so widget fallback works in eval() too
+        return (...args) => shell.runCommand(key, args, { doHistory: historyIndex !== null });
       },
       set(_, key, value) {
         shell._scriptScope[key] = value;
