@@ -19,7 +19,7 @@
 //   vol.mkdir(entries?)                   → string (metadata CID, stored locally)
 //   vol.gc(cidString?)                    → void
 //   vol.resetRoot()                       → void
-//   vol.getServiceWorkerHash()            → string | undefined
+//   vol.getServiceWorkerHash()            → string | null | undefined
 //
 // GritsFile — obtained from vol.lookup():
 //   file.cid()        → string  (metadata CID — use this for li())
