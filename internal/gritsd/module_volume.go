@@ -227,6 +227,7 @@ func (wv *LocalVolume) MultiLink(requests []*grits.LinkRequest, returnResults bo
 	if wv.doPersist {
 		if saveErr := wv.save(); saveErr != nil {
 			// Log but don't fail the operation — the link succeeded
+			// FIXME
 			log.Printf("Warning: failed to checkpoint after MultiLink: %v", saveErr)
 		}
 	}
