@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -212,6 +213,10 @@ func (hm *HTTPModule) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certifica
 }
 
 func (hm *HTTPModule) acquireAndCacheCert(hostname string) (*tls.Certificate, error) {
+	// Safety: only allow FQDNs (must contain a dot) to avoid invalid certbot requests
+	if !strings.Contains(hostname, ".") {
+		return nil, fmt.Errorf("refusing to acquire certificate for non-FQDN hostname %q", hostname)
+	}
 	certPEM, keyPEM, err := RequestCert(hostname)
 	if err != nil {
 		return nil, err
@@ -302,8 +307,10 @@ func (hm *HTTPModule) listContentHostnames(volume Volume) ([]string, error) {
 
 	var hostnames []string
 	for name := range dirListing {
-		if Validate("hostname", name) {
+		if Validate("hostname", name) && strings.Contains(name, ".") {
 			hostnames = append(hostnames, name)
+		} else {
+			log.Printf("HTTP: skipping non-FQDN hostname %q from content volume", name)
 		}
 	}
 	return hostnames, nil
