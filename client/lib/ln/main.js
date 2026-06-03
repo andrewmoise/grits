@@ -14,12 +14,12 @@ Use to() to write a bytestream to a path.`;
 import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
 import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
-async function resolveDestPath(destVol, destR, srcName, cmd) {
-  if (destR.path.endsWith('/')) {
-    const dirPath = destR.path.replace(/\/+$/, '');
+export async function resolveDestPath(destVol, destR, srcName, cmd) {
+  if (destR.trailingSlash) {
+    const dirPath = destR.path;
     const dir = await destVol.lookup(dirPath).catch(() => null);
     if (!dir?.isDir())
-      throw new Error(`${cmd}: destination is not a directory: '${destR.path}'`);
+      throw new Error(`${cmd}: destination is not a directory: '${destR.path}/'`);
     return `${dirPath}/${srcName}`;
   }
   const existing = await destVol.lookup(destR.path).catch(() => null);
@@ -50,11 +50,11 @@ export async function invoke(shell, previous, args, cmd = 'ln') {
 
   const srcFile  = await srcVol.lookup(srcR.path);
   const srcName  = srcR.path.split('/').at(-1);
-  const destPath = opts.f
+  const destPath = opts.ff
     ? destR.path
     : await resolveDestPath(destVol, destR, srcName, cmd);
 
-  if (opts.f) {
+  if (opts.f || opts.ff) {
     await destVol.multiLink([{ path: destPath, addr: srcFile.cid() }]);
     return VOID;
   }

@@ -80,13 +80,23 @@ export const tests = [
     },
   },
   {
-    label: 'ln with {f:1} overwrites a directory',
+    label: 'ln with {f:1} respects directory semantics',
     async fn(shell, scratch) {
       await shell.eval(`mkdir('${scratch}/subdir4')`);
       await shell.eval(`ln(':client/lib/echo/main.js', '${scratch}/subdir4', {f:1})`);
-      const text = await shell.eval(`cat('${scratch}/subdir4').toText()`);
+      const text = await shell.eval(`cat('${scratch}/subdir4/main.js').toText()`);
       if (!text.includes('invoke'))
-        throw new Error('overwritten dest content looks wrong');
+        throw new Error('file not placed inside directory');
+    },
+  },
+  {
+    label: 'ln with {ff:1} overwrites a directory',
+    async fn(shell, scratch) {
+      await shell.eval(`mkdir('${scratch}/subdir5')`);
+      await shell.eval(`ln(':client/lib/echo/main.js', '${scratch}/subdir5', {ff:1})`);
+      const text = await shell.eval(`cat('${scratch}/subdir5').toText()`);
+      if (!text.includes('invoke'))
+        throw new Error('directory not overwritten by {ff:1}');
     },
   },
   {
