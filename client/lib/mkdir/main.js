@@ -4,10 +4,11 @@ mkdir — create a directory
 
 Usage:
   mkdir('path')          create, fail if already exists
-  mkdir('path', {f:1})   create or silently succeed if already a directory`;
+  mkdir('path', {f:1})   create or silently succeed if already a directory
+  mkdir('path', {p:1})   create intermediate directories as needed`;
 
 import { isVoid, VOID, _isPlainObject } from '../gimbal/gsh.js';
-import { AssertionError, ASSERT_PREV_MATCHES } from '../grits/GritsClient.js';
+import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
@@ -21,6 +22,54 @@ export async function invoke(shell, previous, args) {
 
   const r    = shell.resolvePath(positional[0]);
   const vol  = shell._vol(r.serverUrl, r.volume);
+  // -p: create path components iteratively
+  if (opts.p) {
+    const parts = r.path.split('/').filter(Boolean);
+    let cur = '';
+
+    for (const part of parts) {
+      cur += '/' + part;
+
+      const metaCID = await vol.mkdir({});
+
+      try {
+        // Try: create new directory where nothing exists
+        await vol.multiLink([{
+          path:     cur,
+          addr:     metaCID,
+          prevAddr: '',
+          assert:   ASSERT_PREV_MATCHES,
+        }]);
+        continue;
+      } catch (e) {
+        if (!(e instanceof AssertionError)) throw e;
+      }
+
+      if (opts.f) {
+        try {
+          // If a file exists, overwrite it with a directory
+          await vol.multiLink([{
+            path:   cur,
+            addr:   metaCID,
+            assert: ASSERT_IS_BLOB,
+          }]);
+          continue;
+        } catch (e) {
+          if (!(e instanceof AssertionError)) throw e;
+        }
+      }
+
+      // Otherwise it exists; ensure it's a directory
+      const existing = await vol.lookup(cur).catch(() => null);
+      if (existing && !existing.isDir()) {
+        throw new Error(`mkdir: not a directory: '${cur}'`);
+      }
+      // existing directory is fine; continue
+    }
+
+    return VOID;
+  }
+
   const metaCID = await vol.mkdir({});
 
   try {
