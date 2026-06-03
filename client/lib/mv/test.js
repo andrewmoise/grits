@@ -84,4 +84,48 @@ export const tests = [
         throw new Error(`expected 'hello', got '${text}'`);
     },
   },
+  {
+    label: 'mv into directory places file inside it',
+    async fn(shell, scratch) {
+      await shell.eval(`mkdir('${scratch}/dir1')`);
+      await shell.eval(`echo('hello').to('${scratch}/src.txt')`);
+      await shell.eval(`mv('${scratch}/src.txt', '${scratch}/dir1')`);
+      const text = await shell.eval(`cat('${scratch}/dir1/src.txt').toText()`);
+      if (text !== 'hello') throw new Error('file not moved into directory');
+    },
+  },
+  {
+    label: 'mv with trailing slash requires directory',
+    async fn(shell, scratch) {
+      await shell.eval(`echo('hello').to('${scratch}/src.txt')`);
+      let threw = false;
+      try {
+        await shell.eval(`mv('${scratch}/src.txt', '${scratch}/notadir/')`);
+      } catch (e) {
+        if (e.message.includes('not a directory')) threw = true;
+        else throw e;
+      }
+      if (!threw) throw new Error('expected not-a-directory error');
+    },
+  },
+  {
+    label: 'mv with {f:1} respects directory semantics',
+    async fn(shell, scratch) {
+      await shell.eval(`mkdir('${scratch}/dir2')`);
+      await shell.eval(`echo('hello').to('${scratch}/src.txt')`);
+      await shell.eval(`mv('${scratch}/src.txt', '${scratch}/dir2', {f:1})`);
+      const text = await shell.eval(`cat('${scratch}/dir2/src.txt').toText()`);
+      if (text !== 'hello') throw new Error('file not moved into directory');
+    },
+  },
+  {
+    label: 'mv with {ff:1} overwrites directory',
+    async fn(shell, scratch) {
+      await shell.eval(`mkdir('${scratch}/dir3')`);
+      await shell.eval(`echo('hello').to('${scratch}/src.txt')`);
+      await shell.eval(`mv('${scratch}/src.txt', '${scratch}/dir3', {ff:1})`);
+      const text = await shell.eval(`cat('${scratch}/dir3').toText()`);
+      if (text !== 'hello') throw new Error('directory not overwritten');
+    },
+  },
 ];

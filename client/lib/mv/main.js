@@ -8,6 +8,7 @@ Usage:
 
 import { isVoid, VOID, _isPlainObject } from '../gimbal/gsh.js';
 import { AssertionError, ASSERT_PREV_MATCHES } from '../grits/GritsClient.js';
+import { resolveDestPath } from '../ln/main.js';
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
@@ -28,16 +29,21 @@ export async function invoke(shell, previous, args) {
   const destVol = shell._vol(destR.serverUrl, destR.volume);
 
   const srcFile = await srcVol.lookup(srcR.path);
+  const srcName = srcR.path.split('/').at(-1);
+
+  const destPath = opts.ff
+    ? destR.path
+    : await resolveDestPath(destVol, destR, srcName, 'mv');
 
   const isCrossVolume = srcR.serverUrl !== destR.serverUrl || srcR.volume !== destR.volume;
 
   if (isCrossVolume) {
     try {
       await destVol.multiLink([{
-        path:     destR.path,
+        path:     destPath,
         addr:     srcFile.cid(),
-        prevAddr: opts.f ? undefined : '',
-        assert:   opts.f ? 0 : ASSERT_PREV_MATCHES,
+        prevAddr: (opts.f || opts.ff) ? undefined : '',
+        assert:   (opts.f || opts.ff) ? 0 : ASSERT_PREV_MATCHES,
       }]);
     } catch (e) {
       if (e instanceof AssertionError)
@@ -57,10 +63,10 @@ export async function invoke(shell, previous, args) {
     try {
       await srcVol.multiLink([
         {
-          path:     destR.path,
+          path:     destPath,
           addr:     srcFile.cid(),
-          prevAddr: opts.f ? undefined : '',
-          assert:   opts.f ? 0 : ASSERT_PREV_MATCHES,
+          prevAddr: (opts.f || opts.ff) ? undefined : '',
+          assert:   (opts.f || opts.ff) ? 0 : ASSERT_PREV_MATCHES,
         },
         {
           path:     srcR.path,

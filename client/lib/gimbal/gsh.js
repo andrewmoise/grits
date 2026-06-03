@@ -254,15 +254,17 @@ export class GimbalShell {
   }
 
   // ── Path resolution ───────────────────────────────────────────
-  // Returns { serverUrl, volume, path } always.
+  // Returns { serverUrl, volume, path, trailingSlash } always.
   // Callers that previously did shell._currentVol().lookup(shell.resolvePath(p))
   // should now do shell._vol(r.serverUrl, r.volume).lookup(r.path).
   resolvePath(p) {
+    const trailingSlash = typeof p === 'string' && p.endsWith('/') && p !== '/';
     if (!p || p === '.') {
       return {
         serverUrl: this.serverUrl,
         volume:    this.volume,
         path:      this.cwd.replace(/^\//, '') || '',
+        trailingSlash: false,
       };
     }
 
@@ -274,18 +276,18 @@ export class GimbalShell {
       const slashIdx  = rest.indexOf('/');
       const volume    = slashIdx === -1 ? rest            : rest.slice(0, slashIdx);
       const path      = slashIdx === -1 ? ''              : rest.slice(slashIdx + 1);
-      return { serverUrl, volume, path };
+      return { serverUrl, volume, path: path.replace(/\/+$/, ''), trailingSlash };
     }
 
     // Absolute path in current volume.
     if (p.startsWith('/')) {
-      return { serverUrl: this.serverUrl, volume: this.volume, path: p.replace(/^\/+/, '') };
+      return { serverUrl: this.serverUrl, volume: this.volume, path: p.replace(/^\/+|\/+$/g, ''), trailingSlash };
     }
 
     // Relative path — join with cwd.
     const base = this.cwd.replace(/^\/+|\/+$/g, '');
     const joined = base ? `${base}/${p}` : p;
-    return { serverUrl: this.serverUrl, volume: this.volume, path: joined };
+    return { serverUrl: this.serverUrl, volume: this.volume, path: joined.replace(/\/+$/, ''), trailingSlash };
   }
 
   // ── Tool import ───────────────────────────────────────────────
