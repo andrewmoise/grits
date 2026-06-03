@@ -76,7 +76,9 @@ function ensureStyles() {
 
 // ── Node state ────────────────────────────────────────────
 function makeNode(name, file, parentPath = '') {
-  const fullPath = parentPath === '/' ? `/${name}` : `${parentPath}/${name}`;
+  const fullPath = parentPath
+    ? (parentPath === '/' ? `/${name}` : `${parentPath}/${name}`)
+    : name;
   return {
     name,
     fullPath,
@@ -126,7 +128,7 @@ function buildRow(node, depth, onSelect, onToggle, onPlumb) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-export default function createWidget({ name, evalContext = {} }) {
+export default function createWidget({ name, evalContext = {}, args = [] }) {
   ensureStyles();
 
   const el = document.createElement('div');
@@ -134,8 +136,45 @@ export default function createWidget({ name, evalContext = {} }) {
   el.style.cssText = 'overflow:auto;flex:1;min-height:0;height:100%;';
 
   const fs     = evalContext.fs;
-  const vol    = fs.volume(window.location.origin, 'client');
+  const shell  = evalContext.shell;
+  // These define the hard root for this widget instance
+  let serverUrl = window.location.origin;
+  let volume    = 'client';
+  let basePath  = '';
   let selected = null;
+
+  // ── Parse args → path ───────────────────────────────────────
+  // Parse args → (serverUrl, volume, basePath)
+  // Default: cwd if launched from shell, otherwise current client root
+  if (shell) {
+    serverUrl = shell.serverUrl;
+    volume    = shell.volume;
+    basePath  = (shell.cwd || '').replace(/^\/+/, '');
+  }
+
+  if (args && args.length === 1) {
+    const a = args[0];
+    let p = null;
+    if (typeof a === 'string') p = a;
+    else if (a && typeof a === 'object' && typeof a.path === 'string') p = a.path;
+
+    if (p != null && shell) {
+      try {
+        const r = shell.resolvePath(p);
+        serverUrl = r.serverUrl;
+        volume    = r.volume;
+        basePath  = r.path; // already normalized (no leading slash)
+      } catch (e) {
+        console.warn('[files] failed to resolve path, using cwd');
+      }
+    }
+  }
+
+  // Set widget title to leaf-most directory (like shell)
+  const leafName = basePath ? basePath.split('/').pop() : `:${volume}`;
+  const decoration = { title: leafName };
+
+  const vol = fs.volume(serverUrl, volume);
 
   async function toggle(node) {
     if (!node.file.isDir()) return;
@@ -229,8 +268,10 @@ export default function createWidget({ name, evalContext = {} }) {
 
   async function loadRoot() {
     try {
-      const rootFile = await vol.lookup('/');
-      const rootNode = makeNode('/', rootFile);
+      const rootFile = await vol.lookup(basePath);
+      // Display name: last segment or '/' for empty
+      const displayName = basePath ? basePath.split('/').pop() : '/';
+      const rootNode = makeNode(displayName, rootFile, '');
       rootNode.open   = true;
       rootNode.loaded = true;
 
@@ -244,7 +285,8 @@ export default function createWidget({ name, evalContext = {} }) {
       });
 
       for (const [childName, childFile] of sorted) {
-        const childNode = makeNode(childName, childFile, '/');
+        const parentFull = basePath ? `/${basePath}` : '/';
+        const childNode = makeNode(childName, childFile, parentFull);
         rootNode.children.set(childName, childNode);
         const { row, childrenEl } = buildRow(childNode, 0, onSelect, toggle, onPlumb);
         el.appendChild(row);
@@ -266,5 +308,5 @@ export default function createWidget({ name, evalContext = {} }) {
 
   el.tabIndex = 0;
   el.style.outline = 'none';
-  return { el, focus() { el.focus(); }, destroy() {} };
+  return { el, focus() { el.focus(); }, destroy() {}, decoration };
 }
