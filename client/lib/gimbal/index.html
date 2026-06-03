@@ -348,7 +348,9 @@ async function openWidget(mod, opts = {}) {
 
   try {
     const createWidget = mod.default ?? mod;
-    const instance     = await Promise.resolve(createWidget({ name, evalContext, ...rest }));
+    // Allow callers to override evalContext (e.g., when launched from a shell)
+    const ctx = rest.evalContext ?? evalContext;
+    const instance     = await Promise.resolve(createWidget({ name, evalContext: ctx, ...rest }));
     const w            = widgets.get(id);
     if (!w) return;
 
@@ -398,6 +400,8 @@ async function openWidget(mod, opts = {}) {
     }
   } catch (e) {
     console.error('[openWidget] failed to create widget:', e);
+    // Do not swallow — surface to caller for debugging
+    throw e;
   }
 }
 
