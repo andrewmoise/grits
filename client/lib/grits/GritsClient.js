@@ -724,11 +724,29 @@ class GritsVolume {
 
   // ── Put ───────────────────────────────────────────────────────
 
+  async _serverHasBlob(cid) {
+    try {
+      const resp = await fetch(`${this._serverUrl}/grits/v1/blob/${cid}`, {
+        method:  'HEAD',
+        headers: this._serverHeaders(),
+      });
+      return resp.ok;            // 200 present, 404 absent
+    } catch {
+      return false;              // network error → don't know → fall through and upload
+    }
+  }
+
   async put(bytes) {
     _assertBytes(bytes, 'put');
     const data = await _toUint8Array(bytes);
     const cid  = await _computeCID(data);
-    await this._uploadBlob(cid, data);
+    // Shell-upload path only. Cheap existence check before pushing bytes so a slow
+    // uplink doesn't re-send a blob the server already holds. Deliberately NOT in
+    // _uploadBlob: the link-fails path already knows the server lacks the blob (it
+    // got a 422), so a HEAD there would be a guaranteed-wasted round-trip.
+    if (!(await this._serverHasBlob(cid))) {
+      await this._uploadBlob(cid, data);
+    }
     await this._parent._blobCachePut(cid, new Response(data, { status: 200 }));
     return cid;
   }
@@ -781,11 +799,20 @@ class GritsVolume {
   // ── Internal: server communication ───────────────────────────
 
   async _uploadBlob(cid, bytes) {
-    const resp = await fetch(`${this._serverUrl}/grits/v1/blob/${cid}`, {
-      method:  'PUT',
-      headers: this._serverHeaders(),
-      body:    bytes,
-    });
+    let resp;
+    try {
+      resp = await fetch(`${this._serverUrl}/grits/v1/blob/${cid}`, {
+        method:  'PUT',
+        headers: this._serverHeaders(),
+        body:    bytes,
+      });
+    } catch (err) {
+      // A reset / "Failed to fetch" could be a false negative: the server had
+      // the blob and dropped the connection on its dedup early-return, or committed
+      // it just before the reset. Confirm absence before reporting failure.
+      if (await this._serverHasBlob(cid)) return cid;
+      throw err;
+    }
     if (resp.status === 204 || resp.ok) return cid;
     throw new Error(`uploadBlob ${cid}: ${resp.status} ${resp.statusText}`);
   }
