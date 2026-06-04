@@ -54,34 +54,28 @@ export async function glob(shell, pattern) {
   //   '/path'                  — absolute, current volume
   //   'path'                   — relative to cwd
 
-  let serverUrl    = shell.serverUrl;
-  let volume       = shell.volume;
-  let pathStr      = pattern;
+  let serverUrl;
+  let volume;
+  let pathStr;
   let resultPrefix = ''; // prepended to each result
 
+  const resolved = shell.resolvePath(pattern);
+  serverUrl = resolved.serverUrl;
+  volume    = resolved.volume;
+  pathStr   = resolved.path;
+
+  // Preserve previous prefix semantics based on original pattern
   if (pattern.includes(':')) {
     const colonIdx  = pattern.indexOf(':');
     const maybeHost = pattern.slice(0, colonIdx);
-    if (maybeHost) serverUrl = maybeHost;
     const rest     = pattern.slice(colonIdx + 1);
     const slashIdx = rest.indexOf('/');
-    if (slashIdx === -1) {
-      volume  = rest;
-      pathStr = '';
-    } else {
-      volume  = rest.slice(0, slashIdx);
-      pathStr = rest.slice(slashIdx + 1);
-    }
-    resultPrefix = `${maybeHost ? maybeHost + ':' : ':'}${volume}/`;
+    const vol      = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
+    resultPrefix   = `${maybeHost ? maybeHost + ':' : ':'}${vol}/`;
   } else if (pattern.startsWith('/')) {
-    pathStr      = pattern.slice(1);
     resultPrefix = '/';
   } else {
-    // Relative — root the search at cwd so expand() sees the right tree,
-    // but strip the cwd back off results.
-    const cwd = shell.cwd.replace(/^\/+|\/+$/g, '');
-    pathStr   = cwd ? `${cwd}/${pattern}` : pattern;
-    resultPrefix = null; // signals: strip cwd from results
+    resultPrefix = null; // relative
   }
 
   // ── 2. Split into fixed prefix + wildcard parts ────────────
