@@ -67,9 +67,9 @@ export async function invoke(shell, previous, args) {
 
         for (const { label, fn } of mod.tests) {
           const randSuffix = Math.random().toString(36).slice(2, 10);
-          const scratchPath = `tmp/gimbal-test-${randSuffix}`;
-          const emptyDir = await systemVol.mkdir();
-          await systemVol.multiLink([{ path: scratchPath, addr: emptyDir }]);
+          const scratchPath = `tmp/gimbal-test/${randSuffix}`;
+          // Ensure path exists using mkdir -p semantics
+          await shell.eval(`mkdir(':sys/${scratchPath}', {p:1})`);
           const scratch = `:sys/${scratchPath}`;
 
           try {
