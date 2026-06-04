@@ -209,20 +209,16 @@ function _wrapResult(result, historyIndex) {
 // ─────────────────────────────────────────────────────────────────
 
 export class GimbalShell {
-  constructor({ fs, serverUrl, volume, cwd, libs, evalContext = {} }) {
+  constructor({ fs, serverUrl, volume, cwd, evalContext = {} }) {
     this.fs              = fs;
     this.serverUrl       = serverUrl;
     this.volume          = volume;
     this.cwd             = cwd || '/';
-    // libs config removed; tools are resolved relative to this file
-    this.libs            = [];
     this._evalContext    = evalContext;
     this._scriptScope    = Object.create(null);
     this.history         = [];
     this.__              = [];
     this._importCache    = new Map();
-    this._availableTools = null;
-    this._cacheWarmed    = true;
 
     // Expose direct command calls: shell.<cmd>()
     return new Proxy(this, {
@@ -320,29 +316,6 @@ export class GimbalShell {
     return mod;
   }
 
-  // ── Cache warming ─────────────────────────────────────────────
-  // Fetches each lib directory listing to populate _availableTools
-  // and records each lib dir's CID for later staleness checks.
-
-  async _warmCache() {
-    // No-op in relative mode
-    return;
-  }
-
-  // ── Staleness check ───────────────────────────────────────────
-  // Called before each eval. Uses _tryFastLookup (in-memory only,
-  // no network) to compare current lib dir CIDs against what we saw
-  // at warm time. If any lib dir changed, bust the entire tool cache
-  // and re-warm. This is intentionally coarse — a single changed lib
-  // dir invalidates everything — because tool additions/deletions are
-  // entangled with config and it's cheaper to just re-warm than to
-  // try to surgically update.
-
-  async _checkCacheStale() {
-    // No-op in relative mode
-    return;
-  }
-
   // ── Help handling ─────────────────────────────────────────────
 
   _isHelpCall(args) {
@@ -360,8 +333,6 @@ export class GimbalShell {
 
   // Run a command outside eval(), starting from VOID root
   async runCommand(name, args = [], { doHistory = true } = {}) {
-    // No cache warming / staleness checks
-
     const historyIndex = doHistory ? this.__.length : null;
     if (doHistory) this.__.push(undefined);
 
@@ -379,7 +350,6 @@ export class GimbalShell {
   // ── eval ──────────────────────────────────────────────────────
 
   async eval(src, extraVars = {}, { doHistory = false } = {}) {
-    // No cache warming / staleness checks
     this.history.push(src);
 
     const __ = this.__;

@@ -541,12 +541,11 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   };
 
   // ── init ──────────────────────────────────────────────
-  shell._warmCache().then(() => {
-    shellReady = true;
-    syncCwd();
-    if (runOnInit) enqueue(runOnInit);
-    runNext();
-  });
+  // No cache warming in relative mode; initialize immediately
+  shellReady = true;
+  syncCwd();
+  if (runOnInit) enqueue(runOnInit);
+  runNext();
 
   // Defer initial focus until the widget is mounted and layout is stable
   let didInitialFocus = false;
