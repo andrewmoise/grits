@@ -582,16 +582,16 @@ class GritsVolume {
     return this._linkRaw(metaCID, path);
   }
 
-  async multiLink(requests, { maxRetries = 5 } = {}) {
+  async multiLink(requests) {
     if (DESYNC_MODE) {
       return this._desyncMultiLink(requests);
     }
-    return this._serverMultiLink(requests, maxRetries);
+    return this._serverMultiLink(requests);
   }
 
   // Direct-to-server link path. Used by the background flush and by multiLink
   // when DESYNC_MODE is off. Never intercepted by desync logic.
-  async _serverMultiLink(requests, maxRetries = 5) {
+  async _serverMultiLink(requests) {
     const url  = `${this._serverUrl}/grits/v1/link`;
     const body = JSON.stringify({
       volume:   this._volume,
@@ -603,7 +603,8 @@ class GritsVolume {
       })),
     });
 
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const seenMissing = new Set();
+    while (true) {
       const resp = await fetch(url, {
         method:  'POST',
         headers: this._serverHeaders({ 'Content-Type': 'application/json' }),
@@ -621,6 +622,10 @@ class GritsVolume {
       if (resp.status === 422) {
         const { error, missingAddr } = await resp.json();
         if (error === 'missing_blob') {
+          if (seenMissing.has(missingAddr)) {
+            throw new Error(`multiLink: stuck, server repeatedly requested missing blob ${missingAddr}`);
+          }
+          seenMissing.add(missingAddr);
           console.log(`[multiLink] server missing ${missingAddr}, uploading...`);
           await this._uploadMissingBlob(missingAddr);
           continue; // retry the link
@@ -632,7 +637,7 @@ class GritsVolume {
       throw new Error(`multiLink: ${resp.status} ${msg}`);
     }
 
-    throw new Error(`multiLink: server kept reporting missing blobs after ${maxRetries} attempts`);
+    // unreachable: loop exits only via success or error
   }
 
   // Desync path for multiLink: validate assertions locally, enqueue each
