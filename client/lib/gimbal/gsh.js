@@ -214,19 +214,15 @@ export class GimbalShell {
     this.serverUrl       = serverUrl;
     this.volume          = volume;
     this.cwd             = cwd || '/';
-    this.libs            = libs ?? [];
+    // libs config removed; tools are resolved relative to this file
+    this.libs            = [];
     this._evalContext    = evalContext;
     this._scriptScope    = Object.create(null);
     this.history         = [];
     this.__              = [];
     this._importCache    = new Map();
     this._availableTools = null;
-    this._cacheWarmed    = false;
-
-    // Per-lib directory CID tracking for cache invalidation.
-    // Key: "<serverUrl>|<volume>|<path>", value: metadataCID string of the
-    // lib directory at last warm. If this changes we bust and re-warm.
-    this._libDirCIDs = new Map();
+    this._cacheWarmed    = true;
 
     // Expose direct command calls: shell.<cmd>()
     return new Proxy(this, {
@@ -302,23 +298,26 @@ export class GimbalShell {
 
   // ── Tool import ───────────────────────────────────────────────
 
-  _libUrl({ serverUrl, volume, path }) {
-    return `${serverUrl}/grits/v1/content/${volume}/${path}`;
-  }
-
   async _importTool(name) {
     if (this._importCache.has(name)) return this._importCache.get(name);
-    for (const lib of this.libs) {
-      const url = `${this._libUrl(lib)}/${name}/main.js`;
-      let mod;
-      try { mod = await import(url); }
-      catch (e) { console.error(`_importTool: failed to import ${url}:`, e); continue; }
-      if (typeof mod.invoke !== 'function')
-        throw new Error(`${url} has no exported invoke()`);
-      this._importCache.set(name, mod);
-      return mod;
+
+    // Validate tool name to avoid path traversal
+    if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+      throw new Error(`command not found: ${name}`);
     }
-    throw new Error(`command not found: ${name}`);
+
+    const url = `../${name}/main.js`;
+    let mod;
+    try {
+      mod = await import(url);
+    } catch (e) {
+      throw new Error(`command not found: ${name}`);
+    }
+    if (typeof mod.invoke !== 'function')
+      throw new Error(`${url} has no exported invoke()`);
+
+    this._importCache.set(name, mod);
+    return mod;
   }
 
   // ── Cache warming ─────────────────────────────────────────────
@@ -326,19 +325,8 @@ export class GimbalShell {
   // and records each lib dir's CID for later staleness checks.
 
   async _warmCache() {
-    if (this._cacheWarmed) return;
-    this._cacheWarmed    = true;
-    this._availableTools = new Set();
-    for (const lib of this.libs) {
-      try {
-        const vol  = this.fs.volume(lib.serverUrl, lib.volume);
-        const file = await vol.lookup(lib.path);
-        if (!file.isDir()) continue;
-        this._libDirCIDs.set(_libKey(lib), file.cid());
-        const dir = await file.json();
-        for (const name of Object.keys(dir)) this._availableTools.add(name);
-      } catch (e) { console.error('warmCache failed for lib:', lib, e); }
-    }
+    // No-op in relative mode
+    return;
   }
 
   // ── Staleness check ───────────────────────────────────────────
@@ -351,23 +339,8 @@ export class GimbalShell {
   // try to surgically update.
 
   async _checkCacheStale() {
-    let stale = false;
-    for (const lib of this.libs) {
-      try {
-        const vol  = this.fs.volume(lib.serverUrl, lib.volume);
-        const info = await vol._tryFastLookup(lib.path);
-        if (!info) continue;
-        const known = this._libDirCIDs.get(_libKey(lib));
-        if (known && info.metadataHash !== known) { stale = true; break; }
-      } catch (e) {}
-    }
-    if (stale) {
-      this._cacheWarmed    = false;
-      this._availableTools = null;
-      this._importCache.clear();
-      this._libDirCIDs.clear();
-      await this._warmCache();
-    }
+    // No-op in relative mode
+    return;
   }
 
   // ── Help handling ─────────────────────────────────────────────
@@ -387,8 +360,7 @@ export class GimbalShell {
 
   // Run a command outside eval(), starting from VOID root
   async runCommand(name, args = [], { doHistory = true } = {}) {
-    await this._warmCache();
-    await this._checkCacheStale();
+    // No cache warming / staleness checks
 
     const historyIndex = doHistory ? this.__.length : null;
     if (doHistory) this.__.push(undefined);
@@ -407,8 +379,7 @@ export class GimbalShell {
   // ── eval ──────────────────────────────────────────────────────
 
   async eval(src, extraVars = {}, { doHistory = false } = {}) {
-    await this._warmCache();
-    await this._checkCacheStale();
+    // No cache warming / staleness checks
     this.history.push(src);
 
     const __ = this.__;
@@ -428,7 +399,8 @@ export class GimbalShell {
         if (key in globalThis)       return false;
         if (key in extraVars)        return true;
         if (key in shell._scriptScope) return true;
-        return shell._availableTools?.has(key) ?? false;
+        // Allow any identifier; resolution happens at call time via import
+        return true;
       },
       get(_, key) {
         if (typeof key === 'symbol') return undefined;
