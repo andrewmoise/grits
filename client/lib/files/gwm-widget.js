@@ -8,7 +8,6 @@
  */
 
 import { FONT_MONO, injectStyles } from '../style/style.js';
-import { plumber } from '../plumber/plumber.js';
 
 const SVG_CARET = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
@@ -76,9 +75,10 @@ function ensureStyles() {
 
 // ── Node state ────────────────────────────────────────────
 function makeNode(name, file, parentPath = '') {
+  // fullPath is always relative to widget root, no leading slash
   const fullPath = parentPath
-    ? (parentPath === '/' ? `/${name}` : `${parentPath}/${name}`)
-    : name;
+    ? (name ? `${parentPath}/${name}` : parentPath)
+    : (name || '');
   return {
     name,
     fullPath,
@@ -91,7 +91,7 @@ function makeNode(name, file, parentPath = '') {
 }
 
 // ── Build a row element for a node ────────────────────────
-function buildRow(node, depth, onSelect, onToggle, onPlumb) {
+function buildRow(node, depth, onSelect, onToggle, onOpenFile) {
   const isDir = node.file.isDir();
 
   const row = document.createElement('div');
@@ -121,7 +121,7 @@ function buildRow(node, depth, onSelect, onToggle, onPlumb) {
     else       onSelect(node);
   });
   row.addEventListener('dblclick', () => {
-    if (!isDir) onPlumb(node);
+    if (!isDir) onOpenFile(node);
   });
 
   return { row, childrenEl };
@@ -213,7 +213,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
           node.children.set(childName, childNode);
           const depth = depthOf(node) + 1;
           const { row, childrenEl: grandchildrenEl } = buildRow(
-            childNode, depth, onSelect, toggle, onPlumb
+            childNode, depth, onSelect, toggle, onOpenFile
           );
           childrenEl.appendChild(row);
           if (grandchildrenEl) childrenEl.appendChild(grandchildrenEl);
@@ -243,17 +243,16 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
     node.el.row.classList.add('selected');
   }
 
-  function onPlumb(node) {
+  function onOpenFile(node) {
     const shell = evalContext.shell;
-    if (!shell) { console.warn('[files] no shell on evalContext, cannot plumb'); return; }
-    plumber.send({
-      src:  'files',
-      dst:  '',
-      wdir: shell.cwd,
-      type: 'text',
-      attr: {},
-      data: node.fullPath,
-    }, shell);
+    if (!shell) { console.warn('[files] no shell on evalContext, cannot open file'); return; }
+
+    const rel = node.fullPath || '';
+    const fullPath = basePath
+      ? (rel ? `${basePath}/${rel}` : basePath)
+      : rel;
+
+    shell.runCommand('edit', [{ serverUrl, volume, path: fullPath }], { doHistory: false });
   }
 
   function depthOf(node) {
@@ -271,7 +270,8 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       const rootFile = await vol.lookup(basePath);
       // Display name: last segment or '/' for empty
       const displayName = basePath ? basePath.split('/').pop() : '/';
-      const rootNode = makeNode(displayName, rootFile, '');
+      // Root node is virtual; paths are relative to basePath
+      const rootNode = makeNode('', rootFile, '');
       rootNode.open   = true;
       rootNode.loaded = true;
 
@@ -285,10 +285,10 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       });
 
       for (const [childName, childFile] of sorted) {
-        const parentFull = basePath ? `/${basePath}` : '/';
-        const childNode = makeNode(childName, childFile, parentFull);
+        // children of root start at '' (relative to basePath)
+        const childNode = makeNode(childName, childFile, '');
         rootNode.children.set(childName, childNode);
-        const { row, childrenEl } = buildRow(childNode, 0, onSelect, toggle, onPlumb);
+        const { row, childrenEl } = buildRow(childNode, 0, onSelect, toggle, onOpenFile);
         el.appendChild(row);
         if (childrenEl) el.appendChild(childrenEl);
       }

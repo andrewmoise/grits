@@ -14,7 +14,7 @@
  *   await import('https://yourserver.com/grits/v1/content/client/lib/gimbal/overlay.js');
  *   // window.gwm is now available:
  *   await gwm.eval('gterm()');
- *   await gwm.eval('codemirror("lib/foo/main.js")');
+ *   await gwm.eval('edit("lib/foo/main.js")');
  *   gwm.hide();
  *   gwm.show();
  *   gwm.toggle();
@@ -459,7 +459,7 @@ window.gwm = {
   /**
    * Open a widget by running a shell command.
    * e.g.  await gwm.eval('gterm()')
-   *       await gwm.eval('codemirror("lib/foo/main.js")')
+   *       await gwm.eval('edit("lib/foo/main.js")')
    */
   eval: eval_,
   show,
