@@ -253,9 +253,10 @@ import { injectTheme, EASE_SINE, EASE_IN, DUR } from '../style/style.js';
 
 injectTheme();
 
+// Use fixed volume; module loading is purely relative
 const _origin = window.location.origin;
-const _vol    = 'client';
-const _libUrl = `${_origin}/grits/v1/content/${_vol}/lib`;
+let _vol = 'client';
+
 const _gg     = new GritsClient();
 
 const evalContext = { fs: _gg, shell: null };
@@ -263,15 +264,15 @@ const evalContext = { fs: _gg, shell: null };
 const WIDGET_REGISTRY = {
   files: {
     name: 'files', icon: 'files',
-    module: `${_libUrl}/files/gwm-widget.js`, _cache: null,
+    module: '../files/gwm-widget.js', _cache: null,
   },
   gterm: {
     name: 'gterm', icon: 'gterm',
-    module: `${_libUrl}/gterm/gwm-widget.js`, _cache: null,
+    module: '../gterm/gwm-widget.js', _cache: null,
   },
   editor: {
     name: 'editor', icon: 'editor',
-    module: `${_libUrl}/codemirror/gwm-widget.js`, _cache: null,
+    module: '../codemirror/gwm-widget.js', _cache: null,
   },
 };
 
@@ -1062,9 +1063,9 @@ buildStrip();
 
 // Launch initial widgets
 (async () => {
-  const filesMod = await import(`${_libUrl}/files/gwm-widget.js`);
+  const filesMod = await import('../files/gwm-widget.js');
   await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', evalContext });
-  const gtermMod = await import(`${_libUrl}/gterm/gwm-widget.js`);
+  const gtermMod = await import('../gterm/gwm-widget.js');
   await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', evalContext });
 })();
 
