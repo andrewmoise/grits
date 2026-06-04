@@ -874,6 +874,15 @@ function restoreWidget(id, thumbRect) {
   normalizeStackOrder();
   render(true);
   if (thumbRect) spawnFromOrigin(id, thumbRect);
+
+  // If the widget exposes a focus method, call it after restore
+  if (w.cellInstance?.focus) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        w.cellInstance.focus();
+      });
+    });
+  }
 }
 
 function electNewMaster() {
