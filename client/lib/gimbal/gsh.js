@@ -259,11 +259,21 @@ export class GimbalShell {
   // should now do shell._vol(r.serverUrl, r.volume).lookup(r.path).
   resolvePath(p) {
     const trailingSlash = typeof p === 'string' && p.endsWith('/') && p !== '/';
+    const normalize = (path) => {
+      const parts = (path || '').split('/').filter(Boolean);
+      const out = [];
+      for (const part of parts) {
+        if (part === '.') continue;
+        if (part === '..') { if (out.length > 0) out.pop(); continue; }
+        out.push(part);
+      }
+      return out.join('/');
+    };
     if (!p || p === '.') {
       return {
         serverUrl: this.serverUrl,
         volume:    this.volume,
-        path:      this.cwd.replace(/^\//, '') || '',
+        path:      normalize(this.cwd.replace(/^\//, '') || ''),
         trailingSlash: false,
       };
     }
@@ -276,18 +286,18 @@ export class GimbalShell {
       const slashIdx  = rest.indexOf('/');
       const volume    = slashIdx === -1 ? rest            : rest.slice(0, slashIdx);
       const path      = slashIdx === -1 ? ''              : rest.slice(slashIdx + 1);
-      return { serverUrl, volume, path: path.replace(/\/+$/, ''), trailingSlash };
+      return { serverUrl, volume, path: normalize(path.replace(/\/+$/, '')), trailingSlash };
     }
 
     // Absolute path in current volume.
     if (p.startsWith('/')) {
-      return { serverUrl: this.serverUrl, volume: this.volume, path: p.replace(/^\/+|\/+$/g, ''), trailingSlash };
+      return { serverUrl: this.serverUrl, volume: this.volume, path: normalize(p.replace(/^\/+|\/+$/g, '')), trailingSlash };
     }
 
     // Relative path — join with cwd.
     const base = this.cwd.replace(/^\/+|\/+$/g, '');
     const joined = base ? `${base}/${p}` : p;
-    return { serverUrl: this.serverUrl, volume: this.volume, path: joined.replace(/\/+$/, ''), trailingSlash };
+    return { serverUrl: this.serverUrl, volume: this.volume, path: normalize(joined.replace(/\/+$/, '')), trailingSlash };
   }
 
   // ── Tool import ───────────────────────────────────────────────
