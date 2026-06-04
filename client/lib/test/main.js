@@ -10,6 +10,8 @@ import { isVoid, _isPlainObject } from '../gimbal/gsh.js';
 
 export async function invoke(shell, previous, args) {
   const opts = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
+  const namesFromArgs = args.filter(a => typeof a === 'string');
+  const only = namesFromArgs.length > 0 ? new Set(namesFromArgs) : null;
   const enc = new TextEncoder();
 
   let controller;
@@ -34,10 +36,20 @@ export async function invoke(shell, previous, args) {
         if (!file.isDir()) continue;
         const toolChildren = await file.children();
         if (!toolChildren.has('test.js')) continue;
-        suites.push({ name });
+        if (!only || only.has(name)) {
+          suites.push({ name });
+        }
       }
 
-      if (suites.length === 0) { push('testing: no test.js files found in lib/*/'); controller.close(); return; }
+      if (suites.length === 0) {
+        if (only) {
+          push('testing: no matching test suites');
+        } else {
+          push('testing: no test.js files found in lib/*/');
+        }
+        controller.close();
+        return;
+      }
 
       let totalPassed = 0, totalFailed = 0;
       const systemVol = shell.fs.volume(shell.serverUrl, 'sys');
