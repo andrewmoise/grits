@@ -250,7 +250,6 @@
 import GritsClient                             from '../grits/GritsClient.js';
 import { makeShell }                           from '../gimbal/gsh.js';
 import { injectTheme, EASE_SINE, EASE_IN, DUR } from '../style/style.js';
-import { plumber }                             from '../plumber/plumber.js';
 
 injectTheme();
 
@@ -259,7 +258,7 @@ const _vol    = 'client';
 const _libUrl = `${_origin}/grits/v1/content/${_vol}/lib`;
 const _gg     = new GritsClient();
 
-const evalContext = { fs: _gg, shell: null, plumber };
+const evalContext = { fs: _gg, shell: null };
 
 const WIDGET_REGISTRY = {
   files: {
