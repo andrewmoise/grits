@@ -15,16 +15,22 @@ export const tests = [
   {
     label: 'download result matches same file fetched from volume',
     async fn(shell, scratch) {
-      const resp = await shell.eval(
-        `download('${shell.serverUrl}/grits/v1/content/client/lib/grits/GritsClient.js')`
-      );
-      const downloaded = await resp.text();
+      // Create a scratch file and verify consistency across HTTP and volume
+      await shell.eval(`echo('hello world').to('${scratch}/file.txt')`);
 
-      const r = shell.resolvePath(':client/lib/grits/GritsClient.js');
-      const file = await shell._vol(r.serverUrl, r.volume).lookup(r.path);
-      const fromVol = await file.text();
+      // scratch looks like :sys/tmp/...; derive path for HTTP
+      const relPath = `${scratch}`.replace(/^:sys\//, '') + '/file.txt';
+      const url = `${shell.serverUrl}/grits/v1/content/sys/${relPath}`;
 
-      if (downloaded !== fromVol)
+      const downloadedResp = await shell.eval(`download('${url}')`);
+      const fetchedResp = await fetch(url);
+      const volumeResp = await shell.eval(`cat('${scratch}/file.txt')`);
+
+      const a = await downloadedResp.text();
+      const b = await fetchedResp.text();
+      const c = await volumeResp.text();
+
+      if (a !== b || a !== c)
         throw new Error('downloaded content does not match volume content');
     },
   },

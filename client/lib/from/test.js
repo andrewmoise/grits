@@ -5,7 +5,8 @@ export const tests = [
   {
     label: 'from with a path string returns a GritsFile',
     async fn(shell, scratch) {
-      const value = await shell.eval("from(':client/lib/echo/main.js')");
+      await shell.eval(`echo('export default 123').to('${scratch}/mod.js')`);
+      const value = await shell.eval(`from('${scratch}/mod.js')`);
       if (!(value instanceof GritsFile))
         throw new Error(`expected GritsFile, got ${value?.constructor?.name}`);
     },
@@ -13,7 +14,8 @@ export const tests = [
   {
     label: 'from with a cross-volume path returns a GritsFile',
     async fn(shell, scratch) {
-      const value = await shell.eval("from(':client/lib/echo/main.js')");
+      await shell.eval(`echo('export default 123').to('${scratch}/mod.js')`);
+      const value = await shell.eval(`from('${scratch}/mod.js')`);
       if (!(value instanceof GritsFile))
         throw new Error(`expected GritsFile, got ${value?.constructor?.name}`);
     },
@@ -21,11 +23,12 @@ export const tests = [
   {
     label: 'from preserves a GritsFile pass-through',
     async fn(shell, scratch) {
-      const file = await shell.eval("from(':client/lib/echo/main.js')");
+      await shell.eval(`echo('export default 123').to('${scratch}/mod.js')`);
+      const file = await shell.eval(`from('${scratch}/mod.js')`);
       if (!(file instanceof GritsFile))
         throw new Error('expected GritsFile');
       // Pass it back in — should come out the same CID.
-      const file2 = await shell._vol(shell.serverUrl, 'client').lookup('lib/echo/main.js');
+      const file2 = await shell.eval(`from('${scratch}/mod.js')`);
       if (!(file2 instanceof GritsFile))
         throw new Error('expected GritsFile from lookup');
       if (file2.cid() !== file.cid())
@@ -47,7 +50,8 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval("echo('hi').from(':client/lib/echo/main.js')");
+        await shell.eval(`echo('export default 1').to('${scratch}/mod.js')`);
+        await shell.eval(`echo('hi').from('${scratch}/mod.js')`);
       } catch (e) {
         if (e.message.includes('pipeline input')) threw = true;
         else throw e;
@@ -73,7 +77,9 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval("from(':client/lib/echo/main.js', ':client/lib/cat/main.js')");
+        await shell.eval(`echo('a').to('${scratch}/a.js')`);
+        await shell.eval(`echo('b').to('${scratch}/b.js')`);
+        await shell.eval(`from('${scratch}/a.js', '${scratch}/b.js')`);
       } catch (e) {
         if (e.message.includes('exactly one argument required')) threw = true;
         else throw e;

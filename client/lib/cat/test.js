@@ -3,7 +3,8 @@ export const tests = [
   {
     label: 'cat on a single path returns a Response',
     async fn(shell, scratch) {
-      const value = await shell.eval("cat(':client/lib/echo/main.js')");
+      await shell.eval(`echo('hello').to('${scratch}/file.txt')`);
+      const value = await shell.eval(`cat('${scratch}/file.txt')`);
       if (!(value instanceof Response))
         throw new Error(`expected Response, got ${value?.constructor?.name}`);
     },
@@ -11,9 +12,10 @@ export const tests = [
   {
     label: 'cat on a single path has readable content',
     async fn(shell, scratch) {
-      const value = await shell.eval("cat(':client/lib/echo/main.js')");
+      await shell.eval(`echo('hello world').to('${scratch}/file.txt')`);
+      const value = await shell.eval(`cat('${scratch}/file.txt')`);
       const text = await value.text();
-      if (!text.includes('invoke'))
+      if (text !== 'hello world')
         throw new Error('file content looks wrong');
     },
   },
