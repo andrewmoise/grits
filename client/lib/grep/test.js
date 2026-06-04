@@ -38,7 +38,8 @@ export const tests = [
   {
     label: 'grep on a path argument filters that file',
     async fn(shell, scratch) {
-      const text = await shell.eval("grep('invoke', ':client/lib/echo/main.js').toText()");
+      await shell.eval(`echo('hello\\ninvoke\\nworld').to('${scratch}/file.txt')`);
+      const text = await shell.eval(`grep('invoke', '${scratch}/file.txt').toText()`);
       if (!text.includes('invoke'))
         throw new Error('expected to find "invoke" in grep output');
     },
@@ -61,7 +62,8 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval("echo('foo').grep('foo', ':client/lib/echo/main.js')");
+        await shell.eval(`echo('foo').to('${scratch}/file.txt')`);
+        await shell.eval(`echo('foo').grep('foo', '${scratch}/file.txt')`);
       } catch (e) {
         if (e.message.includes('cannot combine')) threw = true;
         else throw e;
