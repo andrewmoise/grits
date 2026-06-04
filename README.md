@@ -1,180 +1,262 @@
-# grits - Decentralized CDN for powerful community-driven web hosting
+# Grits - A web-native operating system
 
-Grits is load-sharing software, designed to allow a community-supported web site to operate based on direct contribution of hosting resources by the members of the site. A site using grits proxies should be able to shift the cost of operating the site towards the members of the community by having them run pretty simple software, while still operating in a fast and secure manner.
+It's two pieces:
 
-The motivation is that for at least 20 years, people have been talking about switching to a more peer-to-peer vision of the internet, but there are significant centralized hosting issues that still haven't gone away. Bittorrent is great, ActivityPub is great, but popular sites still run on expensive centrally-served hosting. People still invest in S3 to run their Mastodon nodes. My vision would be that it becomes realistic to run a busy Mastodon node or Peertube instance, and have a substantial amount of the hosting being done by the users.
+* **Grits** is a backend project which provides a read-writable space with useful primitives for sharing and replicating content.
+* **Gimbal** is a frontend project which provides a Unix-like shell — a little "web operating system" — with some nice abilities, native in the browser, which are normally available only on the backend (thus separated from the browser side of the operation.)
 
-How it works is that the site's client-side code includes the ability to fetch static content from a swarm of user-operated proxies which provide a content-addressable store, verify that the hash of any blocks that come back, and provide it to the browser as if it had come from the central server. Thus the central server has a lot less load. And thus, whoever operates the central instance has lower hosting bills, their organization has less pressure to create a profit or solicit donations, and the internet gets better.
+These pieces operate in tandem to provide an experience different from a conventional "backend / frontend" structure. This structure enables you to do many things which are useful.
 
-This first cut, being able to operate as a sort of community CDN, is actually a precursor to what I'd *actually* like to do, which is to enable a type of web app where most of the app is defined almost all on the client side, and the server is primarily just responsible for CRUD semantics and revision history and permissions on the shared store. I think that'll carry a ton of benefit in terms of security, potentially performance, and user-configurability / empowerment. But, I think it's important to start with one piece that's clearly useful now and see how it works and how difficult it is to get it into real production.
+As an end-user of the web site, you can:
 
-And, even the initial cut has some significant advantages in addition to lowered load. For one example, because the whole thing is handed to the client as a [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree), you can get perfect cache coherency for free -- on every page load, it gets from the central server the new root hash, so that if a big directory hasn't changed at all, the client won't need to spend an RTT seeing if it's up to date, but if it *has* changed you'll be guaranteed to fetch the new files instead of having to shift-reload or anything like that.
+* Directly examine the data and code underlying the web site
+* Persistently edit the UI of the web site you're using, for you, without impacting other people's experience
+* Interact and script interactions with the site in ways not programmed in by the authors/operators
 
-## Current Status
+As an admin, you can:
 
-It's still very much in progress. It doesn't work yet, just under construction.
+* Quickly test, deploy or roll back versions of the site without it being clunky
+* Do first-class maintenance and development things from your browser
+* Replicate content to mirrors, and have them seamlessly assist with the load on the main site
 
-General guide:
+It's still a work in progress. It's a hobby project. It works on my machine.
 
-* Basics of persistent file storage and basic web serving - Done, but at a first cut level.
-* FUSE - Unreliable. It will work for basic stuff, but it's not safe enough to trust your persistent storage to.
-* Node-to-node communication - In progress
-* Client and service worker pieces - In progress
+In particular, don't put this live on the internet. There's no permissions control, so either no one can write (which isn't fun) or everyone can. It may eat your data; there are known data-corruption bugs I haven't sorted out yet. Don't use this in production.
+
+## Motivation
+
+The motivation for all this is this: The internet is based on a peer-to-peer and open software type of vision, but at least as far as the modern web, it's still very much stuck in a mainframe-style "priests and outsiders" organizational structure. (It is in fact, for business reasons, going backwards -- fewer and fewer priests maintaining ever more opaque temples for more and more hapless supplicants.) As an end-user of a web site, you're incapable of interacting with it in common ways that are natural if you are an open-source type of person, even in the case when the software is (from an administrator's POV) open source.
+
+And then, on the admin side and compounding those issues, there are significant centralized hosting issues that still haven't gone away. Bittorrent is great, ActivityPub is great, but popular sites still run on expensive centrally-served hosting. People still invest in S3 to run their Mastodon nodes. My vision would be that it becomes realistic to run a busy Mastodon node or Peertube instance, and have a substantial amount of the hosting being done by the users.
+
+The idea for this project is to provide an option which is more akin to minicomputers instead of mainframes, or of open source instead of Windows.
+
+## Examples
+
+Here's what it looks like:
+
+(screenshot - normal environment)
+
+You can see a terminal, a files browser, and an editor. Should be pretty straightforward.
+
+Terminal commands are interpreted more or less as Javascript syntax. You can do javascript things:
+
+(screenshot - evaluating 1+2, defining and calling a function)
+
+But, you can also run Unix-like commands, including chaining them together:
+
+(screenshot - cd(), cat(), echo().to(), upload().to(), unzip(), cd(), ls())
+
+These commands are chained together via Response bytestreams, with function chaining analogous to `|` in Unix. `.to()` is analogous to `>`, `from().` is almost analogous to `<`.
+
+The system is backed on a Merkle tree filesystem, which naturally makes it possible to efficiently work remotely while maintaining strong cache-coherency guarantees. It also means it's easy to make copy-on-write copies of big things for your own editing:
+
+(screenshot - cd(':client/lib', ':home/moise/lib'))
+
+(screenshot - opening a new tab in the new shell)
+
+(screenshot - editing the shell within the shell)
+
+(screenshot - showing the changed shell after a reload)
+
+And so on.
 
 ## Quickstart
 
-If you want to see it working, this is how you can set up a little test node with some test mirrors attached to it, put content in it, install the service worker, and see it all in action. It doesn't do too much beyond that yet.
-
-### Prerequisites
-
-First, install Go. At present, at least version 1.22.12 is needed.
-
-Then, do this or whatever the equivalent is on your system:
-
-```
-sudo apt install fuse3 certbot
-```
-
 ### Build
 
-Get the source. `cd` to the directory you checked out.
+It only works on Linux right now, as far as I'm aware.
 
-Check that everything is okay first.
+To play around with it, do this:
 
-```
-go test ./...
-go build -o bin/gritsd cmd/gritsd/main.go
-```
+* Install golang >= 1.22.12
+* `sudo apt install fuse3 certbot` or equivalent
+* From the source directory:
+    * `go test ./...`
+    * `go build -o bin/certbot-helper cmd/certbot-helper/main.go`
+    * `go build -o bin/gritsd cmd/gritsd/main.go`
 
 ### Configure
 
 ```
-cp sample.cfg grits.cfg
-nano grits.cfg # Or whatever editor
+cp sample-config.json config.json
+hx config.json # Or whatever editor
 ```
 
-You will need to make significant changes to the config, please edit it and fill in values where requested (and delete the explanation about certbot, whether or not you are planning to run it separately).
+You will need to make significant changes to the config. To play with it significantly, you must disable read-only-ness on the HTTP module, but since there are no permissions this will make your data world-writable. Use your own judgement, probably don't leave the service running in production.
 
-### Port setup
-
-The default config is designed to run as non-root, on port 8443. You will probably want to arrange either forwarding via nginx, or if you're not running nginx, you can arrange for forwarding via a helper script:
-
-```
-sudo bin/port-helper add -s 443 -d 8443
-sudo bin/port-helper add -s 80 -d 8080
-```
-
-If you're doing TLS, then you'll need both, since you will need port 8080 to be forwarded for certbot. You can also simply run certbot by hand. See the sample config file for more information.
+The system will automatically grab HTTPS certificates for you. It needs your email to do that because certbot requires it.
 
 ### Run
 
 ```
-bin/gritsd
+sudo bin/gritsd
 ```
+
+(Note, it'll drop privileges to whatever user you configured for it, as soon as it's opened the ports it needs. If you want to try it as non-root, just configure it on a port above 1024 and set up a manual certbot invocation for its certificates.)
 
 ### Test
 
-At that point, ./content will be a FUSE mount of the content store. You can test it out by putting some stuff in ./content/public, and whatever you put there should be immediately reflected in the web server. 
+From the project directory in a separate shell:
 
 ```
-cd grits/content
-mkdir public
-cd public
-echo hello > index.html
-curl https://(your hostname)/index.html
+mkdir volumes/sites/{your server name}
 ```
 
-You can also check out a little client self test, at:
+(Note: That's modifying the content within the Grits volumes, which in the default config are FUSE-mounted in `volumes/`. You need to make the volumes read-writable for this to work... it is somewhat sensible to set the HTTP endpoints to read-only, and still have the volumes read-writable. But, the main fun of the project at this point is remotely editing files content, so that way would be only if you want to put static content into `volumes/` from the backend and not be able to edit it from the frontend.)
+
+Anyway, once that `sites/` directory is created, the server will be willing to grab a certificate and start serving content for that host. There's no "site content" yet, but you can access the API endpoints directly. In a browser, open:
+
+https://{your server}/grits/v1/content/client/lib/gimbal/
+
+... and it'll show you a little administration interface with a Unix-like shell. Run:
 
 ```
-https://(your hostname)/grits/v1/content/client/client-test.html
+test()
 ```
 
-When you're done, hit Ctrl-C, the server should shut down cleanly. If it hangs because it can't unmount the FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
+That'll run you through a little self test.
 
-## More in-depth setup
-
-So: This is still a work in progress. It's just in development. If you're psyched enough about the whole thing to want to play around with it more, here's how, but be warned that it's still in heavy development and pretty far from the easy deployment stage of things.
-
-### Service worker
-
-Okay, so with the simple setup, you should have a working web server. If you want to have more of (any of) the actual benefits of using a server that uses this approach, the first thing to enable is the service worker. The necessary stuff is already turned on from the server side, but you'll need to enable the right stuff in the browser in order for it to actually do something productive.
-
-Note that I have only tried the service worker on Chrome, and I would expect it to need a little work before it's assured of working in other browsers. Buyer beware.
-
-Anyway. Navigate to:
+You can also try populating some "frontend" content.
 
 ```
-https://(your hostname)/grits/v1/content/client/client-test.html
+mkdir(':sites/{your server}/content')
+echo('Hello!').to(':sites/{your server}/content/index.html')
 ```
 
-Click the appropriate button to request loading the service worker. You can also do this, from within whatever client-side stuff you're doing:
+Then open https://{your server}/
+
+Assuming that works, you can start populating content if you like. `upload().to(filename)` and `unzip(filename)` may be useful. Bear in mind that it is trivial to maintain multiple copy-on-write versions of the site content:
 
 ```
-<script src="/grits-bootstrap.js" async></script>
+cd(':sites/{your server}')
+mkdir('dev/v1',{p:1})
+echo('version 1').to('dev/v1/index.html')
+ln('dev/v1','content',{ff:1})
 ```
 
-Now, you should start getting in the javascript console, in addition to some log spam, stuff like:
+(That "ff" option requests to forcibly overwrite whatever's in `content` with a copy of `dev/v1`, without the normal Unix semantics of creating a new file within `content/` if `content/` already exists.)
+
+And then, if you want to work on a v2 of the site:
 
 ```
-[GRITS STATS] Last 10s: Requests: 3 | Content lookups: 1 (avg 139.30ms) | Blob cache hits: 2 (avg 1.90ms) | Blob cache misses: 0 | Prefetch successes: 5
-GritsClient-sw.js:608 [CONTENT URLS] Direct fetches from /grits/v1/content:
-GritsClient-sw.js:615   public/docs/5.3/content/typography: 139.30ms
+ln('dev/v1','dev/v2',{ff:1})
 ```
 
-Something like that. What that means, is that we're not going back to the server to check if any of the assets for `typography` have changed in the interim, but we're still assured that they're up to date, because of verification through our own offline Merkle tree. Neat! We have minimal latency (generally speaking no RTTs) in the fresh case, and guaranteed refetches in the stale case.
+And then, make edits to `dev/v2`, and then you can observe them at `https://{your server}/grits/v1/content/sites/{your server}/dev/v2/`, and then if you like them you can use another `ln` command to deploy them to `content/` which will place them on the "live site."
 
-If you want to set up some nice content to browse through to watch this happening, what I've been testing on is the bootstrap docs:
+Hopefully this all gives the flavor of the intended interaction. When you're done, hit Ctrl-C, the server should shut down cleanly. If it hangs because it can't unmount the FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
 
-```
-cd
-git clone https://github.com/twbs/bootstrap.git
-cd bootstrap
-npm install
-npm run docs-build
-cp -r site/dist/* ~/grits/content/public/
-```
+And yes it's on the roadmap to make it runnable via systemctl, and file permissions so that not everyone can see `:sites/{your server}/dev`. Both of them would be good to add certainly.
 
-### Testbed mirror network
+## How It Works
 
-Of course, the benefit of doing something like this above something like nginx is still pretty minimal. Cache coherency is nice but the real point is the mirror network. You can start to fool around with that too, if you want to. That's where the advantage of doing something in this fashion starts to really become more significant.
+### Filesystem - Grits
 
-To set the thing up is actually pretty complex, with a bunch of different modules and config elements involved. For now, what's recommended is to do a testbed network.
+The "filesystem" here is specifically constructed with operating principles that are useful to Gimbal-style apps, as well as general file replication operations that are useful for any static content. It is implemented as a Merkle tree, which provides several advantages:
 
-First, add an NS record indicating that anything under `cache.(your hostname)` is going to be served by the nameserver at your host's IP address. (To make everything easy for the browser, we are authenticating and locating mirrors via TLS and DNS, no different than any other web site it might talk with, so we need to serve DNS for the mirrors.)
+* We can easily tell what does and doesn't need to be updated in our local view of remote content, simply from doing a single fetch of the root CID.
+* We can verify content that comes from a semi-untrusted source, which allows us to deploy mirrors while limiting the level to which we need to trust them.
+* We can easily incorporate useful features like file history, copy-on-write semantics, and atomic operations, by leveraging the CID as a descriptor of all content below it.
 
-Next, create a port redirect so our local little DNS server can run.
+#### Structure
+
+The blob identifiers used are hash values of the content, in the exact same format and compatible with IPFS CIDs. Each file is represented by a metadata node (corresponding to a Unix inode), and they are generally referred to by the CID of the metadata node data in JSON format. For example:
 
 ```
-sudo bin/port-helper add -s 53 -d 5353
+QmcdHV2KQTu59Mq5Aw5jDJXN2CZGKoW68G8pc7jJPvbQ1C
 ```
 
-Next, run the testbed.
+Might refer to:
 
 ```
-go run cmd/testbed/main.go
+{"type":"dir","size":61,"contentHash":"QmbjmTt4aJL6p6dZRZMhNomNo3nBaDdoQCGRnk9DrFBMJw","mode":493,"timestamp":"2026-04-16T19:29:57Z"}
 ```
 
-It'll take a while as it first gets started. It needs to fool with certbot, it runs some self tests to make sure things are working. It's setting up 5 mirror nodes on your machine, with a central origin server. Wait for the log spam to calm down, a few minutes, and it should be good to go.
-
-Now, as you navigate around, you should see something like this in your browser console:
+"type" may be "dir" or "blob"; the content for a blob is just the contents of the file, and the content for a directory is a map of the filenames to their own metadata hashes. In this case, the directory has only one file; reading QmbjmTt4aJL6p6dZRZMhNomNo3nBaDdoQCGRnk9DrFBMJw will yield:
 
 ```
-[MIRROR STATS] (5 mirrors)
-GritsClient-sw.js:634   mirror-0.cache.(your hostname): Latency 431.87 ms | Bandwidth 0.00 KB/s | Reliability 100.00% | Data 335 Bytes
-Navigated to https://(your hostname)/docs/5.3/content/typography
-GritsClient-sw.js:596 [GRITS STATS] Last 10s: Requests: 10 | Content lookups: 1 (avg 121.20ms) | Blob cache hits: 9 (avg 5.07ms) | Blob cache misses: 0 | Prefetch successes: 5
-GritsClient-sw.js:608 [CONTENT URLS] Direct fetches from /grits/v1/content:
-GritsClient-sw.js:615   public/docs/5.3/content/typography: 121.10ms
+{"dest.txt":"QmWxZmx2Ej4BfUCEBSChn8p2NiLy1DGSg3zqB3othfktVL"}
 ```
 
-It works! What that means is that we have mirrors working, and we've been fetching content partially from the origin server, and partially from the mirror network. A lot of performance and polish work on this is not done, but the fundamentals are there in some form.
+And QmWxZmx2Ej4BfUCEBSChn8p2NiLy1DGSg3zqB3othfktVL will contain the metadata node for the file in question:
 
-In other words, it works on my machine.
+```
+{"type":"blob","size":5,"contentHash":"QmRN6wdp1S2A5EtjW9A3M1vKSBuQQGcgvuhoMUoEz4iiT5","mode":420,"timestamp":"2026-04-16T19:29:56Z"}
+```
 
-### Real mirror network
+#### Operations
 
-TODO
+There are four main operations available on a Grits filesystem.
+
+**get(cid)** will return the bytestream for a given CID.
+
+**put(cid, bytes)** will insert data for a new CID into the blob store, if it is not already present.
+
+**lookup(path)** resolves a path within the namespace.
+
+**link(path, cid)** defines a path to point to a particular metadata CID, overwriting any previous value. Linking to
+`nil` or `""` will delete the given path, removing it from its parent's directory listing.
+
+`lookup` and `link` will do a good bit of looking within the blob store to execute; you could do that remotely also (by fetching blobs to walk down the tree manually), but this would introduce significant latency. Lookups, in general, will return the LookupResponse structure from `namestore.go`, meaning that you can skip the intermediate indirection and do one lookup and then immediately load the content blob for the file without further investigation.
+
+#### Atomicity
+
+Both lookup() and link() take any number of paths in their argument, and link() allows you to make assertions about the current state of the filesystem (for example asserting that a path you are writing is `nil` previous to the write, if you want to guard against overwriting a previous entry). This combination allows for atomic operations. In particular, you can serialize big operations on the file store via an OCC approach: First gather the existing state of what you want to modify, then execute a write which asserts that everything you're modifying has the value you previously observed. Then, on an assertion failure, try again until the assertion succeeds which means the write executes.
+
+#### Notifications
+
+Another thing which falls out of this naturally is watches for modification -- simply keep an eye on the CID of any file or directory node, and if it changes, it's been modified.
+
+#### Roadmap
+
+There are some pretty essential improvements which are planned for the near future:
+
+* File permissions and authentication / user management
+* Backups and file history
+* Fixes to naming conventions, versioning of file formats, new version of file formats
+
+### Shell - Gimbal
+
+The shell that the system presents is basically just a Javascript console with a couple extra features.
+
+You can type javascript commands:
+
+```
+$ 1+1
+2
+```
+
+You can also type some Gimbal-specific shell commands:
+
+```
+$ cd(':sites/{your server}')
+$ upload().to('test.zip')
+$ unzip('test.zip')
+$ ls()
+["bootstrap-5.3.8-dist","test.zip"]
+$ cd('bootstrap-5.3.8-dist')
+$ ls()
+["css","js"]
+```
+
+#### Paths
+
+Volumes are accessible via `:{volume name}/{path}`. That's a bad syntax; I plan to change it to `//{volume}/path` or `//{server}:{volume}/path` at some point soon.
+
+`..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way. There are no symbolic links.
+
+You can use `glob({pattern})` to get a list of files matching that pattern.
+
+#### Chaining
+
+The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which goes via the same proxy which found the commands in the first place. Commands are implemented in `client/lib/{command name}/main.js`. See the comments at the top of `client/lib/gimbal/gsh.js` for more about the details of how it all works.
+
+### Web Hosting
+
+From the Gimbal shell, you can move stuff from there into `:sites/{your server}/content` and it'll show up on the `https://{your server}/` web site. You can also make arbitrary new directories under `:sites`, and stuff in their `content/` directories will get served as normal (assuming that you arrange for DNS for whatever host to point to your server).
+
+(You can, if you like, set up a DNS wildcard so that `*.{your server}.com` all points to the server where Grits is running. In that case, anything that gets placed in `:sites/{whatever}.{your server}.com/content` will become a live site automatically.)
 
 ## Code layout
 
@@ -191,85 +273,29 @@ TODO
 
 * `module_http.go` for providing HTTP service
 * `module_mount.go` for FUSE mounting
-* `module_localvolume.go` for a local writable storage volume
+* `module_volume.go` for a local writable storage volume
 
-### `grits.cfg`
+### `config.json`
 
-This is the core config file. Most of it involves configuring particular modules. If you look at the sample config, you'll be able to see the setup of some of the main modules to make a simple instance of the server work:
+This is the core config file. Most of it involves configuring particular modules. There are a decent number, in a variety of states of working-ness, but you can see a quick sample in the sample config. Some among them that may be useful and somewhat-work right now are:
 
-* `localvolume` is the module creating a local writable volume of storage
+* `volume` provides a local writable volume of storage
 * `mount` creates a FUSE mount of a particular volume to a local directory
-* `http` creates an HTTP endpoint providing access to the API, and optionally serving some files directly
-* `deployment` requests that a particular directory from a particular volume get served in some particular URL space. This is analagous to `location` in nginx. This affects both the `http` module (by mapping the volume-storage space to URL path space), and also the `serviceworker` module (requesting that the service worker do the same on the client side, avoiding RTTs and potentially utilizing other mirrors)
-* `serviceworker` sets up necessary server-side stuff to support the service worker
+* `http` creates an HTTP endpoint providing access to the API
+* `serviceworker` sets up a service worker which will run all web accesses through a client-side Grits cache automatically, so these benefits apply to any content
 
-Other modules of note:
-
-* `mirror` - Serve content on behalf of someone else's grits server
-* `origin` - Host a network of mirrors
-
-* `peer` - Connect to a network of grits servers to share content
-* `tracker` - Host a network of peers
-
-Mirror/origin and peer/tracker are obviously closely related, but for now the base peer-to-peer communication modules are separated from the file mirroring modules.
-
-* `pin` - Configure a "pin" on a particular part of the file space, keep its files always in local storage. This is mostly unused yet, it will become a lot more relevant once remote volumes and sparsely stored namespaces come into play.
+Check out the source in `internal/gritsd/module_{whatever}.go` to see the configuration for each.
 
 ### Other useful directories
 
 * `client/` defines vital client-side content. It gets populated into a special read-only volume on startup, so that clients can always access stuff within it.
-* `var/` is where all writable data for the server is kept. I think it would be fine (and recommended) to have the entire `grits/` directory outside of `var/` owned by some different user and read-only from the point of view of the server process.
-* `testbed/` is where scratch data for all the testbed's mirror servers is kept. This should be safe to blow away if you want to, although that will cause a repeat of the entire slow startup process including requesting all new certs for the testbed mirrors.
+* `var/` is where all writable data for the server is kept. It should be fine (and is recommended) to have the entire `grits/` directory outside of `var/` owned by some different user, and read-only from the POV of the server process.
 
-## Roadmap
+## In Conclusion
 
-The big roadmap, more or less, is:
+See? It's neat. I made a Discord for it, come join the fun, let me know what you think.
 
-* First cut of various core pieces and rough testing (done)
-* [Merkle tree](https://en.wikipedia.org/wiki/Merkle_tree) basic storage fundamentals (done)
-* FUSE mounting (semi-done)
-* Service worker (WIP)
-* Remote mounting (todo)
-* DHT and node-to-node communication (todo)
-* Real production server tooling / testing / configurability / polish (todo)
-* Performance (todo)
-* Production polish and what's needed for real server operation (todo)
-
-There's a more detailed task list, mostly just an internal punch list, in TODO.md.
-
-## Obvious questions
-
-### Isn't this IPFS?
-
-Yeah, kind of. I'd like to reuse parts of IPFS, and delvers into the code may have noticed that I'm reusing CID v0 as the format for the content blob addresses. IPFS is *so* heavyweight, though, and its latency seems to be high enough that it is a non-starter for use for individual web assets at the level of a single small file. I've wound up reimplementing a lot of stuff instead of trying to use IPFS's stuff. We're just operating in a different domain.
-
-Specifically, we are *not* attempting massive scale or full peer-to-peer operation, but we *are* attempting to have high performance and lightweight process footprints, so that it's feasible to run the thing in a service worker or on a not-powerful server.
-
-### Won't this be subject to malicious nodes?
-
-Yes. We're only requesting data with a specified known hash, and verifying the hash, so it shouldn't be possible to provide poisoned data real easily, but yes you could mess up the system in other ways. I'm not envisioning everyone in the world being able to run a node in any system; it would be a semi-trusted role which if they're clearly messing up the system then you would boot them out of.
-
-In particular, the current service worker will return an internal server error to the user if some mirror is serving up content that doesn't match the hash it is supposed to have. The intent is that this gets noticed and then handled as an administrative problem, as opposed to a technical problem with malicious nodes being an "expected" happening that the code is coping with.
-
-### Is this secure? Should I turn this on and leave the endpoint up on my production server?
-
-Oh mercy, no. At some point I will do some basic level of security audit to the endpoints but that has not been done. There are surely exploits and ways you can use the endpoints to do malicious things. Internal testing only.
-
-### What about performance? Dropped nodes? NAT?
-
-So, all of these are solved problems within IPFS -- my plan is to try to be lightweight with implementation where possible, but there's always the option (particularly with NAT and maintenance of the swarm) to just back up and punt to using IPFS, and focus on the stuff that's genuinely new design ideas. At this point, I've more or less settled on reimplementing most of it, but there's always the option of doing (for example) the blob storage from one of the boxo modules and saving ourselves some getting-it-production-ready pain.
-
-### What about privacy?
-
-Well, you're exposing your IP address to the world if you decide to participate in the swarm. That's potentially an issue. We'll have to be a little careful about who we expose the proxy network to, and to make sure that people are anonymous if they do participate in the proxy network, but even so it'll be something to be careful with.
-
-### How do we incentivize people to contribute resources, and prevent free riders?
-
-So since we're in a relatively small "all friends here" network, we can afford to just have all the nodes blast out data to whoever requests it, and if someone's being obnoxious to the point that it creates an issue then it's dealt with administratively instead of technologically.
-
-## Contributing
-
-If you're interested in trying out running a node once it gets to that point, you can star the repo and I'll send an update, or just send me a note here. In the meantime feel free to check out the code (although, again, it's still super rough) and let me know what you think of the concept or the implementation.
+(discord link)
 
 ## Enjoy!
 
