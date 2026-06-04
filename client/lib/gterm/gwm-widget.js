@@ -548,7 +548,16 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     runNext();
   });
 
-  textarea.focus();
+  // Defer initial focus until the widget is mounted and layout is stable
+  let didInitialFocus = false;
+  const focusOnce = () => {
+    if (didInitialFocus) return;
+    didInitialFocus = true;
+    textarea.focus();
+  };
+  requestAnimationFrame(() => {
+    requestAnimationFrame(focusOnce);
+  });
 
   return {
     el,
