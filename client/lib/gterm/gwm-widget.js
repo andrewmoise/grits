@@ -20,7 +20,7 @@ import { FONT_MONO, injectStyles } from '../style/style.js';
 // ── cwd display label ─────────────────────────────────────
 function cwdLabel(shell) {
   const cwd = shell.cwd ?? '/';
-  if (cwd === '/' || cwd === '') return `:${shell.volume ?? 'client'}`;
+  if (cwd === '/' || cwd === '') return `//${shell.volume ?? 'client'}`;
   const parts = cwd.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1];
 }

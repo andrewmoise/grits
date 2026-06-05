@@ -39,12 +39,12 @@
 //   The browser's native import() handles caching and relative imports inside
 //   tool modules automatically.
 //
-// Path syntax (scp-style):
-//   'lib/grits'                     — relative path, current server+volume
-//   '/lib/grits'                    — absolute path, current server+volume
-//   ':client/lib'                   — different volume, same server
-//   ':client'                       — different volume root, same server
-//   'test.melanic.org:client/lib'   — different server+volume
+// Path syntax:
+//   'lib/grits'                       — relative path, current server+volume
+//   '/lib/grits'                      — absolute path, current server+volume
+//   '//client/lib'                    — different volume, same server
+//   '//client'                        — root of different volume, same server
+//   '//test.melanic.org:client/lib'   — different server+volume
 //
 // Eval model:
 //   shell.eval(src) evals src via new Function() (async, sloppy mode) with
@@ -60,8 +60,16 @@ import stringify from '../vendor/json-stringify-pretty-compact/index.js';
 // Void sentinel — returned by commands with no meaningful output
 // ─────────────────────────────────────────────────────────────────
 
+// Ensure a singleton VOID across multiple module instances (different URLs)
+// const __g = (typeof globalThis !== 'undefined') ? globalThis : window;
+// export const VOID = __g.__gimbalVoid ??= Object.freeze({ _gimbalVoid: true, toString: () => '(void)' });
+// export function isVoid(v) {
+//   return v === null || v === undefined || v === VOID || (v && v._gimbalVoid === true);
+// }
+
 export const VOID = Object.freeze({ _gimbalVoid: true, toString: () => '(void)' });
 export function isVoid(v) { return v === null || v === undefined || v === VOID; } // FIXME
+
 
 // ─────────────────────────────────────────────────────────────────
 // Internal helpers
@@ -270,15 +278,32 @@ export class GimbalShell {
       };
     }
 
-    // scp-style cross-volume: [server]:volume[/path]
-    if (p.includes(':')) {
-      const colonIdx  = p.indexOf(':');
-      const serverUrl = p.slice(0, colonIdx) || this.serverUrl;
-      const rest      = p.slice(colonIdx + 1);
-      const slashIdx  = rest.indexOf('/');
-      const volume    = slashIdx === -1 ? rest            : rest.slice(0, slashIdx);
-      const path      = slashIdx === -1 ? ''              : rest.slice(slashIdx + 1);
-      return { serverUrl, volume, path: normalize(path.replace(/\/+$/, '')), trailingSlash };
+    // //volume/... or //hostname:volume/...
+    if (p.startsWith('//')) {
+      const rest = p.slice(2);
+
+      const firstSlash = rest.indexOf('/');
+      const head = firstSlash === -1 ? rest : rest.slice(0, firstSlash);
+      const tail = firstSlash === -1 ? ''   : rest.slice(firstSlash + 1);
+
+      let serverUrl = this.serverUrl;
+      let volume;
+
+      if (head.includes(':')) {
+        const [server, vol] = head.split(':');
+        if (!server || !vol) throw new Error(`invalid path: ${p}`);
+        serverUrl = server;
+        volume    = vol;
+      } else {
+        volume = head;
+      }
+
+      return {
+        serverUrl,
+        volume,
+        path: normalize(tail.replace(/\/+$/, '')),
+        trailingSlash,
+      };
     }
 
     // Absolute path in current volume.
