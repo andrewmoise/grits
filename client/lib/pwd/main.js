@@ -20,6 +20,6 @@ export async function invoke(shell, previous, args, cmd = 'pwd') {
 
   // FIXME - serverUrl
   const cwd = (shell.cwd == '/' ? '' : shell.cwd);
-  const result = `:${shell._currentVol()._volume}/${cwd}`;
+  const result = `//${shell._currentVol()._volume}/${cwd}`;
   return responseFromText(result);
 }

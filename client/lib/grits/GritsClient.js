@@ -559,7 +559,7 @@ class GritsVolume {
     const normalized = path.replace(/^\/+/, '');
     const info = await this._lookup_internal(normalized);
     // Standardize path format to :volume/path (shell convention)
-    const displayPath = `:${this._volume}/${normalized}`;
+    const displayPath = `//${this._volume}/${normalized}`;
     if (!info) throw new Error(`lookup: ${displayPath}: not found`);
     const meta = await this._fetchMeta(info.metadataHash);
     return new GritsFile(info.metadataHash, meta, this, normalized);

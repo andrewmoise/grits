@@ -5,11 +5,12 @@ cd — change current directory
 
 Usage:
   cd('path')              relative or absolute path
-  cd(':volume/path')      different volume, same server
-  cd('host:vol/path')     different server and volume`;
+  cd('//volume/path')     different volume, same server
+  cd('//host:vol/path')   different server and volume`;
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
+  console.log('cd previous:', prev);
   if (!isVoid(prev))
     throw new Error('cd: does not accept pipeline input');
 

@@ -49,10 +49,10 @@ export async function glob(shell, pattern) {
   // ── 1. Parse prefix → serverUrl, volume, pathStr ───────────
   //
   // Three forms:
-  //   ':volume[/path]'         — explicit volume, current server
-  //   '[server]:volume[/path]' — explicit server + volume
-  //   '/path'                  — absolute, current volume
-  //   'path'                   — relative to cwd
+  //   '//volume[/path]'          — explicit volume, current server
+  //   '//server:volume[/path]' — explicit server + volume
+  //   '/path'                    — absolute, current volume
+  //   'path'                     — relative to cwd
 
   let serverUrl;
   let volume;
@@ -64,14 +64,18 @@ export async function glob(shell, pattern) {
   volume    = resolved.volume;
   pathStr   = resolved.path;
 
-  // Preserve previous prefix semantics based on original pattern
-  if (pattern.includes(':')) {
-    const colonIdx  = pattern.indexOf(':');
-    const maybeHost = pattern.slice(0, colonIdx);
-    const rest     = pattern.slice(colonIdx + 1);
-    const slashIdx = rest.indexOf('/');
-    const vol      = slashIdx === -1 ? rest : rest.slice(0, slashIdx);
-    resultPrefix   = `${maybeHost ? maybeHost + ':' : ':'}${vol}/`;
+  // Validate: no wildcards in server or volume
+  if (/[*?]/.test(resolved.serverUrl) || /[*?]/.test(resolved.volume)) {
+    throw new Error('wildcards not allowed in server or volume');
+  }
+
+  // Reconstruct prefix from resolved path
+  if (pattern.startsWith('//')) {
+    if (resolved.serverUrl !== shell.serverUrl) {
+      resultPrefix = `//${resolved.serverUrl}:${resolved.volume}/`;
+    } else {
+      resultPrefix = `//${resolved.volume}/`;
+    }
   } else if (pattern.startsWith('/')) {
     resultPrefix = '/';
   } else {

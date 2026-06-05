@@ -18,8 +18,8 @@ export const tests = [
       // Create a scratch file and verify consistency across HTTP and volume
       await shell.eval(`echo('hello world').to('${scratch}/file.txt')`);
 
-      // scratch looks like :sys/tmp/...; derive path for HTTP
-      const relPath = `${scratch}`.replace(/^:sys\//, '') + '/file.txt';
+      // scratch looks like //sys/tmp/...; derive path for HTTP
+      const relPath = `${scratch}`.replace(/^\/\/sys\//, '') + '/file.txt';
       const url = `${shell.serverUrl}/grits/v1/content/sys/${relPath}`;
 
       const downloadedResp = await shell.eval(`download('${url}')`);

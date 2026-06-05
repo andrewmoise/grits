@@ -4,7 +4,7 @@ from — bring a single resource into the pipeline, preserving its type
 
 Usage:
   from('path/to/file')     → GritsFile
-  from(':volume/path')     → GritsFile
+  from('//volume/path')    → GritsFile
   from(gritsFile)          → GritsFile (pass-through)
   from(response)           → Response (pass-through)
 
