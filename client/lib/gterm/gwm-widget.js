@@ -173,14 +173,7 @@ function ensureStyles() {
 }
 
 export default function createWidget({ name, evalContext = {}, runOnInit = null }) {
-  const shell = makeShell({
-    fs:        evalContext.fs,
-    serverUrl: window.location.origin,
-    volume:    'client',
-    cwd:       '/',
-    libs:      [{ serverUrl: window.location.origin, volume: 'client', path: 'lib' }],
-    evalContext,
-  });
+  const shell = evalContext.shell;
 
   // ── root element ──────────────────────────────────────
   const el = document.createElement('div');
