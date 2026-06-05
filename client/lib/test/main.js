@@ -24,9 +24,22 @@ export async function invoke(shell, previous, args) {
 
   (async () => {
     try {
-      const clientVol = shell.fs.volume(shell.serverUrl, 'client');
+      // Derive location from this module instead of hardcoding //client/lib
+      const here = shell.fs.fromModule(import.meta.url);
+      const vol  = shell.fs.volume(here.serverUrl, here.volume);
 
-      const libDir = await clientVol.lookup('lib');
+      const parts = here.path.split('/');
+      // Expect .../test/main.js
+      if (parts.length < 3 || parts[parts.length - 2] !== 'test') {
+        push('testing: must be located in a test/ directory');
+        controller.close();
+        return;
+      }
+
+      // Strip "test/main.js" → parent directory (e.g. lib/)
+      const basePath = parts.slice(0, -2).join('/');
+
+      const libDir = await vol.lookup(basePath);
       if (!libDir.isDir()) { push('testing: cannot find lib directory'); controller.close(); return; }
 
       const children = await libDir.children();

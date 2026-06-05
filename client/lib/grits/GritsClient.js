@@ -1334,6 +1334,27 @@ class GritsClient {
     return this._volumes.get(key);
   }
 
+  // Derive { serverUrl, volume, path } from a module URL
+  fromModule(moduleUrl) {
+    if (typeof moduleUrl !== 'string') throw new TypeError('fromModule: moduleUrl must be a string');
+    const u = new URL(moduleUrl);
+    const parts = u.pathname.split('/').filter(Boolean);
+
+    // Expect: grits/v1/content/{volume}/{path...}
+    if (parts.length < 4 || parts[0] !== 'grits' || parts[2] !== 'content') {
+      throw new Error(`fromModule: unsupported URL format: ${moduleUrl}`);
+    }
+
+    const volume = parts[3];
+    const path   = parts.slice(4).join('/');
+
+    return {
+      serverUrl: u.origin,
+      volume,
+      path,
+    };
+  }
+
   // ── cacheGet ─────────────────────────────────────────────────
   // Read from local or browser cache only. Returns null if not found.
 

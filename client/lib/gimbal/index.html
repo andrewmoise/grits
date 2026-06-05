@@ -253,13 +253,26 @@ import { injectTheme, EASE_SINE, EASE_IN, DUR } from '../style/style.js';
 
 injectTheme();
 
-// Use fixed volume; module loading is purely relative
-const _origin = window.location.origin;
-let _vol = 'client';
-
 const _gg     = new GritsClient();
 
-const evalContext = { fs: _gg, shell: null };
+// Derive runtime location using canonical GritsClient.fromModule()
+// FIXME: If this throws (non /grits/v1/content/ URL), we may want a
+// fallback strategy (e.g. default volume/cwd or alternate detection).
+const _origin = window.location.origin;
+
+const { serverUrl: _serverUrl, volume: _vol, path: _path } = _gg.fromModule(import.meta.url);
+
+// Strip filename from path to get cwd
+const _parts = (_path || '').split('/').filter(Boolean);
+const _cwd = _parts.slice(0, -1).join('/');
+
+// Initialize shell with correct runtime context
+const _shell = makeShell({ fs: _gg });
+_shell.serverUrl = _serverUrl || _origin;
+_shell.volume = _vol;
+_shell.cwd = _cwd;
+
+const evalContext = { fs: _gg, shell: _shell };
 
 const WIDGET_REGISTRY = {
   files: {
@@ -425,16 +438,6 @@ window.gimbal = {
   WIDGET_REGISTRY,
 };
 
-// ── Shell ─────────────────────────────────────────────────
-const _shell = makeShell({
-  fs:        _gg,
-  serverUrl: _origin,
-  volume:    _vol,
-  cwd:       '/',
-  libs:      [{ serverUrl: _origin, volume: _vol, path: 'lib' }],
-  evalContext,
-});
-evalContext.shell = _shell;
 
 const mkEl = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
 const $    = id => document.getElementById(id);
