@@ -263,6 +263,10 @@ const _origin = window.location.origin;
 const { serverUrl: _serverUrl, volume: _vol, path: _path } = _gg.fromModule(import.meta.url);
 
 // Strip filename from path to get cwd
+
+// FIXME - This strips off /gimbal/ because it doesn't know we're looking at index.html, and lands in lib/. That's
+// actually fine, it's a better place to start, but it would be better to do that on purpose than accidentally.
+
 const _parts = (_path || '').split('/').filter(Boolean);
 const _cwd = _parts.slice(0, -1).join('/');
 
