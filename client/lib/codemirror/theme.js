@@ -9,7 +9,7 @@
  *   rather than throwing. TODO: audit against pinned version.
  */
 
-import { HighlightStyle, syntaxHighlighting } from 'https://esm.sh/@codemirror/language@6';
+import { HighlightStyle, syntaxHighlighting }  from 'https://esm.sh/@codemirror/language@6';
 import { tags }                                from 'https://esm.sh/@lezer/highlight@1';
 import { C, lighten, darken, dim, alpha, mix } from '../style/style.js';
 
