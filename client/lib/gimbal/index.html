@@ -361,8 +361,11 @@ async function openWidget(mod, opts = {}) {
 
   try {
     const createWidget = mod.default ?? mod;
+    
     // Allow callers to override evalContext (e.g., when launched from a shell)
-    const ctx = rest.evalContext ?? evalContext;
+    const ctx = {... rest.evalContext ?? evalContext};
+    ctx.shell = ctx.shell.fork();
+    
     const instance     = await Promise.resolve(createWidget({ name, evalContext: ctx, ...rest }));
     const w            = widgets.get(id);
     if (!w) return;

@@ -106,8 +106,9 @@ export function responseFromJSON(obj) {
 // ─────────────────────────────────────────────────────────────────
 
 class Result {
-  constructor(shell, promise) {
+  constructor(shell, parentShell, promise) {
     this._shell   = shell;
+    this._parent  = parentShell;
 
     this._promise = Promise.resolve(promise);
     this._settled = null;
@@ -181,17 +182,18 @@ class Result {
 const HISTORY_NEW = Symbol('HISTORY_NEW');
 
 function _dispatchWrapped(shell, name, prevResult, args, historyIndex) {
+  const parentShell = prevResult._parent;
   if (historyIndex === HISTORY_NEW) {
-    historyIndex = shell.__.length;
-    shell.__.push(undefined);
+    historyIndex = parentShell.__.length;
+    parentShell.__.push(undefined);
   }
   const promise = shell._dispatch(name, prevResult, args).then(v => {
-    const result = new Result(shell, Promise.resolve(v));
+    const result = new Result(shell, parentShell, Promise.resolve(v));
     if (historyIndex !== null)
-      shell.__[historyIndex] = _wrapResult(result, HISTORY_NEW)
+      parentShell.__[historyIndex] = _wrapResult(result, HISTORY_NEW)
     return v;
   });
-  return _wrapResult(new Result(shell, promise), historyIndex);
+  return _wrapResult(new Result(shell, parentShell, promise), historyIndex);
 }
 
 function _wrapResult(result, historyIndex) {
@@ -228,6 +230,29 @@ export class GimbalShell {
         return (...args) => target.runCommand(key, args);
       }
     });
+  }
+
+  // ── fork ──────────────────────────────────────────────────────
+  // Create a child execution shell inheriting location + caches.
+  // evalContext is shallow-cloned and rebound to the child shell.
+  fork() {
+    const childEvalContext = { ...(this._evalContext || {}) };
+
+    const child = new GimbalShell({
+      fs: this.fs,
+      serverUrl: this.serverUrl,
+      volume: this.volume,
+      cwd: this.cwd,
+      evalContext: childEvalContext,
+    });
+
+    // Share import cache for performance
+    child._importCache = this._importCache;
+
+    // Rebind evalContext.shell to child
+    childEvalContext.shell = child;
+
+    return child;
   }
 
   // ── ui accessor — reads evalContext live so timing doesn't matter ─
@@ -350,23 +375,29 @@ export class GimbalShell {
 
   // Run a command outside eval(), starting from VOID root
   async runCommand(name, args = [], { doHistory = true } = {}) {
+    // Fork an execution shell so mutations don't affect the parent by default
+    const execShell = this.fork();
+
     const historyIndex = doHistory ? this.__.length : null;
     if (doHistory) this.__.push(undefined);
 
-    const root = this._rootResult(VOID, historyIndex);
+    const root = execShell._rootResult(VOID, historyIndex, this);
 
-    return await _dispatchWrapped(this, name, root, args, historyIndex);
+    return await _dispatchWrapped(execShell, name, root, args, historyIndex);
   }
 
   // ── Root result (void input, start of every eval) ─────────────
 
-  _rootResult(initial, historyIndex) {
-    return _wrapResult(new Result(this, Promise.resolve(initial)), historyIndex);
+  _rootResult(initial, historyIndex, parentShell = this) {
+    return _wrapResult(new Result(this, parentShell, Promise.resolve(initial)), historyIndex);
   }
 
   // ── eval ──────────────────────────────────────────────────────
 
   async eval(src, extraVars = {}, { doHistory = false } = {}) {
+    // Fork an execution shell for this eval
+    const execShell = this.fork();
+
     this.history.push(src);
 
     const __ = this.__;
@@ -374,8 +405,8 @@ export class GimbalShell {
     const historyIndex = doHistory ? __.length : null;
     if (doHistory) __.push(undefined);
 
-    const root  = this._rootResult(VOID, historyIndex);
-    const shell = this;
+    const root  = execShell._rootResult(VOID, historyIndex, this);
+    const shell = execShell;
 
     const withTarget = new Proxy(Object.create(null), {
       has(_, key) {

@@ -23,8 +23,9 @@ export async function invoke(shell, previous, args) {
     throw new Error(`cd: not a directory: ${value}`);
   }
 
-  shell.serverUrl = serverUrl;
-  shell.volume    = volume;
-  shell.cwd       = path;
+  previous._parent.serverUrl = serverUrl;
+  previous._parent.volume    = volume;
+  previous._parent.cwd       = path;
+
   return VOID;
 }
