@@ -170,9 +170,9 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
     }
   }
 
-  // Set widget title to leaf-most directory (like shell)
-  const leafName = basePath ? basePath.split('/').pop() : `//${volume}`;
-  const decoration = { title: leafName };
+  // Set widget title
+  const title = basePath ? `//${volume}/${basePath}` : `//${volume}/`;
+  const decoration = { title };
 
   const vol = fs.volume(serverUrl, volume);
 
