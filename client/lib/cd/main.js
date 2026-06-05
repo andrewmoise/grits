@@ -10,7 +10,6 @@ Usage:
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
-  console.log('cd previous:', prev);
   if (!isVoid(prev))
     throw new Error('cd: does not accept pipeline input');
 
