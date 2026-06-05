@@ -31,10 +31,10 @@ export const tests = [
     },
   },
   {
-    label: 'rm with {f:1} removes a directory',
+    label: 'rm with {r:1} removes a directory',
     async fn(shell, scratch) {
       await shell.eval(`mkdir('${scratch}/subdir')`);
-      await shell.eval(`rm('${scratch}/subdir', {f:1})`);
+      await shell.eval(`rm('${scratch}/subdir', {r:1})`);
       let threw = false;
       try {
         const r = shell.resolvePath(`${scratch}/subdir`);
@@ -95,11 +95,11 @@ export const tests = [
     },
   },
   {
-    label: 'rm with {f:1} removes multiple mixed paths',
+    label: 'rm with {r:1} removes multiple mixed paths',
     async fn(shell, scratch) {
       await shell.eval(`echo('x').to('${scratch}/x.txt')`);
       await shell.eval(`mkdir('${scratch}/dirmix')`);
-      await shell.eval(`rm('${scratch}/x.txt', '${scratch}/dirmix', {f:1})`);
+      await shell.eval(`rm('${scratch}/x.txt', '${scratch}/dirmix', {r:1})`);
       for (const p of [`${scratch}/x.txt`, `${scratch}/dirmix`]) {
         let threw = false;
         try {
@@ -167,6 +167,39 @@ export const tests = [
         else throw e;
       }
       if (!threw) throw new Error('expected usage error for non-string arg');
+    },
+  },
+  {
+    label: 'rm fails on non-existent path by default',
+    async fn(shell, scratch) {
+      let threw = false;
+      try {
+        await shell.eval(`rm('${scratch}/nope.txt')`);
+      } catch (e) {
+        if (e.message.includes('not found')) threw = true;
+        else throw e;
+      }
+      if (!threw) throw new Error('expected not found error');
+    },
+  },
+  {
+    label: 'rm with {f:1} ignores non-existent path',
+    async fn(shell, scratch) {
+      await shell.eval(`rm('${scratch}/nope.txt', {f:1})`);
+    },
+  },
+  {
+    label: 'rm with {f:1} still fails on directory',
+    async fn(shell, scratch) {
+      await shell.eval(`mkdir('${scratch}/dir')`);
+      let threw = false;
+      try {
+        await shell.eval(`rm('${scratch}/dir', {f:1})`);
+      } catch (e) {
+        if (e.message.includes('is a directory')) threw = true;
+        else throw e;
+      }
+      if (!threw) throw new Error('expected directory error with {f:1}');
     },
   },
 ];
