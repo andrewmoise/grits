@@ -60,16 +60,8 @@ import stringify from '../vendor/json-stringify-pretty-compact/index.js';
 // Void sentinel — returned by commands with no meaningful output
 // ─────────────────────────────────────────────────────────────────
 
-// Ensure a singleton VOID across multiple module instances (different URLs)
-// const __g = (typeof globalThis !== 'undefined') ? globalThis : window;
-// export const VOID = __g.__gimbalVoid ??= Object.freeze({ _gimbalVoid: true, toString: () => '(void)' });
-// export function isVoid(v) {
-//   return v === null || v === undefined || v === VOID || (v && v._gimbalVoid === true);
-// }
-
 export const VOID = Object.freeze({ _gimbalVoid: true, toString: () => '(void)' });
 export function isVoid(v) { return v === null || v === undefined || v === VOID; } // FIXME
-
 
 // ─────────────────────────────────────────────────────────────────
 // Internal helpers
