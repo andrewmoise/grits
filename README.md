@@ -125,7 +125,7 @@ mkdir volumes/sites/{your server name}
 
 (That command, run from the actual backend Linux shell, will make that directory within a FUSE mount, which will create `//sites/{your server name}/` in the frontend Gimbal shell's world. Normally, we want to do all this stuff from the frontend so we don't have to touch `ssh` once things are set up, but this is needed bootstrapping so we can access the frontend in the first place.)
 
-(You can also use the FUSE mounts in `volumes/` if you need to do large operations which will be slow / cumbersome if you try to do it from the web frontend.)
+(You can also use the FUSE mounts in `volumes/` if you need to do large operations which will be slow / cumbersome if you try to do them from the web frontend.)
 
 Once that directory in `//sites` is created, the server will be willing to grab a certificate and start serving content for your host. There's no content yet to serve at `https://{your server}/`, but you can access the API endpoints directly. In a browser, open:
 
@@ -226,7 +226,7 @@ There are four main operations available on a Grits filesystem.
 * **link(path, cid)** defines a path to point to a particular metadata CID, overwriting any previous value. Linking to
 `nil` or `""` will delete the given path, removing it from its parent's directory listing.
 
-`lookup` and `link` will do a good bit of looking within the blob store to execute; you could do that remotely also (by fetching blobs to walk down the tree manually), but that would be very slow. Lookups, in general, will return the LookupResponse structure from `namestore.go`, meaning that you can skip the intermediate indirection and do one lookup and then immediately load the content blob for the file without further investigation.
+`lookup` and `link` will do a good bit of looking around in the blob store to execute; you could do that remotely also (by fetching blobs to walk down the tree manually), but that would be very slow. Lookups, in general, will return the LookupResponse structure from `namestore.go`.
 
 #### Atomicity
 
@@ -238,7 +238,7 @@ Another thing which falls out of this naturally is watches for modification -- s
 
 #### Performance
 
-The remote performance is pretty mediocre right now. It should be possible to do prefetching more cleverly than we're doing now. Also, when configured to (when concurrent access isn't expected), we should batch up writes into long lists of write-back-cached "path/CID/assertions" tuples. That should make it better. But, for now, it's not super fast when doing I/O remotely with writes involved.
+The remote performance is pretty mediocre right now. It should be possible to do prefetching more cleverly than we're doing now. Also, when configured to (when concurrent access isn't expected), we should batch up writes into long lists of write-back-cached "path/CID/assertions" tuples which we are committing from a background thread. That should make it better. But, for now, it's not super fast when doing I/O remotely with writes involved.
 
 Reading (serving the read-only bits of the site) should already be faster than a normal web site, if the service worker is enabled. Try it out, see if that's the reality.
 
@@ -278,13 +278,13 @@ $ ls()
 
 #### Paths
 
-Volumes are accessible via `//{volume name}/{path}`. Note, I want to do away with the "different volumes for `home`, `client`, `sys`" approach soon. It should by default all be one unified volume, `//root/`, so that usually you don't type the volume, but just `/home/moise` or `/sites/{your server}` as is more normal.
+Volumes are accessible via `//{volume name}/{path}`. Note, I want to do away with the "different volumes for `home`, `client`, `sys`" approach soon. It should by default all be one unified volume, `//root/`, so that usually you don't type the volume, but just `/home/moise` or `/sites/{your server}` as is more normal for Unix.
 
 `..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way.
 
 There are no symbolic links.
 
-You can use `glob({pattern})` to get a list of files matching the pattern.
+You can use `glob({pattern})` to get a list of files matching the pattern. It's not a "shell command," just a normal async function, so you will have to do things like `rm(... await glob('*.txt'))`.
 
 #### Chaining
 
