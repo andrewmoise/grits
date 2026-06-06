@@ -38,15 +38,13 @@ Terminal commands are interpreted more or less as Javascript syntax. You can do 
 
 ![Screenshot showing basic JS commands](doc/images/intro-1.png)
 
-(screenshot - evaluating 1+2, defining and calling a function)
-
 But, you can also run Unix-like commands and interact with the little filesystem:
 
 ![Screenshot showing Unix-like commands](doc/images/intro-2.png)
 
 These commands are chained together via Response bytestreams, with function chaining analogous to `|` in Unix. `.to()` is analogous to `>`, `from().` is almost analogous to `<`.
 
-The files you're editing are located on the server's storage. The system is backed on a Merkle tree, which makes it natural to efficiently work remotely while maintaining strong cache-coherency guarantees. It also means it's easy to make copy-on-write copies of big things for your own editing.
+The files you're editing are located on the server's storage. The system is backed on a Merkle tree, which makes it natural to efficiently work remotely while maintaining cache-coherency guarantees. It also means it's easy to make copy-on-write copies of big things for your own editing.
 
 This means you can make custom versions of anything the server is running, which then become something you can run instead. For example, we can make a copy of `//client/lib` so we can customize the whole Gimbal interface:
 
@@ -68,15 +66,15 @@ It's not limited to just one tool, though. Any of the environment you see can be
 
 ![Screenshot showing the lib/ README](doc/images/editor-0.png)
 
-Oh, look at that, it's hard to read because the lines aren't wrapped. Not a problem:
+Oh, look at that, it's hard to read because the lines aren't wrapped. Not a problem. We're using codemirror for editing; we open up our widget wrapper code, and make the one-line fix to add the line wrapping extension:
 
 ![Screenshot showing enabling line wrapping](doc/images/editor-1.png)
 
-Reload the tab and open the README again:
+We reload the tab and open the README again:
 
 ![Screenshot showing line wrapping](doc/images/editor-2.png)
 
-Bingo bango. It's actually quicker as a non-site-admin to make the change, than it would be to make a change on the backend and rebuild+restart+whatever, if you *were* the admin.
+Bingo bango. It's actually quicker as a non-site-admin to make the line-wrap edit, than it would be to make a change on the backend and rebuild+restart+whatever, if you *were* the admin.
 
 You get the idea.
 
@@ -90,6 +88,7 @@ To play around with it, do this:
 
 * Install golang >= 1.22.12
 * `sudo apt install fuse3 certbot` or equivalent
+* Check out the source
 * From the source directory:
     * `go test ./...`
     * `go build -o bin/certbot-helper cmd/certbot-helper/main.go`
@@ -106,7 +105,7 @@ You will need to make changes to the config.
 
 To play with it significantly, you must disable read-only-ness on the HTTP module, but since there are no permissions yet, this will make your data world-writable. Use your own judgement, probably don't leave the service running in production.
 
-Change %USER% and %EMAIL% to your Unix user and your email (email is only needed for certbot interactions -- the system will automatically grab HTTPS certificates for you, by default, and certbot wants your email in order to do that.)
+Change %USER% and %EMAIL% to your Unix username, and your email (email is only needed for certbot interactions -- the system will automatically grab HTTPS certificates for you, by default, and certbot wants your email in order to do that.)
 
 ### Run
 
