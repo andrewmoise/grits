@@ -24,7 +24,7 @@ The motivation is this: The internet is based on a peer-to-peer and open-softwar
 
 And on the admin side, compounding those user-side issues, there are significant centralized hosting issues that still haven't gone away. Bittorrent is great, ActivityPub is great, but popular sites still run on expensive centrally-served hosting. People still invest in S3 to run their Mastodon nodes. My vision would be that, in addition to the user side getting better, it could become realistic to run something like a busy Mastodon node or Peertube instance, and have a substantial amount of the hosting being done by the users.
 
-Basically, the idea for this project is to provide a framework which is more akin to minicomputers instead of mainframes, or of open source instead of Windows.
+Basically, the idea for this project is to provide a framework which is more akin to minicomputers instead of mainframes, or to open source instead of Windows.
 
 ## Examples
 
@@ -105,7 +105,7 @@ You will need to make changes to the config.
 
 To play with it significantly, you must disable read-only-ness on the HTTP module, but since there are no permissions yet, this will make your data world-writable. Use your own judgement, probably don't leave the service running in production.
 
-Change %USER% and %EMAIL% to your Unix username, and your email (email is only needed for certbot interactions -- the system will automatically grab HTTPS certificates for you, by default, and certbot wants your email in order to do that.)
+Change `%USER%` to your Unix username, and `%EMAIL%` to your email (email is only needed for certbot interactions -- the system will automatically grab HTTPS certificates for you, by default, and certbot wants your email in order to do that.)
 
 ### Run
 
@@ -113,7 +113,7 @@ Change %USER% and %EMAIL% to your Unix username, and your email (email is only n
 sudo bin/gritsd
 ```
 
-(It'll drop privileges to whatever user you configured for it, as soon as it's opened the ports it needs. If you want to try it as non-root, just configure it on a port above 1024 and run certbot by hand to get certificates if any.)
+(It'll drop privileges to whatever user you configured for it, as soon as it's opened the ports it needs. If you want to try it as non-root, just configure it on a port above 1024 and run certbot by hand to get certificates if any, and then you can run without `sudo`.)
 
 ### Test
 
@@ -123,7 +123,9 @@ From the project directory in a separate shell:
 mkdir volumes/sites/{your server name}
 ```
 
-(That command, run from the actual backend Linux shell, will make `//sites/{your server name}/` in the frontend Gimbal shell's world. Normally, we want to do all this stuff from the frontend so we don't have to touch `ssh` once things are set up, but this is needed bootstrapping so we can access the frontend in the first place.)
+(That command, run from the actual backend Linux shell, will make that directory within a FUSE mount, which will create `//sites/{your server name}/` in the frontend Gimbal shell's world. Normally, we want to do all this stuff from the frontend so we don't have to touch `ssh` once things are set up, but this is needed bootstrapping so we can access the frontend in the first place.)
+
+(You can also use the FUSE mounts in `volumes/` if you need to do large operations which will be slow / cumbersome if you try to do it from the web frontend.)
 
 Once that directory in `//sites` is created, the server will be willing to grab a certificate and start serving content for your host. There's no content yet to serve at `https://{your server}/`, but you can access the API endpoints directly. In a browser, open:
 
@@ -131,15 +133,13 @@ Once that directory in `//sites` is created, the server will be willing to grab 
 
 ... and it'll show you that frontend Gimbal interface from the screenshots above.
 
-Run:
+From the frontend command shell, run:
 
 ```
 test()
 ```
 
-That'll run you through a little self test.
-
-You can also try populating some site content:
+That'll run you through a little self test. You can also test if the web serving works:
 
 ```
 mkdir('//sites/{your server}/content')
@@ -175,8 +175,8 @@ And yes it's on the roadmap to make it runnable via systemctl, and file permissi
 
 Nomenclature-wise, the system is split into two cooperating pieces:
 
-* **Grits** is the backend which provides a read-writable space with useful primitives for sharing and replicating content, and serves web sites based on that content
-* **Gimbal** is the frontend which provides a Unix-like shell and "window manager" of sorts that runs in the browser and can do operations on the filesystem
+* **Grits** is the backend which provides a read-writable space with useful primitives for sharing and replicating content, and serves web sites based on that content.
+* **Gimbal** is the frontend which provides a Unix-like shell and "window manager" of sorts that runs in the browser and can do operations on the filesystem.
 
 ### Backend Piece (Grits)
 
@@ -185,6 +185,8 @@ The "filesystem" here is specifically constructed with operating principles that
 * We can easily tell what does and doesn't need to be updated in our local view of remote content, simply from doing a single fetch of the root CID.
 * We can verify content that comes from a semi-untrusted source, which allows us to deploy mirrors while limiting the level to which we need to trust them.
 * We can easily incorporate useful features like file history, copy-on-write semantics, and atomic operations, by leveraging the CID as a descriptor of all content below it.
+
+It's also nice for cache coherency. If the service worker is enabled, then we won't have to set cache expiry times or tell people to try shift-reload when at some point the caching inevitably goes wrong.
 
 #### Storage format
 
