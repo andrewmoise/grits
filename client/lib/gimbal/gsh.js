@@ -372,7 +372,7 @@ export class GimbalShell {
     return mod.invoke(this, prevResult, args);
   }
 
-  // Run a command outside eval(), starting from VOID root
+  // Run a command without shell evaluation, similar to exec()
   async runCommand(name, args = [], { doHistory = true } = {}) {
     // Fork an execution shell so mutations don't affect the parent by default
     const execShell = this.fork();
@@ -387,16 +387,13 @@ export class GimbalShell {
 
   // ── Root result (void input, start of every eval) ─────────────
 
-  _rootResult(initial, historyIndex, parentShell = this) {
+  _rootResult(initial, historyIndex, parentShell) {
     return _wrapResult(new Result(this, parentShell, Promise.resolve(initial)), historyIndex);
   }
 
   // ── eval ──────────────────────────────────────────────────────
 
   async eval(src, extraVars = {}, { doHistory = false } = {}) {
-    // Fork an execution shell for this eval
-    const execShell = this.fork();
-
     this.history.push(src);
 
     const __ = this.__;
@@ -404,9 +401,7 @@ export class GimbalShell {
     const historyIndex = doHistory ? __.length : null;
     if (doHistory) __.push(undefined);
 
-    const root  = execShell._rootResult(VOID, historyIndex, this);
-    const shell = execShell;
-
+    const shell = this;
     const withTarget = new Proxy(Object.create(null), {
       has(_, key) {
         if (typeof key === 'symbol') return false;
@@ -426,7 +421,11 @@ export class GimbalShell {
         if (key === 'glob') return (pattern) => glob(shell, pattern);
         if (key in extraVars)          return extraVars[key];
         if (key in shell._scriptScope) return shell._scriptScope[key];
-        return (...args) => _dispatchWrapped(shell, key, root, args, historyIndex);
+
+        // We are running a real command, apparently. We need to fork a new shell context for it.
+        const execShell = shell.fork();
+        const rootResult  = execShell._rootResult(VOID, historyIndex, shell);
+        return (...args) => _dispatchWrapped(execShell, key, rootResult, args, historyIndex);
       },
       set(_, key, value) {
         shell._scriptScope[key] = value;
