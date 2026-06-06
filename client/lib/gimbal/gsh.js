@@ -34,7 +34,6 @@
 //   Calling a tool with ({help: true}) as the only arg prints that string.
 //
 // Tool discovery:
-//   shell.libUrls is an array of base URLs searched in order.
 //   For command 'grep': tries <base>/grep/main.js, first match wins.
 //   The browser's native import() handles caching and relative imports inside
 //   tool modules automatically.
