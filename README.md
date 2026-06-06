@@ -1,71 +1,90 @@
-# Grits - A web-native operating system
+# Grits - A framework for web-native development
 
-It's two pieces:
+It's a little system which enables you to serve a web site which can be interacted with much more directly and comfortably than is traditional on the modern web.
 
-* **Grits** is a backend project which provides a read-writable space with useful primitives for sharing and replicating content.
-* **Gimbal** is a frontend project which provides a Unix-like shell — a little "web operating system" — with some nice abilities, native in the browser, which are normally available only on the backend (thus separated from the browser side of the operation.)
+As an end-user of a site on this framework, you can:
 
-These pieces operate in tandem to provide an experience different from a conventional "backend / frontend" structure. This structure enables you to do many things which are useful.
-
-As an end-user of the web site, you can:
-
-* Directly examine the data and code underlying the web site
+* Directly examine the underlying data and code
 * Persistently edit the UI of the web site you're using, for you, without impacting other people's experience
-* Interact and script interactions with the site in ways not programmed in by the authors/operators
+* Interact and script interactions with the site in ways not programmed in advance by the authors/operators
 
 As an admin, you can:
 
-* Quickly test, deploy or roll back versions of the site without it being clunky
-* Do first-class maintenance and development things from your browser
+* Easily test, deploy or roll back versions of the site
+* Do first-class development and devops things from your browser
 * Replicate content to mirrors, and have them seamlessly assist with the load on the main site
 
-It's still a work in progress. It's a hobby project. It works on my machine.
+Note: This is all still an ambitious work in progress. It's a hobby project. It works on my machine. **It also may eat your data at any time; there are known volume-storage-corrupting bugs I haven't sorted out yet.** And **there are no permissions; everyone can write to any of your data that isn't set read-only at the HTTP or volume level.**
 
-In particular, don't put this live on the internet. There's no permissions control, so either no one can write (which isn't fun) or everyone can. It may eat your data; there are known data-corruption bugs I haven't sorted out yet. Don't use this in production.
+**Don't use this in production.** Basically, some things work and it's fun for tinkering but it's very far from a working version 1.
 
 ## Motivation
 
-The motivation for all this is this: The internet is based on a peer-to-peer and open software type of vision, but at least as far as the modern web, it's still very much stuck in a mainframe-style "priests and outsiders" organizational structure. (It is in fact, for business reasons, going backwards -- fewer and fewer priests maintaining ever more opaque temples for more and more hapless supplicants.) As an end-user of a web site, you're incapable of interacting with it in common ways that are natural if you are an open-source type of person, even in the case when the software is (from an administrator's POV) open source.
+The motivation is this: The internet is based on a peer-to-peer and open-software type of vision, but at least as far as the modern web, it's still very much stuck in a mainframe-style "priests and outsiders" organizational structure. (In fact, for business reasons, it is going backwards: Fewer and fewer priests maintaining ever more restricted temples for ever more hapless supplicants.) As an end-user of a web site, you're incapable of interacting with it in ways that are natural if you are an open-source type of person, even in the case when the backend is (from an administrator's POV) open source. You're left with weird little scraps, like being able to export your data or paste a custom block of CSS, that don't really scratch the surface of what you should be able to do to control your experience and your data.
 
-And then, on the admin side and compounding those issues, there are significant centralized hosting issues that still haven't gone away. Bittorrent is great, ActivityPub is great, but popular sites still run on expensive centrally-served hosting. People still invest in S3 to run their Mastodon nodes. My vision would be that it becomes realistic to run a busy Mastodon node or Peertube instance, and have a substantial amount of the hosting being done by the users.
+And on the admin side, compounding those user-side issues, there are significant centralized hosting issues that still haven't gone away. Bittorrent is great, ActivityPub is great, but popular sites still run on expensive centrally-served hosting. People still invest in S3 to run their Mastodon nodes. My vision would be that, in addition to the user side getting better, it could become realistic to run something like a busy Mastodon node or Peertube instance, and have a substantial amount of the hosting being done by the users.
 
-The idea for this project is to provide an option which is more akin to minicomputers instead of mainframes, or of open source instead of Windows.
+Basically, the idea for this project is to provide a framework which is more akin to minicomputers instead of mainframes, or of open source instead of Windows.
 
 ## Examples
 
 Here's what it looks like:
 
-(screenshot - normal environment)
+![Screenshot of normal environment](doc/images/intro-0.png)
 
 You can see a terminal, a files browser, and an editor. Should be pretty straightforward.
 
 Terminal commands are interpreted more or less as Javascript syntax. You can do javascript things:
 
+![Screenshot showing basic JS commands](doc/images/intro-1.png)
+
 (screenshot - evaluating 1+2, defining and calling a function)
 
-But, you can also run Unix-like commands, including chaining them together:
+But, you can also run Unix-like commands and interact with the little filesystem:
 
-(screenshot - cd(), cat(), echo().to(), upload().to(), unzip(), cd(), ls())
+![Screenshot showing Unix-like commands](doc/images/intro-2.png)
 
 These commands are chained together via Response bytestreams, with function chaining analogous to `|` in Unix. `.to()` is analogous to `>`, `from().` is almost analogous to `<`.
 
-The system is backed on a Merkle tree filesystem, which naturally makes it possible to efficiently work remotely while maintaining strong cache-coherency guarantees. It also means it's easy to make copy-on-write copies of big things for your own editing:
+The files you're editing are located on the server's storage. The system is backed on a Merkle tree, which makes it natural to efficiently work remotely while maintaining strong cache-coherency guarantees. It also means it's easy to make copy-on-write copies of big things for your own editing.
 
-(screenshot - cd(':client/lib', ':home/moise/lib'))
+This means you can make custom versions of anything the server is running, which then become something you can run instead. For example, we can make a copy of `//client/lib` so we can customize the whole Gimbal interface:
 
-(screenshot - opening a new tab in the new shell)
+![Screenshot showing making a per-user copy of the shell environment](doc/images/custom-0.png)
 
-(screenshot - editing the shell within the shell)
+We load up an instance of Gimbal that's fully runnable and editable based on the instance in our own home directory:
 
-(screenshot - showing the changed shell after a reload)
+![Screenshot showing the custom environment loaded](doc/images/custom-1.png)
 
-And so on.
+We make a change to echo():
+
+![Screenshot showing edits to echo()](doc/images/custom-2.png)
+
+We reload the tab, and execute echo(), and we observe that our changes are live (without mucking anything up for existing users of the main `//client`-based app):
+
+![Screenshot showing the changed version of echo()](doc/images/custom-3.png)
+
+It's not limited to just one tool, though. Any of the environment you see can be edited. There's a README with guidance about where all the tools and code are located within lib/:
+
+![Screenshot showing the lib/ README](doc/images/editor-0.png)
+
+Oh, look at that, it's hard to read because the lines aren't wrapped. Not a problem:
+
+![Screenshot showing enabling line wrapping](doc/images/editor-1.png)
+
+Reload the tab and open the README again:
+
+![Screenshot showing line wrapping](doc/images/editor-2.png)
+
+Bingo bango. It's actually quicker as a non-site-admin to make the change, than it would be to make a change on the backend and rebuild+restart+whatever, if you *were* the admin.
+
+You get the idea.
 
 ## Quickstart
 
 ### Build
 
-It only works on Linux right now, as far as I'm aware.
+It only works on Linux right now.
 
 To play around with it, do this:
 
@@ -83,9 +102,11 @@ cp sample-config.json config.json
 hx config.json # Or whatever editor
 ```
 
-You will need to make significant changes to the config. To play with it significantly, you must disable read-only-ness on the HTTP module, but since there are no permissions this will make your data world-writable. Use your own judgement, probably don't leave the service running in production.
+You will need to make changes to the config. 
 
-The system will automatically grab HTTPS certificates for you. It needs your email to do that because certbot requires it.
+To play with it significantly, you must disable read-only-ness on the HTTP module, but since there are no permissions yet, this will make your data world-writable. Use your own judgement, probably don't leave the service running in production.
+
+Change %USER% and %EMAIL% to your Unix user and your email (email is only needed for certbot interactions -- the system will automatically grab HTTPS certificates for you, by default, and certbot wants your email in order to do that.)
 
 ### Run
 
@@ -93,7 +114,7 @@ The system will automatically grab HTTPS certificates for you. It needs your ema
 sudo bin/gritsd
 ```
 
-(Note, it'll drop privileges to whatever user you configured for it, as soon as it's opened the ports it needs. If you want to try it as non-root, just configure it on a port above 1024 and set up a manual certbot invocation for its certificates.)
+(It'll drop privileges to whatever user you configured for it, as soon as it's opened the ports it needs. If you want to try it as non-root, just configure it on a port above 1024 and run certbot by hand to get certificates if any.)
 
 ### Test
 
@@ -103,13 +124,15 @@ From the project directory in a separate shell:
 mkdir volumes/sites/{your server name}
 ```
 
-(Note: That's modifying the content within the Grits volumes, which in the default config are FUSE-mounted in `volumes/`. You need to make the volumes read-writable for this to work... it is somewhat sensible to set the HTTP endpoints to read-only, and still have the volumes read-writable. But, the main fun of the project at this point is remotely editing files content, so that way would be only if you want to put static content into `volumes/` from the backend and not be able to edit it from the frontend.)
+(That command, run from the actual backend Linux shell, will make //sites/{your server name}/ in the frontend Gimbal shell's world. Normally, we want to do all this stuff from the frontend so we don't have to touch `ssh` once it's set up, but this is needed bootstrapping so we can access the frontend in the first place.)
 
-Anyway, once that `sites/` directory is created, the server will be willing to grab a certificate and start serving content for that host. There's no "site content" yet, but you can access the API endpoints directly. In a browser, open:
+Once that `sites/` directory is created, the server will be willing to grab a certificate and start serving content for your host. There's no "site content" yet, but you can access the API endpoints directly. In a browser, open:
 
 https://{your server}/grits/v1/content/client/lib/gimbal/
 
-... and it'll show you a little administration interface with a Unix-like shell. Run:
+... and it'll show you that frontend Gimbal interface.
+
+Run:
 
 ```
 test()
@@ -120,8 +143,8 @@ That'll run you through a little self test.
 You can also try populating some "frontend" content.
 
 ```
-mkdir(':sites/{your server}/content')
-echo('Hello!').to(':sites/{your server}/content/index.html')
+mkdir('//sites/{your server}/content')
+echo('Hello!').to('//sites/{your server}/content/index.html')
 ```
 
 Then open https://{your server}/
@@ -129,7 +152,7 @@ Then open https://{your server}/
 Assuming that works, you can start populating content if you like. `upload().to(filename)` and `unzip(filename)` may be useful. Bear in mind that it is trivial to maintain multiple copy-on-write versions of the site content:
 
 ```
-cd(':sites/{your server}')
+cd('//sites/{your server}')
 mkdir('dev/v1',{p:1})
 echo('version 1').to('dev/v1/index.html')
 ln('dev/v1','content',{ff:1})
@@ -145,13 +168,18 @@ ln('dev/v1','dev/v2',{ff:1})
 
 And then, make edits to `dev/v2`, and then you can observe them at `https://{your server}/grits/v1/content/sites/{your server}/dev/v2/`, and then if you like them you can use another `ln` command to deploy them to `content/` which will place them on the "live site."
 
-Hopefully this all gives the flavor of the intended interaction. When you're done, hit Ctrl-C, the server should shut down cleanly. If it hangs because it can't unmount the FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
+Hopefully this all gives the flavor of the intent. When you're done, hit Ctrl-C on the backend and the server should shut down cleanly. If it hangs because it can't unmount the FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
 
-And yes it's on the roadmap to make it runnable via systemctl, and file permissions so that not everyone can see `:sites/{your server}/dev`. Both of them would be good to add certainly.
+And yes it's on the roadmap to make it runnable via systemctl, and file permissions so that not everyone can see and edit `//sites/{your server}/dev`. Both of them would be good to add.
 
 ## How It Works
 
-### Filesystem - Grits
+So nomenclature wise, the system is split into two coordinating pieces:
+
+* **Grits** is a backend which provides a read-writable space with useful primitives for sharing and replicating content, and serves web sites based on that content
+* **Gimbal** is a frontend which provides a Unix-like shell and "window manager" of sorts that runs in the browser and can do operations on the filesystem
+
+### Filesystem (Grits)
 
 The "filesystem" here is specifically constructed with operating principles that are useful to Gimbal-style apps, as well as general file replication operations that are useful for any static content. It is implemented as a Merkle tree, which provides several advantages:
 
@@ -159,15 +187,15 @@ The "filesystem" here is specifically constructed with operating principles that
 * We can verify content that comes from a semi-untrusted source, which allows us to deploy mirrors while limiting the level to which we need to trust them.
 * We can easily incorporate useful features like file history, copy-on-write semantics, and atomic operations, by leveraging the CID as a descriptor of all content below it.
 
-#### Structure
+#### Storage format
 
-The blob identifiers used are hash values of the content, in the exact same format and compatible with IPFS CIDs. Each file is represented by a metadata node (corresponding to a Unix inode), and they are generally referred to by the CID of the metadata node data in JSON format. For example:
+All the data is stored as blobs within the Merkle tree, with metadata in JSON format. File identifiers (analogous to inode numbers, or to CIDs within IPFS) look like this:
 
 ```
 QmcdHV2KQTu59Mq5Aw5jDJXN2CZGKoW68G8pc7jJPvbQ1C
 ```
 
-Might refer to:
+Fetching that blob will give you metadata:
 
 ```
 {"type":"dir","size":61,"contentHash":"QmbjmTt4aJL6p6dZRZMhNomNo3nBaDdoQCGRnk9DrFBMJw","mode":493,"timestamp":"2026-04-16T19:29:57Z"}
@@ -184,6 +212,8 @@ And QmWxZmx2Ej4BfUCEBSChn8p2NiLy1DGSg3zqB3othfktVL will contain the metadata nod
 ```
 {"type":"blob","size":5,"contentHash":"QmRN6wdp1S2A5EtjW9A3M1vKSBuQQGcgvuhoMUoEz4iiT5","mode":420,"timestamp":"2026-04-16T19:29:56Z"}
 ```
+
+And so on.
 
 #### Operations
 
@@ -208,17 +238,25 @@ Both lookup() and link() take any number of paths in their argument, and link() 
 
 Another thing which falls out of this naturally is watches for modification -- simply keep an eye on the CID of any file or directory node, and if it changes, it's been modified.
 
+#### Performance
+
+The remote performance is pretty bad right now. It should be possible to do prefetching more cleverly than we're doing now. Also, when configured to (when concurrent access isn't expected), we should batch up writes into long lists of write-back-cached "path/CID/assertions" tuples. That should make it better. But, for now, it's not super fast when doing extensive I/O remotely.
+
+Reading (serving the read-only bits of the site) should already be faster than a normal web site, if the service worker is enabled. Try it out, see if that's the reality.
+
 #### Roadmap
 
 There are some pretty essential improvements which are planned for the near future:
 
 * File permissions and authentication / user management
-* Backups and file history
-* Fixes to naming conventions, versioning of file formats, new version of file formats
+* Automatic copy-on-write backups and file history
+* Fixes to naming conventions, versioning of file formats, new stabilized version of file and wire formats
 
-### Shell - Gimbal
+### Frontend (Gimbal)
 
-The shell that the system presents is basically just a Javascript console with a couple extra features.
+"Gimbal" refers to the whole frontend system, notably including `gsh` the command shell and `gwm` the "window manager". Within `gwm` are widgets including `gterm` the terminal, and a file browser and editor which are creatively invoked via `files` and `edit`.
+
+The shell the system presents is basically just a Javascript console with a couple extra features.
 
 You can type javascript commands:
 
@@ -227,10 +265,10 @@ $ 1+1
 2
 ```
 
-You can also type some Gimbal-specific shell commands:
+You can also type Gimbal-specific shell commands, and pipe them together, like Unix:
 
 ```
-$ cd(':sites/{your server}')
+$ cd('//sites/{your server}')
 $ upload().to('test.zip')
 $ unzip('test.zip')
 $ ls()
@@ -242,7 +280,7 @@ $ ls()
 
 #### Paths
 
-Volumes are accessible via `:{volume name}/{path}`. That's a bad syntax; I plan to change it to `//{volume}/path` or `//{server}:{volume}/path` at some point soon.
+Volumes are accessible via `//{volume name}/{path}`. Note, I want to do away with the "different volumes for home/client/sys" soon. It should by default all be one unified volume, //root/, so that usually you don't type the volume, but just /home/moise or /sites/{your server} as would be more normal.
 
 `..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way. There are no symbolic links.
 
@@ -250,13 +288,13 @@ You can use `glob({pattern})` to get a list of files matching that pattern.
 
 #### Chaining
 
-The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which goes via the same proxy which found the commands in the first place. Commands are implemented in `client/lib/{command name}/main.js`. See the comments at the top of `client/lib/gimbal/gsh.js` for more about the details of how it all works.
+The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which goes via the same proxy which found the commands in the first place. Commands are implemented in `//client/lib/{command name}/main.js`. See the comments at the top of `//client/lib/gimbal/gsh.js` for more about the details of how it all works.
 
 ### Web Hosting
 
-From the Gimbal shell, you can move stuff from there into `:sites/{your server}/content` and it'll show up on the `https://{your server}/` web site. You can also make arbitrary new directories under `:sites`, and stuff in their `content/` directories will get served as normal (assuming that you arrange for DNS for whatever host to point to your server).
+From the Gimbal shell, you can move stuff from there into `//sites/{your server}/content` and it'll show up on the `https://{your server}/` web site. You can also make arbitrary new directories under `//sites`, and stuff in their `content/` directories will get served as normal (assuming that you arrange for DNS for whatever host to point to your server).
 
-(You can, if you like, set up a DNS wildcard so that `*.{your server}.com` all points to the server where Grits is running. In that case, anything that gets placed in `:sites/{whatever}.{your server}.com/content` will become a live site automatically.)
+(You can, if you like, set up a DNS wildcard so that `*.{your server}.com` all points to the server where Grits is running. In that case, anything that gets placed in `//sites/{whatever}.{your server}.com/content` will become a live site automatically.)
 
 ## Code layout
 
@@ -269,11 +307,7 @@ From the Gimbal shell, you can move stuff from there into `:sites/{your server}/
 ### `internal/gritsd`: Server implementation
 
 * `server.go` defines the actual server implementation.
-* `modules.go` defines an interface for "modules" added to the server. Almost all the server's functionality is implemented via these modules. You will see many of them; of particular importance are:
-
-* `module_http.go` for providing HTTP service
-* `module_mount.go` for FUSE mounting
-* `module_volume.go` for a local writable storage volume
+* `modules.go` defines an interface for "modules" added to the server. Almost all the server's functionality is implemented via these modules. You will see many of them; of particular importance the ones listed in the next (config.json) section.
 
 ### `config.json`
 
@@ -282,20 +316,20 @@ This is the core config file. Most of it involves configuring particular modules
 * `volume` provides a local writable volume of storage
 * `mount` creates a FUSE mount of a particular volume to a local directory
 * `http` creates an HTTP endpoint providing access to the API
-* `serviceworker` sets up a service worker which will run all web accesses through a client-side Grits cache automatically, so these benefits apply to any content
+* `serviceworker` sets up a service worker which will run all web accesses through a client-side Grits cache automatically, so these benefits apply to any content. (Note: Currently the SW works on Chrome, but not completely on Firefox; for what reason, I don't know.)
 
 Check out the source in `internal/gritsd/module_{whatever}.go` to see the configuration for each.
 
 ### Other useful directories
 
-* `client/` defines vital client-side content. It gets populated into a special read-only volume on startup, so that clients can always access stuff within it.
-* `var/` is where all writable data for the server is kept. It should be fine (and is recommended) to have the entire `grits/` directory outside of `var/` owned by some different user, and read-only from the POV of the server process.
+* `client/` defines vital client-side content. It gets populated into a special place in the Grits filesystem on startup, so that clients can access stuff within it.
+* `var/` is where all writable data for the server is kept. It should be fine (and is recommended) to have the entire `grits/` directory outside of `var/` owned by a different user, and read-only from the POV of the server process.
 
 ## In Conclusion
 
-See? It's neat. I made a Discord for it, come join the fun, let me know what you think.
+See? It's neat.
 
-(discord link)
+(TODO - discord link)
 
 ## Enjoy!
 
