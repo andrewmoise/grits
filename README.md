@@ -123,13 +123,13 @@ From the project directory in a separate shell:
 mkdir volumes/sites/{your server name}
 ```
 
-(That command, run from the actual backend Linux shell, will make //sites/{your server name}/ in the frontend Gimbal shell's world. Normally, we want to do all this stuff from the frontend so we don't have to touch `ssh` once it's set up, but this is needed bootstrapping so we can access the frontend in the first place.)
+(That command, run from the actual backend Linux shell, will make `//sites/{your server name}/` in the frontend Gimbal shell's world. Normally, we want to do all this stuff from the frontend so we don't have to touch `ssh` once things are set up, but this is needed bootstrapping so we can access the frontend in the first place.)
 
-Once that `sites/` directory is created, the server will be willing to grab a certificate and start serving content for your host. There's no "site content" yet, but you can access the API endpoints directly. In a browser, open:
+Once that directory in `//sites` is created, the server will be willing to grab a certificate and start serving content for your host. There's no content yet to serve at `https://{your server}/`, but you can access the API endpoints directly. In a browser, open:
 
-https://{your server}/grits/v1/content/client/lib/gimbal/
+`https://{your server}/grits/v1/content/client/lib/gimbal/`
 
-... and it'll show you that frontend Gimbal interface.
+... and it'll show you that frontend Gimbal interface from the screenshots above.
 
 Run:
 
@@ -139,14 +139,14 @@ test()
 
 That'll run you through a little self test.
 
-You can also try populating some "frontend" content.
+You can also try populating some site content:
 
 ```
 mkdir('//sites/{your server}/content')
 echo('Hello!').to('//sites/{your server}/content/index.html')
 ```
 
-Then open https://{your server}/
+Then open `https://{your server}/`.
 
 Assuming that works, you can start populating content if you like. `upload().to(filename)` and `unzip(filename)` may be useful. Bear in mind that it is trivial to maintain multiple copy-on-write versions of the site content:
 
@@ -157,9 +157,9 @@ echo('version 1').to('dev/v1/index.html')
 ln('dev/v1','content',{ff:1})
 ```
 
-(That "ff" option requests to forcibly overwrite whatever's in `content` with a copy of `dev/v1`, without the normal Unix semantics of creating a new file within `content/` if `content/` already exists.)
+(That `ff` option requests to forcibly overwrite whatever's in `content` with a copy of `dev/v1`, without the normal Unix semantics of creating a new file within `content/` if `content/` already exists.)
 
-And then, if you want to work on a v2 of the site:
+If you want to work on a v2 of the site:
 
 ```
 ln('dev/v1','dev/v2',{ff:1})
@@ -169,16 +169,16 @@ And then, make edits to `dev/v2`, and then you can observe them at `https://{you
 
 Hopefully this all gives the flavor of the intent. When you're done, hit Ctrl-C on the backend and the server should shut down cleanly. If it hangs because it can't unmount the FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
 
-And yes it's on the roadmap to make it runnable via systemctl, and file permissions so that not everyone can see and edit `//sites/{your server}/dev`. Both of them would be good to add.
+And yes it's on the roadmap to make it runnable via systemctl, and file permissions so that not everyone can see and edit `//sites/{your server}/dev`. Both of those things would be good to add.
 
 ## How It Works
 
-So nomenclature wise, the system is split into two coordinating pieces:
+Nomenclature-wise, the system is split into two cooperating pieces:
 
-* **Grits** is a backend which provides a read-writable space with useful primitives for sharing and replicating content, and serves web sites based on that content
-* **Gimbal** is a frontend which provides a Unix-like shell and "window manager" of sorts that runs in the browser and can do operations on the filesystem
+* **Grits** is the backend which provides a read-writable space with useful primitives for sharing and replicating content, and serves web sites based on that content
+* **Gimbal** is the frontend which provides a Unix-like shell and "window manager" of sorts that runs in the browser and can do operations on the filesystem
 
-### Filesystem (Grits)
+### Backend Piece (Grits)
 
 The "filesystem" here is specifically constructed with operating principles that are useful to Gimbal-style apps, as well as general file replication operations that are useful for any static content. It is implemented as a Merkle tree, which provides several advantages:
 
@@ -218,20 +218,17 @@ And so on.
 
 There are four main operations available on a Grits filesystem.
 
-**get(cid)** will return the bytestream for a given CID.
-
-**put(cid, bytes)** will insert data for a new CID into the blob store, if it is not already present.
-
-**lookup(path)** resolves a path within the namespace.
-
-**link(path, cid)** defines a path to point to a particular metadata CID, overwriting any previous value. Linking to
+* **get(cid)** will return the bytestream for a given CID.
+* **put(cid, bytes)** will insert data for a new CID into the blob store, if it is not already present.
+* **lookup(path)** resolves a path within the namespace.
+* **link(path, cid)** defines a path to point to a particular metadata CID, overwriting any previous value. Linking to
 `nil` or `""` will delete the given path, removing it from its parent's directory listing.
 
-`lookup` and `link` will do a good bit of looking within the blob store to execute; you could do that remotely also (by fetching blobs to walk down the tree manually), but this would introduce significant latency. Lookups, in general, will return the LookupResponse structure from `namestore.go`, meaning that you can skip the intermediate indirection and do one lookup and then immediately load the content blob for the file without further investigation.
+`lookup` and `link` will do a good bit of looking within the blob store to execute; you could do that remotely also (by fetching blobs to walk down the tree manually), but that would be very slow. Lookups, in general, will return the LookupResponse structure from `namestore.go`, meaning that you can skip the intermediate indirection and do one lookup and then immediately load the content blob for the file without further investigation.
 
 #### Atomicity
 
-Both lookup() and link() take any number of paths in their argument, and link() allows you to make assertions about the current state of the filesystem (for example asserting that a path you are writing is `nil` previous to the write, if you want to guard against overwriting a previous entry). This combination allows for atomic operations. In particular, you can serialize big operations on the file store via an OCC approach: First gather the existing state of what you want to modify, then execute a write which asserts that everything you're modifying has the value you previously observed. Then, on an assertion failure, try again until the assertion succeeds which means the write executes.
+Both lookup() and link() take any number of paths in their argument, and link() allows you to make assertions about the current state of the filesystem (for example asserting that a path you are writing is `nil` previous to the write, if you want to guard against overwriting a previous entry). This combination allows for atomic operations. In particular, you can serialize big operations on the file store via an OCC approach: First gather the existing state of what you want to modify, then execute a write which asserts that everything you're modifying has the value you previously observed. Then, on an assertion failure, re-read and try again until the assertion succeeds, which means the write has finally succeeded.
 
 #### Notifications
 
@@ -239,7 +236,7 @@ Another thing which falls out of this naturally is watches for modification -- s
 
 #### Performance
 
-The remote performance is pretty bad right now. It should be possible to do prefetching more cleverly than we're doing now. Also, when configured to (when concurrent access isn't expected), we should batch up writes into long lists of write-back-cached "path/CID/assertions" tuples. That should make it better. But, for now, it's not super fast when doing extensive I/O remotely.
+The remote performance is pretty mediocre right now. It should be possible to do prefetching more cleverly than we're doing now. Also, when configured to (when concurrent access isn't expected), we should batch up writes into long lists of write-back-cached "path/CID/assertions" tuples. That should make it better. But, for now, it's not super fast when doing I/O remotely with writes involved.
 
 Reading (serving the read-only bits of the site) should already be faster than a normal web site, if the service worker is enabled. Try it out, see if that's the reality.
 
@@ -251,9 +248,9 @@ There are some pretty essential improvements which are planned for the near futu
 * Automatic copy-on-write backups and file history
 * Fixes to naming conventions, versioning of file formats, new stabilized version of file and wire formats
 
-### Frontend (Gimbal)
+### Frontend Piece (Gimbal)
 
-"Gimbal" refers to the whole frontend system, notably including `gsh` the command shell and `gwm` the "window manager". Within `gwm` are widgets including `gterm` the terminal, and a file browser and editor which are creatively invoked via `files` and `edit`.
+"Gimbal" refers to the whole frontend system, notably including `gsh` the command shell and `gwm` the "window manager". Within `gwm` are widgets including `gterm` the terminal, and a file browser and editor which are creatively titled `files` and `edit`.
 
 The shell the system presents is basically just a Javascript console with a couple extra features.
 
@@ -279,21 +276,25 @@ $ ls()
 
 #### Paths
 
-Volumes are accessible via `//{volume name}/{path}`. Note, I want to do away with the "different volumes for home/client/sys" soon. It should by default all be one unified volume, //root/, so that usually you don't type the volume, but just /home/moise or /sites/{your server} as would be more normal.
+Volumes are accessible via `//{volume name}/{path}`. Note, I want to do away with the "different volumes for `home`, `client`, `sys`" approach soon. It should by default all be one unified volume, `//root/`, so that usually you don't type the volume, but just `/home/moise` or `/sites/{your server}` as is more normal.
 
-`..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way. There are no symbolic links.
+`..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way.
 
-You can use `glob({pattern})` to get a list of files matching that pattern.
+There are no symbolic links.
+
+You can use `glob({pattern})` to get a list of files matching the pattern.
 
 #### Chaining
 
-The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which goes via the same proxy which found the commands in the first place. Commands are implemented in `//client/lib/{command name}/main.js`. See the comments at the top of `//client/lib/gimbal/gsh.js` for more about the details of how it all works.
+The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which then go via the same proxy as the shell uses to find commands. When called on a `Result`, commands will chain together with the output from the command that created that `Result`.
+
+Commands are implemented in `//client/lib/{command name}/main.js`. See the comments at the top of `//client/lib/gimbal/gsh.js` for more about the details of how this all works.
 
 ### Web Hosting
 
-From the Gimbal shell, you can move stuff from there into `//sites/{your server}/content` and it'll show up on the `https://{your server}/` web site. You can also make arbitrary new directories under `//sites`, and stuff in their `content/` directories will get served as normal (assuming that you arrange for DNS for whatever host to point to your server).
+From the Gimbal shell, you can move stuff into `//sites/{your server}/content` and it'll show up in the root of `https://{your server}/`. You can also make arbitrary new directories under `//sites` which will effectively make new vhosts (assuming you've arranged for DNS for whatever vhost to point to your server).
 
-(You can, if you like, set up a DNS wildcard so that `*.{your server}.com` all points to the server where Grits is running. In that case, anything that gets placed in `//sites/{whatever}.{your server}.com/content` will become a live site automatically.)
+(You can, if you like, set up a DNS wildcard so that `*.{your server}.com` all points to the server where Grits is running. In that case, anything that gets placed in `//sites/{whatever}.{your server}.com/content` will become a live site automatically. This may be useful for testing.)
 
 ## Code layout
 
