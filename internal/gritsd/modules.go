@@ -199,6 +199,18 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return swModule, nil
 
+	case "auth":
+		var authConfig AuthModuleConfig
+		if err := json.Unmarshal(rawConfig, &authConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal Auth module config: %v", err)
+		}
+
+		authModule, err := NewAuthModule(s, &authConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to instantiate auth module: %v", err)
+		}
+		return authModule, nil
+
 	case "startup":
 		var startupConfig StartupModuleConfig
 		if err := json.Unmarshal(rawConfig, &startupConfig); err != nil {

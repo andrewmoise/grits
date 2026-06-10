@@ -7,6 +7,8 @@ require (
 	github.com/miekg/dns v1.1.57
 	github.com/mr-tron/base58 v1.2.0
 	github.com/multiformats/go-multihash v0.2.3
+	golang.org/x/crypto v0.16.0
+	golang.org/x/sync v0.20.0
 )
 
 require (
@@ -14,10 +16,8 @@ require (
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/multiformats/go-varint v0.0.7 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
-	golang.org/x/crypto v0.16.0 // indirect
 	golang.org/x/mod v0.18.0 // indirect
 	golang.org/x/net v0.19.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/tools v0.16.1 // indirect
 	lukechampine.com/blake3 v1.2.1 // indirect
