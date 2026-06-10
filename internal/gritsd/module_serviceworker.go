@@ -32,19 +32,19 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 
 		serve := func(path, volumePath string, tmpl bool) {
 			httpModule.Mux.HandleFunc(path, httpModule.requestMiddleware(
-				swm.serveFromClientVolume(volumePath, tmpl)))
+				swm.serveFromVolume(volumePath, tmpl)))
 		}
 
 		// JS bundles that get the module/SW template substitution.
-		serve("/grits-serviceworker.js", "serviceworker/grits-serviceworker.js", true)
+		serve("/grits-serviceworker.js", "lib/serviceworker/grits-serviceworker.js", true)
 		serve("/grits-GritsClient-sw.js", "lib/grits/GritsClient.js", true)
 		serve("/grits-MirrorManager-sw.js", "lib/grits/MirrorManager.js", true)
 		serve("/grits-HashVerifier-sw.js", "lib/grits/HashVerifier.js", true)
 		serve("/grits-PerformanceTracker-sw.js", "lib/grits/PerformanceTracker.js", true)
 
-		// Self-test HTML — served verbatim from the client volume, no templating.
-		serve("/grits/v1/swtest", "serviceworker/swtest.html", false)
-		serve("/grits/v1/swtest/", "serviceworker/swtest.html", false)
+		// Self-test HTML — served verbatim from the volume, no templating.
+		serve("/grits/v1/swtest", "lib/serviceworker/swtest.html", false)
+		serve("/grits/v1/swtest/", "lib/serviceworker/swtest.html", false)
 
 		// Self-test ping endpoint. The SW intercepts this when active;
 		// when absent, the server responds 404 so the test can detect
@@ -104,15 +104,15 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 	return swm, nil
 }
 
-func (swm *ServiceWorkerModule) clientVolume() Volume {
-	return swm.Server.FindVolumeByName("client")
+func (swm *ServiceWorkerModule) rootVolume() Volume {
+	return swm.Server.FindVolumeByName("root")
 }
 
-func (swm *ServiceWorkerModule) serveFromClientVolume(volumePath string, applyTemplate bool) http.HandlerFunc {
+func (swm *ServiceWorkerModule) serveFromVolume(volumePath string, applyTemplate bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		vol := swm.clientVolume()
+		vol := swm.rootVolume()
 		if vol == nil {
-			http.Error(w, "Client volume not found", http.StatusInternalServerError)
+			http.Error(w, "Volume not found", http.StatusInternalServerError)
 			return
 		}
 
@@ -140,7 +140,7 @@ func (swm *ServiceWorkerModule) serveFromClientVolume(volumePath string, applyTe
 			result = processTemplateForSW(result)
 			result = strings.ReplaceAll(result, "{{SW_DIR_HASH}}", string(swm.getClientDirHash()))
 
-			swNode, err := vol.LookupNode("serviceworker/grits-serviceworker.js", grits.BackendPrincipal)
+			swNode, err := vol.LookupNode("lib/serviceworker/grits-serviceworker.js", grits.BackendPrincipal)
 			if err != nil || swNode == nil {
 				http.Error(w, "Service worker script not found", http.StatusInternalServerError)
 				return
@@ -156,7 +156,7 @@ func (swm *ServiceWorkerModule) serveFromClientVolume(volumePath string, applyTe
 }
 
 // contentTypeForVolumePath returns an appropriate Content-Type for files
-// served through serveFromClientVolume. Kept small — we only serve a handful
+// served through serveFromVolume. Kept small — we only serve a handful
 // of file types through this path.
 func contentTypeForVolumePath(volumePath string) string {
 	switch {
@@ -172,11 +172,11 @@ func contentTypeForVolumePath(volumePath string) string {
 }
 
 func (swm *ServiceWorkerModule) getClientDirHash() grits.BlobAddr {
-	vol := swm.clientVolume()
+	vol := swm.rootVolume()
 	if vol == nil {
-		return "(no client volume)"
+		return "(no volume)"
 	}
-	node, err := vol.LookupNode("serviceworker", grits.BackendPrincipal)
+	node, err := vol.LookupNode("lib/serviceworker", grits.BackendPrincipal)
 	if err != nil || node == nil {
 		return grits.BlobAddr(fmt.Sprintf("(error: %v)", err))
 	}

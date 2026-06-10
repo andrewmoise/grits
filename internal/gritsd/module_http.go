@@ -68,8 +68,8 @@ type HTTPModuleConfig struct {
 	CertPath string `json:"certPath,omitempty"`
 	KeyPath  string `json:"keyPath,omitempty"`
 
-	// Which volume holds deployed content. Defaults to "sites".
-	// Content is served from //{volume}/{hostname}/content/{path}.
+	// Which volume holds deployed content. Defaults to "root".
+	// Content is served from /sites/{hostname}/content/{path}.
 	ContentVolume string `json:"contentVolume,omitempty"`
 
 	MaxUploadSize int64 `json:"maxUploadSize,omitempty"`
@@ -128,7 +128,7 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 		config.MaxUploadSize = DefaultMaxUploadSize
 	}
 	if config.ContentVolume == "" {
-		config.ContentVolume = "sites"
+		config.ContentVolume = "root"
 	}
 	if config.EnableTls {
 		if config.AutoCertificate && config.CertbotEmail == "" {
@@ -327,7 +327,7 @@ func (hm *HTTPModule) hostnameHasContent(hostname string) bool {
 	if volume == nil {
 		return false
 	}
-	node, err := volume.LookupNode(hostname, grits.BackendPrincipal)
+	node, err := volume.LookupNode("sites/"+hostname, grits.BackendPrincipal)
 	if err != nil || node == nil {
 		return false
 	}
@@ -495,7 +495,7 @@ func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Reques
 	urlPath := strings.TrimPrefix(r.URL.Path, "/")
 	urlPath = strings.TrimRight(urlPath, "/")
 
-	volumePath := path.Join(hostname, "content", urlPath)
+	volumePath := path.Join("sites", hostname, "content", urlPath)
 
 	if !Validate("relativePath", volumePath) {
 		http.Error(w, "Invalid path", http.StatusBadRequest)

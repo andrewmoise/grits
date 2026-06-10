@@ -1,5 +1,5 @@
 export const help = `\
-testing — run all test.js suites found in //client/lib
+testing — run all test.js suites found in /lib
 
 Usage:
   testing()
@@ -94,8 +94,8 @@ export async function invoke(shell, previous, args) {
           const randSuffix = Math.random().toString(36).slice(2, 10);
           const scratchPath = `tmp/gimbal-test/${randSuffix}`;
           // Ensure path exists using mkdir -p semantics
-          await shell.eval(`mkdir('//sys/${scratchPath}', {p:1})`);
-          const scratch = `//sys/${scratchPath}`;
+          await shell.eval(`mkdir('//root/tmp/${scratchPath}', {p:1})`);
+          const scratch = `//root/tmp/${scratchPath}`;
 
           try {
             await fn(shell, scratch);

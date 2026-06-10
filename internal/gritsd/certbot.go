@@ -278,31 +278,31 @@ func (hm *HTTPModule) WarmUpCert(hostname string) error {
 	return err
 }
 
-// listContentHostnames returns the top-level directory names in the content volume.
+// listContentHostnames returns the hostname directories under sites/ in the volume.
 func (hm *HTTPModule) listContentHostnames(volume Volume) ([]string, error) {
-	node, err := volume.LookupNode("", grits.BackendPrincipal)
+	node, err := volume.LookupNode("sites", grits.BackendPrincipal)
 	if err != nil {
-		return nil, fmt.Errorf("failed to look up content volume root: %v", err)
+		return nil, fmt.Errorf("failed to look up sites directory: %v", err)
 	}
 	defer node.Release()
 
 	if node.Metadata().Type != grits.GNodeTypeDirectory {
-		return nil, fmt.Errorf("content volume root is not a directory")
+		return nil, fmt.Errorf("sites directory is not a directory")
 	}
 
 	blob, err := node.ExportedBlob()
 	if err != nil {
-		return nil, fmt.Errorf("failed to read content volume root: %v", err)
+		return nil, fmt.Errorf("failed to read sites directory: %v", err)
 	}
 
 	data, err := blob.Read(0, blob.GetSize())
 	if err != nil {
-		return nil, fmt.Errorf("failed to read content volume root blob: %v", err)
+		return nil, fmt.Errorf("failed to read sites directory blob: %v", err)
 	}
 
 	var dirListing map[string]string
 	if err := json.Unmarshal(data, &dirListing); err != nil {
-		return nil, fmt.Errorf("failed to decode content volume root: %v", err)
+		return nil, fmt.Errorf("failed to decode sites directory: %v", err)
 	}
 
 	var hostnames []string
@@ -310,7 +310,7 @@ func (hm *HTTPModule) listContentHostnames(volume Volume) ([]string, error) {
 		if Validate("hostname", name) && strings.Contains(name, ".") {
 			hostnames = append(hostnames, name)
 		} else {
-			log.Printf("HTTP: skipping non-FQDN hostname %q from content volume", name)
+			log.Printf("HTTP: skipping non-FQDN hostname %q from sites directory", name)
 		}
 	}
 	return hostnames, nil
