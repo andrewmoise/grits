@@ -1200,7 +1200,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 		log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
 	}
 
-	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress())
+	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
 		return
@@ -1219,7 +1219,7 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
 		return
 	}
-	err := volume.LinkByMetadata(path, "")
+	err := volume.LinkByMetadata(path, "", grits.BackendPrincipal)
 	if err != nil {
 		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
 		return

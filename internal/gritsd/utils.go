@@ -26,7 +26,7 @@ func ImportLocalDir(volume Volume, localPath string, volumePath string) error {
 		return err
 	}
 
-	return volume.LinkByMetadata(volumePath, node.MetadataBlob().GetAddress())
+	return volume.LinkByMetadata(volumePath, node.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 }
 
 // refHolder keeps CachedFile and FileNode references alive until we're done
@@ -153,15 +153,16 @@ func importDir(volume Volume, localPath string, info os.FileInfo, h *refHolder) 
 
 // ReadVolumeFile reads the full content of a file stored in a volume.
 // Returns the file bytes, or an error if the file doesn't exist or can't be read.
-// The caller is responsible for the returned bytes (the underlying CachedFile
-// reference is released before returning).
-func ReadVolumeFile(srv *Server, volumeName, path string) ([]byte, error) {
+// The principal is used for permission checks. The caller is responsible for
+// the returned bytes (the underlying CachedFile reference is released before
+// returning).
+func ReadVolumeFile(srv *Server, volumeName, path string, principal *grits.Principal) ([]byte, error) {
 	volume := srv.FindVolumeByName(volumeName)
 	if volume == nil {
 		return nil, fmt.Errorf("ReadVolumeFile: volume %q not found", volumeName)
 	}
 
-	fileNode, err := volume.LookupNode(path, grits.BackendPrincipal)
+	fileNode, err := volume.LookupNode(path, principal)
 	if err != nil {
 		return nil, fmt.Errorf("ReadVolumeFile: lookup %q in %q: %w", path, volumeName, err)
 	}
@@ -206,7 +207,7 @@ func ensureVolumeParentDirs(volume Volume, parentPath string) error {
 				return fmt.Errorf("creating dir node for %q: %w", acc, dirErr)
 			}
 			defer dirNode.Release()
-			if linkErr := volume.LinkByMetadata(acc, dirNode.MetadataBlob().GetAddress()); linkErr != nil {
+			if linkErr := volume.LinkByMetadata(acc, dirNode.MetadataBlob().GetAddress(), grits.BackendPrincipal); linkErr != nil {
 				return fmt.Errorf("linking dir %q: %w", acc, linkErr)
 			}
 		}
@@ -216,8 +217,8 @@ func ensureVolumeParentDirs(volume Volume, parentPath string) error {
 
 // WriteVolumeFile stores data as a file at the given path within a volume,
 // replacing any existing file at that path. Parent directories are created
-// automatically if they don't exist.
-func WriteVolumeFile(srv *Server, volumeName, path string, data []byte) error {
+// automatically if they don't exist. The principal is used for permission checks.
+func WriteVolumeFile(srv *Server, volumeName, path string, data []byte, principal *grits.Principal) error {
 	volume := srv.FindVolumeByName(volumeName)
 	if volume == nil {
 		return fmt.Errorf("WriteVolumeFile: volume %q not found", volumeName)
@@ -246,7 +247,7 @@ func WriteVolumeFile(srv *Server, volumeName, path string, data []byte) error {
 	}
 	defer metadataNode.Release()
 
-	if err := volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress()); err != nil {
+	if err := volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress(), principal); err != nil {
 		return fmt.Errorf("WriteVolumeFile: linking %q: %w", path, err)
 	}
 
@@ -255,8 +256,9 @@ func WriteVolumeFile(srv *Server, volumeName, path string, data []byte) error {
 
 // ReadJSONL reads a JSONL (JSON Lines) file from a volume and returns each
 // non-empty line as a raw byte slice. Lines with only whitespace are omitted.
-func ReadJSONL(srv *Server, volumeName, path string) ([][]byte, error) {
-	data, err := ReadVolumeFile(srv, volumeName, path)
+// The principal is used for permission checks.
+func ReadJSONL(srv *Server, volumeName, path string, principal *grits.Principal) ([][]byte, error) {
+	data, err := ReadVolumeFile(srv, volumeName, path, principal)
 	if err != nil {
 		return nil, err
 	}
@@ -273,8 +275,9 @@ func ReadJSONL(srv *Server, volumeName, path string) ([][]byte, error) {
 }
 
 // WriteJSONL writes a set of records as a JSONL (JSON Lines) file to a volume.
-// Each record is marshalled to JSON and written as one line.
-func WriteJSONL(srv *Server, volumeName, path string, records []map[string]any) error {
+// Each record is marshalled to JSON and written as one line. The principal is
+// used for permission checks.
+func WriteJSONL(srv *Server, volumeName, path string, records []map[string]any, principal *grits.Principal) error {
 	var buf bytes.Buffer
 	for _, rec := range records {
 		line, err := json.Marshal(rec)
@@ -284,5 +287,5 @@ func WriteJSONL(srv *Server, volumeName, path string, records []map[string]any) 
 		buf.Write(line)
 		buf.WriteByte('\n')
 	}
-	return WriteVolumeFile(srv, volumeName, path, buf.Bytes())
+	return WriteVolumeFile(srv, volumeName, path, buf.Bytes(), principal)
 }

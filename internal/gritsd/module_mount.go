@@ -1485,7 +1485,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		dirtyNode.mtx.Lock()
 		dirtyNode.path = fullNewPath
 
-		err := gn.module.volume.LinkByMetadata(fullPath, grits.NilAddr)
+		err := gn.module.volume.LinkByMetadata(fullPath, grits.NilAddr, grits.BackendPrincipal)
 		if grits.IsNotDir(err) || grits.IsNotExist(err) {
 			// Having an error is actually fine here; we don't care too much about the source
 			// as it may not exist yet in the merkle tree. As long as it's not some internal

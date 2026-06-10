@@ -88,29 +88,29 @@ func setupLocalServerWithData(t *testing.T, port int, volumeName string) (*Serve
 	defer dir2.Release()
 
 	// Link everything into the volume
-	err = localVolume.LinkByMetadata("testdir", dir1.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata("testdir", dir1.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link testdir: %v", err)
 	}
 
-	err = localVolume.LinkByMetadata("testdir/file1.txt", node1.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata("testdir/file1.txt", node1.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link file1: %v", err)
 	}
 	testData["testdir/file1.txt"] = content1.GetAddress()
 
-	err = localVolume.LinkByMetadata("testdir/file2.txt", node2.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata("testdir/file2.txt", node2.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link file2: %v", err)
 	}
 	testData["testdir/file2.txt"] = content2.GetAddress()
 
-	err = localVolume.LinkByMetadata("testdir/subdir", dir2.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata("testdir/subdir", dir2.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link subdir: %v", err)
 	}
 
-	err = localVolume.LinkByMetadata("testdir/subdir/file3.txt", node3.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata("testdir/subdir/file3.txt", node3.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link file3: %v", err)
 	}
@@ -129,7 +129,7 @@ func setupLocalServerWithData(t *testing.T, port int, volumeName string) (*Serve
 	}
 	defer rootNode.Release()
 
-	err = localVolume.LinkByMetadata("root.txt", rootNode.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata("root.txt", rootNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link root file: %v", err)
 	}
@@ -416,7 +416,7 @@ func TestRemoteVolumeMultipleFiles(t *testing.T) {
 		defer node.Release()
 
 		path := fmt.Sprintf("testdir/file%d.txt", i)
-		err = localVolume.LinkByMetadata(path, node.MetadataBlob().GetAddress())
+		err = localVolume.LinkByMetadata(path, node.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 		if err != nil {
 			t.Fatalf("Failed to link file %d: %v", i, err)
 		}

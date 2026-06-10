@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"grits/internal/grits"
 	"io"
 	"net/http"
 	"strings"
@@ -23,7 +24,7 @@ func hashPasswordForTest(t *testing.T, password string) string {
 func writeUserRecord(t *testing.T, s *Server, username, pwdHash string) {
 	t.Helper()
 
-	lines, err := ReadJSONL(s, "root", usersFilePath)
+	lines, err := ReadJSONL(s, "root", usersFilePath, grits.BackendPrincipal)
 	if err != nil {
 		// File doesn't exist yet — that's fine, start empty
 		lines = nil
@@ -50,7 +51,7 @@ func writeUserRecord(t *testing.T, s *Server, username, pwdHash string) {
 		})
 	}
 
-	if err := WriteJSONL(s, "root", usersFilePath, records); err != nil {
+	if err := WriteJSONL(s, "root", usersFilePath, records, grits.BackendPrincipal); err != nil {
 		t.Fatalf("WriteJSONL: %v", err)
 	}
 }
@@ -123,11 +124,11 @@ func TestReadWriteJSONL(t *testing.T) {
 		{"username": "bob", "role": "user"},
 	}
 
-	if err := WriteJSONL(server, "testjsonl", "data/users.jsonl", records); err != nil {
+	if err := WriteJSONL(server, "testjsonl", "data/users.jsonl", records, grits.BackendPrincipal); err != nil {
 		t.Fatalf("WriteJSONL: %v", err)
 	}
 
-	lines, err := ReadJSONL(server, "testjsonl", "data/users.jsonl")
+	lines, err := ReadJSONL(server, "testjsonl", "data/users.jsonl", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("ReadJSONL: %v", err)
 	}

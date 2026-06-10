@@ -25,7 +25,7 @@ type Volume interface {
 	CreateTreeNode() (grits.FileNode, error)
 	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (grits.FileNode, error)
 
-	LinkByMetadata(path string, metadataAddr grits.BlobAddr) error
+	LinkByMetadata(path string, metadataAddr grits.BlobAddr, principal *grits.Principal) error
 	MultiLink(requests []*grits.LinkRequest, returnResults bool, principal *grits.Principal) (*grits.LookupResponse, error)
 
 	AddBlob(path string) (grits.CachedFile, error)
@@ -234,11 +234,11 @@ func (wv *LocalVolume) MultiLink(requests []*grits.LinkRequest, returnResults bo
 	return result, nil
 }
 
-func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr) error {
+func (wv *LocalVolume) LinkByMetadata(name string, metadataAddr grits.BlobAddr, principal *grits.Principal) error {
 	_, err := wv.MultiLink([]*grits.LinkRequest{{
 		Path:    name,
 		NewAddr: metadataAddr,
-	}}, false, grits.BackendPrincipal)
+	}}, false, principal)
 	return err
 }
 

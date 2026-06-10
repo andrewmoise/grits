@@ -277,7 +277,7 @@ func TestExternalModificationsWithInvalidation(t *testing.T) {
 
 	// 1. Delete file1.txt
 	t.Log("  Deleting testdir/file1.txt...")
-	err = vol.LinkByMetadata("testdir/file1.txt", grits.NilAddr)
+	err = vol.LinkByMetadata("testdir/file1.txt", grits.NilAddr, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to delete file1 via volume: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestExternalModificationsWithInvalidation(t *testing.T) {
 	}
 	defer newNode.Release()
 
-	err = vol.LinkByMetadata("testdir/newfile.txt", newNode.MetadataBlob().GetAddress())
+	err = vol.LinkByMetadata("testdir/newfile.txt", newNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link newfile: %v", err)
 	}
@@ -323,12 +323,12 @@ func TestExternalModificationsWithInvalidation(t *testing.T) {
 	// 4. Delete the subdir directory (which has file3.txt in it)
 	t.Log("  Deleting testdir/subdir/ (non-empty)...")
 	// First delete the file inside
-	err = vol.LinkByMetadata("testdir/subdir/file3.txt", grits.NilAddr)
+	err = vol.LinkByMetadata("testdir/subdir/file3.txt", grits.NilAddr, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to delete file3: %v", err)
 	}
 	// Then delete the directory
-	err = vol.LinkByMetadata("testdir/subdir", grits.NilAddr)
+	err = vol.LinkByMetadata("testdir/subdir", grits.NilAddr, grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to delete subdir: %v", err)
 	}

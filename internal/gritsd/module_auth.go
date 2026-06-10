@@ -80,7 +80,7 @@ func (m *AuthModule) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	lines, err := ReadJSONL(m.Server, rootVolume, usersFilePath)
+	lines, err := ReadJSONL(m.Server, rootVolume, usersFilePath, grits.BackendPrincipal)
 	if err != nil {
 		if errors.Is(err, grits.ErrNotExist) {
 			// No users file yet — no users exist.

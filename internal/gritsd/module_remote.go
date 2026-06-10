@@ -199,7 +199,7 @@ func (rv *RemoteVolume) CreateBlobNode(contentAddr grits.BlobAddr, size int64) (
 	return nil, fmt.Errorf("cannot write to remote volume")
 }
 
-func (rv *RemoteVolume) LinkByMetadata(_ string, _ grits.BlobAddr) error {
+func (rv *RemoteVolume) LinkByMetadata(_ string, _ grits.BlobAddr, _ *grits.Principal) error {
 	return fmt.Errorf("cannot write to remote volume")
 }
 

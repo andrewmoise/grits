@@ -42,7 +42,7 @@ func TestLocalVolumePersistenceDirect(t *testing.T) {
 	defer blobNode.Release()
 
 	// Link the new blob to the local volume using the test path.
-	err = localVolume.LinkByMetadata(testPath, blobNode.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata(testPath, blobNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link blob in local volume: %v", err)
 	}
@@ -157,13 +157,13 @@ func TestLocalVolumeOperations(t *testing.T) {
 	log.Printf("Created empty tree node; metadata %s, content %s", treeNode.MetadataBlob().GetAddress(), treeNode.Metadata().ContentHash)
 
 	// Scenario 1: Create a node, link it, then release our reference
-	err = localVolume.LinkByMetadata("test", treeNode.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata("test", treeNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Can't make empty 'test' directory: %v", err)
 	}
 
 	blobPath := "test/file.txt"
-	err = localVolume.LinkByMetadata(blobPath, blobNode.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata(blobPath, blobNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LinkByMetadata for blob failed: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 
 	// Scenario 3: Link and release
 	treePath := "test/emptydir"
-	err = localVolume.LinkByMetadata(treePath, anotherTreeNode.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata(treePath, anotherTreeNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("LinkByMetadata for tree failed: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestLocalVolumeOperations(t *testing.T) {
 	}
 
 	// Link it into the tree and release
-	err = localVolume.LinkByMetadata(childPath, childNode.MetadataBlob().GetAddress())
+	err = localVolume.LinkByMetadata(childPath, childNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("Failed to link child to tree: %v", err)
 	}
@@ -301,8 +301,8 @@ func TestSerialNumberPersistence(t *testing.T) {
 	defer node.Release()
 
 	// Link and track the resulting serial number
-	vol1.LinkByMetadata("file1.txt", node.MetadataBlob().GetAddress())
-	vol1.LinkByMetadata("file2.txt", node.MetadataBlob().GetAddress())
+	vol1.LinkByMetadata("file1.txt", node.MetadataBlob().GetAddress(), grits.BackendPrincipal)
+	vol1.LinkByMetadata("file2.txt", node.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	expectedSerial := vol1.ns.GetSerialNumber()
 
 	// Because of .grits directory
@@ -326,7 +326,7 @@ func TestSerialNumberPersistence(t *testing.T) {
 	}
 
 	// Make another change and confirm serial number increments
-	vol2.LinkByMetadata("file3.txt", node.MetadataBlob().GetAddress())
+	vol2.LinkByMetadata("file3.txt", node.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 	if vol2.ns.GetSerialNumber() != expectedSerial+1 {
 		t.Errorf("Serial number did not increment correctly after load")
 	}
@@ -359,14 +359,14 @@ func TestLookupAndMultiLinkResults(t *testing.T) {
 	emptyTree, _ := vol.CreateTreeNode()
 	defer emptyTree.Release()
 
-	vol.LinkByMetadata("dir1", emptyTree.MetadataBlob().GetAddress())
-	vol.LinkByMetadata("dir2", emptyTree.MetadataBlob().GetAddress())
-	vol.LinkByMetadata("dir1/dir3", emptyTree.MetadataBlob().GetAddress())
+	vol.LinkByMetadata("dir1", emptyTree.MetadataBlob().GetAddress(), grits.BackendPrincipal)
+	vol.LinkByMetadata("dir2", emptyTree.MetadataBlob().GetAddress(), grits.BackendPrincipal)
+	vol.LinkByMetadata("dir1/dir3", emptyTree.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 
 	// Link the files
-	vol.LinkByMetadata("dir1/file1.txt", node1.MetadataBlob().GetAddress())
-	vol.LinkByMetadata("dir2/file2.txt", node2.MetadataBlob().GetAddress())
-	vol.LinkByMetadata("dir1/dir3/file3.txt", node3.MetadataBlob().GetAddress())
+	vol.LinkByMetadata("dir1/file1.txt", node1.MetadataBlob().GetAddress(), grits.BackendPrincipal)
+	vol.LinkByMetadata("dir2/file2.txt", node2.MetadataBlob().GetAddress(), grits.BackendPrincipal)
+	vol.LinkByMetadata("dir1/dir3/file3.txt", node3.MetadataBlob().GetAddress(), grits.BackendPrincipal)
 
 	// Test Lookup with a single path
 	lookupResponse, _ := vol.Lookup([]string{"dir1/file1.txt"}, "", nil, grits.BackendPrincipal)
@@ -530,7 +530,7 @@ func TestReadOnlyVolume_RejectsAllWrites(t *testing.T) {
 	defer rawCF.Release()
 
 	t.Run("LinkByMetadata", func(t *testing.T) {
-		err := vol.LinkByMetadata("x", rawCF.GetAddress())
+		err := vol.LinkByMetadata("x", rawCF.GetAddress(), grits.BackendPrincipal)
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
@@ -612,7 +612,7 @@ func TestReadOnlyVolume_ReadsStillWork(t *testing.T) {
 	}
 	defer node.Release()
 
-	if err := vol.LinkByMetadata("file.txt", node.MetadataBlob().GetAddress()); err != nil {
+	if err := vol.LinkByMetadata("file.txt", node.MetadataBlob().GetAddress(), grits.BackendPrincipal); err != nil {
 		t.Fatalf("LinkByMetadata: %v", err)
 	}
 
@@ -719,7 +719,7 @@ func TestBootstrap_ReadOnlyVolumeCanBootstrap(t *testing.T) {
 		t.Errorf("hello.txt: expected %q, got %q", "hello", got)
 	}
 
-	if err := vol.LinkByMetadata("new.txt", hello.MetadataBlob().GetAddress()); err == nil {
+	if err := vol.LinkByMetadata("new.txt", hello.MetadataBlob().GetAddress(), grits.BackendPrincipal); err == nil {
 		t.Error("expected write to fail on read-only volume, got nil")
 	}
 }
