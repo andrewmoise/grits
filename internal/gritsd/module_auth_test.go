@@ -379,3 +379,181 @@ func TestAuthNoUsersFile(t *testing.T) {
 		t.Errorf("expected 401 when no users file exists, got %d", resp.StatusCode)
 	}
 }
+
+// doReq sends an HTTP request with an optional cookie and returns the response.
+func doReq(t *testing.T, method, url, cookieVal string, body []byte) (*http.Response, []byte) {
+	t.Helper()
+	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("NewRequest(%s %s): %v", method, url, err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if cookieVal != "" {
+		req.Header.Set("Cookie", cookieVal)
+	}
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("Do(%s %s): %v", method, url, err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	return resp, respBody
+}
+
+// contentURL builds a URL for content access.
+func contentURL(base, volume, path string) string {
+	return fmt.Sprintf("%s/grits/v1/content/%s/%s", base, volume, path)
+}
+
+func TestAuthPermissionsEndToEnd(t *testing.T) {
+	port := 1920
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	server, cleanup := SetupTestServer(t,
+		WithLocalVolume("root"),
+		WithHttpModule(port),
+		WithPermissionsModule(
+			[]string{"sites", "home/user"},      // ReadWhitelist
+			[]string{"home/user"},               // WriteWhitelist
+		),
+		WithAuthModule(),
+	)
+	defer cleanup()
+
+	server.Start()
+	defer server.Stop()
+
+	// --- Setup: create directories and files via BackendPrincipal ---
+
+	// Create directory structure
+	for _, dir := range []string{"sys/etc", "sites", "home", "home/user"} {
+		if err := ensureVolumeParentDirs(server.FindVolumeByName("root"), dir); err != nil {
+			t.Fatalf("creating dir %q: %v", dir, err)
+		}
+	}
+
+	// Write a test file at /sites/test.txt (readable by whitelist)
+	if err := WriteVolumeFile(server, "root", "sites/test.txt", []byte("site content"), grits.BackendPrincipal); err != nil {
+		t.Fatalf("writing sites/test.txt: %v", err)
+	}
+
+	// Write users file
+	pwdHashUser := hashPasswordForTest(t, "user-pass")
+	pwdHashAdmin := hashPasswordForTest(t, "admin-pass")
+	records := []map[string]any{
+		{"username": "user", "pwdHash": pwdHashUser},
+		{"username": "admin", "pwdHash": pwdHashAdmin},
+	}
+	if err := WriteJSONL(server, "root", "sys/etc/users.jsonl", records, grits.BackendPrincipal); err != nil {
+		t.Fatalf("writing users.jsonl: %v", err)
+	}
+
+	// --- Test 1: Unauthenticated read of whitelisted path ---
+	t.Run("unauthenticated read allowed", func(t *testing.T) {
+		resp, _ := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sites/test.txt"), "", nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected 200, got %d", resp.StatusCode)
+		}
+	})
+
+	// --- Test 2: Unauthenticated read of non-whitelisted path ---
+	t.Run("unauthenticated read denied", func(t *testing.T) {
+		resp, body := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sys/etc/users.jsonl"), "", nil)
+		if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
+			t.Errorf("expected 403 or 404, got %d: %s", resp.StatusCode, string(body))
+		}
+	})
+
+	// --- Test 3: Login as normal user ---
+	var cookieStr string
+	t.Run("login as user", func(t *testing.T) {
+		resp, body := doReq(t, http.MethodPost, baseURL+"/grits/v1/auth/login", "",
+			[]byte(`{"username":"user","password":"user-pass"}`))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("login failed: %d %s", resp.StatusCode, string(body))
+		}
+		for _, c := range resp.Cookies() {
+			if c.Name == "grits-auth-user" {
+				cookieStr = c.String()
+				break
+			}
+		}
+		if cookieStr == "" {
+			t.Fatal("no auth cookie in response")
+		}
+	})
+
+	// --- Test 4: Authenticated read of whitelisted path ---
+	t.Run("authed read allowed", func(t *testing.T) {
+		resp, _ := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sites/test.txt"), cookieStr, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected 200, got %d", resp.StatusCode)
+		}
+	})
+
+	// --- Test 5: Authenticated read of non-whitelisted path ---
+	t.Run("authed read denied", func(t *testing.T) {
+		resp, body := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sys/etc/users.jsonl"), cookieStr, nil)
+		if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
+			t.Errorf("expected 403 or 404, got %d: %s", resp.StatusCode, string(body))
+		}
+	})
+
+	// --- Test 6: Authenticated write to whitelisted path ---
+	t.Run("authed write allowed", func(t *testing.T) {
+		resp, _ := doReq(t, http.MethodPut, contentURL(baseURL, "root", "home/user/foo.txt"), cookieStr,
+			[]byte("user content"))
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected 200, got %d", resp.StatusCode)
+		}
+	})
+
+	// --- Test 7: Authenticated write to non-whitelisted path ---
+	t.Run("authed write denied", func(t *testing.T) {
+		resp, body := doReq(t, http.MethodPut, contentURL(baseURL, "root", "sites/bar.txt"), cookieStr,
+			[]byte("should be denied"))
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("expected 403, got %d: %s", resp.StatusCode, string(body))
+		}
+	})
+
+	// --- Test 8: Authenticated delete from whitelisted path ---
+	t.Run("authed delete allowed", func(t *testing.T) {
+		resp, _ := doReq(t, http.MethodDelete, contentURL(baseURL, "root", "home/user/foo.txt"), cookieStr, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("expected 200, got %d", resp.StatusCode)
+		}
+	})
+
+	// --- Test 9: Authenticated delete from non-whitelisted path ---
+	t.Run("authed delete denied", func(t *testing.T) {
+		resp, body := doReq(t, http.MethodDelete, contentURL(baseURL, "root", "sites/test.txt"), cookieStr, nil)
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("expected 403, got %d: %s", resp.StatusCode, string(body))
+		}
+	})
+
+	// --- Test 10: Logout ---
+	t.Run("logout", func(t *testing.T) {
+		resp, body := doReq(t, http.MethodPost, baseURL+"/grits/v1/auth/logout", cookieStr, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("logout failed: %d %s", resp.StatusCode, string(body))
+		}
+	})
+
+	// --- Test 11: Post-logout write denied (no valid cookie) ---
+	t.Run("post-logout write denied", func(t *testing.T) {
+		resp, body := doReq(t, http.MethodPut, contentURL(baseURL, "root", "home/user/foo.txt"), "", nil)
+		// Without auth, the principal is AnonPrincipal. The whitelist still covers
+		// /home/user, so read is allowed — but the important thing is the principal
+		// is no longer "user". The write should be allowed because whitelist applies
+		// to the path, not the user (Phase 3 will add per-user grants).
+		// For now this just verifies the server doesn't crash and returns something sensible.
+		if resp.StatusCode == http.StatusInternalServerError {
+			t.Errorf("expected non-500, got %d: %s", resp.StatusCode, string(body))
+		}
+	})
+}

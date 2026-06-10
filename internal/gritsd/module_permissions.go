@@ -148,12 +148,9 @@ func (m *PermissionsModule) MakeLookupCallback(ns *grits.NameStore) grits.Lookup
 		log.Printf("Permissions [lookup]: checking %d paths", len(resp.Paths))
 
 		result := make([]*grits.PathNodePair, 0, len(resp.Paths))
-		denied := true
 
 		for _, pair := range resp.Paths {
-			if pathCoveredBy(pair.Path, m.Config.ReadWhitelist) {
-				denied = false
-			}
+			denied := !pathCoveredBy(pair.Path, m.Config.ReadWhitelist)
 			if denied {
 				// Replace this entry with access_denied, preserving the path.
 				// Don't change the number of entries or their paths.

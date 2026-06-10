@@ -139,3 +139,19 @@ func WithAuthModule() TestModuleInitializer {
 		s.AddModule(authModule)
 	}
 }
+
+// WithPermissionsModule is an initializer for adding the permissions module
+// to the server with the given read and write whitelists.
+func WithPermissionsModule(readWhitelist, writeWhitelist []string) TestModuleInitializer {
+	return func(t *testing.T, s *Server) {
+		permConfig := &PermissionsModuleConfig{
+			ReadWhitelist:  readWhitelist,
+			WriteWhitelist: writeWhitelist,
+		}
+		permModule, err := NewPermissionsModule(s, permConfig)
+		if err != nil {
+			t.Fatalf("Failed to create permissions module: %v", err)
+		}
+		s.AddModule(permModule)
+	}
+}

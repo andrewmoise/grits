@@ -397,6 +397,20 @@ func (s *HTTPModule) setupRoutes() {
 	s.HTTPServer.Handler = s.Mux
 }
 
+// contextKey is an unexported type for context keys to avoid collisions.
+type contextKey string
+
+const principalKey contextKey = "principal"
+
+// principalFromContext extracts the Principal associated with an HTTP request.
+// Returns AnonPrincipal if none has been set.
+func principalFromContext(r *http.Request) *grits.Principal {
+	if p, ok := r.Context().Value(principalKey).(*grits.Principal); ok {
+		return p
+	}
+	return grits.AnonPrincipal
+}
+
 /////
 // Middleware
 /////
@@ -452,6 +466,18 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 				w.Header().Set("X-Grits-Sw-Hash", override)
 			}
 		}
+
+		// Extract principal from cookie and Origin header for permission checks.
+		user := ""
+		if cookie, err := r.Cookie("grits-auth-user"); err == nil {
+			user = cookie.Value
+		}
+		principal := &grits.Principal{
+			User:   user,
+			Origin: r.Header.Get("Origin"),
+		}
+		ctx := context.WithValue(r.Context(), principalKey, principal)
+		r = r.WithContext(ctx)
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Calling handler\n")
 		next(w, r)
@@ -793,7 +819,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	lookupResponse, err := volume.Lookup(req.Paths, req.StartAddr, holdRef, grits.AnonPrincipal)
+	lookupResponse, err := volume.Lookup(req.Paths, req.StartAddr, holdRef, principalFromContext(r))
 	if err != nil {
 		if denied, ok := grits.IsAccessDenied(err); ok {
 			w.Header().Set("Content-Type", "application/json")
@@ -917,7 +943,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, req.Volume, "Link start\n")
 
-	linkResponse, err := volume.MultiLink(req.Requests, true, grits.BackendPrincipal)
+	linkResponse, err := volume.MultiLink(req.Requests, true, principalFromContext(r))
 	if err != nil {
 		log.Printf("HTTP API MultiLink() failed: %v", err)
 		if missing, ok := grits.IsBlobMissing(err); ok {
@@ -931,9 +957,18 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		}
 		if grits.IsAssertionFailed(err) {
 			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusConflict) // 409
-		} else {
-			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
+			return
 		}
+		if denied, ok := grits.IsAccessDenied(err); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "access_denied",
+				"path":  denied.Path,
+			})
+			return
+		}
+		http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -1019,7 +1054,7 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 		if *s.Config.ReadOnly {
 			http.Error(w, "Volume is read-only", http.StatusForbidden)
 		} else {
-			handleNamespaceDelete(volume, filePath, w)
+			handleNamespaceDelete(volume, filePath, w, r)
 		}
 	default:
 		http.Error(w, "Method not supported", http.StatusMethodNotAllowed)
@@ -1034,7 +1069,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET start\n")
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Looking up in volume\n")
 
-	lookupResponse, err := volume.Lookup([]string{path}, "", nil, grits.AnonPrincipal)
+	lookupResponse, err := volume.Lookup([]string{path}, "", nil, principalFromContext(r))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return
@@ -1080,7 +1115,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 		} else {
 			// Browser request — try to serve index.html instead.
 			indexPath := strings.TrimRight(path, "/") + "/index.html"
-			indexNode, err := volume.LookupNode(indexPath, grits.AnonPrincipal)
+			indexNode, err := volume.LookupNode(indexPath, principalFromContext(r))
 
 			// Fail if we don't have an index.html to serve
 			if err != nil {
@@ -1200,8 +1235,17 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 		log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
 	}
 
-	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress(), grits.BackendPrincipal)
+	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress(), principalFromContext(r))
 	if err != nil {
+		if denied, ok := grits.IsAccessDenied(err); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "access_denied",
+				"path":  denied.Path,
+			})
+			return
+		}
 		http.Error(w, fmt.Sprintf("Failed to link %s to namespace", path), http.StatusInternalServerError)
 		return
 	}
@@ -1210,7 +1254,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 	fmt.Fprintf(w, "File linked successfully")
 }
 
-func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
+func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter, r *http.Request) {
 	if grits.DebugHttp {
 		log.Printf("Received DELETE request for file: %s\n", path)
 	}
@@ -1219,8 +1263,17 @@ func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter) {
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
 		return
 	}
-	err := volume.LinkByMetadata(path, "", grits.BackendPrincipal)
+	err := volume.LinkByMetadata(path, "", principalFromContext(r))
 	if err != nil {
+		if denied, ok := grits.IsAccessDenied(err); ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error": "access_denied",
+				"path":  denied.Path,
+			})
+			return
+		}
 		http.Error(w, "Failed to link file to namespace", http.StatusInternalServerError)
 		return
 	}
