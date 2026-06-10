@@ -157,7 +157,7 @@ func TestAuthLoginSuccess(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithLocalVolume("root"),
 		WithHttpModule(1911),
-		WithAuthModule(),
+		WithAuthModule(nil, nil),
 	)
 	defer cleanup()
 
@@ -210,7 +210,7 @@ func TestAuthLoginWrongPassword(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithLocalVolume("root"),
 		WithHttpModule(1912),
-		WithAuthModule(),
+		WithAuthModule(nil, nil),
 	)
 	defer cleanup()
 
@@ -237,7 +237,7 @@ func TestAuthLoginUnknownUser(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithLocalVolume("root"),
 		WithHttpModule(1913),
-		WithAuthModule(),
+		WithAuthModule(nil, nil),
 	)
 	defer cleanup()
 
@@ -264,7 +264,7 @@ func TestAuthLoginInvalidUsername(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithLocalVolume("root"),
 		WithHttpModule(1914),
-		WithAuthModule(),
+		WithAuthModule(nil, nil),
 	)
 	defer cleanup()
 
@@ -289,7 +289,7 @@ func TestAuthLogout(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithLocalVolume("root"),
 		WithHttpModule(1915),
-		WithAuthModule(),
+		WithAuthModule(nil, nil),
 	)
 	defer cleanup()
 
@@ -336,7 +336,7 @@ func TestAuthLogout(t *testing.T) {
 func TestAuthLoginMethodNotAllowed(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithHttpModule(1916),
-		WithAuthModule(),
+		WithAuthModule(nil, nil),
 	)
 	defer cleanup()
 
@@ -358,7 +358,7 @@ func TestAuthNoUsersFile(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithLocalVolume("root"),
 		WithHttpModule(1917),
-		WithAuthModule(),
+		WithAuthModule(nil, nil),
 	)
 	defer cleanup()
 
@@ -415,11 +415,10 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithLocalVolume("root"),
 		WithHttpModule(port),
-		WithPermissionsModule(
+		WithAuthModule(
 			[]string{"sites", "home/user"},      // ReadWhitelist
 			[]string{"home/user"},               // WriteWhitelist
 		),
-		WithAuthModule(),
 	)
 	defer cleanup()
 

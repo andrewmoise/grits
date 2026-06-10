@@ -157,17 +157,6 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return peerModule, nil
 
-	case "permissions":
-		var permConfig PermissionsModuleConfig
-		if err := json.Unmarshal(rawConfig, &permConfig); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal permissions module config: %v", err)
-		}
-		permModule, err := NewPermissionsModule(s, &permConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create permissions module: %v", err)
-		}
-		return permModule, nil
-
 		// Configured pins are not enabled for a bit longer
 
 		//case "pin":

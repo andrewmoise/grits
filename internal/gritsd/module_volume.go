@@ -50,7 +50,6 @@ type LocalVolume struct {
 	persistMtx sync.Mutex
 	doPersist  bool
 
-	permissionsModule *PermissionsModule // set by permissions module hook; nil if not loaded
 }
 
 var _ = (Volume)((*LocalVolume)(nil))
@@ -81,6 +80,17 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, sparse bool, pers
 			return nil, fmt.Errorf("failed to load LocalVolume %s: %v", wv.name, err)
 		}
 	}
+
+	// Watch for an auth module to appear and register its permission callbacks.
+	server.AddModuleHook(func(module Module) {
+		auth, ok := module.(*AuthModule)
+		if !ok {
+			return
+		}
+		log.Printf("LocalVolume %q: registering auth permission callbacks", wv.name)
+		wv.ns.AddLookupCallback(auth.MakeLookupCallback())
+		wv.ns.AddLinkCallback(auth.MakeLinkCallback())
+	})
 
 	return wv, nil
 }
@@ -297,12 +307,6 @@ func (wv *LocalVolume) RegisterWatcher(watcher grits.FileTreeWatcher) {
 
 func (wv *LocalVolume) UnregisterWatcher(watcher grits.FileTreeWatcher) {
 	wv.ns.UnregisterWatcher(watcher)
-}
-
-func (wv *LocalVolume) SetPermissionsModule(m *PermissionsModule) {
-	wv.permissionsModule = m
-	wv.ns.AddLookupCallback(m.MakeLookupCallback(wv.ns))
-	wv.ns.AddLinkCallback(m.MakeLinkCallback(wv.ns))
 }
 
 // RootState represents the serialized state of a NameStore root

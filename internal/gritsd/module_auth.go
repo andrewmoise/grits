@@ -15,7 +15,18 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-type AuthModuleConfig struct{}
+type AuthModuleConfig struct {
+	// ReadWhitelist restricts which paths are visible in lookup responses.
+	// Empty means all paths are readable.
+	// Paths not covered are pruned silently from multi-path responses;
+	// direct requests to uncovered paths return access_denied.
+	ReadWhitelist []string `json:"readWhitelist,omitempty"`
+
+	// WriteWhitelist restricts which paths may be written via link operations.
+	// Empty means all paths are writable.
+	// Attempts to write outside the whitelist return ErrAccessDenied.
+	WriteWhitelist []string `json:"writeWhitelist,omitempty"`
+}
 
 type AuthModule struct {
 	Config *AuthModuleConfig
@@ -34,6 +45,7 @@ func NewAuthModule(server *Server, config *AuthModuleConfig) (*AuthModule, error
 		Server: server,
 	}
 
+	// Hook into HTTP module to register auth endpoints, if present.
 	server.AddModuleHook(func(module Module) {
 		httpModule, ok := module.(*HTTPModule)
 		if !ok {
@@ -55,7 +67,7 @@ func (m *AuthModule) Stop() error  { return nil }
 func (m *AuthModule) GetModuleName() string { return "auth" }
 func (*AuthModule) GetDependencies() []*Dependency {
 	return []*Dependency{
-		{ModuleType: "http", Type: DependRequired},
+		{ModuleType: "http", Type: DependOptional},
 	}
 }
 func (m *AuthModule) GetConfig() any { return m.Config }
@@ -205,4 +217,80 @@ func verifyArgon2id(password, encodedHash string) bool {
 	computedHash := argon2.IDKey([]byte(password), salt, time, memory, threads, keyLen)
 
 	return subtle.ConstantTimeCompare(computedHash, expectedHash) == 1
+}
+
+/////
+// Permission callbacks
+
+// pathCoveredBy returns true if path is equal to or a descendant of any
+// entry in the whitelist. An empty whitelist covers everything.
+func pathCoveredBy(path string, whitelist []string) bool {
+	if len(whitelist) == 0 {
+		return true
+	}
+	for _, entry := range whitelist {
+		if path == entry || strings.HasPrefix(path, entry+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// MakeLookupCallback returns a LookupCallback that enforces the read whitelist.
+func (m *AuthModule) MakeLookupCallback() grits.LookupCallback {
+	return func(resp *grits.LookupResponse, principal *grits.Principal) (*grits.LookupResponse, error) {
+		if resp == nil {
+			return nil, nil
+		}
+		if principal == grits.BackendPrincipal {
+			return resp, nil
+		}
+
+		log.Printf("Auth [lookup]: checking %d paths", len(resp.Paths))
+
+		result := make([]*grits.PathNodePair, 0, len(resp.Paths))
+
+		for _, pair := range resp.Paths {
+			denied := !pathCoveredBy(pair.Path, m.Config.ReadWhitelist)
+			if denied {
+				log.Printf("Auth [lookup]: access denied for %q", pair.Path)
+				result = append(result, &grits.PathNodePair{
+					Path:  pair.Path,
+					Error: "access_denied",
+				})
+			} else {
+				log.Printf("Auth [lookup]: allowing %q", pair.Path)
+				result = append(result, pair)
+			}
+		}
+
+		return &grits.LookupResponse{
+			Paths:        result,
+			SerialNumber: resp.SerialNumber,
+		}, nil
+	}
+}
+
+// MakeLinkCallback returns a LinkCallback that enforces the write whitelist.
+func (m *AuthModule) MakeLinkCallback() grits.LinkCallback {
+	return func(oldRoot, newRoot grits.FileNode, requests []*grits.LinkRequest, principal *grits.Principal) error {
+		log.Printf("Auth [link]: checking %d requests", len(requests))
+
+		if principal == grits.BackendPrincipal {
+			return nil
+		}
+
+		for _, req := range requests {
+			path := strings.TrimRight(req.Path, "/")
+
+			if !pathCoveredBy(path, m.Config.WriteWhitelist) {
+				log.Printf("Auth [link]: DENY %q (not in WriteWhitelist)", path)
+				return &grits.ErrAccessDenied{Path: path}
+			}
+
+			log.Printf("Auth [link]: ALLOW %q", path)
+		}
+
+		return nil
+	}
 }

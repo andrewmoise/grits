@@ -128,30 +128,18 @@ func WithMountModule(volumeName string, mountPoint string) TestModuleInitializer
 	}
 }
 
-// WithAuthModule is an initializer for adding the auth module to the server.
-func WithAuthModule() TestModuleInitializer {
+// WithAuthModule is an initializer for adding the auth module to the server
+// with optional read/write whitelists for permission enforcement.
+func WithAuthModule(readWhitelist, writeWhitelist []string) TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
-		authConfig := &AuthModuleConfig{}
+		authConfig := &AuthModuleConfig{
+			ReadWhitelist:  readWhitelist,
+			WriteWhitelist: writeWhitelist,
+		}
 		authModule, err := NewAuthModule(s, authConfig)
 		if err != nil {
 			t.Fatalf("Failed to create auth module: %v", err)
 		}
 		s.AddModule(authModule)
-	}
-}
-
-// WithPermissionsModule is an initializer for adding the permissions module
-// to the server with the given read and write whitelists.
-func WithPermissionsModule(readWhitelist, writeWhitelist []string) TestModuleInitializer {
-	return func(t *testing.T, s *Server) {
-		permConfig := &PermissionsModuleConfig{
-			ReadWhitelist:  readWhitelist,
-			WriteWhitelist: writeWhitelist,
-		}
-		permModule, err := NewPermissionsModule(s, permConfig)
-		if err != nil {
-			t.Fatalf("Failed to create permissions module: %v", err)
-		}
-		s.AddModule(permModule)
 	}
 }
