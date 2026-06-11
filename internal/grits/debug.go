@@ -24,6 +24,7 @@ var DebugHttpPerformance = false    // Debug HTTP performance
 var DebugRemotePerformance = false  // Debug remote volume performance
 var DebugBlobCache = false          // Debug pass-through LRU blob cache
 var DebugServerLifecycle = false    // Debug major server / module events
+var DebugAuth = false               // Debug auth permission lookups and decisions
 
 // More helpers, for performance analysis
 

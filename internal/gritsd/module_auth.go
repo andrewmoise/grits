@@ -369,7 +369,7 @@ func (m *AuthModule) resolvePermission(vol Volume, dirPath string, principal *gr
 
 		cfg, err := m.readAccessConfig(vol, acc)
 		if err != nil {
-			log.Printf("Auth [permission]: error reading %q: %v", acc+"/.grits/access.json", err)
+			grits.DebugLog(grits.DebugAuth, "Auth [permission]: error reading %q: %v", acc+"/.grits/access.json", err)
 			continue
 		}
 		if cfg == nil {
@@ -472,19 +472,19 @@ func (m *AuthModule) MakeLookupCallback(vol Volume) grits.LookupCallback {
 			return nil, nil
 		}
 
-		log.Printf("Auth [lookup]: checking %d paths", len(resp.Paths))
+		grits.DebugLog(grits.DebugAuth, "Auth [lookup]: checking %d paths", len(resp.Paths))
 
 		result := make([]*grits.PathNodePair, 0, len(resp.Paths))
 
 		for _, pair := range resp.Paths {
 			if !m.hasPermission(vol, pair.Path, principal, PermRead) {
-				log.Printf("Auth [lookup]: access denied for %q", pair.Path)
+				grits.DebugLog(grits.DebugAuth, "Auth [lookup]: access denied for %q", pair.Path)
 				result = append(result, &grits.PathNodePair{
 					Path:  pair.Path,
 					Error: "access_denied",
 				})
 			} else {
-				log.Printf("Auth [lookup]: allowing %q", pair.Path)
+				grits.DebugLog(grits.DebugAuth, "Auth [lookup]: allowing %q", pair.Path)
 				result = append(result, pair)
 			}
 		}
@@ -501,14 +501,14 @@ func (m *AuthModule) MakeLookupCallback(vol Volume) grits.LookupCallback {
 // is captured so the callback reads access.json from the correct volume.
 func (m *AuthModule) MakeLinkCallback(vol Volume) grits.LinkCallback {
 	return func(oldRoot, newRoot grits.FileNode, requests []*grits.LinkRequest, principal *grits.Principal) error {
-		log.Printf("Auth [link]: checking %d requests", len(requests))
+		grits.DebugLog(grits.DebugAuth, "Auth [link]: checking %d requests", len(requests))
 
 		for _, req := range requests {
 			reqPath := strings.TrimRight(req.Path, "/")
 			parent := parentPath(reqPath)
 
 			if m.hasPermission(vol, parent, principal, PermReadWrite) {
-				log.Printf("Auth [link]: ALLOW %q (has write)", reqPath)
+				grits.DebugLog(grits.DebugAuth, "Auth [link]: ALLOW %q (has write)", reqPath)
 				continue
 			}
 
@@ -518,15 +518,15 @@ func (m *AuthModule) MakeLinkCallback(vol Volume) grits.LinkCallback {
 				_, err := vol.LookupNode(reqPath, grits.BackendPrincipal)
 				if err != nil {
 					// File doesn't exist — this is a genuine insert.
-					log.Printf("Auth [link]: ALLOW %q (insert)", reqPath)
+					grits.DebugLog(grits.DebugAuth, "Auth [link]: ALLOW %q (insert)", reqPath)
 					continue
 				}
 				// File exists — insert doesn't grant modification rights.
-				log.Printf("Auth [link]: DENY %q (insert but file exists)", reqPath)
+				grits.DebugLog(grits.DebugAuth, "Auth [link]: DENY %q (insert but file exists)", reqPath)
 				return &grits.ErrAccessDenied{Path: reqPath}
 			}
 
-			log.Printf("Auth [link]: DENY %q (no permission)", reqPath)
+			grits.DebugLog(grits.DebugAuth, "Auth [link]: DENY %q (no permission)", reqPath)
 			return &grits.ErrAccessDenied{Path: reqPath}
 		}
 
