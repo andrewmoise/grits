@@ -557,11 +557,16 @@ class GritsVolume {
     if (typeof path !== 'string')
       throw new TypeError(`lookup: path must be a string, got ${_typename(path)}`);
     const normalized = path.replace(/^\/+/, '');
-    const info = await this._lookup_internal(normalized);
-    // Standardize path format to :volume/path (shell convention)
     const displayPath = `//${this._volume}/${normalized}`;
-    if (!info) throw new Error(`lookup: ${displayPath}: not found`);
+    DEBUG && console.debug(`[GritsClient] lookup("${path}") normalized="${normalized}"`);
+    const info = await this._lookup_internal(normalized);
+    if (!info) {
+      DEBUG && console.debug(`[GritsClient] lookup → info is null, throwing "not found" for ${displayPath}`);
+      throw new Error(`lookup: ${displayPath}: not found`);
+    }
+    DEBUG && console.debug(`[GritsClient] lookup → info=${JSON.stringify(info)}, fetching meta`);
     const meta = await this._fetchMeta(info.metadataHash);
+    DEBUG && console.debug(`[GritsClient] lookup → meta.isDir=${meta?.type === 'dir'}`);
     return new GritsFile(info.metadataHash, meta, this, normalized);
   }
 
@@ -905,8 +910,10 @@ class GritsVolume {
 
   async _lookup_internal(path) {
     const n = _normalizePath(path);
+    DEBUG && console.debug(`[GritsClient] _lookup_internal("${path}") normalized="${n}" miniRoots=[${[...this._miniRoots.keys()].join(',')}]`);
 
     if (this._parent._swControlled) {
+      DEBUG && console.debug(`[GritsClient] _lookup_internal → SW controlled, slow path only`);
       return this._slowLookup(n);
     }
 
@@ -947,20 +954,29 @@ class GritsVolume {
     });
 
     const miniRoot = this._findMiniRoot(n);
-    if (!miniRoot) return slowPromise;
+    if (!miniRoot) {
+      DEBUG && console.debug(`[GritsClient] _lookup_internal → no miniRoot for "${n}", relying on slowLookup`);
+      return slowPromise;
+    }
+    DEBUG && console.debug(`[GritsClient] _lookup_internal → miniRoot found for "${n}": rootPath="${miniRoot.rootPath}" addr=${miniRoot.entry.addr}, racing fast vs slow`);
 
     const fastPromise = this._fastWalk(n, miniRoot, abort.signal).then(result => {
       // If the fast walk returned a partial result, let the slow lookup win instead.
       if (result?.partial) {
-        console.log(`[fastWalk] partial result for "${n}", deferring to slowLookup`);
+        DEBUG && console.debug(`[GritsClient] _lookup_internal → fastWalk partial result for "${n}", deferring to slowLookup`);
         return new Promise(() => {}); // stay pending so slowPromise wins the race
       }
+      DEBUG && console.debug(`[GritsClient] _lookup_internal → fastWalk won race for "${n}"`);
       return result;
-    }).catch(() => new Promise(() => {}));
+    }).catch(() => {
+      DEBUG && console.debug(`[GritsClient] _lookup_internal → fastWalk rejected for "${n}"`);
+      return new Promise(() => {});
+    });
 
     const raceStart = performance.now();
     const result = await Promise.race([fastPromise, slowPromise]);
     const elapsed = performance.now() - raceStart;
+    DEBUG && console.debug(`[GritsClient] _lookup_internal → race finished for "${n}" winner=${result?._source ?? 'unknown'}`);
     if (result?._source) {
       this._parent._tracker.record(
         result._source === 'fast' ? 'fastWalkHit' : 'slowLookup',
@@ -1150,11 +1166,22 @@ class GritsVolume {
 
     this._updateServiceWorkerHash(resp);
 
+    if (DEBUG) {
+      // Debug: log raw response before processing.
+      const respClone = resp.clone();
+      const rawBody = await respClone.text().catch(() => '(unreadable)');
+      console.debug(`[GritsClient] _slowLookup path=${path} status=${resp.status} ok=${resp.ok} body=`, rawBody);
+    }
+
     if (resp.status === 403) {
       const { path: deniedPath } = await resp.json().catch(() => ({ path }));
+      DEBUG && console.debug(`[GritsClient] _slowLookup → 403 access_denied for ${deniedPath}`);
       throw new AccessDeniedError(deniedPath);
     }
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      DEBUG && console.debug(`[GritsClient] _slowLookup → !ok (status=${resp.status}), returning null`);
+      return null;
+    }
 
     const result = await resp.json();
     this._ingestLookupResponse(result);
