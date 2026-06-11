@@ -835,15 +835,21 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hold refs on all returned nodes so blobs don't get GC'd before
-	// the client fetches them.
-	hasErrors := false
+	// the client fetches them. Only successful entries (no error, non-empty addr)
+	// get a ref hold — intermediate paths with permission denials are skipped.
+	//
+	// The HTTP status code is determined solely by the leaf (last) entry in the
+	// response. If the leaf itself succeeded we return 200 even when intermediate
+	// paths (e.g. the root "/") were pruned by the permissions callback. This
+	// avoids confusing clients that check resp.ok before examining individual
+	// path results. Intermediate errors are still present in the JSON payload
+	// for clients that want to inspect them, but they don't drive the wire status.
+	leafErr := ""
+	if len(lookupResponse.Paths) > 0 {
+		leafErr = lookupResponse.Paths[len(lookupResponse.Paths)-1].Error
+	}
 	for _, pair := range lookupResponse.Paths {
-		if pair.Error != "" {
-			hasErrors = true
-			continue
-		}
-		if pair.Addr == "" {
-			// Mapping to nil node, nothing to hold
+		if pair.Error != "" || pair.Addr == "" {
 			continue
 		}
 		node, err := volume.GetFileNode(pair.Addr)
@@ -864,11 +870,27 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if hasErrors {
-		w.WriteHeader(http.StatusMultiStatus)
-	} else {
-		w.WriteHeader(http.StatusOK)
+	status := http.StatusOK
+	if leafErr != "" {
+		switch leafErr {
+		case "not_found":
+			status = http.StatusNotFound
+		case "access_denied":
+			status = http.StatusForbidden
+		default:
+			status = http.StatusMultiStatus
+		}
 	}
+	w.WriteHeader(status)
+
+	// Debug: log the exact JSON being sent to the client.
+	encoded, encodeErr := json.Marshal(lookupResponse)
+	if encodeErr != nil {
+		log.Printf("[lookup] marshal error: %v", encodeErr)
+	} else {
+		log.Printf("[lookup] status=%d leafErr=%q response=%s", status, leafErr, string(encoded))
+	}
+
 	if err := json.NewEncoder(w).Encode(lookupResponse); err != nil {
 		log.Printf("Failed to encode lookup response: %v", err)
 	}
