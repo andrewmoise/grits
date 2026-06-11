@@ -165,8 +165,77 @@ And yes it's on the roadmap to make it runnable via systemctl, and file permissi
 
 Nomenclature-wise, the system is split into two cooperating pieces:
 
-* **Grits** is the backend which provides a read-writable space with useful primitives for sharing and replicating content, and serves web sites based on that content.
 * **Gimbal** is the frontend which provides a Unix-like shell and "window manager" of sorts that runs in the browser and can do operations on the filesystem.
+* **Grits** is the backend, the server that hosts Gimbal and provides a read-writable space with useful primitives for sharing and replicating content. More or less, it is the filesystem, and Gimbal is the desktop environment.
+
+### Design philosophy
+
+There are a few overarching goals that define a lot of the shape of the system:
+
+* **Everything from the frontend**. As much as is feasible, any file that defines operation of the system should be within the frontend's file store so that you don't have to drop back to the backend or `ssh` into anything to change things. The backend reads its configuration from the same place, so things aren't awkward to configure from a server admin perspective.
+* **Convention, not configuration**. Frontend code lives in `/lib/{tool}`, user home directories are `/home/{username}`, vhost content is in `/sites/{hostname}/content`. Shell commands are enabled by creating a file `/lib/{command}/main.js`. And so on. We don't do layers of indirection where we can avoid them.
+* **JSON for everything**. Either JSON or JSONL is used as the universal format for the system's metadata and configuration.
+* **Use familiar names**. We imitate Unix commands and filesystem organization as much as is sensible, to avoid forcing people to learn new models or new names for things.
+
+The overall goal is that the system is transparent and comfortable to modify.
+
+### Frontend Piece (Gimbal)
+
+"Gimbal" refers to the whole frontend system, notably including `gsh` the command shell and `gwm` the "window manager". Within `gwm` are widgets including `gterm` the terminal, and a file browser and editor which are creatively titled `files` and `edit`.
+
+The shell the system presents is basically just a Javascript console with a couple extra features.
+
+You can type javascript commands:
+
+```
+$ 1+1
+2
+```
+
+You can also type Gimbal-specific shell commands, and pipe them together, like Unix:
+
+```
+$ cd('/sites/{your server}')
+$ upload().to('test.zip')
+$ unzip('test.zip')
+$ ls()
+["bootstrap-5.3.8-dist","test.zip"]
+$ cd('bootstrap-5.3.8-dist')
+$ ls()
+["css","js"]
+```
+
+#### Paths
+
+There is a single volume (`//root`) which contains the whole filesystem. A bare `/` refers to this volume, so paths like `/home/moise` or `/sites/{your server}` work as you'd expect. The `//volume/path` syntax still works for explicit volume references (e.g. `//root/home/moise`).
+
+`..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way.
+
+There are no symbolic links.
+
+You can use `glob({pattern})` to get a list of files matching the pattern. It's not a "shell command," just a normal async function, so you will have to do things like `rm(... await glob('*.txt'))`.
+
+The plan for where things are located within `//root` is to keep things pretty similar to Unix:
+
+* `/home/{username}` - Home directories
+* `/home/{username}/local/{app name}` - Application-specific data (per user)
+* `/lib/{app name}` - Application code
+* `/opt/{app name}` - Application-specific variable data (system wide)
+* `/sys/etc` - System configuration
+* `/sys/log` - Logs
+* `/tmp` - Temp files
+
+#### Chaining
+
+The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which then go via the same proxy as the shell uses to find commands. When called on a `Result`, commands will chain together with the output from the command that created that `Result`.
+
+Commands are implemented in `/lib/{command name}/main.js`. See the comments at the top of `/lib/gimbal/gsh.js` for more about the details of how this all works.
+
+### Web Hosting
+
+From the Gimbal shell, you can move stuff into `/sites/{your server}/content` and it'll show up in the root of `https://{your server}/`. You can also make arbitrary new directories under `/sites` which will effectively make new vhosts (assuming you've arranged for DNS for whatever vhost to point to your server).
+
+(You can, if you like, set up a DNS wildcard so that `*.{your server}.com` all points to the server where Grits is running. In that case, anything that gets placed in `/sites/{whatever}.{your server}.com/content` will become a live site automatically. This may be useful for testing.)
 
 ### Backend Piece (Grits)
 
@@ -240,64 +309,6 @@ There are some pretty essential improvements which are planned for the near futu
 * Automatic copy-on-write backups and file history
 * Fixes to naming conventions, versioning of file formats, new stabilized version of file and wire formats
 
-### Frontend Piece (Gimbal)
-
-"Gimbal" refers to the whole frontend system, notably including `gsh` the command shell and `gwm` the "window manager". Within `gwm` are widgets including `gterm` the terminal, and a file browser and editor which are creatively titled `files` and `edit`.
-
-The shell the system presents is basically just a Javascript console with a couple extra features.
-
-You can type javascript commands:
-
-```
-$ 1+1
-2
-```
-
-You can also type Gimbal-specific shell commands, and pipe them together, like Unix:
-
-```
-$ cd('/sites/{your server}')
-$ upload().to('test.zip')
-$ unzip('test.zip')
-$ ls()
-["bootstrap-5.3.8-dist","test.zip"]
-$ cd('bootstrap-5.3.8-dist')
-$ ls()
-["css","js"]
-```
-
-#### Paths
-
-There is a single volume (`//root`) which contains the whole filesystem. A bare `/` refers to this volume, so paths like `/home/moise` or `/sites/{your server}` work as you'd expect. The `//volume/path` syntax still works for explicit volume references (e.g. `//root/home/moise`).
-
-`..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way.
-
-There are no symbolic links.
-
-You can use `glob({pattern})` to get a list of files matching the pattern. It's not a "shell command," just a normal async function, so you will have to do things like `rm(... await glob('*.txt'))`.
-
-The plan for where things are located within `//root` is to keep things pretty similar to Unix:
-
-* `/home/{username}` - Home directories
-* `/home/{username}/local/{app name}` - Application-specific data (per user)
-* `/lib/{app name}` - Application code
-* `/opt/{app name}` - Application-specific variable data (system wide)
-* `/sys/etc` - System configuration
-* `/sys/log` - Logs
-* `/tmp` - Temp files
-
-#### Chaining
-
-The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which then go via the same proxy as the shell uses to find commands. When called on a `Result`, commands will chain together with the output from the command that created that `Result`.
-
-Commands are implemented in `/lib/{command name}/main.js`. See the comments at the top of `/lib/gimbal/gsh.js` for more about the details of how this all works.
-
-### Web Hosting
-
-From the Gimbal shell, you can move stuff into `/sites/{your server}/content` and it'll show up in the root of `https://{your server}/`. You can also make arbitrary new directories under `/sites` which will effectively make new vhosts (assuming you've arranged for DNS for whatever vhost to point to your server).
-
-(You can, if you like, set up a DNS wildcard so that `*.{your server}.com` all points to the server where Grits is running. In that case, anything that gets placed in `/sites/{whatever}.{your server}.com/content` will become a live site automatically. This may be useful for testing.)
-
 ## Code layout
 
 ### `internal/grits`: Core. Blob storage, configuration, the namespace, and so on. 
@@ -319,8 +330,25 @@ This is the core config file. Most of it involves configuring particular modules
 * `mount` creates a FUSE mount of a particular volume to a local directory
 * `http` creates an HTTP endpoint providing access to the API
 * `serviceworker` sets up a service worker which will run all web accesses through a client-side Grits cache automatically, so these benefits apply to any content. (Note: Currently the SW works on Chrome, but not completely on Firefox; for what reason, I don't know.)
+* `startup` provides a list of backend commands to run on startup. See the next section.
 
 Check out the source in `internal/gritsd/module_{whatever}.go` to see the configuration for each.
+
+### Backend Commands
+
+Most administration of the server should be done from the frontend. But there are a couple of things which can't be done from the frontend or are needed for bootstrapping.
+
+If you:
+
+* Enable the `cmdline` module on the backend
+* Compile the backend command tool, `go build -o bin/grits cmd/grits/main.go`
+
+Then you can type things like:
+
+* `bin/grits ping` to test the command pipe
+* `bin/grits import local/path //volume/dest/path` to import files from your Linux filesystem into Grits's file store
+* `bin/grits adduser username` to add a user (you will be prompted for the password)
+* `bin/grits deluser username` to delete a user
 
 ### Other useful directories
 
