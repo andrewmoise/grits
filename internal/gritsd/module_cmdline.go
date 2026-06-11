@@ -250,6 +250,41 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 		if err := WriteJSONL(s, "root", usersFilePath, records, grits.BackendPrincipal); err != nil {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("writing users file: %v", err)}
 		}
+
+		// Create home directory with owner permission.
+		homeDir := "home/" + username
+		volume := s.FindVolumeByName("root")
+		if volume != nil {
+			// Ensure home parent exists, then import skeleton files first
+			// so the access.json write below is the final step and won't
+			// be overwritten by a later LinkByMetadata.
+			if err := ensureVolumeParentDirs(volume, "home"); err != nil {
+				log.Printf("adduser: ensuring home dir: %v", err)
+			}
+
+			skelPath := s.Config.ServerPath("skel/sys/skel")
+			if info, statErr := os.Stat(skelPath); statErr == nil && info.IsDir() {
+				if importErr := ImportLocalDir(volume, skelPath, homeDir); importErr != nil {
+					log.Printf("adduser: importing skel: %v", importErr)
+				}
+			} else {
+				// No skel — at least create the empty home directory.
+				if err := ensureVolumeParentDirs(volume, homeDir); err != nil {
+					log.Printf("adduser: creating home dir: %v", err)
+				}
+			}
+
+			// Write owner access.json last so it's not overwritten.
+			homeAccess, _ := json.Marshal(AccessConfig{
+				Allow: []Grant{
+					{User: username, Permission: PermOwner},
+				},
+			})
+			if err := WriteVolumeFile(s, "root", homeDir+"/.grits/access.json", homeAccess, grits.BackendPrincipal); err != nil {
+				log.Printf("adduser: writing home access.json: %v", err)
+			}
+		}
+
 		return CommandResponse{Status: 0, Output: "user added"}
 
 	case "deluser":

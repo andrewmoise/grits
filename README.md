@@ -95,6 +95,8 @@ To play around with it, do this:
     * `go test ./...`
     * `go build -o bin/certbot-helper cmd/certbot-helper/main.go`
     * `go build -o bin/gritsd cmd/gritsd/main.go`
+    * `go build -o bin/grits cmd/grits/main.go`
+
 
 ### Configure
 
@@ -104,8 +106,6 @@ hx config.json # Or whatever editor
 ```
 
 You will need to make changes to the config. 
-
-To play with it significantly, you must disable read-only-ness on the HTTP module, but since there are no permissions yet, this will make your data world-writable. Use your own judgement, probably don't leave the service running in production.
 
 Change `%USER%` to your Unix username, and `%EMAIL%` to your email (email is only needed for certbot interactions -- the system will automatically grab HTTPS certificates for you, by default, and certbot wants your email in order to do that.)
 
@@ -125,16 +125,39 @@ sudo bin/gritsd
 
 It'll drop privileges to whatever user you configured for it, as soon as it's opened the ports it needs. If you want to try it as non-root, just configure it on a port above 1024 and run certbot by hand to get certificates if any, and then you can run without `sudo`.
 
+### First-time setup
+
+Once the server is running, the FUSE mount at `mnt/` gives you access to the volume. You'll need to add users and set up the initial filesystem skeleton:
+
+(Note - if you shut down the server while files in the FUSE mount are open, it will refuse to shut down so as to not leave a stale mount behind. Just close the files / cd out of the FUSE mount / unmount the FUSE mount, and the server shutdown should automatically continue as normal and finish.)
+
+```
+# Populate the volume with the initial filesystem skeleton.
+# This sets up directory structure and permissions for core system directories.
+cp -r skel/* mnt/
+cp -r skel/.grits mnt/.grits
+cp -r client/lib mnt/
+
+# Create the admin user and an account for yourself.
+bin/grits adduser glenda
+bin/grits adduser your-username
+
+# Create a blank vhost for your machine
+mkdir mnt/sites/{your hostname}
+
+```
+
 ### Test
 
-There are a few different test suites:
+Once you've done that, you should be able to log in to see the Gimbal shell at:
 
-* As mentioned, you can run `go test ./...` for a general smoke test for the backend.
-* Once you have the service running, you can do a frontend test.
-   * From a Linux shell alongside the backend, populate the volume with client code and make a deployment for your chosen hostname. From the main project directory, make sure you have FUSE mounts within `mnt/`, then run `cp -r client/lib mnt/lib` to copy the client code into the volume. (On subsequent starts the server will do this automatically.) Next, create a site directory with `mkdir mnt/sites/{your server name}`. Once that's done, you'll be able to access the API via `https://{your server name}/grits/v1/`.
-  * Navigate to `https://{your server}/grits/v1/content/root/lib/gimbal/`. You should see the general shell interface.
-  * From the command line, run `test()`. It'll take a while.
-* If you are brave enough to try the service worker, you can enable the module, and then go to `https://{your server name}/grits/v1/content/root/lib/serviceworker/swtest.html` for some self tests of loading and updating the service worker. Assuming that checks out, you can re-run the client side `test()` tests from the shell, with the SW active, to give it a more substantive test.
+`https://{your server}/grits/v1/content/root/gimbal/index.html`
+
+If you see the graphical interface from the screenshots, you're in.
+
+Run `test()` at the command line to run a detailed frontend test. It'll take a while.
+
+If you are brave enough to try the service worker, you can also enable the module, and then go to `https://{your server name}/grits/v1/content/root/lib/serviceworker/swtest.html` for some self tests of loading and updating the service worker. Assuming that checks out, you can re-run the client side `test()` tests from the shell, with the SW active, to give it a more substantive test. Bear in mind that the SW currently works in Chrome, but not in Firefox, and I don't know why.
 
 ### Web Serving
 
@@ -221,6 +244,7 @@ The plan for where things are located within `//root` is to keep things pretty s
 * `/home/{username}/local/{app name}` - Application-specific data (per user)
 * `/lib/{app name}` - Application code
 * `/opt/{app name}` - Application-specific variable data (system wide)
+* `/sites/{hostname}/content` - Public web space for {hostname}
 * `/sys/etc` - System configuration
 * `/sys/log` - Logs
 * `/tmp` - Temp files
@@ -338,12 +362,7 @@ Check out the source in `internal/gritsd/module_{whatever}.go` to see the config
 
 Most administration of the server should be done from the frontend. But there are a couple of things which can't be done from the frontend or are needed for bootstrapping.
 
-If you:
-
-* Enable the `cmdline` module on the backend
-* Compile the backend command tool, `go build -o bin/grits cmd/grits/main.go`
-
-Then you can type things like:
+If you enable the `cmdline` module on the backend, then you can type things like:
 
 * `bin/grits ping` to test the command pipe
 * `bin/grits import local/path //volume/dest/path` to import files from your Linux filesystem into Grits's file store

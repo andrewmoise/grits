@@ -1,11 +1,15 @@
 # In Progress
 
-* Consolidate volumes all into one
-* User module stub
-* Read .grits/access.json for real access control
-* Thread user and origin through HTTP call chain
-* Wire access control to user/origin
 * Sort out losing root blob reference
+* Think about race conditions in lookup auth check
+
+# Near future annoyances
+
+* Fix copy and paste from Gimbal shell
+* Fix download test failure
+* Make the corner icons a little bigger
+* Look into service worker not unregistering
+* Change "type" to "module" in modules config
 
 # Backlog
 
@@ -39,7 +43,7 @@ Line the result __[n] up with the output, not the input
 
 Sync up the /lib directory with a particular snapshot
 
-Handle binary or very-large files a little better
+Handle binary or very-large files a little better in terminal output
 
 Detect un-handled options and give an error on those
 
@@ -52,6 +56,10 @@ Tab completion
 Don't add void returns to history
 
 Do away with doHistory
+
+Shell environment variables
+
+Some indication when things disconnect
 
 ## gwm + tools
 
@@ -71,6 +79,10 @@ Make files widget sync to changes in the directory
 Import git tools libs
 
 Defaults / config system
+
+More tools: Diff, patch
+
+Image / video / random binary file output in terminal
 
 ## grits client
 
