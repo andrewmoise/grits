@@ -179,9 +179,9 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 		return CommandResponse{Status: 0, Output: "pong"}
 
 	case "import":
-		// import //volume/dest/path  local/src/path
+		// import local/src/path //volume/dest/path
 		if len(cmd) != 3 {
-			return CommandResponse{Status: 1, Output: "usage: import //volume/dest/path local/src/path"}
+			return CommandResponse{Status: 1, Output: "usage: import local/src/path //volume/dest/path"}
 		}
 
 		srcPath := cmd[1]
