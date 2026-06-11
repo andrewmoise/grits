@@ -1,7 +1,9 @@
 package gritsd
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -10,36 +12,64 @@ import (
 	"grits/internal/grits"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
 
-type AuthModuleConfig struct{}
+type AuthModuleConfig struct {
+	// SessionMaxAge is the sliding expiry window for session tokens.
+	// Defaults to 30 minutes. After this long without any API request,
+	// the user must log in again.
+	SessionMaxAge time.Duration `json:"sessionMaxAge,omitempty"`
+}
 
 type AuthModule struct {
-	Config *AuthModuleConfig
-	Server *Server
+	Config        *AuthModuleConfig
+	Server        *Server
+	authSecret    []byte
+	sessionMaxAge time.Duration
 }
 
 const (
-	usersFilePath = "sys/etc/users.jsonl"
-	rootVolume    = "root"
-	authCookie    = "grits-auth-user"
+	usersFilePath    = "sys/etc/users.jsonl"
+	rootVolume       = "root"
+	authCookie       = "grits-auth-user"
+	defaultSessionMaxAge = 30 * time.Minute
 )
 
 func NewAuthModule(server *Server, config *AuthModuleConfig) (*AuthModule, error) {
-	m := &AuthModule{
-		Config: config,
-		Server: server,
+	// Load or generate the secret key for HMAC session tokens.
+	secret, err := loadOrGenerateSecret(server)
+	if err != nil {
+		return nil, fmt.Errorf("auth: %v", err)
 	}
 
-	// Hook into HTTP module to register auth endpoints, if present.
+	maxAge := config.SessionMaxAge
+	if maxAge <= 0 {
+		maxAge = defaultSessionMaxAge
+	}
+
+	m := &AuthModule{
+		Config:        config,
+		Server:        server,
+		authSecret:    secret,
+		sessionMaxAge: maxAge,
+	}
+
+	// Hook into HTTP module to register auth endpoints and store a reference
+	// for cookie verification in the request middleware.
 	server.AddModuleHook(func(module Module) {
 		httpModule, ok := module.(*HTTPModule)
 		if !ok {
 			return
 		}
+
+		httpModule.SetAuthModule(m)
 
 		httpModule.Mux.HandleFunc("/grits/v1/auth/login",
 			httpModule.requestMiddleware(m.handleLogin))
@@ -48,6 +78,28 @@ func NewAuthModule(server *Server, config *AuthModuleConfig) (*AuthModule, error
 	})
 
 	return m, nil
+}
+
+// loadOrGenerateSecret reads the HMAC secret from var/auth-secret, creating
+// it with 32 random bytes if the file doesn't exist.
+func loadOrGenerateSecret(srv *Server) ([]byte, error) {
+	path := filepath.Join(srv.Config.ServerDir, "var", "auth-secret")
+	data, err := os.ReadFile(path)
+	if err == nil {
+		return data, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("reading auth-secret: %w", err)
+	}
+	// Generate a new secret.
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("generating auth-secret: %w", err)
+	}
+	if err := os.WriteFile(path, secret, 0600); err != nil {
+		return nil, fmt.Errorf("writing auth-secret: %w", err)
+	}
+	return secret, nil
 }
 
 func (m *AuthModule) Start() error { return nil }
@@ -110,9 +162,16 @@ func (m *AuthModule) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		token, err := m.hmacToken(body.Username)
+		if err != nil {
+			log.Printf("[auth] creating session token: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+			return
+		}
+
 		http.SetCookie(w, &http.Cookie{
 			Name:     authCookie,
-			Value:    body.Username,
+			Value:    token,
 			Path:     "/",
 			HttpOnly: true,
 			SameSite: http.SameSiteLaxMode,
@@ -206,6 +265,64 @@ func verifyArgon2id(password, encodedHash string) bool {
 	computedHash := argon2.IDKey([]byte(password), salt, time, memory, threads, keyLen)
 
 	return subtle.ConstantTimeCompare(computedHash, expectedHash) == 1
+}
+
+/////
+// HMAC session token helpers
+
+// hmacToken creates a signed session token for the given username.
+// Format: base64(timestamp:username:hmac)
+func (m *AuthModule) hmacToken(username string) (string, error) {
+	now := time.Now().Unix()
+	plain := fmt.Sprintf("%d:%s", now, username)
+	mac := hmac.New(sha256.New, m.authSecret)
+	mac.Write([]byte(plain))
+	sig := mac.Sum(nil)
+	token := fmt.Sprintf("%s:%s", plain, base64.RawStdEncoding.EncodeToString(sig))
+	return base64.RawStdEncoding.EncodeToString([]byte(token)), nil
+}
+
+// verifyHMACToken parses and validates a session token. Returns the username
+// if valid, or "" if the token is stale, forged, or malformed.
+func (m *AuthModule) verifyHMACToken(token string) string {
+	if m == nil || len(m.authSecret) == 0 {
+		return ""
+	}
+	raw, err := base64.RawStdEncoding.DecodeString(token)
+	if err != nil {
+		return ""
+	}
+	parts := strings.SplitN(string(raw), ":", 3)
+	if len(parts) != 3 {
+		return ""
+	}
+
+	ts, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return ""
+	}
+	username := parts[1]
+	providedSig, err := base64.RawStdEncoding.DecodeString(parts[2])
+	if err != nil {
+		return ""
+	}
+
+	// Recompute HMAC.
+	plain := fmt.Sprintf("%d:%s", ts, username)
+	mac := hmac.New(sha256.New, m.authSecret)
+	mac.Write([]byte(plain))
+	expectedSig := mac.Sum(nil)
+
+	if subtle.ConstantTimeCompare(providedSig, expectedSig) != 1 {
+		return ""
+	}
+
+	// Check expiry.
+	if time.Now().Unix()-ts > int64(m.sessionMaxAge.Seconds()) {
+		return ""
+	}
+
+	return username
 }
 
 /////

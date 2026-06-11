@@ -183,7 +183,7 @@ func TestAuthLoginSuccess(t *testing.T) {
 	cookies := resp.Cookies()
 	var found bool
 	for _, c := range cookies {
-		if c.Name == authCookie && c.Value == "testuser" {
+		if c.Name == authCookie && c.Value != "" {
 			found = true
 			if !c.HttpOnly {
 				t.Error("cookie should be HttpOnly")
@@ -192,7 +192,7 @@ func TestAuthLoginSuccess(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("cookie %s=testuser not set", authCookie)
+		t.Errorf("cookie %s not set", authCookie)
 	}
 
 	// Check response body

@@ -85,6 +85,7 @@ type HTTPModule struct {
 
 	serviceWorkerModule *ServiceWorkerModule
 	activeMirrorModule  *MirrorModule
+	authModule          *AuthModule
 
 	refHolder *ReferenceHolder
 
@@ -364,6 +365,10 @@ func (hm *HTTPModule) addMirrorModule(module Module) {
 	hm.activeMirrorModule = mirror
 }
 
+func (hm *HTTPModule) SetAuthModule(m *AuthModule) {
+	hm.authModule = m
+}
+
 func (hm *HTTPModule) WrapContentHandler(wrapper func(http.HandlerFunc) http.HandlerFunc) {
 	hm.contentHandlerChain = wrapper(hm.contentHandlerChain)
 }
@@ -467,10 +472,10 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 			}
 		}
 
-		// Extract principal from cookie and Origin header for permission checks.
+		// Extract principal from HMAC-signed cookie and Origin header.
 		user := ""
-		if cookie, err := r.Cookie("grits-auth-user"); err == nil {
-			user = cookie.Value
+		if cookie, err := r.Cookie("grits-auth-user"); err == nil && srv.authModule != nil {
+			user = srv.authModule.verifyHMACToken(cookie.Value)
 		}
 		principal := &grits.Principal{
 			User:   user,
@@ -478,6 +483,21 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 		}
 		ctx := context.WithValue(r.Context(), principalKey, principal)
 		r = r.WithContext(ctx)
+
+		// Re-issue the cookie with a fresh timestamp on every valid request
+		// (sliding session expiry).
+		if user != "" && srv.authModule != nil {
+			newToken, err := srv.authModule.hmacToken(user)
+			if err == nil {
+				http.SetCookie(w, &http.Cookie{
+					Name:     authCookie,
+					Value:    newToken,
+					Path:     "/",
+					HttpOnly: true,
+					SameSite: http.SameSiteLaxMode,
+				})
+			}
+		}
 
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Calling handler\n")
 		next(w, r)
