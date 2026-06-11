@@ -433,19 +433,14 @@ export class GimbalShell {
       },
     });
 
-    let finalResult;
-    try {
-      // Oh my God I hate this so so much
-      const fnMatch = src.match(/^\s*function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(/);
-      if (fnMatch) src = `${fnMatch[1]} = ${src}`;
-      let fn;
-      try { fn = new Function('__w__', `with (__w__) { return (async () => (${src}))(); }`); }
-      catch { fn = new Function('__w__', `with (__w__) { return (async () => { ${src} })(); }`); }
+    // Oh my God I hate this so so much
+    const fnMatch = src.match(/^\s*function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(/);
+    if (fnMatch) src = `${fnMatch[1]} = ${src}`;
+    let fn;
+    try { fn = new Function('__w__', `with (__w__) { return (async () => (${src}))(); }`); }
+    catch { fn = new Function('__w__', `with (__w__) { return (async () => { ${src} })(); }`); }
 
-      finalResult = await fn(withTarget);
-    } catch (e) {
-      throw new Error(`eval error: ${e.message}`);
-    }
+    let finalResult = await fn(withTarget);
 
     if (doHistory && __[historyIndex] === undefined) {
       __[historyIndex] = finalResult;
