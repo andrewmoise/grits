@@ -5,42 +5,12 @@
   "modules": [
     {
       "type": "volume",
-      "volumeName": "client"
+      "volumeName": "root"
     },
     {
       "type": "mount",
-      "volume": "client",
-      "mountPoint": "volumes/client"
-    },
-
-    {
-      "type": "volume",
-      "volumeName": "home"
-    },
-    {
-      "type": "mount",
-      "volume": "home",
-      "mountPoint": "volumes/home"   
-    },
-
-    {
-      "type": "volume",
-      "volumeName": "sites"
-    },
-    {
-      "type": "mount",
-      "volume": "sites",
-      "mountPoint": "volumes/sites"
-    },
-
-    {
-      "type": "volume",
-      "volumeName": "sys"
-    },
-    {
-      "type": "mount",
-      "volume": "sys",
-      "mountPoint": "volumes/sys"
+      "volume": "root",
+      "mountPoint": "mnt"
     },
 
     {
