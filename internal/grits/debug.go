@@ -12,19 +12,19 @@ import (
 /////
 // Generic utility and debugging
 
-var DebugRefCounts = false          // Check reference counts when taking/releasing nodes
+var DebugAuth = false               // Debug auth permission lookups and decisions
+var DebugBlobCache = false          // Debug pass-through LRU blob cache
 var DebugBlobStorage = false        // Print periodic detailed stats about the blob store
 var VerboseDebugBlobStorage = false // Dump the entire contents of the file store
-var DebugNameStore = false          // Debug NameStore main operations
 var DebugFileCache = false          // Debug NameStore file cache
-var DebugLinks = false              // Debug calls to Link()
 var DebugFuse = false               // Debug FUSE mounting
 var DebugHttp = false               // Debug HTTP API
 var DebugHttpPerformance = false    // Debug HTTP performance
+var DebugLinks = false              // Debug calls to Link()
+var DebugNameStore = false          // Debug NameStore main operations
+var DebugRefCounts = false          // Check reference counts when taking/releasing nodes
 var DebugRemotePerformance = false  // Debug remote volume performance
-var DebugBlobCache = false          // Debug pass-through LRU blob cache
 var DebugServerLifecycle = false    // Debug major server / module events
-var DebugAuth = false               // Debug auth permission lookups and decisions
 
 // More helpers, for performance analysis
 
