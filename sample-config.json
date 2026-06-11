@@ -20,13 +20,6 @@
       "readOnly": true,
       "autoCertificate": true,
       "certbotEmail": "%EMAIL%"
-    },
-
-    {
-      "type": "startup",
-      "commands": [
-        ["import", "./client", "//client"]
-      ]
     }
   ]
 }
