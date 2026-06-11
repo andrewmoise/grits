@@ -88,8 +88,8 @@ func NewLocalVolume(config *LocalVolumeConfig, server *Server, sparse bool, pers
 			return
 		}
 		log.Printf("LocalVolume %q: registering auth permission callbacks", wv.name)
-		wv.ns.AddLookupCallback(auth.MakeLookupCallback())
-		wv.ns.AddLinkCallback(auth.MakeLinkCallback())
+		wv.ns.AddLookupCallback(auth.MakeLookupCallback(wv))
+			wv.ns.AddLinkCallback(auth.MakeLinkCallback(wv))
 	})
 
 	return wv, nil

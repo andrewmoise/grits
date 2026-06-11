@@ -15,18 +15,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-type AuthModuleConfig struct {
-	// ReadWhitelist restricts which paths are visible in lookup responses.
-	// Empty means all paths are readable.
-	// Paths not covered are pruned silently from multi-path responses;
-	// direct requests to uncovered paths return access_denied.
-	ReadWhitelist []string `json:"readWhitelist,omitempty"`
-
-	// WriteWhitelist restricts which paths may be written via link operations.
-	// Empty means all paths are writable.
-	// Attempts to write outside the whitelist return ErrAccessDenied.
-	WriteWhitelist []string `json:"writeWhitelist,omitempty"`
-}
+type AuthModuleConfig struct{}
 
 type AuthModule struct {
 	Config *AuthModuleConfig
@@ -220,42 +209,275 @@ func verifyArgon2id(password, encodedHash string) bool {
 }
 
 /////
-// Permission callbacks
+// Permission types
+// Permissions are stored in .grits/access.json files within the volume
+// and are resolved by walking up the tree from the target path.
 
-// pathCoveredBy returns true if path is equal to or a descendant of any
-// entry in the whitelist. An empty whitelist covers everything.
-func pathCoveredBy(path string, whitelist []string) bool {
-	if len(whitelist) == 0 {
-		return true
+type Permission string
+
+const (
+	PermRead       Permission = "read"
+	PermInsert     Permission = "insert"
+	PermReadInsert Permission = "read+insert"
+	PermReadWrite  Permission = "read+write"
+	PermOwner      Permission = "owner"
+)
+
+func CanRead(p Permission) bool {
+	return p == PermRead || p == PermReadInsert || p == PermReadWrite || p == PermOwner
+}
+
+func CanInsert(p Permission) bool {
+	return p == PermInsert || p == PermReadInsert || p == PermReadWrite || p == PermOwner
+}
+
+func CanWrite(p Permission) bool {
+	return p == PermReadWrite || p == PermOwner
+}
+
+func CanOwn(p Permission) bool {
+	return p == PermOwner
+}
+
+// mergePerm returns the most permissive combination of two permissions.
+func mergePerm(a, b Permission) Permission {
+	read := CanRead(a) || CanRead(b)
+	insert := CanInsert(a) || CanInsert(b)
+	write := CanWrite(a) || CanWrite(b)
+	own := CanOwn(a) || CanOwn(b)
+
+	switch {
+	case own:
+		return PermOwner
+	case write:
+		return PermReadWrite
+	case read && insert:
+		return PermReadInsert
+	case insert:
+		return PermInsert
+	case read:
+		return PermRead
+	default:
+		return ""
 	}
-	for _, entry := range whitelist {
-		if path == entry || strings.HasPrefix(path, entry+"/") {
-			return true
+}
+
+// Grant represents a single permission grant for a user/origin.
+//
+// The three matching tiers are:
+//   - User:    matches a specific authenticated username
+//   - Auth:    matches any authenticated user (non-empty User)
+//   - All:    matches any principal (including unauthenticated)
+//
+// When multiple grants match, the most permissive permission wins.
+type Grant struct {
+	User       string     `json:"user,omitempty"`   // specific username
+	Auth       *bool      `json:"auth,omitempty"`   // any authenticated user
+	All        *bool      `json:"all,omitempty"`    // any principal including unauthenticated
+	Origin     string     `json:"origin,omitempty"` // not enforced yet
+	Permission Permission `json:"permission"`
+}
+
+// AccessConfig is the schema for .grits/access.json files.
+type AccessConfig struct {
+	Allow []Grant `json:"allow"`
+}
+
+// parentPath returns the parent directory of a path, or "" for root-level paths.
+func parentPath(path string) string {
+	path = strings.TrimRight(path, "/")
+	if idx := strings.LastIndex(path, "/"); idx >= 0 {
+		return path[:idx]
+	}
+	return ""
+}
+
+// readAccessConfig reads and parses .grits/access.json from the given directory
+// path within the given volume. Returns nil without error if the file doesn't exist.
+func (m *AuthModule) readAccessConfig(vol Volume, dirPath string) (*AccessConfig, error) {
+	accessPath := dirPath + "/.grits/access.json"
+	if dirPath == "" {
+		accessPath = ".grits/access.json"
+	}
+
+	// Use BackendPrincipal to avoid recursion into this callback.
+	data, err := ReadVolumeFile(m.Server, vol.GetVolumeName(), accessPath, grits.BackendPrincipal)
+	if err != nil {
+		if errors.Is(err, grits.ErrNotExist) {
+			return nil, nil
 		}
+		return nil, fmt.Errorf("reading %q: %w", accessPath, err)
+	}
+
+	var cfg AccessConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing %q: %w", accessPath, err)
+	}
+	return &cfg, nil
+}
+
+// grantMatchesPrincipal checks if a grant applies to the given principal.
+//
+// Matching priority (first wins):
+//  1. Specific username
+//  2. Any authenticated user (auth: true)
+//  3. Anyone including unauthenticated (all: true)
+func grantMatchesPrincipal(g Grant, principal *grits.Principal) bool {
+	if g.User != "" {
+		return g.User == principal.User
+	}
+	if g.Auth != nil && *g.Auth {
+		return principal.User != ""
+	}
+	if g.All != nil && *g.All {
+		return true
 	}
 	return false
 }
 
-// MakeLookupCallback returns a LookupCallback that enforces the read whitelist.
-func (m *AuthModule) MakeLookupCallback() grits.LookupCallback {
+// resolvePermission walks up the tree from dirPath to root, collects all
+// grants that match the principal from .grits/access.json files, and merges
+// them into a single effective Permission.
+//
+// Inheritance rules:
+//   - read applies downward (any ancestor with read grants read to descendants)
+//   - read+write applies downward as owner (write at an ancestor lets you
+//     replace any descendant subtree including its .grits, granting effective
+//     ownership over descendants)
+//   - owner applies downward unchanged
+//   - insert does NOT apply downward (only the exact directory with the grant)
+//
+// If no access.json is found anywhere, the default is deny (empty Permission).
+func (m *AuthModule) resolvePermission(vol Volume, dirPath string, principal *grits.Principal) Permission {
+	dirPath = strings.TrimRight(dirPath, "/")
+
+	// Collect all matching grants from the path up to root.
+	var inheritedGrants []Grant
+	var localGrants []Grant // used for insert (non-inherited)
+
+	segments := strings.Split(dirPath, "/")
+	acc := ""
+	for i, seg := range segments {
+		if seg == "" {
+			continue
+		}
+		if acc == "" {
+			acc = seg
+		} else {
+			acc = acc + "/" + seg
+		}
+
+		cfg, err := m.readAccessConfig(vol, acc)
+		if err != nil {
+			log.Printf("Auth [permission]: error reading %q: %v", acc+"/.grits/access.json", err)
+			continue
+		}
+		if cfg == nil {
+			continue
+		}
+
+		for _, g := range cfg.Allow {
+			if !grantMatchesPrincipal(g, principal) {
+				continue
+			}
+			// Grants at the target directory are local (for insert).
+			// Grants at ancestor directories are inherited.
+			if i == len(segments)-1 {
+				localGrants = append(localGrants, g)
+			} else {
+				inheritedGrants = append(inheritedGrants, g)
+			}
+		}
+	}
+
+	// Also check root
+	rootCfg, err := m.readAccessConfig(vol, "")
+	if err == nil && rootCfg != nil {
+		for _, g := range rootCfg.Allow {
+			if grantMatchesPrincipal(g, principal) {
+				inheritedGrants = append(inheritedGrants, g)
+			}
+		}
+	}
+
+	// Merge inherited grants. Permission transformations:
+	//   - Insert → not inherited (only applies at the exact directory)
+	//   - read+insert → read (only the read part is inherited)
+	//   - read+write → owner (write at an ancestor lets you replace any
+	//     descendant including its .grits, granting effective ownership)
+	//   - owner, read → inherited as-is
+	merged := Permission("")
+	for _, g := range inheritedGrants {
+		inherited := g.Permission
+		switch inherited {
+		case PermInsert:
+			continue
+		case PermReadInsert:
+			inherited = PermRead
+		case PermReadWrite:
+			inherited = PermOwner
+		}
+		merged = mergePerm(merged, inherited)
+	}
+
+	// Merge local (directory-level) grants. Insert applies only at the
+	// exact directory that contains the access.json.
+	for _, g := range localGrants {
+		merged = mergePerm(merged, g.Permission)
+	}
+
+	// If the path is under .grits/, enforce special rules:
+	//   - read+write can READ .grits but not write it
+	//   - owner can do everything
+	//   - read-only can also read .grits
+	if strings.Contains(dirPath, "/.grits") || strings.HasPrefix(dirPath, ".grits") {
+		if CanOwn(merged) {
+			return merged
+		}
+		if CanWrite(merged) || CanRead(merged) {
+			return PermRead // .grits is read-only without owner
+		}
+		return ""
+	}
+
+	return merged
+}
+
+// hasPermission checks whether the principal has the required permission at
+// the given path within the volume. BackendPrincipal always passes.
+func (m *AuthModule) hasPermission(vol Volume, path string, principal *grits.Principal, required Permission) bool {
+	if principal == grits.BackendPrincipal {
+		return true
+	}
+	effective := m.resolvePermission(vol, path, principal)
+	switch required {
+	case PermRead:
+		return CanRead(effective)
+	case PermInsert:
+		return CanInsert(effective)
+	case PermReadWrite:
+		return CanWrite(effective)
+	case PermOwner:
+		return CanOwn(effective)
+	}
+	return false
+}
+
+// MakeLookupCallback returns a LookupCallback that enforces filesystem-based
+// permissions by reading .grits/access.json files along the path. The volume
+// is captured so the callback reads access.json from the correct volume.
+func (m *AuthModule) MakeLookupCallback(vol Volume) grits.LookupCallback {
 	return func(resp *grits.LookupResponse, principal *grits.Principal) (*grits.LookupResponse, error) {
 		if resp == nil {
 			return nil, nil
-		}
-		if principal == grits.BackendPrincipal {
-			return resp, nil
 		}
 
 		log.Printf("Auth [lookup]: checking %d paths", len(resp.Paths))
 
 		result := make([]*grits.PathNodePair, 0, len(resp.Paths))
-		denied := true
 
 		for _, pair := range resp.Paths {
-			if pathCoveredBy(pair.Path, m.Config.ReadWhitelist) {
-				denied = false
-			}
-			if denied {
+			if !m.hasPermission(vol, pair.Path, principal, PermRead) {
 				log.Printf("Auth [lookup]: access denied for %q", pair.Path)
 				result = append(result, &grits.PathNodePair{
 					Path:  pair.Path,
@@ -274,24 +496,38 @@ func (m *AuthModule) MakeLookupCallback() grits.LookupCallback {
 	}
 }
 
-// MakeLinkCallback returns a LinkCallback that enforces the write whitelist.
-func (m *AuthModule) MakeLinkCallback() grits.LinkCallback {
+// MakeLinkCallback returns a LinkCallback that enforces filesystem-based
+// permissions by reading .grits/access.json files along the path. The volume
+// is captured so the callback reads access.json from the correct volume.
+func (m *AuthModule) MakeLinkCallback(vol Volume) grits.LinkCallback {
 	return func(oldRoot, newRoot grits.FileNode, requests []*grits.LinkRequest, principal *grits.Principal) error {
 		log.Printf("Auth [link]: checking %d requests", len(requests))
 
-		if principal == grits.BackendPrincipal {
-			return nil
-		}
-
 		for _, req := range requests {
-			path := strings.TrimRight(req.Path, "/")
+			reqPath := strings.TrimRight(req.Path, "/")
+			parent := parentPath(reqPath)
 
-			if !pathCoveredBy(path, m.Config.WriteWhitelist) {
-				log.Printf("Auth [link]: DENY %q (not in WriteWhitelist)", path)
-				return &grits.ErrAccessDenied{Path: path}
+			if m.hasPermission(vol, parent, principal, PermReadWrite) {
+				log.Printf("Auth [link]: ALLOW %q (has write)", reqPath)
+				continue
 			}
 
-			log.Printf("Auth [link]: ALLOW %q", path)
+			if m.hasPermission(vol, parent, principal, PermInsert) {
+				// Insert only allows creating new files (paths that don't exist yet).
+				// Do a backend-principal lookup to check existence without recursion.
+				_, err := vol.LookupNode(reqPath, grits.BackendPrincipal)
+				if err != nil {
+					// File doesn't exist — this is a genuine insert.
+					log.Printf("Auth [link]: ALLOW %q (insert)", reqPath)
+					continue
+				}
+				// File exists — insert doesn't grant modification rights.
+				log.Printf("Auth [link]: DENY %q (insert but file exists)", reqPath)
+				return &grits.ErrAccessDenied{Path: reqPath}
+			}
+
+			log.Printf("Auth [link]: DENY %q (no permission)", reqPath)
+			return &grits.ErrAccessDenied{Path: reqPath}
 		}
 
 		return nil
