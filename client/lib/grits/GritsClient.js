@@ -1188,23 +1188,28 @@ class GritsVolume {
 
     if (!this._configFetched) this._fetchVolumeConfig();
 
-    // Find the deepest path entry — it corresponds to what we actually asked for.
+    // Find the entry for the path we actually asked for. The response may
+    // contain additional entries for mini-root refresh — the last entry is
+    // not necessarily ours.
     if (!result.paths || result.paths.length <= 0) {
+      DEBUG && console.debug(`[GritsClient] _slowLookup → no paths in result, throwing`);
       throw new Error(`lookup: No paths returned looking up ${path}`);
     }
 
-    const leaf = result.paths[result.paths.length - 1];
+    const entry = result.paths.find(p => p.path === path);
+    DEBUG && console.debug(`[GritsClient] _slowLookup paths=${result.paths.map(p => `${p.path}(err=${p.error})`).join(', ')} entry=${entry?.path} entry.error=${entry?.error}`);
 
-    if (!leaf || leaf.path !== path) {
-      // Path wasn't reached — treat as not found.
+    if (!entry) {
+      DEBUG && console.debug(`[GritsClient] _slowLookup → path "${path}" not in response, returning null`);
       return null;
     }
 
-    if (leaf.error === 'not_found') return null;
-    if (leaf.error === 'access_denied') throw new AccessDeniedError(leaf.path ?? path);
-    if (leaf.error) throw new Error(`lookup: unexpected error at ${leaf.path}: ${leaf.error}`);
+    if (entry.error === 'not_found') { DEBUG && console.debug(`[GritsClient] _slowLookup → not_found, returning null`); return null; }
+    if (entry.error === 'access_denied') { DEBUG && console.debug(`[GritsClient] _slowLookup → access_denied, throwing`); throw new AccessDeniedError(entry.path ?? path); }
+    if (entry.error) { DEBUG && console.debug(`[GritsClient] _slowLookup → unexpected error ${entry.error}, throwing`); throw new Error(`lookup: unexpected error at ${entry.path}: ${entry.error}`); }
 
-    return { metadataHash: leaf.addr, contentHash: leaf.contentHash, contentSize: leaf.size ?? 0, _source: 'slow' };
+    DEBUG && console.debug(`[GritsClient] _slowLookup → success, returning addr=${entry.addr}`);
+    return { metadataHash: entry.addr, contentHash: entry.contentHash, contentSize: entry.size ?? 0, _source: 'slow' };
   }
 
   // Ingest a lookup/link response: cache all returned blobs and update
