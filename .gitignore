@@ -1,6 +1,4 @@
 /bin/
-/testbed/
 /var/
-/volumes/
-/grits.cfg
-/client.dist/
+/mnt/
+/config.json
