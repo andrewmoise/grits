@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>gimbal — login</title>
+<link rel="stylesheet" href="../style/style.css">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: var(--bg-root);
+    color: var(--text);
+    font-family: var(--font-ui);
+    user-select: none;
+  }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,255,255,0.012) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px);
+    background-size: 2rem 2rem;
+    pointer-events: none; z-index: 0;
+  }
+  .center {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1;
+  }
+  .card {
+    background: var(--bg-float);
+    border: 1px solid var(--border);
+    border-radius: 0.75rem;
+    padding: 2rem 2.5rem;
+    width: 22rem;
+    max-width: 90vw;
+    box-shadow: 0 0.4rem 1.5rem rgba(0,0,0,0.45);
+  }
+  .card h1 {
+    font-size: var(--fs-lg);
+    font-weight: 400;
+    color: var(--text);
+    text-align: center;
+    margin-bottom: 1.5rem;
+    letter-spacing: 0.02em;
+  }
+  .field {
+    margin-bottom: 1rem;
+  }
+  .field label {
+    display: block;
+    font-size: var(--fs-base);
+    color: var(--text-dim);
+    margin-bottom: 0.3rem;
+  }
+  .field input {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 0.4rem;
+    color: var(--text);
+    font-family: var(--font-ui);
+    font-size: var(--fs-base);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .field input:focus {
+    border-color: var(--border-focus);
+  }
+  .btn {
+    width: 100%;
+    padding: 0.55rem;
+    background: var(--a1-dim);
+    border: 1px solid var(--a1);
+    border-radius: 0.4rem;
+    color: var(--text-hi);
+    font-family: var(--font-ui);
+    font-size: var(--fs-base);
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-top: 0.5rem;
+  }
+  .btn:hover { background: var(--a1); }
+  .btn:active { transform: scale(0.98); }
+  .error {
+    color: var(--red);
+    font-size: var(--fs-base);
+    text-align: center;
+    margin-top: 0.75rem;
+    min-height: 1.5em;
+  }
+  .status {
+    color: var(--text-dim);
+    font-size: var(--fs-base);
+    text-align: center;
+    margin-top: 0.75rem;
+    min-height: 1.5em;
+  }
+</style>
+</head>
+<body>
+<div class="center">
+  <div class="card">
+    <h1>log in</h1>
+    <div class="field">
+      <label for="username">username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autofocus>
+    </div>
+    <div class="field">
+      <label for="password">password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password">
+    </div>
+    <button class="btn" id="login-btn">log in</button>
+    <div id="error" class="error"></div>
+    <div id="status" class="status"></div>
+  </div>
+</div>
+
+<script type="module">
+import { injectTheme } from '../style/style.js';
+injectTheme();
+
+const usernameEl = document.getElementById('username');
+const passwordEl = document.getElementById('password');
+const loginBtn   = document.getElementById('login-btn');
+const errorEl    = document.getElementById('error');
+const statusEl   = document.getElementById('status');
+
+async function doLogin() {
+  const username = usernameEl.value.trim();
+  const password = passwordEl.value;
+
+  if (!username || !password) {
+    errorEl.textContent = 'enter username and password';
+    return;
+  }
+
+  errorEl.textContent = '';
+  statusEl.textContent = 'logging in…';
+  loginBtn.disabled = true;
+
+  try {
+    const res = await fetch('/grits/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (res.ok) {
+      statusEl.textContent = 'success — redirecting…';
+      window.location.href = '/grits/v1/content/root/lib/gimbal/';
+    } else {
+      const data = await res.json().catch(() => ({}));
+      errorEl.textContent = data.error || 'login failed';
+      statusEl.textContent = '';
+    }
+  } catch (e) {
+    errorEl.textContent = 'connection error';
+    statusEl.textContent = '';
+  } finally {
+    loginBtn.disabled = false;
+  }
+}
+
+loginBtn.addEventListener('click', doLogin);
+passwordEl.addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+usernameEl.addEventListener('keydown', e => { if (e.key === 'Enter') passwordEl.focus(); });
+</script>
+</body>
+</html>

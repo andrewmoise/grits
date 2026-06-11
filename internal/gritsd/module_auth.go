@@ -157,11 +157,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// argon2idEncode hashes a password using argon2id and returns an encoded
+// Argon2idEncode hashes a password using argon2id and returns an encoded
 // string in the standard format:
 //
 //	$argon2id$v=19$m=<memory>,t=<time>,p=<threads>$<base64_salt>$<base64_hash>
-func argon2idEncode(password string) (string, error) {
+func Argon2idEncode(password string) (string, error) {
 	salt := make([]byte, 16)
 	if _, err := rand.Read(salt); err != nil {
 		return "", fmt.Errorf("generating salt: %w", err)
@@ -249,9 +249,12 @@ func (m *AuthModule) MakeLookupCallback() grits.LookupCallback {
 		log.Printf("Auth [lookup]: checking %d paths", len(resp.Paths))
 
 		result := make([]*grits.PathNodePair, 0, len(resp.Paths))
+		denied := true
 
 		for _, pair := range resp.Paths {
-			denied := !pathCoveredBy(pair.Path, m.Config.ReadWhitelist)
+			if pathCoveredBy(pair.Path, m.Config.ReadWhitelist) {
+				denied = false
+			}
 			if denied {
 				log.Printf("Auth [lookup]: access denied for %q", pair.Path)
 				result = append(result, &grits.PathNodePair{

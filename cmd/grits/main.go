@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // CommandRequest represents the request format for the pipe
@@ -48,6 +50,19 @@ func main() {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "Error: No command specified")
 		os.Exit(1)
+	}
+
+	// Special-case adduser: if only username given, prompt for password from stdin
+	// so it doesn't end up in shell history.
+	if args[0] == "adduser" && len(args) == 2 {
+		fmt.Fprint(os.Stderr, "Password: ")
+		reader := bufio.NewReader(os.Stdin)
+		password, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
+			os.Exit(1)
+		}
+		args = append(args, strings.TrimRight(password, "\n\r"))
 	}
 
 	// Connect to the socket

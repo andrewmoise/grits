@@ -2,6 +2,7 @@ package gritsd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -201,6 +202,87 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("import failed: %v", err)}
 		}
 		return CommandResponse{Status: 0, Output: fmt.Sprintf("imported %s into //%s/%s", cmd[2], volumeName, destPath)}
+
+	case "adduser":
+		// adduser <username> <password>
+		if len(cmd) != 3 {
+			return CommandResponse{Status: 1, Output: "usage: adduser <username> <password>"}
+		}
+		username := cmd[1]
+		password := cmd[2]
+		if !Validate("username", username) {
+			return CommandResponse{Status: 1, Output: "invalid username format"}
+		}
+		if password == "" {
+			return CommandResponse{Status: 1, Output: "password must not be empty"}
+		}
+
+		pwdHash, err := Argon2idEncode(password)
+		if err != nil {
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("failed to hash password: %v", err)}
+		}
+
+		lines, err := ReadJSONL(s, "root", usersFilePath, grits.BackendPrincipal)
+		if err != nil && !errors.Is(err, grits.ErrNotExist) {
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("reading users file: %v", err)}
+		}
+
+		var records []map[string]any
+		found := false
+		for _, line := range lines {
+			var rec map[string]any
+			if err := json.Unmarshal(line, &rec); err != nil {
+				continue
+			}
+			if rec["username"] == username {
+				rec["pwdHash"] = pwdHash
+				found = true
+			}
+			records = append(records, rec)
+		}
+		if !found {
+			records = append(records, map[string]any{
+				"username": username,
+				"pwdHash":  pwdHash,
+			})
+		}
+
+		if err := WriteJSONL(s, "root", usersFilePath, records, grits.BackendPrincipal); err != nil {
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("writing users file: %v", err)}
+		}
+		return CommandResponse{Status: 0, Output: "user added"}
+
+	case "deluser":
+		// deluser <username>
+		if len(cmd) != 2 {
+			return CommandResponse{Status: 1, Output: "usage: deluser <username>"}
+		}
+		username := cmd[1]
+
+		lines, err := ReadJSONL(s, "root", usersFilePath, grits.BackendPrincipal)
+		if err != nil {
+			if errors.Is(err, grits.ErrNotExist) {
+				return CommandResponse{Status: 1, Output: "users file not found"}
+			}
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("reading users file: %v", err)}
+		}
+
+		var records []map[string]any
+		for _, line := range lines {
+			var rec map[string]any
+			if err := json.Unmarshal(line, &rec); err != nil {
+				continue
+			}
+			if rec["username"] == username {
+				continue // skip — deleting this user
+			}
+			records = append(records, rec)
+		}
+
+		if err := WriteJSONL(s, "root", usersFilePath, records, grits.BackendPrincipal); err != nil {
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("writing users file: %v", err)}
+		}
+		return CommandResponse{Status: 0, Output: "user deleted"}
 
 	default:
 		return CommandResponse{Status: 1, Output: fmt.Sprintf("unknown command: %s", cmd[0])}

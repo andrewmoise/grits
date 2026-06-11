@@ -14,9 +14,9 @@ import (
 // hashPasswordForTest produces an argon2id hash for direct use in test user records.
 func hashPasswordForTest(t *testing.T, password string) string {
 	t.Helper()
-	h, err := argon2idEncode(password)
+	h, err := Argon2idEncode(password)
 	if err != nil {
-		t.Fatalf("argon2idEncode: %v", err)
+		t.Fatalf("Argon2idEncode: %v", err)
 	}
 	return h
 }
@@ -66,9 +66,9 @@ func TestArgon2idRoundTrip(t *testing.T) {
 	}
 
 	for _, pw := range passwords {
-		encoded, err := argon2idEncode(pw)
+		encoded, err := Argon2idEncode(pw)
 		if err != nil {
-			t.Errorf("argon2idEncode(%q): %v", pw, err)
+			t.Errorf("Argon2idEncode(%q): %v", pw, err)
 			continue
 		}
 
@@ -83,9 +83,9 @@ func TestArgon2idRoundTrip(t *testing.T) {
 }
 
 func TestArgon2idWrongPassword(t *testing.T) {
-	encoded, err := argon2idEncode("real-password")
+	encoded, err := Argon2idEncode("real-password")
 	if err != nil {
-		t.Fatalf("argon2idEncode: %v", err)
+		t.Fatalf("Argon2idEncode: %v", err)
 	}
 
 	if verifyArgon2id("wrong-password", encoded) {
