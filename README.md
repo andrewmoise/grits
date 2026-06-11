@@ -276,6 +276,16 @@ There are no symbolic links.
 
 You can use `glob({pattern})` to get a list of files matching the pattern. It's not a "shell command," just a normal async function, so you will have to do things like `rm(... await glob('*.txt'))`.
 
+The plan for where things are located within `//root` is to keep things pretty similar to Unix:
+
+* `/home/{username}` - Home directories
+* `/home/{username}/local/{app name}` - Application-specific data (per user)
+* `/lib/{app name}` - Application code
+* `/opt/{app name}` - Application-specific variable data (system wide)
+* `/sys/etc` - System configuration
+* `/sys/log` - Logs
+* `/tmp` - Temp files
+
 #### Chaining
 
 The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which then go via the same proxy as the shell uses to find commands. When called on a `Result`, commands will chain together with the output from the command that created that `Result`.
