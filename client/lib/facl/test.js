@@ -3,10 +3,6 @@ export const tests = [
   {
     label: 'facl() lists empty when no access.json',
     async fn(shell, scratch) {
-      // Existing facl on a directory with no .grits — should return { allow: [] }
-      // because scratch was just created and has no .grits directory.
-      // If it throws "file does not exist", that's fine too — the impl may
-      // change, so accept either empty JSON or an error that we handle.
       let threw = false;
       let result;
       try {
@@ -14,7 +10,7 @@ export const tests = [
       } catch {
         threw = true;
       }
-      if (threw) return; // no access.json yet — acceptable
+      if (threw) return;
       const data = await result.json();
       if (!Array.isArray(data.allow)) {
         throw new Error('expected { allow: [...] }');
@@ -22,9 +18,9 @@ export const tests = [
     },
   },
   {
-    label: 'facl({u:"alice", p:"owner"}) adds a grant',
+    label: 'facl({u:"alice"}, {p:"owner"}) adds a grant',
     async fn(shell, scratch) {
-      await shell.eval(`facl('${scratch}', {u:"alice", p:"owner"})`);
+      await shell.eval(`facl('${scratch}', {u:"alice"}, {p:"owner"})`);
       const result = await shell.eval(`facl('${scratch}')`);
       const data = await result.json();
       if (!data.allow || data.allow.length !== 1) {
@@ -39,9 +35,8 @@ export const tests = [
   {
     label: 'facl() updates existing grant when same user specified',
     async fn(shell, scratch) {
-      await shell.eval(`facl('${scratch}', {u:"bob", p:"read"})`);
-      // Same user, different permission → should update.
-      await shell.eval(`facl('${scratch}', {u:"bob", p:"read+write"})`);
+      await shell.eval(`facl('${scratch}', {u:"bob"}, {p:"read"})`);
+      await shell.eval(`facl('${scratch}', {u:"bob"}, {p:"read+write"})`);
       const result = await shell.eval(`facl('${scratch}')`);
       const data = await result.json();
       if (data.allow.length !== 1) {
@@ -55,7 +50,7 @@ export const tests = [
   {
     label: 'facl({u:"bob"}, {x:1}) removes the grant',
     async fn(shell, scratch) {
-      await shell.eval(`facl('${scratch}', {u:"bob", p:"read"})`);
+      await shell.eval(`facl('${scratch}', {u:"bob"}, {p:"read"})`);
       await shell.eval(`facl('${scratch}', {u:"bob"}, {x:1})`);
       const result = await shell.eval(`facl('${scratch}')`);
       const data = await result.json();
@@ -78,13 +73,44 @@ export const tests = [
     },
   },
   {
+    label: 'facl({x:1}) alone clears all grants',
+    async fn(shell, scratch) {
+      await shell.eval(`facl('${scratch}', {u:"alice"}, {p:"read"})`);
+      await shell.eval(`facl('${scratch}', {u:"bob"}, {p:"owner"})`);
+      await shell.eval(`facl('${scratch}', {x:1})`);
+      const result = await shell.eval(`facl('${scratch}')`);
+      const data = await result.json();
+      if (data.allow.length !== 0) {
+        throw new Error(`expected 0 grants after clear, got ${data.allow.length}`);
+      }
+    },
+  },
+  {
+    label: 'facl({p:"read"}, {x:1}) removes all read grants',
+    async fn(shell, scratch) {
+      await shell.eval(`facl('${scratch}', {u:"alice"}, {p:"read"})`);
+      let dump = await (await shell.eval(`facl('${scratch}')`)).json();
+      await shell.eval(`facl('${scratch}', {u:"bob"}, {p:"owner"})`);
+      dump = await (await shell.eval(`facl('${scratch}')`)).json();
+      await shell.eval(`facl('${scratch}', {p:"read"}, {x:1})`);
+      dump = await (await shell.eval(`facl('${scratch}')`)).json();
+      const result = await shell.eval(`facl('${scratch}')`);
+      const data = await result.json();
+      if (data.allow.length !== 1) {
+        throw new Error(`expected 1 grant after removing reads, got ${data.allow.length}`);
+      }
+      if (data.allow[0].user !== 'bob') {
+        throw new Error(`expected bob to remain, got ${JSON.stringify(data.allow)}`);
+      }
+    },
+  },
+  {
     label: 'facl() on .grits directory is rejected',
     async fn(shell, scratch) {
-      // Create a .grits directory.
       await shell.eval(`mkdir('${scratch}/sub/.grits', {p:1})`);
       let threw = false;
       try {
-        await shell.eval(`facl('${scratch}/sub/.grits', {u:"x", p:"read"})`);
+        await shell.eval(`facl('${scratch}/sub/.grits', {u:"x"}, {p:"read"})`);
       } catch (e) {
         if (e.message.includes('cannot modify grants within a .grits directory')) threw = true;
         else throw e;
@@ -96,7 +122,7 @@ export const tests = [
     label: 'facl() on a specific path works',
     async fn(shell, scratch) {
       await shell.eval(`mkdir('${scratch}/data', {p:1})`);
-      await shell.eval(`facl('${scratch}/data', {all:true, p:"read"})`);
+      await shell.eval(`facl('${scratch}/data', {all:true}, {p:"read"})`);
       const result = await shell.eval(`facl('${scratch}/data')`);
       const data = await result.json();
       if (!data.allow || data.allow.length !== 1) {
@@ -110,7 +136,7 @@ export const tests = [
   {
     label: 'facl() with u: and p: aliases works',
     async fn(shell, scratch) {
-      await shell.eval(`facl('${scratch}', {u:"carol", p:"owner"})`);
+      await shell.eval(`facl('${scratch}', {u:"carol"}, {p:"owner"})`);
       const result = await shell.eval(`facl('${scratch}')`);
       const data = await result.json();
       const g = data.allow.find(a => a.user === 'carol');
