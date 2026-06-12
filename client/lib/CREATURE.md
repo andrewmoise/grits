@@ -26,6 +26,57 @@ Gimbal-specific: `from(filename)` / `to(filename)` for `<` / `>` style piping, `
 
 Each command directory typically has `main.js` and optionally `test.js`.
 
+## Frontend unit testing
+
+Tests live in `lib/<name>/test.js` and are run via `test()` (the `lib/test/main.js` runner).
+
+### Test structure
+
+Each test file exports a `tests` array of `{ label, fn }` objects:
+
+```js
+export const tests = [
+  {
+    label: 'cp copies a file',
+    async fn(shell, scratch) {
+      await shell.eval(`echo('hello').to('${scratch}/src.txt')`);
+      await shell.eval(`cp('${scratch}/src.txt', '${scratch}/dest.txt')`);
+      const text = await shell.eval(`cat('${scratch}/dest.txt').toText()`);
+      if (text !== 'hello') throw new Error('copy failed');
+    },
+  },
+];
+```
+
+### How it works
+
+1. **Discovery** — `test()` scans `lib/*/` for directories containing a `test.js` file
+2. **Filtering** — run a subset with `test('cp', 'echo')`
+3. **Isolation** — each test gets a unique scratch directory at `//root/tmp/gimbal-test/<random>` (auto-created with `mkdir -p`)
+4. **Test signature** — `fn(shell, scratch)` where `shell` gives access to `shell.eval()`, `shell.resolvePath()`, and `shell._vol()`, and `scratch` is the scratch path string
+5. **Assertions** — throw on failure: `throw new Error('expected ...')`
+6. **Output** — streamed as plain text with ✓/✗ marks and a summary
+
+### Common patterns
+
+| What | How |
+|---|---|
+| Run a command | `await shell.eval(\`cmd('${scratch}/path')\`)` |
+| Read file content | `await shell.eval(\`cat('${scratch}/f').toText()\`)` |
+| Check file exists | `shell._vol(r.serverUrl, r.volume).lookup(r.path)` |
+| Check file is gone | Catch `"not found"` from `lookup()` |
+| Expect an error | Catch the error from `shell.eval()` and check `e.message` |
+| Write for a test | `await shell.eval(\`echo('data').to('${scratch}/f')\`)` |
+
+### Options
+
+| Flag | Effect |
+|---|---|
+| `{v:1}` | Show full stack traces on failure |
+| `{ff:1}` | Fail fast — stop at first failure |
+
+Run from the Gimbal shell: `test()` or `test('cp', 'echo')`.
+
 ## Widgets (GWM window manager components)
 
 Widgets are windows within the Gimbal window environment. Each has a `main.js` (the shell command to launch it) and a `gwm-widget.js` (the actual widget implementation):
