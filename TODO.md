@@ -10,6 +10,17 @@
 * Make the corner icons a little bigger
 * Look into service worker not unregistering
 * Change "type" to "module" in modules config
+* Double-check permissions within .grits directories — the access.json in
+  foo/.grits should apply to both foo/ and foo/.grits/ itself, with slight
+  differences between the two contexts
+* Consolidate client/ and skel/ into a single gimbal/ directory
+* Make a more secure way to input passwords for login()
+* s/cell/creature/g
+* Fix test /tmp/tmp scratch dir
+* Make a more friendly vhost setup in the instructions
+* Session tokens in cookies or something
+* What's up with sessionStorage in GritsClient.js?
+* Reorient the initial paradigm to vhosts instead of /grits/v1/content
 
 # Backlog
 
@@ -61,9 +72,17 @@ Shell environment variables
 
 Some indication when things disconnect
 
-## gwm + tools
+Import git tools libs
 
-Syncing files between files() and cd() in a shell optionally
+Defaults / config system
+
+More tools: Diff, patch
+
+adduser() and deluser() from frontend
+
+## gwm
+
+Syncing cwd between files() and cd() in a shell optionally
 
 Hotkeys
 
@@ -76,13 +95,9 @@ Make multi-file editing based on clicking titlebar to see a listing
 
 Make files widget sync to changes in the directory
 
-Import git tools libs
-
-Defaults / config system
-
-More tools: Diff, patch
-
 Image / video / random binary file output in terminal
+
+Make light mode
 
 ## grits client
 
@@ -92,9 +107,13 @@ Look into possible prefetch loop issue
 
 Add index.html to path lookups pre-emptively
 
-Change GritsClient to be per serverUrl
+XX Change GritsClient to be per serverUrl
+(Probably superceded now; instead we need to look at having the SW bounce every blob read to immutable accesses to /grits/v1/blob in the core vhost)
+
 
 ## backend
+
+Be smart about sending small blobs directly with the answer, for stuff like lookup(), to save RTT
 
 Transition a bunch of stuff to JSONL
 
@@ -108,9 +127,13 @@ Prune for path access on multilink
 
 Make multilink (esp with assertions) atomic, with OCC probably
 
-Change "type" to "module" in modules config
-
 Change LookupResponse to just include metadata inline
+
+Make more complete auth-timeout-force-re-login system (an endpoint to verify user-initiated action, and a way to configure auth timeouts per user)
+
+Make mkdir('one/two') return a sensible error, not a 500
+
+Change 404 returns during normal operations, so we don't spam the console
 
 ## Old TODOs
 
