@@ -185,6 +185,20 @@ function _isoNow() {
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
+// Deep-freeze an object/array tree so it cannot be mutated.
+// Uses a Set to handle circular references safely.
+// Primitives and null/undefined pass through unchanged.
+function _deepFreeze(obj, seen = new Set()) {
+  if (obj === null || obj === undefined || typeof obj !== 'object') return obj;
+  if (seen.has(obj)) return obj;
+  seen.add(obj);
+  Object.freeze(obj);
+  for (const key of Object.getOwnPropertyNames(obj)) {
+    _deepFreeze(obj[key], seen);
+  }
+  return obj;
+}
+
 // ─────────────────────────────────────────────────────────────────
 // GritsFile
 // ─────────────────────────────────────────────────────────────────
@@ -775,7 +789,7 @@ class GritsVolume {
     const cached = this._parent._jsonCache.get(cid);
     if (cached) { cached.lastAccessed = Date.now(); return cached.data; }
     const data = await (await this.get(cid)).json();
-    this._parent._jsonCache.set(cid, { data, lastAccessed: Date.now() });
+    this._parent._jsonCache.set(cid, { data: _deepFreeze(data), lastAccessed: Date.now() });
     return data;
   }
 
