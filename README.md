@@ -91,8 +91,8 @@ To play around with it, do this:
 * Install golang >= 1.22.12
 * `sudo apt install fuse3 certbot` or equivalent
 * Check out the source
-* From the source directory:
-    * `go test ./...`
+* Run tests: `go test ./internal/... ./cmd/...`
+* Assuming the smoke tests pass, build:
     * `go build -o bin/certbot-helper cmd/certbot-helper/main.go`
     * `go build -o bin/gritsd cmd/gritsd/main.go`
     * `go build -o bin/grits cmd/grits/main.go`
@@ -110,12 +110,6 @@ You will need to make changes to the config.
 Change `%USER%` to your Unix username, and `%EMAIL%` to your email (email is only needed for certbot interactions -- the system will automatically grab HTTPS certificates for you, by default, and certbot wants your email in order to do that.)
 
 ### Run
-
-First, test the backend. See the next section for more about tests.
-
-```
-go test ./...
-```
 
 Assuming everything checks out, you're good to start the actual service (foreground-only for now, you can use `tmux` if you like):
 
@@ -253,23 +247,23 @@ The permissions system is very specifically adapted to the needs of this system.
 
 * The filesystem enforces permissions at the directory level. Files have no permissions set which are distinct from the directory they're placed in.
 * The default is no access. Permission must be explicitly granted to be allowed.
-* Grants of access are both according to the user, and also to the referer which is making the request.
+* Grants of access are both according to the user, and also to the origin which is making the request.
 * Grants of access also apply recursively to directories lower down than the specified directory. This is a consequence of the Merkle tree structure -- once you have given read or write access to a parent directory, you cannot set one of its subdirectories in a way that will disable that access going down the tree.
 
 So, in practice, the root directory is forbidden to all non-superusers, and grants of access add up unreversibly as you go further down into subdirectories.
 
-Grants of access are specified in terms of *both* to a specific user, and a referer (sic) who is making the request on behalf of that user. This means that it is safe to run an untrusted application, while carrying a token for your user which gives filesystem access on behalf of your user. The untrusted application will be forbidden from filesystem operations that aren't explicitly granted to it (as determined by checking `Referer:`), while still being able to do filesystem operations "as you" within the subset that are allowed for it.
+Grants of access are specified in terms of *both* to a specific user, and an origin (the scheme+host of the page making the request). The granularity of the permission model is per-origin: all pages running on the same vhost share the same origin, and thus the same permissions. If you want isolation between different applications, run them on separate vhosts (separate origins). The permissions structure will protect everything gated behind each origin from code running on other origins.
 
 An example might help.
 
-* `/home/moise` is read/writable by `moise`, but *only* when being accessed from the page `https://gimbal.example.com/grits/v1/content/root/lib/gimbal/index.html`.
-* `/home/moise/local/music-player/` is set up to be read/writable by the music app, *only* when being accessed from the page `https://gimbal.example.com/grits/v1/content/root/home/eve/music-player/index.html`
+* `/home/moise` is read/writable by `moise`, but *only* when being accessed from the origin `https://gimbal.example.com`.
+* `/home/moise/local/music-player/` is set up to be read/writable by the music app, *only* when being accessed from the origin `https://music.example.com`.
 
-This means that, running the Gimbal shell, `moise` can examine the music player's application data, and make changes to it. The music player can operate on its own data however it will need to. However, even though it carries a token for `moise`'s user, the music player cannot read or write anything from `moise`'s main home directory, nor can any other code that doesn't originate from `/lib/gimbal/index.html`.
+This means that, running the Gimbal shell, `moise` can examine the music player's application data, and make changes to it. The music player can operate on its own data however it will need to. However, even though it carries a token for `moise`'s user, the music player cannot read or write anything from `moise`'s main home directory, nor can any other code that doesn't originate from `https://gimbal.example.com`.
 
-Now say that `moise` decides to set up his own custom Gimbal shell in `/home/moise/gimbal`, by copying `/lib` to that directory and making his own personal edits. He makes that copy, and then grants access on `/home/moise` to his own user when accessed from the referer `https://gimbal.example.com/grits/v1/content/root/home/moise/gimbal/lib/gimbal/index.html`.
+Now say that `moise` decides to set up his own custom Gimbal shell on a different vhost, say `https://dev.moise.example.com`. He grants access on `/home/moise` to his own user when accessed from that origin. Both shells can access the same data. No other origin can access `/home/moise` unless given specific access.
 
-Now both of the Gimbal shells can access the same data, including the music player's application data. No one else can access `/home/moise` unless they have specific access. And, crucially, the music player runs as `moise`, but it can access only its own data. `eve`'s music player, running the same code, can also run for `eve` as it can for `moise` or any other user, without either of their data being readable or writable for each other.
+The key factor here is that any random person can create `music.example.com`, and it will be safe for `moise` to go to that page and interact with it, with it having precisely the permissions it should have without being able to read or write things that it shouldn't.
 
 There are other, more sophisticated access patterns possible. Notably, there is a pattern where all users have `read+insert` permission in `/var/music-player`, meaning that they can all write data to that location, but no user can interfere with the other users' data there.
 
@@ -287,11 +281,11 @@ The way that permissions at one level apply to subdirectories below that level f
 
 The frontend shell tool `facl()` is used to modify directory permissions. Run `help('facl')` to see more about how to use it.
 
-Note that the `referer` is such a critical piece of this security that it *must* be specified with any grant of permissions. If you really want to grant access to any referer (such as making `/lib` world-readable), then call `facl()` with referer set to `"*"`. If you want to grant access to a piece of the filesystem to yourself (the human), then generally the referer should be the Gimbal shell page, which will avoid granting access also to any piece of code or any Gimbal page you ever run as yourself.
+Note that the `origin` is such a critical piece of this security that it *must* be specified with any grant of permissions. If you really want to grant access to any origin (such as if you are hosting files on a vhost designed to be media for a separate external site), then call `facl()` with origin set to `"*"`. If you want to grant access to a piece of the filesystem to yourself (the human), then generally the origin should be set to `"/"` which resolves to the core vhost's origin.
 
-Note: All of these permissions are only enforced at the namespace level. Blobs comprising your filesystem are still stored in plaintext and handed out to anyone who knows the CID. That's a stronger protection than it might sound, but don't put anything that's actually secret into this store without encrypting it separately.
+Note: All of these permissions are only enforced at the namespace level. Blobs comprising your filesystem are still stored in plaintext and handed out to anyone who knows the CID.
 
-(Like I said, don't use this in production yet, basically.)
+Don't put anything in this filesystem that you seriously want to keep secret, in other words. The long-run plan for actual security is via cryptography on the client as opposed to via keeping CIDs secret
 
 #### Chaining
 

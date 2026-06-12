@@ -1,1 +1,1 @@
-{"allow":[{"all":true,"referer":"*","permission":"read+write"}]}
+{"allow":[{"all":true,"origin":"*","permission":"read+write"}]}

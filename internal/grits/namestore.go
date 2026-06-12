@@ -190,15 +190,15 @@ type RefHoldFunc func(addr BlobAddr)
 
 // Principal represents the entity making a request.
 // BackendPrincipal bypasses all permission checks, AnonPrincipal
-// follows permission whitelists. Referer is set from the HTTP
-// Referer header (or Origin as a cross-origin fallback).
+// follows permission whitelists. Origin is set from the HTTP
+// Origin header.
 
 type Principal struct {
-	User    string // "" means unauthenticated
-	Referer string // "" means direct navigation (user at keyboard)
+	User   string // "" means unauthenticated
+	Origin string // "" means direct navigation (user at keyboard)
 }
 
-var BackendPrincipal = &Principal{User: "backend", Referer: ""}
+var BackendPrincipal = &Principal{User: "backend", Origin: ""}
 var AnonPrincipal = &Principal{}
 
 // LookupCallback is called just before Lookup returns its response.

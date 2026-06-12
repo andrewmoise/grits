@@ -472,25 +472,17 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 			}
 		}
 
-		// Extract principal from auth token. Referer comes from the HTTP
-		// Referer header. Origin without Referer is always rejected — an
-		// app that strips its referer is untrustworthy. If both are empty
-		// (direct navigation), Referer stays empty and grantMatchesPrincipal
-		// passes the check.
+		// Extract principal from auth token. Origin comes from the HTTP
+		// Origin header. If empty (direct navigation), Origin stays empty
+		// and grantMatchesPrincipal passes the check.
 		user := ""
 		if token := r.Header.Get("X-Grits-Auth-Token"); token != "" && srv.authModule != nil {
 			user = srv.authModule.verifyHMACToken(token)
 		}
-		referer := r.Header.Get("Referer")
-		if referer == "" && r.Header.Get("Origin") != "" {
-			// Origin header without Referer — the client intentionally
-			// suppressed referer info. Reject immediately.
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
+		origin := r.Header.Get("Origin")
 		principal := &grits.Principal{
-			User:    user,
-			Referer: referer,
+			User:   user,
+			Origin: origin,
 		}
 		ctx := context.WithValue(r.Context(), principalKey, principal)
 		r = r.WithContext(ctx)

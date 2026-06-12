@@ -22,19 +22,19 @@ Multiple paths and principals can be combined:
   facl({x:1})                                   clear all grants on current dir
   facl({p:'read'}, {x:1})                       remove all read grants
 
-Principal fields:  u / user, r / referer (required)
+Principal fields:  u / user, o / origin (required)
                    auth, all
 Grant fields:      p / permission, x
 
 Permissions: read, insert, read+insert, read+write, owner
 
-Note: referer must be specified when adding grants.
-  Use {r:"*"} for any referer, or {r:"/path/to/app/index.html"}
-  to restrict to a specific page URL.`;
+Note: origin must be specified when adding grants.
+  Use {o:"*"} for any origin, or {o:"/"} for the core vhost origin,
+  or {o:"https://app.example.com"} for a specific origin.`;
 
 import { isVoid, VOID, _isPlainObject, responseFromJSON } from '../gimbal/gsh.js';
 
-const PRINCIPAL_KEYS = new Set(['u', 'user', 'auth', 'all', 'r', 'referer']);
+const PRINCIPAL_KEYS = new Set(['u', 'user', 'auth', 'all', 'o', 'origin']);
 const ACTION_KEYS    = new Set(['p', 'permission', 'x']);
 
 // Normalize a principal descriptor — expands u→user, nothing else needed.
@@ -44,8 +44,8 @@ function normalizePrincipal(spec) {
   if (spec.user !== undefined) p.user = spec.user;
   if (spec.auth !== undefined) p.auth = spec.auth;
   if (spec.all !== undefined) p.all = spec.all;
-  if (spec.r !== undefined) p.referer = spec.r;
-  if (spec.referer !== undefined) p.referer = spec.referer;
+	if (spec.o !== undefined) p.origin = spec.o;
+	if (spec.origin !== undefined) p.origin = spec.origin;
   return p;
 }
 
@@ -62,7 +62,7 @@ function grantMatchesPrincipal(grant, principal) {
   if (principal.user !== undefined && grant.user !== principal.user) return false;
   if (principal.auth !== undefined && grant.auth !== principal.auth) return false;
   if (principal.all !== undefined && grant.all !== principal.all) return false;
-  if (principal.referer !== undefined && principal.referer !== '*' && grant.referer !== principal.referer) return false;
+	if (principal.origin !== undefined && principal.origin !== '*' && grant.origin !== principal.origin) return false;
   return true;
 }
 
@@ -147,9 +147,9 @@ export async function invoke(shell, previous, args) {
   if (!remove && principals.length === 0) {
     throw new Error('facl: specify at least one principal (u:, auth, all) to add grants');
   }
-  if (!remove && principals.every(p => p.referer === undefined)) {
-    throw new Error('facl: referer is required. Use {r:"*"} for any referer, or {r:"/path/..."} for a specific page URL.');
-  }
+	if (!remove && principals.every(p => p.origin === undefined)) {
+		throw new Error('facl: origin is required. Use {o:"*"} for any origin, or {o:"/"} for the core vhost origin.');
+	}
 
   // Process each path.
   for (const targetPath of paths) {

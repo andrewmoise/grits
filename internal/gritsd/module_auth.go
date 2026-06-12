@@ -23,7 +23,7 @@ import (
 
 type AuthModuleConfig struct {
 	// CoreVhost is the URL of the main admin vhost (e.g. "https://gimbal.example.com").
-	// Relative referer values in access.json grants get this URL prepended.
+	// Grants with origin "/" get resolved to this origin.
 	CoreVhost string `json:"coreVhost"`
 
 	// SessionMaxAge is the sliding expiry window for session tokens.
@@ -373,26 +373,27 @@ func mergePerm(a, b Permission) Permission {
 	}
 }
 
-// Grant represents a single permission grant for a user/referer.
+// Grant represents a single permission grant for a user/origin.
 //
 // The three matching tiers are:
 //   - User:    matches a specific authenticated username
 //   - Auth:    matches any authenticated user (non-empty User)
 //   - All:    matches any principal (including unauthenticated)
 //
-// Referer is a cross-cutting constraint on top of user/auth/all:
+// Origin is a cross-cutting constraint on top of user/auth/all:
 //
 //	""  → grant is inert (never matches)
-//	"*" → any referer (no constraint)
-//	otherwise → must match principal.Referer exactly (or be a relative
-//	            path that resolves via coreVhost)
+//	"*" → any origin (no constraint)
+//	"/" → resolves to coreVhost origin
+//	otherwise → must match principal.Origin exactly (bare hostnames
+//	            like "gimbal.example.com" are resolved to "https://...")
 //
 // When multiple grants match, the most permissive permission wins.
 type Grant struct {
 	User       string     `json:"user,omitempty"` // specific username
 	Auth       *bool      `json:"auth,omitempty"` // any authenticated user
 	All        *bool      `json:"all,omitempty"`  // any principal including unauthenticated
-	Referer    string     `json:"referer"`        // ""=inert; "*"=any; URL or relative path
+	Origin     string     `json:"origin"`          // ""=inert; "*"=any; URL or bare hostname
 	Permission Permission `json:"permission"`
 }
 
@@ -410,20 +411,23 @@ func parentPath(path string) string {
 	return ""
 }
 
-// resolveReferer normalizes a grant's referer string.
+// resolveOrigin normalizes a grant's origin string.
 //
-//	""           → inert (pass through)
-//	"*"          → any referer (pass through)
-//	http(s)://…  → absolute URL, use as-is
-//	anything else → relative path: prepend coreVhost
-func (m *AuthModule) resolveReferer(referer string) string {
+//	""              → inert (pass through)
+//	"*"             → any origin (pass through)
+//	"/"             → coreVhost's origin
+//	http(s)://…     → absolute URL, use as-is
+//	anything else   → bare hostname: prepend "https://"
+func (m *AuthModule) resolveOrigin(origin string) string {
 	switch {
-	case referer == "" || referer == "*":
-		return referer
-	case strings.HasPrefix(referer, "http://") || strings.HasPrefix(referer, "https://"):
-		return referer
+	case origin == "" || origin == "*":
+		return origin
+	case origin == "/":
+		return strings.TrimRight(m.Config.CoreVhost, "/")
+	case strings.HasPrefix(origin, "http://") || strings.HasPrefix(origin, "https://"):
+		return origin
 	default:
-		return strings.TrimRight(m.Config.CoreVhost, "/") + "/" + strings.TrimLeft(referer, "/")
+		return "https://" + origin
 	}
 }
 
@@ -449,9 +453,9 @@ func (m *AuthModule) readAccessConfig(vol Volume, dirPath string) (*AccessConfig
 		return nil, fmt.Errorf("parsing %q: %w", accessPath, err)
 	}
 
-	// Resolve shorthand referers (relative paths → coreVhost + path).
+	// Resolve shorthand origins (bare hostnames, "/" → coreVhost).
 	for i := range cfg.Allow {
-		cfg.Allow[i].Referer = m.resolveReferer(cfg.Allow[i].Referer)
+		cfg.Allow[i].Origin = m.resolveOrigin(cfg.Allow[i].Origin)
 	}
 
 	return &cfg, nil
@@ -464,16 +468,16 @@ func (m *AuthModule) readAccessConfig(vol Volume, dirPath string) (*AccessConfig
 //  2. Any authenticated user (auth: true)
 //  3. Anyone including unauthenticated (all: true)
 //
-// Referer is a cross-cutting constraint on top of user/auth/all:
+// Origin is a cross-cutting constraint on top of user/auth/all:
 //
 //	""  → grant is inert (never matches)
-//	"*" → any referer (no constraint)
-//	otherwise → must exactly match principal.Referer.
+//	"*" → any origin (no constraint)
+//	otherwise → must exactly match principal.Origin.
 //
-// If principal.Referer is empty (direct navigation), the referer
+// If principal.Origin is empty (direct navigation), the origin
 // check is passed — the user is navigating directly.
 func grantMatchesPrincipal(g Grant, principal *grits.Principal) bool {
-	if g.Referer == "" {
+	if g.Origin == "" {
 		return false
 	}
 
@@ -489,24 +493,24 @@ func grantMatchesPrincipal(g Grant, principal *grits.Principal) bool {
 	case g.All != nil && *g.All:
 		// matches anyone
 	default:
-		// No user/auth/all tier — referer alone can serve as the
-		// matching criterion (but only if it names a specific referer;
+		// No user/auth/all tier — origin alone can serve as the
+		// matching criterion (but only if it names a specific origin;
 		// "*" alone with no tier is inert since there's nothing to match).
-		if g.Referer == "*" {
+		if g.Origin == "*" {
 			return false
 		}
 	}
 
-	if g.Referer == "*" {
+	if g.Origin == "*" {
 		return true
 	}
 
 	// Direct navigation — user at the keyboard, always passes.
-	if principal.Referer == "" {
+	if principal.Origin == "" {
 		return true
 	}
 
-	return g.Referer == principal.Referer
+	return g.Origin == principal.Origin
 }
 
 // resolvePermission walks up the tree from dirPath to root, collects all
