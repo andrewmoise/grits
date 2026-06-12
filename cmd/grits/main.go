@@ -55,7 +55,7 @@ func main() {
 	// Special-case adduser: if only username given, prompt for password from stdin
 	// so it doesn't end up in shell history.
 	if args[0] == "adduser" && len(args) == 2 {
-		fmt.Fprint(os.Stderr, "Password: ")
+		fmt.Fprintf(os.Stderr, "Password for %s: ", args[1])
 		reader := bufio.NewReader(os.Stdin)
 		password, err := reader.ReadString('\n')
 		if err != nil {
