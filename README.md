@@ -129,7 +129,7 @@ It'll drop privileges to whatever user you configured for it, as soon as it's op
 
 Once the server is running, the FUSE mount at `mnt/` gives you access to the volume. You'll need to add users and set up the initial filesystem skeleton:
 
-(Note - if you shut down the server while files in the FUSE mount are open, it will refuse to shut down so as to not leave a stale mount behind. Just close the files / cd out of the FUSE mount / unmount the FUSE mount, and the server shutdown should automatically continue as normal and finish.)
+(Note - if you shut down the server while files in the FUSE mount are open, it will refuse to shut down so as to not leave a stale mount behind. Just close any open files/cd out of the FUSE mount, unmount the FUSE mount, and the server shutdown should automatically continue as normal and finish.)
 
 ```
 # Populate the volume with the initial filesystem skeleton.
@@ -230,15 +230,7 @@ $ ls()
 
 #### Paths
 
-There is a single volume (`//root`) which contains the whole filesystem. A bare `/` refers to this volume, so paths like `/home/moise` or `/sites/{your server}` work as you'd expect. The `//volume/path` syntax still works for explicit volume references (e.g. `//root/home/moise`).
-
-`..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way.
-
-There are no symbolic links.
-
-You can use `glob({pattern})` to get a list of files matching the pattern. It's not a "shell command," just a normal async function, so you will have to do things like `rm(... await glob('*.txt'))`.
-
-The plan for where things are located within `//root` is to keep things pretty similar to Unix:
+Your home directory is in `/home/{username}`. All the Gimbal code lives in `/lib`. There are some various other directories created, or stubbed into place, in various locations:
 
 * `/home/{username}` - Home directories
 * `/home/{username}/local/{app name}` - Application-specific data (per user)
@@ -248,6 +240,58 @@ The plan for where things are located within `//root` is to keep things pretty s
 * `/sys/etc` - System configuration
 * `/sys/log` - Logs
 * `/tmp` - Temp files
+
+`..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way.
+
+There are no symbolic links.
+
+You can use `glob({pattern})` to get a list of files matching the pattern. It's not a "shell command," just a normal async function, so you will have to do things like `rm(... await glob('*.txt'))`.
+
+#### Permissions
+
+The permissions system is very specifically adapted to the needs of this system.
+
+* The filesystem enforces permissions at the directory level. Files have no permissions set which are distinct from the directory they're placed in.
+* The default is no access. Permission must be explicitly granted to be allowed.
+* Grants of access are both according to the user, and also to the referer which is making the request.
+* Grants of access also apply recursively to directories lower down than the specified directory. This is a consequence of the Merkle tree structure -- once you have given read or write access to a parent directory, you cannot set one of its subdirectories in a way that will disable that access going down the tree.
+
+So, in practice, the root directory is forbidden to all non-superusers, and grants of access add up unreversibly as you go further down into subdirectories.
+
+Grants of access are specified in terms of *both* to a specific user, and a referer (sic) who is making the request on behalf of that user. This means that it is safe to run an untrusted application, while carrying a token for your user which gives filesystem access on behalf of your user. The untrusted application will be forbidden from filesystem operations that aren't explicitly granted to it (as determined by checking `Referer:`), while still being able to do filesystem operations "as you" within the subset that are allowed for it.
+
+An example might help.
+
+* `/home/moise` is read/writable by `moise`, but *only* when being accessed from the page `https://gimbal.example.com/grits/v1/content/root/lib/gimbal/index.html`.
+* `/home/moise/local/music-player/` is set up to be read/writable by the music app, *only* when being accessed from the page `https://gimbal.example.com/grits/v1/content/root/home/eve/music-player/index.html`
+
+This means that, running the Gimbal shell, `moise` can examine the music player's application data, and make changes to it. The music player can operate on its own data however it will need to. However, even though it carries a token for `moise`'s user, the music player cannot read or write anything from `moise`'s main home directory, nor can any other code that doesn't originate from `/lib/gimbal/index.html`.
+
+Now say that `moise` decides to set up his own custom Gimbal shell in `/home/moise/gimbal`, by copying `/lib` to that directory and making his own personal edits. He makes that copy, and then grants access on `/home/moise` to his own user when accessed from the referer `https://gimbal.example.com/grits/v1/content/root/home/moise/gimbal/lib/gimbal/index.html`.
+
+Now both of the Gimbal shells can access the same data, including the music player's application data. No one else can access `/home/moise` unless they have specific access. And, crucially, the music player runs as `moise`, but it can access only its own data. `eve`'s music player, running the same code, can also run for `eve` as it can for `moise` or any other user, without either of their data being readable or writable for each other.
+
+There are other, more sophisticated access patterns possible. Notably, there is a pattern where all users have `read+insert` permission in `/var/music-player`, meaning that they can all write data to that location, but no user can interfere with the other users' data there.
+
+These grants of access come in plain files, located at `./.grits/access.json` within the directory that access is being granted to. Look around at `access.json` files in `skel/` to get a sense of how they're structured; they are simple.
+
+The full set of access types permitted is:
+
+* `read`
+* `read+insert`: You may read all data in this directory, but you may not modify this directory or subdirectories. You can *insert* files only (create links directly in the same directory which do not previously exist). You can either use this to create an append-only store, or you can use a pattern where users link in populated subdirectories which come with grants of access for those users only, so that each person has their own read-writable store and can read other users' stores.
+* `insert`: Same, but write-only. No user may read back the files which have been appended inside.
+* `read+write`: You may read or write any data in this directory *except* that you may not modify the `.grits` directory in it. (You may modify `.grits` directories in subdirectories). This can be used for example to give someone read/write access to a directory without letting them lock you out of it by removing your own permissions to it.
+* `owner`: You can read or write anything in this directory, and control permissions by modifying files in `.grits` (including the access control file).
+
+The way that permissions at one level apply to subdirectories below that level falls out as a natural consequence of being able to make reads or writes to the Merkle tree at that exact specific level. Mostly, they simply carry down recursively, but `write` turns into `owner` at lower levels, and `insert` does not allow any modification at lower levels.
+
+The frontend shell tool `facl()` is used to modify directory permissions. Run `help('facl')` to see more about how to use it.
+
+Note that the `referer` is such a critical piece of this security that it *must* be specified with any grant of permissions. If you really want to grant access to any referer (such as making `/lib` world-readable), then call `facl()` with referer set to `"*"`. If you want to grant access to a piece of the filesystem to yourself (the human), then generally the referer should be the Gimbal shell page, which will avoid granting access also to any piece of code or any Gimbal page you ever run as yourself.
+
+Note: All of these permissions are only enforced at the namespace level. Blobs comprising your filesystem are still stored in plaintext and handed out to anyone who knows the CID. That's a stronger protection than it might sound, but don't put anything that's actually secret into this store without encrypting it separately.
+
+(Like I said, don't use this in production yet, basically.)
 
 #### Chaining
 
@@ -324,6 +368,10 @@ Another thing which falls out of this naturally is watches for modification -- s
 The remote performance is pretty mediocre right now. It should be possible to do prefetching more cleverly than we're doing now. Also, when configured to (when concurrent access isn't expected), we should batch up writes into long lists of write-back-cached "path/CID/assertions" tuples which we are committing from a background thread. That should make it better. But, for now, it's not super fast when doing I/O remotely with writes involved.
 
 Reading (serving the read-only bits of the site) should already be faster than a normal web site, if the service worker is enabled. Try it out, see if that's the reality.
+
+#### Mirrors
+
+There is a subsystem that is intended to run a network of mirrors for Grits content (module_mirror.go, module_origin.go, and so on). It was working in a first-cut state, as of a while ago, but it may need some updates to work in the current codebase.
 
 #### Roadmap
 
