@@ -10,20 +10,31 @@ Usage:
   facl('/sites', {u:'moise'}, {p:'owner'})
   facl('/sites', {u:'moise'}, {x:1})
 
+Auth/wildcard principals:
+  facl({auth:true}, {p:'read'})                 grant all authenticated users
+  facl({all:true}, {p:'read'})                  grant everyone (including anonymous)
+  facl({auth:true}, {x:1})                      remove grant for authenticated users
+  facl({all:true}, {x:1})                       remove grant for everyone
+
 Multiple paths and principals can be combined:
   facl('/a', '/b', {u:'alice'}, {x:1})          remove on both paths
   facl({u:'alice'}, {u:'bob'}, {p:'read'})     add two grants on one path
   facl({x:1})                                   clear all grants on current dir
   facl({p:'read'}, {x:1})                       remove all read grants
 
-Principal fields:  u / user, auth, all
+Principal fields:  u / user, r / referer (required)
+                   auth, all
 Grant fields:      p / permission, x
 
-Permissions: read, insert, read+insert, read+write, owner`;
+Permissions: read, insert, read+insert, read+write, owner
+
+Note: referer must be specified when adding grants.
+  Use {r:"*"} for any referer, or {r:"/path/to/app/index.html"}
+  to restrict to a specific page URL.`;
 
 import { isVoid, VOID, _isPlainObject, responseFromJSON } from '../gimbal/gsh.js';
 
-const PRINCIPAL_KEYS = new Set(['u', 'user', 'auth', 'all']);
+const PRINCIPAL_KEYS = new Set(['u', 'user', 'auth', 'all', 'r', 'referer']);
 const ACTION_KEYS    = new Set(['p', 'permission', 'x']);
 
 // Normalize a principal descriptor — expands u→user, nothing else needed.
@@ -33,6 +44,8 @@ function normalizePrincipal(spec) {
   if (spec.user !== undefined) p.user = spec.user;
   if (spec.auth !== undefined) p.auth = spec.auth;
   if (spec.all !== undefined) p.all = spec.all;
+  if (spec.r !== undefined) p.referer = spec.r;
+  if (spec.referer !== undefined) p.referer = spec.referer;
   return p;
 }
 
@@ -49,6 +62,7 @@ function grantMatchesPrincipal(grant, principal) {
   if (principal.user !== undefined && grant.user !== principal.user) return false;
   if (principal.auth !== undefined && grant.auth !== principal.auth) return false;
   if (principal.all !== undefined && grant.all !== principal.all) return false;
+  if (principal.referer !== undefined && principal.referer !== '*' && grant.referer !== principal.referer) return false;
   return true;
 }
 
@@ -132,6 +146,9 @@ export async function invoke(shell, previous, args) {
   }
   if (!remove && principals.length === 0) {
     throw new Error('facl: specify at least one principal (u:, auth, all) to add grants');
+  }
+  if (!remove && principals.every(p => p.referer === undefined)) {
+    throw new Error('facl: referer is required. Use {r:"*"} for any referer, or {r:"/path/..."} for a specific page URL.');
   }
 
   // Process each path.

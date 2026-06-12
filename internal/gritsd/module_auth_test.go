@@ -406,7 +406,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 	anonTrue := true
 	sitesAccess := AccessConfig{
 		Allow: []Grant{
-			{All: &anonTrue, Permission: PermRead},
+			{All: &anonTrue, Referer: "*", Permission: PermRead},
 		},
 	}
 	sitesAccessData, _ := json.Marshal(sitesAccess)
@@ -417,7 +417,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 	// Grant user read+write access to /home/user
 	homeAccess := AccessConfig{
 		Allow: []Grant{
-			{User: "user", Permission: PermReadWrite},
+			{User: "user", Referer: "*", Permission: PermReadWrite},
 		},
 	}
 	homeAccessData, _ := json.Marshal(homeAccess)
@@ -660,6 +660,31 @@ func TestParentPath(t *testing.T) {
 	}
 }
 
+func TestResolveReferer(t *testing.T) {
+	tests := []struct {
+		name      string
+		referer   string
+		coreVhost string
+		want      string
+	}{
+		{"star passthrough", "*", "http://test.local", "*"},
+		{"empty passthrough", "", "http://test.local", ""},
+		{"absolute http passthrough", "http://example.com/path", "http://test.local", "http://example.com/path"},
+		{"absolute https passthrough", "https://app.example.com/foo", "http://test.local", "https://app.example.com/foo"},
+		{"relative resolved", "/grits/v1/content/root/lib/gimbal/", "https://gimbal.example.com", "https://gimbal.example.com/grits/v1/content/root/lib/gimbal/"},
+		{"relative with vhost trailing slash", "/grits/thing", "https://g.example.com/", "https://g.example.com/grits/thing"},
+		{"relative no leading slash", "grits/thing", "https://g.example.com", "https://g.example.com/grits/thing"},
+	}
+	for _, tc := range tests {
+		m := &AuthModule{Config: &AuthModuleConfig{CoreVhost: tc.coreVhost}}
+		got := m.resolveReferer(tc.referer)
+		if got != tc.want {
+			t.Errorf("%s: resolveReferer(%q) with coreVhost=%q = %q, want %q",
+				tc.name, tc.referer, tc.coreVhost, got, tc.want)
+		}
+	}
+}
+
 func TestGrantMatchesPrincipal(t *testing.T) {
 	bt := boolTrue()
 	anon := &grits.Principal{}
@@ -670,16 +695,29 @@ func TestGrantMatchesPrincipal(t *testing.T) {
 		princ *grits.Principal
 		match bool
 	}{
-		{"specific user matches", Grant{User: "alice"}, auth, true},
-		{"specific user no match", Grant{User: "alice"}, anon, false},
-		{"specific wrong user", Grant{User: "bob"}, auth, false},
-		{"auth matches authenticated", Grant{Auth: bt}, auth, true},
-		{"auth no match anonymous", Grant{Auth: bt}, anon, false},
-		{"anon matches anonymous", Grant{All: bt}, anon, true},
-		{"anon matches auth", Grant{All: bt}, auth, true},
-		{"user overrides auth", Grant{User: "alice", Auth: bt}, anon, false},
-		{"user overrides anon", Grant{User: "alice", All: bt}, anon, false},
+		{"specific user matches", Grant{User: "alice", Referer: "*"}, auth, true},
+		{"specific user no match", Grant{User: "alice", Referer: "*"}, anon, false},
+		{"specific wrong user", Grant{User: "bob", Referer: "*"}, auth, false},
+		{"auth matches authenticated", Grant{Auth: bt, Referer: "*"}, auth, true},
+		{"auth no match anonymous", Grant{Auth: bt, Referer: "*"}, anon, false},
+		{"anon matches anonymous", Grant{All: bt, Referer: "*"}, anon, true},
+		{"anon matches auth", Grant{All: bt, Referer: "*"}, auth, true},
+		{"user overrides auth", Grant{User: "alice", Auth: bt, Referer: "*"}, anon, false},
+		{"user overrides anon", Grant{User: "alice", All: bt, Referer: "*"}, anon, false},
 		{"empty grant no match", Grant{}, auth, false},
+		{"referer alone matches specific", Grant{Referer: "https://app.example.com"}, &grits.Principal{Referer: "https://app.example.com"}, true},
+		{"referer alone rejects different", Grant{Referer: "https://app.example.com"}, &grits.Principal{Referer: "https://evil.com"}, false},
+		{"referer alone with empty principal (direct nav) passes", Grant{Referer: "https://app.example.com"}, &grits.Principal{}, true},
+		{"referer star matches any", Grant{Referer: "*", All: bt}, &grits.Principal{Referer: "https://anything"}, true},
+		{"referer star matches empty", Grant{Referer: "*", All: bt}, &grits.Principal{}, true},
+		{"referer narrows user", Grant{User: "alice", Referer: "https://app.example.com"}, &grits.Principal{User: "alice", Referer: "https://app.example.com"}, true},
+		{"referer rejects user from wrong", Grant{User: "alice", Referer: "https://app.example.com"}, &grits.Principal{User: "alice", Referer: "https://evil.com"}, false},
+		{"no referer matches any referer", Grant{User: "alice", Referer: "*"}, &grits.Principal{User: "alice", Referer: "https://anything"}, true},
+		{"referer star with user", Grant{User: "bob", Referer: "*"}, &grits.Principal{User: "bob", Referer: "https://anything"}, true},
+		{"empty referer never matches", Grant{User: "alice"}, &grits.Principal{User: "alice"}, false},
+		// Direct navigation (empty principal referer) always passes the
+		// referer check even when the grant has a specific referer.
+		{"direct nav passes referer check", Grant{Referer: "https://app.example.com"}, &grits.Principal{}, true},
 	}
 	for _, tc := range tests {
 		got := grantMatchesPrincipal(tc.grant, tc.princ)
@@ -708,7 +746,7 @@ func TestReadAccessConfig(t *testing.T) {
 	defer server.Stop()
 
 	// Create auth module so we can call readAccessConfig
-	authMod, err := NewAuthModule(server, &AuthModuleConfig{})
+	authMod, err := NewAuthModule(server, &AuthModuleConfig{CoreVhost: "http://test.local"})
 	if err != nil {
 		t.Fatalf("NewAuthModule: %v", err)
 	}
@@ -727,8 +765,8 @@ func TestReadAccessConfig(t *testing.T) {
 	bt := boolTrue()
 	access := AccessConfig{
 		Allow: []Grant{
-			{User: "alice", Permission: PermOwner},
-			{All: bt, Permission: PermRead},
+			{User: "alice", Referer: "*", Permission: PermOwner},
+			{All: bt, Referer: "*", Permission: PermRead},
 		},
 	}
 	raw, _ := json.Marshal(access)
@@ -754,7 +792,7 @@ func TestReadAccessConfig(t *testing.T) {
 	// Test with root-level path
 	ensureVolumeParentDirs(vol, ".grits")
 	rootAccess := AccessConfig{
-		Allow: []Grant{{User: "glenda", Permission: PermOwner}},
+		Allow: []Grant{{User: "glenda", Referer: "*", Permission: PermOwner}},
 	}
 	raw2, _ := json.Marshal(rootAccess)
 	WriteVolumeFile(server, "root", ".grits/access.json", raw2, grits.BackendPrincipal)
@@ -786,7 +824,7 @@ func setupPermTest(t *testing.T, accessPath string, access AccessConfig) (Volume
 	server.AddVolume(vol)
 	server.Start()
 
-	authMod, err := NewAuthModule(server, &AuthModuleConfig{})
+	authMod, err := NewAuthModule(server, &AuthModuleConfig{CoreVhost: "http://test.local"})
 	if err != nil {
 		t.Fatalf("NewAuthModule: %v", err)
 	}
@@ -821,7 +859,7 @@ func TestResolvePermissionDefaultDeny(t *testing.T) {
 func TestResolvePermissionReadInherited(t *testing.T) {
 	bt := boolTrue()
 	vol, authMod := setupPermTest(t, "data",
-		AccessConfig{Allow: []Grant{{All: bt, Permission: PermRead}}})
+		AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermRead}}})
 
 	anon := &grits.Principal{}
 
@@ -841,7 +879,7 @@ func TestResolvePermissionReadInherited(t *testing.T) {
 func TestResolvePermissionWriteInherited(t *testing.T) {
 	bt := boolTrue()
 	vol, authMod := setupPermTest(t, "work",
-		AccessConfig{Allow: []Grant{{All: bt, Permission: PermReadWrite}}})
+		AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermReadWrite}}})
 
 	anon := &grits.Principal{}
 
@@ -856,7 +894,7 @@ func TestResolvePermissionWriteInherited(t *testing.T) {
 func TestResolvePermissionInsertNotInherited(t *testing.T) {
 	bt := boolTrue()
 	vol, authMod := setupPermTest(t, "parent",
-		AccessConfig{Allow: []Grant{{All: bt, Permission: PermInsert}}})
+		AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermInsert}}})
 
 	anon := &grits.Principal{}
 
@@ -870,7 +908,7 @@ func TestResolvePermissionInsertNotInherited(t *testing.T) {
 		t.Errorf("insert should NOT be inherited, got %q", perm)
 	}
 	vol2, authMod2 := setupPermTest(t, "base",
-		AccessConfig{Allow: []Grant{{All: bt, Permission: PermReadInsert}}})
+		AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermReadInsert}}})
 	perm = authMod2.resolvePermission(vol2, "base/child", anon)
 	if !CanRead(perm) {
 		t.Errorf("expected read at 'base/child', got %q", perm)
@@ -886,7 +924,7 @@ func TestResolvePermissionGritsProtection(t *testing.T) {
 	// ownership over descendants (you can replace the entire subtree), the
 	// inherited permission at data/.grits is owner — bypassing .grits protection.
 	vol, authMod := setupPermTest(t, "data",
-		AccessConfig{Allow: []Grant{{All: bt, Permission: PermReadWrite}}})
+		AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermReadWrite}}})
 
 	anon := &grits.Principal{}
 
@@ -909,7 +947,7 @@ func TestResolvePermissionGritsProtection(t *testing.T) {
 
 func TestResolvePermissionOwnerBypassesGritsProtection(t *testing.T) {
 	vol, authMod := setupPermTest(t, "data",
-		AccessConfig{Allow: []Grant{{User: "admin", Permission: PermOwner}}})
+		AccessConfig{Allow: []Grant{{User: "admin", Referer: "*", Permission: PermOwner}}})
 
 	admin := &grits.Principal{User: "admin"}
 	anon := &grits.Principal{}
@@ -939,17 +977,17 @@ func TestResolvePermissionMultiLevelMerge(t *testing.T) {
 	server.AddVolume(vol)
 	server.Start()
 
-	authMod, err := NewAuthModule(server, &AuthModuleConfig{})
+	authMod, err := NewAuthModule(server, &AuthModuleConfig{CoreVhost: "http://test.local"})
 	if err != nil {
 		t.Fatalf("NewAuthModule: %v", err)
 	}
 
-	rootAccess := AccessConfig{Allow: []Grant{{All: bt, Permission: PermRead}}}
+	rootAccess := AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermRead}}}
 	raw, _ := json.Marshal(rootAccess)
 	ensureVolumeParentDirs(vol, ".grits")
 	WriteVolumeFile(server, "root", ".grits/access.json", raw, grits.BackendPrincipal)
 
-	aliceAccess := AccessConfig{Allow: []Grant{{User: "alice", Permission: PermReadWrite}}}
+	aliceAccess := AccessConfig{Allow: []Grant{{User: "alice", Referer: "*", Permission: PermReadWrite}}}
 	raw2, _ := json.Marshal(aliceAccess)
 	ensureVolumeParentDirs(vol, "projects/alice/.grits")
 	WriteVolumeFile(server, "root", "projects/alice/.grits/access.json", raw2, grits.BackendPrincipal)
@@ -977,7 +1015,86 @@ func TestResolvePermissionMultiLevelMerge(t *testing.T) {
 	}
 }
 
-/////
+func TestResolvePermissionRefererConstraint(t *testing.T) {
+	bt := boolTrue()
+	vol, authMod := setupPermTest(t, "data",
+		AccessConfig{Allow: []Grant{
+			{All: bt, Referer: "https://app.example.com", Permission: PermRead},
+			{User: "admin", Referer: "*", Permission: PermOwner},
+		}})
+
+	// Same referer should get read
+	sameReferer := &grits.Principal{Referer: "https://app.example.com"}
+	perm := authMod.resolvePermission(vol, "data", sameReferer)
+	if !CanRead(perm) {
+		t.Errorf("expected read for same referer, got %q", perm)
+	}
+
+	// Different referer should get nothing
+	diffReferer := &grits.Principal{Referer: "https://evil.com"}
+	perm = authMod.resolvePermission(vol, "data", diffReferer)
+	if CanRead(perm) {
+		t.Errorf("expected deny for different referer, got %q", perm)
+	}
+
+	// Empty referer (direct nav) passes the referer check
+	emptyReferer := &grits.Principal{}
+	perm = authMod.resolvePermission(vol, "data", emptyReferer)
+	if !CanRead(perm) {
+		t.Errorf("expected read for empty referer (direct nav), got %q", perm)
+	}
+
+	// Admin with referer: "*" should get owner regardless of referer
+	adminSame := &grits.Principal{User: "admin", Referer: "https://app.example.com"}
+	perm = authMod.resolvePermission(vol, "data", adminSame)
+	if !CanOwn(perm) {
+		t.Errorf("expected owner for admin same referer, got %q", perm)
+	}
+
+	adminDiff := &grits.Principal{User: "admin", Referer: "https://evil.com"}
+	perm = authMod.resolvePermission(vol, "data", adminDiff)
+	if !CanOwn(perm) {
+		t.Errorf("expected owner for admin diff referer, got %q", perm)
+	}
+
+	adminEmpty := &grits.Principal{User: "admin"}
+	perm = authMod.resolvePermission(vol, "data", adminEmpty)
+	if !CanOwn(perm) {
+		t.Errorf("expected owner for admin empty referer, got %q", perm)
+	}
+
+	// --- Relative referer resolution ---
+	// Grants with relative referers should be resolved via coreVhost.
+	// setupPermTest uses coreVhost "http://test.local", so a grant with
+	// referer "/grits/foo" resolves to "http://test.local/grits/foo".
+	volRel, authModRel := setupPermTest(t, "other",
+		AccessConfig{Allow: []Grant{
+			{All: bt, Referer: "/grits/foo", Permission: PermRead},
+		}})
+
+	// Principal with matching resolved referer should get read
+	matchReferer := &grits.Principal{Referer: "http://test.local/grits/foo"}
+	perm = authModRel.resolvePermission(volRel, "other", matchReferer)
+	if !CanRead(perm) {
+		t.Errorf("relative referer: expected read for matching resolved referer, got %q", perm)
+	}
+
+	// Principal with wrong referer should get nothing
+	wrongReferer := &grits.Principal{Referer: "http://test.local/other"}
+	perm = authModRel.resolvePermission(volRel, "other", wrongReferer)
+	if CanRead(perm) {
+		t.Errorf("relative referer: expected deny for wrong referer, got %q", perm)
+	}
+
+	// Principal with non-matching root host should get nothing
+	foreignReferer := &grits.Principal{Referer: "https://evil.com/grits/foo"}
+	perm = authModRel.resolvePermission(volRel, "other", foreignReferer)
+	if CanRead(perm) {
+		t.Errorf("relative referer: expected deny for foreign host, got %q", perm)
+	}
+}
+
+////
 // Lookup callback tests
 
 func TestLookupCallbackAccessControl(t *testing.T) {
@@ -997,7 +1114,7 @@ func TestLookupCallbackAccessControl(t *testing.T) {
 	}
 
 	// public: anyone can read
-	pubAccess := AccessConfig{Allow: []Grant{{All: bt, Permission: PermRead}}}
+	pubAccess := AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermRead}}}
 	raw, _ := json.Marshal(pubAccess)
 	WriteVolumeFile(server, "root", "public/.grits/access.json", raw, grits.BackendPrincipal)
 
@@ -1036,13 +1153,13 @@ func TestLinkCallbackWritePermission(t *testing.T) {
 
 	// write-allowed dir: anyone can read+write
 	ensureVolumeParentDirs(vol, "writabledir/.grits")
-	writeAccess := AccessConfig{Allow: []Grant{{All: bt, Permission: PermReadWrite}}}
+	writeAccess := AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermReadWrite}}}
 	raw, _ := json.Marshal(writeAccess)
 	WriteVolumeFile(server, "root", "writabledir/.grits/access.json", raw, grits.BackendPrincipal)
 
 	// insert-only dir: anyone can read+insert
 	ensureVolumeParentDirs(vol, "insertdir/.grits")
-	insAccess := AccessConfig{Allow: []Grant{{All: bt, Permission: PermReadInsert}}}
+	insAccess := AccessConfig{Allow: []Grant{{All: bt, Referer: "*", Permission: PermReadInsert}}}
 	raw2, _ := json.Marshal(insAccess)
 	WriteVolumeFile(server, "root", "insertdir/.grits/access.json", raw2, grits.BackendPrincipal)
 
@@ -1083,7 +1200,129 @@ func TestLinkCallbackWritePermission(t *testing.T) {
 	}
 }
 
-/////
+func TestLookupCallbackRefererEnforcement(t *testing.T) {
+	port := 1923
+	coreVhost := fmt.Sprintf("http://127.0.0.1:%d", port)
+	server, cleanup := SetupTestServer(t,
+		WithLocalVolume("root"),
+		WithHttpModule(port),
+		WithAuthModuleVhost(coreVhost),
+	)
+	defer cleanup()
+	server.Start()
+	defer server.Stop()
+
+	bt := boolTrue()
+	vol := server.FindVolumeByName("root")
+	client := &http.Client{}
+	fileURL := contentURL(coreVhost, "root", "refererprotected/file.txt")
+
+	ensureVolumeParentDirs(vol, "refererprotected/.grits")
+
+	t.Run("absolute referer grant", func(t *testing.T) {
+		access := AccessConfig{Allow: []Grant{{All: bt, Referer: "https://allowed.example.com", Permission: PermRead}}}
+		raw, _ := json.Marshal(access)
+		WriteVolumeFile(server, "root", "refererprotected/.grits/access.json", raw, grits.BackendPrincipal)
+		WriteVolumeFile(server, "root", "refererprotected/file.txt", []byte("content"), grits.BackendPrincipal)
+
+		// Matching referer
+		req, _ := http.NewRequest("GET", fileURL, nil)
+		req.Header.Set("Referer", "https://allowed.example.com")
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("absolute match request: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("absolute match: expected 200, got %d", resp.StatusCode)
+		}
+
+		// Wrong referer
+		req2, _ := http.NewRequest("GET", fileURL, nil)
+		req2.Header.Set("Referer", "https://evil.com")
+		resp2, _ := client.Do(req2)
+		resp2.Body.Close()
+		if resp2.StatusCode != http.StatusForbidden {
+			t.Errorf("absolute wrong: expected 403, got %d", resp2.StatusCode)
+		}
+
+		// No referer header (direct navigation)
+		req3, _ := http.NewRequest("GET", fileURL, nil)
+		resp3, _ := client.Do(req3)
+		resp3.Body.Close()
+		if resp3.StatusCode != http.StatusOK {
+			t.Errorf("absolute direct nav: expected 200, got %d", resp3.StatusCode)
+		}
+
+		// Origin without Referer — always rejected
+		req4, _ := http.NewRequest("GET", fileURL, nil)
+		req4.Header.Set("Origin", "https://allowed.example.com")
+		resp4, _ := client.Do(req4)
+		resp4.Body.Close()
+		if resp4.StatusCode != http.StatusForbidden {
+			t.Errorf("absolute origin-only: expected 403, got %d", resp4.StatusCode)
+		}
+	})
+
+	t.Run("relative referer grant", func(t *testing.T) {
+		// Grant read only from the core vhost's gimbal app path.
+		// Resolves to coreVhost + "/grits/v1/content/root/lib/gimbal/"
+		access := AccessConfig{Allow: []Grant{{All: bt, Referer: "/grits/v1/content/root/lib/gimbal/", Permission: PermRead}}}
+		raw, _ := json.Marshal(access)
+		WriteVolumeFile(server, "root", "refererprotected/.grits/access.json", raw, grits.BackendPrincipal)
+		WriteVolumeFile(server, "root", "refererprotected/file.txt", []byte("content"), grits.BackendPrincipal)
+
+		// Matching resolved referer
+		matchReferer := coreVhost + "/grits/v1/content/root/lib/gimbal/"
+		req, _ := http.NewRequest("GET", fileURL, nil)
+		req.Header.Set("Referer", matchReferer)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("relative match request: %v", err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("relative match: expected 200, got %d", resp.StatusCode)
+		}
+
+		// Wrong path on same host
+		req2, _ := http.NewRequest("GET", fileURL, nil)
+		req2.Header.Set("Referer", coreVhost+"/some/other/path")
+		resp2, _ := client.Do(req2)
+		resp2.Body.Close()
+		if resp2.StatusCode != http.StatusForbidden {
+			t.Errorf("relative wrong path: expected 403, got %d", resp2.StatusCode)
+		}
+
+		// Different host entirely
+		req3, _ := http.NewRequest("GET", fileURL, nil)
+		req3.Header.Set("Referer", "https://evil.com/grits/v1/content/root/lib/gimbal/")
+		resp3, _ := client.Do(req3)
+		resp3.Body.Close()
+		if resp3.StatusCode != http.StatusForbidden {
+			t.Errorf("relative foreign host: expected 403, got %d", resp3.StatusCode)
+		}
+
+		// No referer header (direct navigation)
+		req4, _ := http.NewRequest("GET", fileURL, nil)
+		resp4, _ := client.Do(req4)
+		resp4.Body.Close()
+		if resp4.StatusCode != http.StatusOK {
+			t.Errorf("relative direct nav: expected 200, got %d", resp4.StatusCode)
+		}
+
+		// Origin without Referer — always rejected
+		req5, _ := http.NewRequest("GET", fileURL, nil)
+		req5.Header.Set("Origin", matchReferer)
+		resp5, _ := client.Do(req5)
+		resp5.Body.Close()
+		if resp5.StatusCode != http.StatusForbidden {
+			t.Errorf("relative origin-only: expected 403, got %d", resp5.StatusCode)
+		}
+	})
+}
+
+////
 // adduser command tests
 
 func TestAdduserCreatesHomeDir(t *testing.T) {
@@ -1146,7 +1385,7 @@ func TestAdduserCreatesHomeDir(t *testing.T) {
 // and reads an access.json from the given volume and directory path.
 func authModReadAccessConfig(t *testing.T, s *Server, vol Volume, dirPath string) (*AccessConfig, error) {
 	t.Helper()
-	authMod, err := NewAuthModule(s, &AuthModuleConfig{})
+	authMod, err := NewAuthModule(s, &AuthModuleConfig{CoreVhost: "http://test.local"})
 	if err != nil {
 		return nil, err
 	}

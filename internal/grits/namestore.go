@@ -188,15 +188,17 @@ func (r *LookupResponse) Leaf() *PathNodePair {
 // so the callback can safely snag a timed reference via a refHolder.
 type RefHoldFunc func(addr BlobAddr)
 
-// Principal represents the entity making a request. Still stubbed for now.
-// BackendPrincipal bypasses all permission checks, AnonPrinciple follows permission whitelists.
+// Principal represents the entity making a request.
+// BackendPrincipal bypasses all permission checks, AnonPrincipal
+// follows permission whitelists. Referer is set from the HTTP
+// Referer header (or Origin as a cross-origin fallback).
 
 type Principal struct {
-	User   string // "" means unauthenticated
-	Origin string // "" means server-internal
+	User    string // "" means unauthenticated
+	Referer string // "" means direct navigation (user at keyboard)
 }
 
-var BackendPrincipal = &Principal{User: "backend", Origin: ""}
+var BackendPrincipal = &Principal{User: "backend", Referer: ""}
 var AnonPrincipal = &Principal{}
 
 // LookupCallback is called just before Lookup returns its response.

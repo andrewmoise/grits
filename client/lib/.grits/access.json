@@ -1,1 +1,1 @@
-{"allow":[{"all":true,"permission":"read"}]}
+{"allow":[{"all":true,"referer":"*","permission":"read"}]}

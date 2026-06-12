@@ -131,7 +131,18 @@ func WithMountModule(volumeName string, mountPoint string) TestModuleInitializer
 // WithAuthModule is an initializer for adding the auth module to the server.
 func WithAuthModule() TestModuleInitializer {
 	return func(t *testing.T, s *Server) {
-		authConfig := &AuthModuleConfig{}
+		authConfig := &AuthModuleConfig{CoreVhost: "http://test.local"}
+		authModule, err := NewAuthModule(s, authConfig)
+		if err != nil {
+			t.Fatalf("Failed to create auth module: %v", err)
+		}
+		s.AddModule(authModule)
+	}
+}
+
+func WithAuthModuleVhost(coreVhost string) TestModuleInitializer {
+	return func(t *testing.T, s *Server) {
+		authConfig := &AuthModuleConfig{CoreVhost: coreVhost}
 		authModule, err := NewAuthModule(s, authConfig)
 		if err != nil {
 			t.Fatalf("Failed to create auth module: %v", err)

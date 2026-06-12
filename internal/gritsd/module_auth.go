@@ -22,6 +22,10 @@ import (
 )
 
 type AuthModuleConfig struct {
+	// CoreVhost is the URL of the main admin vhost (e.g. "https://gimbal.example.com").
+	// Relative referer values in access.json grants get this URL prepended.
+	CoreVhost string `json:"coreVhost"`
+
 	// SessionMaxAge is the sliding expiry window for session tokens.
 	// Defaults to 30 minutes. After this long without any API request,
 	// the user must log in again.
@@ -43,6 +47,10 @@ const (
 )
 
 func NewAuthModule(server *Server, config *AuthModuleConfig) (*AuthModule, error) {
+	if config.CoreVhost == "" {
+		return nil, fmt.Errorf("auth: coreVhost is required")
+	}
+
 	// Load or generate the secret key for HMAC session tokens.
 	secret, err := loadOrGenerateSecret(server)
 	if err != nil {
@@ -365,19 +373,26 @@ func mergePerm(a, b Permission) Permission {
 	}
 }
 
-// Grant represents a single permission grant for a user/origin.
+// Grant represents a single permission grant for a user/referer.
 //
 // The three matching tiers are:
 //   - User:    matches a specific authenticated username
 //   - Auth:    matches any authenticated user (non-empty User)
 //   - All:    matches any principal (including unauthenticated)
 //
+// Referer is a cross-cutting constraint on top of user/auth/all:
+//
+//	""  → grant is inert (never matches)
+//	"*" → any referer (no constraint)
+//	otherwise → must match principal.Referer exactly (or be a relative
+//	            path that resolves via coreVhost)
+//
 // When multiple grants match, the most permissive permission wins.
 type Grant struct {
-	User       string     `json:"user,omitempty"`   // specific username
-	Auth       *bool      `json:"auth,omitempty"`   // any authenticated user
-	All        *bool      `json:"all,omitempty"`    // any principal including unauthenticated
-	Origin     string     `json:"origin,omitempty"` // not enforced yet
+	User       string     `json:"user,omitempty"` // specific username
+	Auth       *bool      `json:"auth,omitempty"` // any authenticated user
+	All        *bool      `json:"all,omitempty"`  // any principal including unauthenticated
+	Referer    string     `json:"referer"`        // ""=inert; "*"=any; URL or relative path
 	Permission Permission `json:"permission"`
 }
 
@@ -393,6 +408,23 @@ func parentPath(path string) string {
 		return path[:idx]
 	}
 	return ""
+}
+
+// resolveReferer normalizes a grant's referer string.
+//
+//	""           → inert (pass through)
+//	"*"          → any referer (pass through)
+//	http(s)://…  → absolute URL, use as-is
+//	anything else → relative path: prepend coreVhost
+func (m *AuthModule) resolveReferer(referer string) string {
+	switch {
+	case referer == "" || referer == "*":
+		return referer
+	case strings.HasPrefix(referer, "http://") || strings.HasPrefix(referer, "https://"):
+		return referer
+	default:
+		return strings.TrimRight(m.Config.CoreVhost, "/") + "/" + strings.TrimLeft(referer, "/")
+	}
 }
 
 // readAccessConfig reads and parses .grits/access.json from the given directory
@@ -416,6 +448,12 @@ func (m *AuthModule) readAccessConfig(vol Volume, dirPath string) (*AccessConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %q: %w", accessPath, err)
 	}
+
+	// Resolve shorthand referers (relative paths → coreVhost + path).
+	for i := range cfg.Allow {
+		cfg.Allow[i].Referer = m.resolveReferer(cfg.Allow[i].Referer)
+	}
+
 	return &cfg, nil
 }
 
@@ -425,17 +463,50 @@ func (m *AuthModule) readAccessConfig(vol Volume, dirPath string) (*AccessConfig
 //  1. Specific username
 //  2. Any authenticated user (auth: true)
 //  3. Anyone including unauthenticated (all: true)
+//
+// Referer is a cross-cutting constraint on top of user/auth/all:
+//
+//	""  → grant is inert (never matches)
+//	"*" → any referer (no constraint)
+//	otherwise → must exactly match principal.Referer.
+//
+// If principal.Referer is empty (direct navigation), the referer
+// check is passed — the user is navigating directly.
 func grantMatchesPrincipal(g Grant, principal *grits.Principal) bool {
-	if g.User != "" {
-		return g.User == principal.User
+	if g.Referer == "" {
+		return false
 	}
-	if g.Auth != nil && *g.Auth {
-		return principal.User != ""
+
+	switch {
+	case g.User != "":
+		if g.User != principal.User {
+			return false
+		}
+	case g.Auth != nil && *g.Auth:
+		if principal.User == "" {
+			return false
+		}
+	case g.All != nil && *g.All:
+		// matches anyone
+	default:
+		// No user/auth/all tier — referer alone can serve as the
+		// matching criterion (but only if it names a specific referer;
+		// "*" alone with no tier is inert since there's nothing to match).
+		if g.Referer == "*" {
+			return false
+		}
 	}
-	if g.All != nil && *g.All {
+
+	if g.Referer == "*" {
 		return true
 	}
-	return false
+
+	// Direct navigation — user at the keyboard, always passes.
+	if principal.Referer == "" {
+		return true
+	}
+
+	return g.Referer == principal.Referer
 }
 
 // resolvePermission walks up the tree from dirPath to root, collects all
