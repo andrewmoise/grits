@@ -36,9 +36,9 @@ type AuthModule struct {
 }
 
 const (
-	usersFilePath    = "sys/etc/users.jsonl"
-	rootVolume       = "root"
-	authCookie       = "grits-auth-user"
+	usersFilePath        = "sys/etc/users.jsonl"
+	rootVolume           = "root"
+	authCookie           = "grits-auth-user"
 	defaultSessionMaxAge = 30 * time.Minute
 )
 
