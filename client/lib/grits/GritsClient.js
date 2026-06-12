@@ -580,7 +580,7 @@ class GritsVolume {
     }
     DEBUG && console.debug(`[GritsClient] lookup → info=${JSON.stringify(info)}, fetching meta`);
     const meta = await this._fetchMeta(info.metadataHash);
-    DEBUG && console.debug(`[GritsClient] lookup → meta.isDir=${meta?.type === 'dir'}`);
+    DEBUG && console.debug(`[GritsClient] lookup → "${normalized}" metaCID=${info.metadataHash} contentCID=${meta?.contentHash} type=${meta?.type} size=${meta?.size}`);
     return new GritsFile(info.metadataHash, meta, this, normalized);
   }
 
@@ -598,6 +598,7 @@ class GritsVolume {
     if (typeof path !== 'string')
       throw new TypeError(`link: path must be a string, got ${_typename(path)}`);
     const metaCID = fileOrCID instanceof GritsFile ? fileOrCID.cid() : fileOrCID;
+    DEBUG && console.log(`[link] metaCID=${metaCID} path="${_normalizePath(path)}" volume=${this._volume}`);
     return this._linkRaw(metaCID, path);
   }
 
@@ -622,6 +623,8 @@ class GritsVolume {
       })),
     });
 
+    DEBUG && console.log(`[multiLink] POST ${url} volume=${this._volume} requests=${JSON.stringify(requests.map(r => ({path: _normalizePath(r.path), addr: r.addr})))}`);
+
     const seenMissing = new Set();
     while (true) {
       const resp = await fetch(url, {
@@ -634,6 +637,7 @@ class GritsVolume {
 
       if (resp.ok) {
         const result = await resp.json();
+        DEBUG && console.log(`[multiLink] response paths=${JSON.stringify(result.paths?.map(p => ({path: p.path, addr: p.addr, size: p.size, error: p.error})))}`);
         this._ingestLookupResponse(result);
         return result;
       }
@@ -645,7 +649,7 @@ class GritsVolume {
             throw new Error(`multiLink: stuck, server repeatedly requested missing blob ${missingAddr}`);
           }
           seenMissing.add(missingAddr);
-          console.log(`[multiLink] server missing ${missingAddr}, uploading...`);
+          DEBUG && console.log(`[multiLink] server missing ${missingAddr}, uploading...`);
           await this._uploadMissingBlob(missingAddr);
           continue; // retry the link
         }
@@ -731,11 +735,12 @@ class GritsVolume {
     const startTime = performance.now();
 
     const local = this._parent._local.get(cid);
-    if (local) return new Response(local, { status: 200 });
+    if (local) { DEBUG && console.log(`[get] CID=${cid} source=local`); return new Response(local, { status: 200 }); }
 
     const cached = await this._parent._blobCacheGet(cid);
     if (cached) {
       this._parent._tracker.record('blobCacheHit', performance.now() - startTime);
+      DEBUG && console.log(`[get] CID=${cid} source=blobCache`);
       return cached;
     }
 
@@ -743,6 +748,7 @@ class GritsVolume {
     if (resp.ok) {
       this._parent._tracker.record('blobCacheMiss', performance.now() - startTime);
       await this._parent._blobCachePut(cid, resp.clone());
+      DEBUG && console.log(`[get] CID=${cid} source=network`);
       return resp;
     }
     throw new Error(`get: CID ${cid} not found on ${this._serverUrl}/${this._volume}`);
@@ -771,9 +777,13 @@ class GritsVolume {
     // _uploadBlob: the link-fails path already knows the server lacks the blob (it
     // got a 422), so a HEAD there would be a guaranteed-wasted round-trip.
     if (!(await this._serverHasBlob(cid))) {
+      DEBUG && console.log(`[put] uploading CID=${cid} (${data.length} bytes)`);
       await this._uploadBlob(cid, data);
+    } else {
+      DEBUG && console.log(`[put] CID=${cid} already on server`);
     }
     await this._parent._blobCachePut(cid, new Response(data, { status: 200 }));
+    DEBUG && console.log(`[put] CID=${cid} cached locally, returning`);
     return cid;
   }
 
@@ -787,8 +797,17 @@ class GritsVolume {
   async json(cid) {
     _assertString(cid, 'json');
     const cached = this._parent._jsonCache.get(cid);
-    if (cached) { cached.lastAccessed = Date.now(); return cached.data; }
-    const data = await (await this.get(cid)).json();
+    if (cached) {
+      cached.lastAccessed = Date.now();
+      DEBUG && console.log(`[json] CID=${cid} cache=hit data=${JSON.stringify(cached.data).slice(0,200)}`);
+      return cached.data;
+    }
+    
+    DEBUG && console.log(`[json] CID=${cid} cache=miss — fetching`);
+    const resp = await this.get(cid);
+    const data = await resp.json();
+    DEBUG && console.log(`[json] CID=${cid} fetched data=${JSON.stringify(data).slice(0,200)}`);
+
     this._parent._jsonCache.set(cid, { data: _deepFreeze(data), lastAccessed: Date.now() });
     return data;
   }
@@ -844,6 +863,7 @@ class GritsVolume {
   }
 
   async _linkRaw(metaCID, path) {
+    DEBUG && console.log(`[_linkRaw] metaCID=${metaCID} path="${_normalizePath(path)}"`);
     return this.multiLink([{ path, addr: metaCID }]);
   }
 
@@ -865,10 +885,16 @@ class GritsVolume {
 
   async _fetchMeta(metaCID) {
     const cached = this._parent._jsonCache.get(metaCID);
-    if (cached) { cached.lastAccessed = Date.now(); return cached.data; }
+    if (cached) {
+      cached.lastAccessed = Date.now();
+      DEBUG && console.log(`[_fetchMeta] CID=${metaCID} cache=hit type=${cached.data?.type} size=${cached.data?.size}`);
+      return cached.data;
+    }
+    DEBUG && console.log(`[_fetchMeta] CID=${metaCID} cache=miss — fetching`);
     const resp = await this.get(metaCID);
     const data = await resp.json();
-    this._parent._jsonCache.set(metaCID, { data, lastAccessed: Date.now() });
+    DEBUG && console.log(`[_fetchMeta] CID=${metaCID} fetched type=${data?.type} size=${data?.size}`);
+    this._parent._jsonCache.set(metaCID, { data: _deepFreeze(data), lastAccessed: Date.now() });
     return data;
   }
 
@@ -916,10 +942,11 @@ class GritsVolume {
       if (now - entry.ts > this.hardTimeout) continue;
       // "" matches everything; otherwise rootPath must be a prefix of path.
       if (rootPath === '' || path === rootPath || path.startsWith(rootPath + '/')) {
+        DEBUG && console.log(`[findMiniRoot] MATCH path="${path}" rootPath="${rootPath}" addr=${entry.addr?.slice(0,8)}… age=${now - entry.ts}ms`);
         return { rootPath, entry };
       }
     }
-    return null;
+    DEBUG && console.log(`[findMiniRoot] NO MATCH for path="${path}"`);
   }
 
   async _lookup_internal(path) {
@@ -990,7 +1017,7 @@ class GritsVolume {
     const raceStart = performance.now();
     const result = await Promise.race([fastPromise, slowPromise]);
     const elapsed = performance.now() - raceStart;
-    DEBUG && console.debug(`[GritsClient] _lookup_internal → race finished for "${n}" winner=${result?._source ?? 'unknown'}`);
+    DEBUG && console.debug(`[GritsClient] _lookup_internal → race finished for "${n}" winner=${result?._source ?? 'unknown'} metaHash=${result?.metadataHash} contentHash=${result?.contentHash}`);
     if (result?._source) {
       this._parent._tracker.record(
         result._source === 'fast' ? 'fastWalkHit' : 'slowLookup',
@@ -1098,6 +1125,7 @@ class GritsVolume {
       ? path
       : path.slice(rootPath.length + 1); // skip the trailing '/'
     const parts = remainder ? remainder.split('/') : [];
+    DEBUG && console.log(`[fastWalk] walking path="${path}" rootPath="${rootPath}" remainder="${remainder}" parts=[${parts.join(',')}] startAddr=${entry.addr?.slice(0,8)}…`);
 
     let metaHash = entry.addr;
 
@@ -1109,7 +1137,7 @@ class GritsVolume {
       if (!meta) {
         // Can't read the current node's metadata — return partial from parent.
         const remaining = parts.slice(i).join('/');
-        console.log(`[fastWalk] cache miss on meta of "${metaHash.slice(0,8)}…", partial at remaining="${remaining}"`);
+        DEBUG && console.log(`[fastWalk] cache miss on meta of "${metaHash.slice(0,8)}…", partial at remaining="${remaining}"`);
         return { metadataHash: metaHash, remainingPath: remaining, partial: true };
       }
       if (meta.type !== 'dir') throw new Error(`fastWalk: expected dir at "${part}", got ${meta.type}`);
@@ -1120,7 +1148,7 @@ class GritsVolume {
       if (!dir) {
         // Have the dir metadata but not its content listing — return partial from here.
         const remaining = parts.slice(i).join('/');
-        console.log(`[fastWalk] cache miss on dir content of "${meta.contentHash.slice(0,8)}…", partial at remaining="${remaining}"`);
+        DEBUG && console.log(`[fastWalk] cache miss on dir content of "${meta.contentHash.slice(0,8)}…", partial at remaining="${remaining}"`);
         return { metadataHash: metaHash, remainingPath: remaining, partial: true };
       }
 
@@ -1134,7 +1162,7 @@ class GritsVolume {
       if (!childMeta) {
         // Have the child's CID but not its metadata yet — return partial pointing at child.
         const remaining = parts.slice(i + 1).join('/');
-        console.log(`[fastWalk] cache miss on child meta "${childMetaHash.slice(0,8)}…", partial at remaining="${remaining}"`);
+        DEBUG && console.log(`[fastWalk] cache miss on child meta "${childMetaHash.slice(0,8)}…", partial at remaining="${remaining}"`);
         return { metadataHash: childMetaHash, remainingPath: remaining, partial: true };
       }
 
@@ -1146,7 +1174,7 @@ class GritsVolume {
     // We need the final meta to return contentHash and size.
     const [finalMeta] = await this._parent._unmarshal(metaHash);
     if (!finalMeta) {
-      console.log(`[fastWalk] cache miss on final meta "${metaHash.slice(0,8)}…", partial with empty remaining`);
+      DEBUG && console.log(`[fastWalk] cache miss on final meta "${metaHash.slice(0,8)}…", partial with empty remaining`);
       return { metadataHash: metaHash, remainingPath: '', partial: true };
     }
 
@@ -1222,7 +1250,7 @@ class GritsVolume {
     if (entry.error === 'access_denied') { DEBUG && console.debug(`[GritsClient] _slowLookup → access_denied, throwing`); throw new AccessDeniedError(entry.path ?? path); }
     if (entry.error) { DEBUG && console.debug(`[GritsClient] _slowLookup → unexpected error ${entry.error}, throwing`); throw new Error(`lookup: unexpected error at ${entry.path}: ${entry.error}`); }
 
-    DEBUG && console.debug(`[GritsClient] _slowLookup → success, returning addr=${entry.addr}`);
+    DEBUG && console.debug(`[GritsClient] _slowLookup → success for "${path}" addr=${entry.addr} contentHash=${entry.contentHash} size=${entry.size ?? 0}`);
     return { metadataHash: entry.addr, contentHash: entry.contentHash, contentSize: entry.size ?? 0, _source: 'slow' };
   }
 
@@ -1244,6 +1272,8 @@ class GritsVolume {
         DEBUG && console.log(`[miniRoot] upsert "${entry.path}" → ${entry.addr?.slice(0,8)}…`);
       }
     }
+
+    DEBUG && console.log(`[miniRoot] full map after rebuild:`, JSON.stringify([...this._miniRoots.entries()]));
 
     this._startPrefetch(successPaths);
   }
@@ -1344,7 +1374,9 @@ class GritsClient {
     this.extraHeaders = {};
 
     // Bootstrap auth token from sessionStorage (set by login.html).
-    const savedToken = sessionStorage.getItem('grits-auth-token');
+    // Guarded for environments without sessionStorage (e.g. service workers).
+    let savedToken = null;
+    try { savedToken = sessionStorage.getItem('grits-auth-token'); } catch { /* no sessionStorage */ }
     if (savedToken) {
       this._authToken = savedToken;
       this.extraHeaders['X-Grits-Auth-Token'] = savedToken;
@@ -1547,14 +1579,19 @@ class GritsClient {
   async _unmarshal(hash) {
     // 1. Hot JSON cache — fastest path.
     const cached = this._jsonCache.get(hash);
-    if (cached) { cached.lastAccessed = Date.now(); return [cached.data, 'memory']; }
+    if (cached) {
+      cached.lastAccessed = Date.now();
+      DEBUG && console.log(`[_unmarshal] ${hash} source=jsonCache`);
+      return [cached.data, 'memory'];
+    }
 
     // 2. Local synthesized blobs (mkfile/mkdir output not yet uploaded).
     const local = this._local.get(hash);
     if (local) {
       try {
         const data = JSON.parse(new TextDecoder().decode(local));
-        this._jsonCache.set(hash, { data, lastAccessed: Date.now() });
+        this._jsonCache.set(hash, { data: _deepFreeze(data), lastAccessed: Date.now() });
+        DEBUG && console.log(`[_unmarshal] ${hash} source=local`);
         return [data, 'local'];
       } catch (_) {}
     }
@@ -1564,11 +1601,13 @@ class GritsClient {
     if (blobResp) {
       try {
         const data = await blobResp.json();
-        this._jsonCache.set(hash, { data, lastAccessed: Date.now() });
+        this._jsonCache.set(hash, { data: _deepFreeze(data), lastAccessed: Date.now() });
+        DEBUG && console.log(`[_unmarshal] ${hash} source=blobCache`);
         return [data, 'blobCache'];
       } catch (_) {}
     }
 
+    DEBUG && console.log(`[_unmarshal] ${hash} source=miss`);
     return [null, null];
   }
 
