@@ -1,15 +1,26 @@
-import { VOID, isVoid } from '../gimbal/gsh.js';
+import { isVoid } from '../gimbal/gsh.js';
 
 export const help = `\
-help — show getting started message
+help — show help for a command
 
 Usage:
-  help()`;
+  help()                       show welcome message
+  help('command')              show help text for a command`;
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
   if (!isVoid(prev))
     throw new Error('help: does not accept pipeline input');
+
+  const [cmdName] = args;
+
+  if (cmdName !== undefined) {
+    if (typeof cmdName !== 'string')
+      throw new Error('help: expected a command name (string), got ' + typeof cmdName);
+
+    const mod = await shell._importTool(cmdName);
+    return mod.help ?? `${cmdName}: no help text available`;
+  }
 
   return `Welcome to Gimbal shell!
 

@@ -360,7 +360,7 @@ export class GimbalShell {
   // ── Help handling ─────────────────────────────────────────────
 
   _isHelpCall(args) {
-    return args.length === 1 && _isPlainObject(args[0]) && args[0].help === true;
+    return args.length === 1 && _isPlainObject(args[0]) && args[0].help;
   }
 
   // ── Dispatch ──────────────────────────────────────────────────
