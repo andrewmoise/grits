@@ -245,47 +245,48 @@ You can use `glob({pattern})` to get a list of files matching the pattern. It's 
 
 The permissions system is very specifically adapted to the needs of this system.
 
-* The filesystem enforces permissions at the directory level. Files have no permissions set which are distinct from the directory they're placed in.
-* The default is no access. Permission must be explicitly granted to be allowed.
-* Grants of access are both according to the user, and also to the origin which is making the request.
-* Grants of access also apply recursively to directories lower down than the specified directory. This is a consequence of the Merkle tree structure -- once you have given read or write access to a parent directory, you cannot set one of its subdirectories in a way that will disable that access going down the tree.
+* The filesystem enforces permissions at the directory level. Files have no permissions which are distinct from the directory they're placed in.
+* The default is no access. Permission must be explicitly granted.
+* Grants of access also apply recursively to directories lower down than the specified directory. There is no way to revoke a permission on a subdirectory, if a parent directory has it. (This is, somewhat, a consequence of the Merkle tree structure.)
+* Grants of access apply according to both the user, and the application (the origin) which is making the request.
 
-So, in practice, the root directory is forbidden to all non-superusers, and grants of access add up unreversibly as you go further down into subdirectories.
+So, in practice, the root directory is forbidden to all non-superusers, and grants of access accumulate irreversibly as you go deeper into subdirectories.
 
-Grants of access are specified in terms of *both* to a specific user, and an origin (the scheme+host of the page making the request). The granularity of the permission model is per-origin: all pages running on the same vhost share the same origin, and thus the same permissions. If you want isolation between different applications, run them on separate vhosts (separate origins). The permissions structure will protect everything gated behind each origin from code running on other origins.
+Again, grants of access are specified in terms of *both* to a specific user, and an origin (the scheme+host of the page making the request). The granularity of the permission model is per-origin: all pages running on the same vhost share the same origin, and thus the same permissions. If you visit `evil.example.com`, it will not be able to access anything from `gimbal.example.com` even though you hold a token for your user all across `example.com`.
 
 An example might help.
 
-* `/home/moise` is read/writable by `moise`, but *only* when being accessed from the origin `https://gimbal.example.com`.
-* `/home/moise/local/music-player/` is set up to be read/writable by the music app, *only* when being accessed from the origin `https://music.example.com`.
+* `/home/moise` will be read/writable by `moise`, but *only* when being accessed from the origin `https://gimbal.example.com`.
+* `/home/moise/local/music-player/` could be read/writable by the music app, but *only* when being accessed from the origin `https://music.example.com`.
 
-This means that, running the Gimbal shell, `moise` can examine the music player's application data, and make changes to it. The music player can operate on its own data however it will need to. However, even though it carries a token for `moise`'s user, the music player cannot read or write anything from `moise`'s main home directory, nor can any other code that doesn't originate from `https://gimbal.example.com`.
+This means that, running the Gimbal shell, `moise` can examine the music player's application data and make changes to it. The music player can operate on its own data however it will need to. However, even though it carries a token for `moise`'s user, the music player cannot read or write anything from `moise`'s files outside its permitted area, nor can any other code that doesn't originate from `https://gimbal.example.com`.
 
-Now say that `moise` decides to set up his own custom Gimbal shell on a different vhost, say `https://dev.moise.example.com`. He grants access on `/home/moise` to his own user when accessed from that origin. Both shells can access the same data. No other origin can access `/home/moise` unless given specific access.
+Now say that `moise` wants to set up his own custom Gimbal shell on a different vhost, `https://dev.moise.example.com`. He adds a grant of access on `/home/moise` to his own user when accessed from that origin. Both vhosts can now access the same data. No other origin can access `/home/moise` unless specifically allowed.
 
-The key factor here is that any random person can create `music.example.com`, and it will be safe for `moise` to go to that page and interact with it, with it having precisely the permissions it should have without being able to read or write things that it shouldn't.
+The key factor here is that any random person can code up `music.example.com`, create a vhost for it, and it will be safe for `moise` to go to that page and interact with it, and it'll have precisely the permissions it should have without being able to read or write things that it shouldn't.
 
-There are other, more sophisticated access patterns possible. Notably, there is a pattern where all users have `read+insert` permission in `/var/music-player`, meaning that they can all write data to that location, but no user can interfere with the other users' data there.
+There are other more sophisticated access patterns possible. Notably, all users may have `read+insert` permission in `/var/music-player`, meaning that they can all write data to that location, but no user can interfere with the other users' data.
 
-These grants of access come in plain files, located at `./.grits/access.json` within the directory that access is being granted to. Look around at `access.json` files in `skel/` to get a sense of how they're structured; they are simple.
+These grants of access come in plain files located at `./.grits/access.json` within each directory that access is being granted to. Look around at `access.json` files in `skel/` to get a sense of how they're structured; they are simple.
 
-The full set of access types permitted is:
+The full set of access types is:
 
 * `read`
-* `read+insert`: You may read all data in this directory, but you may not modify this directory or subdirectories. You can *insert* files only (create links directly in the same directory which do not previously exist). You can either use this to create an append-only store, or you can use a pattern where users link in populated subdirectories which come with grants of access for those users only, so that each person has their own read-writable store and can read other users' stores.
+* `read+insert`: You may read all data in this directory, but you may not modify this directory or subdirectories. You can *insert* files only (create links which did not previously exist). You can either use this to create an append-only store, or you can use a pattern where users make populated subdirectories which come with grants of access for those users only, so that each person has their own read-writable store and can read other users' stores (but not interfere with them).
 * `insert`: Same, but write-only. No user may read back the files which have been appended inside.
 * `read+write`: You may read or write any data in this directory *except* that you may not modify the `.grits` directory in it. (You may modify `.grits` directories in subdirectories). This can be used for example to give someone read/write access to a directory without letting them lock you out of it by removing your own permissions to it.
 * `owner`: You can read or write anything in this directory, and control permissions by modifying files in `.grits` (including the access control file).
 
-The way that permissions at one level apply to subdirectories below that level falls out as a natural consequence of being able to make reads or writes to the Merkle tree at that exact specific level. Mostly, they simply carry down recursively, but `write` turns into `owner` at lower levels, and `insert` does not allow any modification at lower levels.
+The way that permissions at one level apply to subdirectories below that level falls out as a natural consequence of being able to make reads or writes to the Merkle tree at that exact specific level. Mostly, they simply carry down recursively, but `write` turns into `owner` at lower levels, and `insert` does not itself allow any modification at lower levels.
 
-The frontend shell tool `facl()` is used to modify directory permissions. Run `help('facl')` to see more about how to use it.
+The frontend shell tool `facl()` is used to modify directory permissions. Run `help('facl')` to see more about how to use it and how grants of permission look.
 
-Note that the `origin` is such a critical piece of this security that it *must* be specified with any grant of permissions. If you really want to grant access to any origin (such as if you are hosting files on a vhost designed to be media for a separate external site), then call `facl()` with origin set to `"*"`. If you want to grant access to a piece of the filesystem to yourself (the human), then generally the origin should be set to `"/"` which resolves to the core vhost's origin.
+Note that the `origin` is such a critical piece of this security that it *must* be specified with any grant of permissions. There are two special values:
 
-Note: All of these permissions are only enforced at the namespace level. Blobs comprising your filesystem are still stored in plaintext and handed out to anyone who knows the CID.
+* `"*"` grants access to *any* origin. You might use this for a vhost whose files are meant to be media for some separate external site. Use it deliberately; it removes the origin half of the protection entirely. Mostly, you will want to copy files into /sites/{a vhost}/content instead of granting access across vhosts. Remember, copies are just Merkle tree links; they are basically free.
+* `"/"` is shorthand for the origin of the **core vhost** -- the main vhost the server is configured to serve Gimbal from (e.g. `https://gimbal.example.com`). The server expands `"/"` to that origin when it reads the grant, so you don't have to hardcode your hostname into every `access.json`. If you want to grant something to "the human," then use this, and the human will have access to it through the Gimbal shell application.
 
-Don't put anything in this filesystem that you seriously want to keep secret, in other words. The long-run plan for actual security is via cryptography on the client as opposed to via keeping CIDs secret
+Note: Permissions are enforced only at the namespace level — blobs are stored in plaintext and served to anyone who has the CID. Don't store anything secret here. In particular, content with few possible values can have its CID guessed, so this can bite even where you didn't think you were storing a secret — a PIN or password check can leak this way. (Real confidentiality is a someday-feature via client-side crypto, not CID secrecy. And don't use this in production yet regardless.)
 
 #### Chaining
 
