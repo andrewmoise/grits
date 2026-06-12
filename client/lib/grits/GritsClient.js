@@ -1329,6 +1329,20 @@ class GritsClient {
     // lookup/link/upload requests without modifying GritsClient internals.
     this.extraHeaders = {};
 
+    // Bootstrap auth token from sessionStorage (set by login.html).
+    const savedToken = sessionStorage.getItem('grits-auth-token');
+    if (savedToken) {
+      this._authToken = savedToken;
+      this.extraHeaders['X-Grits-Auth-Token'] = savedToken;
+      try {
+        const raw = atob(savedToken);
+        this._username = raw.split(':')[1] || '';
+      } catch { this._username = ''; }
+    } else {
+      this._authToken = null;
+      this._username  = '';
+    }
+
     this._verifier = new HashVerifier({ debug: DEBUG });
     this._tracker  = new PerformanceTracker({
       enabled:      DEBUG_STATS,
@@ -1338,6 +1352,42 @@ class GritsClient {
 
     this._initBlobCache();
     this._cleanupTimer = setInterval(() => this._cleanupJsonCache(), JSON_CACHE_CLEANUP_INTERVAL);
+  }
+
+  // ── Auth ──────────────────────────────────────────────────
+  // Session token management. The token is an HMAC-signed value
+  // returned by the server on login. It's stored in memory only
+  // and sent as X-Grits-Auth-Token on every request.
+
+  /** Log in to the given server URL. Stores the token and username. */
+  async login(serverUrl, username, password) {
+    const res = await fetch(`${serverUrl}/grits/v1/auth/login`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ username, password }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'login failed');
+    }
+    const { token } = await res.json();
+    if (!token) throw new Error('login: no token in response');
+    this._authToken = token;
+    this._username  = username;
+    this.extraHeaders['X-Grits-Auth-Token'] = token;
+  }
+
+  /** Log out — clears the stored token. */
+  logout() {
+    delete this.extraHeaders['X-Grits-Auth-Token'];
+    this._authToken = null;
+    this._username  = '';
+    sessionStorage.removeItem('grits-auth-token');
+  }
+
+  /** Returns the current username, or empty string if not logged in. */
+  whoami() {
+    return this._username ?? '';
   }
 
   destroy() {

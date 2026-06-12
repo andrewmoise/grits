@@ -169,14 +169,7 @@ func (m *AuthModule) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		http.SetCookie(w, &http.Cookie{
-			Name:     authCookie,
-			Value:    token,
-			Path:     "/",
-			HttpOnly: true,
-			SameSite: http.SameSiteLaxMode,
-		})
-		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "token": token})
 		return
 	}
 
@@ -189,13 +182,6 @@ func (m *AuthModule) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.SetCookie(w, &http.Cookie{
-		Name:     authCookie,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		MaxAge:   -1,
-	})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

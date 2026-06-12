@@ -179,23 +179,7 @@ func TestAuthLoginSuccess(t *testing.T) {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Check cookie was set
-	cookies := resp.Cookies()
-	var found bool
-	for _, c := range cookies {
-		if c.Name == authCookie && c.Value != "" {
-			found = true
-			if !c.HttpOnly {
-				t.Error("cookie should be HttpOnly")
-			}
-			break
-		}
-	}
-	if !found {
-		t.Errorf("cookie %s not set", authCookie)
-	}
-
-	// Check response body
+	// Check response body for token
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	if err := json.Unmarshal(respBody, &result); err != nil {
@@ -203,6 +187,9 @@ func TestAuthLoginSuccess(t *testing.T) {
 	}
 	if result["ok"] != true {
 		t.Errorf("expected ok=true, got %v", result)
+	}
+	if token, ok := result["token"].(string); !ok || token == "" {
+		t.Errorf("expected non-empty token, got %v", result["token"])
 	}
 }
 
@@ -307,22 +294,6 @@ func TestAuthLogout(t *testing.T) {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
 
-	// Check cookie was cleared
-	var found bool
-	for _, c := range resp.Cookies() {
-		if c.Name == authCookie {
-			found = true
-			if c.MaxAge != -1 && !(c.Value == "") {
-				t.Errorf("expected cleared cookie, got maxAge=%d value=%q", c.MaxAge, c.Value)
-			}
-			break
-		}
-	}
-	if !found {
-		t.Errorf("cookie %s not present in response", authCookie)
-	}
-
-	// Check response body
 	respBody, _ := io.ReadAll(resp.Body)
 	var result map[string]any
 	if err := json.Unmarshal(respBody, &result); err != nil {
@@ -380,8 +351,8 @@ func TestAuthNoUsersFile(t *testing.T) {
 	}
 }
 
-// doReq sends an HTTP request with an optional cookie and returns the response.
-func doReq(t *testing.T, method, url, cookieVal string, body []byte) (*http.Response, []byte) {
+// doReq sends an HTTP request with an optional auth token and returns the response.
+func doReq(t *testing.T, method, url, authToken string, body []byte) (*http.Response, []byte) {
 	t.Helper()
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))
 	if err != nil {
@@ -390,8 +361,8 @@ func doReq(t *testing.T, method, url, cookieVal string, body []byte) (*http.Resp
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if cookieVal != "" {
-		req.Header.Set("Cookie", cookieVal)
+	if authToken != "" {
+		req.Header.Set("X-Grits-Auth-Token", authToken)
 	}
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -487,27 +458,29 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 	})
 
 	// --- Test 3: Login as normal user ---
-	var cookieStr string
+	var authToken string
 	t.Run("login as user", func(t *testing.T) {
 		resp, body := doReq(t, http.MethodPost, baseURL+"/grits/v1/auth/login", "",
 			[]byte(`{"username":"user","password":"user-pass"}`))
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("login failed: %d %s", resp.StatusCode, string(body))
 		}
-		for _, c := range resp.Cookies() {
-			if c.Name == "grits-auth-user" {
-				cookieStr = c.String()
-				break
-			}
+		var loginResp struct {
+			Ok    bool   `json:"ok"`
+			Token string `json:"token"`
 		}
-		if cookieStr == "" {
-			t.Fatal("no auth cookie in response")
+		if err := json.Unmarshal(body, &loginResp); err != nil {
+			t.Fatalf("unmarshal login response: %v", err)
 		}
+		if !loginResp.Ok || loginResp.Token == "" {
+			t.Fatal("login response missing token")
+		}
+		authToken = loginResp.Token
 	})
 
 	// --- Test 4: Authenticated read of whitelisted path ---
 	t.Run("authed read allowed", func(t *testing.T) {
-		resp, _ := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sites/test.txt"), cookieStr, nil)
+		resp, _ := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sites/test.txt"), authToken, nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected 200, got %d", resp.StatusCode)
 		}
@@ -515,7 +488,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 5: Authenticated read of non-whitelisted path ---
 	t.Run("authed read denied", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sys/etc/users.jsonl"), cookieStr, nil)
+		resp, body := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sys/etc/users.jsonl"), authToken, nil)
 		if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 			t.Errorf("expected 403 or 404, got %d: %s", resp.StatusCode, string(body))
 		}
@@ -523,7 +496,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 6: Authenticated write to whitelisted path ---
 	t.Run("authed write allowed", func(t *testing.T) {
-		resp, _ := doReq(t, http.MethodPut, contentURL(baseURL, "root", "home/user/foo.txt"), cookieStr,
+		resp, _ := doReq(t, http.MethodPut, contentURL(baseURL, "root", "home/user/foo.txt"), authToken,
 			[]byte("user content"))
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -532,7 +505,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 7: Authenticated write to non-whitelisted path ---
 	t.Run("authed write denied", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodPut, contentURL(baseURL, "root", "sites/bar.txt"), cookieStr,
+		resp, body := doReq(t, http.MethodPut, contentURL(baseURL, "root", "sites/bar.txt"), authToken,
 			[]byte("should be denied"))
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("expected 403, got %d: %s", resp.StatusCode, string(body))
@@ -541,7 +514,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 8: Authenticated delete from whitelisted path ---
 	t.Run("authed delete allowed", func(t *testing.T) {
-		resp, _ := doReq(t, http.MethodDelete, contentURL(baseURL, "root", "home/user/foo.txt"), cookieStr, nil)
+		resp, _ := doReq(t, http.MethodDelete, contentURL(baseURL, "root", "home/user/foo.txt"), authToken, nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected 200, got %d", resp.StatusCode)
 		}
@@ -549,7 +522,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 9: Authenticated delete from non-whitelisted path ---
 	t.Run("authed delete denied", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodDelete, contentURL(baseURL, "root", "sites/test.txt"), cookieStr, nil)
+		resp, body := doReq(t, http.MethodDelete, contentURL(baseURL, "root", "sites/test.txt"), authToken, nil)
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("expected 403, got %d: %s", resp.StatusCode, string(body))
 		}
@@ -557,7 +530,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 10: Logout ---
 	t.Run("logout", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodPost, baseURL+"/grits/v1/auth/logout", cookieStr, nil)
+		resp, body := doReq(t, http.MethodPost, baseURL+"/grits/v1/auth/logout", authToken, nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("logout failed: %d %s", resp.StatusCode, string(body))
 		}
