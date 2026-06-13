@@ -20,6 +20,15 @@
       "readOnly": true,
       "autoCertificate": true,
       "certbotEmail": "%EMAIL%"
+    },
+
+    {
+      "type": "cmdline"
+    },
+
+    {
+      "type": "auth",
+      "coreVhost": "https://%YOUR_SERVER%"
     }
   ]
 }
