@@ -410,16 +410,19 @@ func (bs *LocalBlobStore) Release(cachedFile *LocalCachedFile) {
 	// All decisions and map mutation happen under the lock, eliminating the TOCTOU race.
 	if time.Now().After(cachedFile.ExpiresAt) {
 		// No future expiry — delete immediately.
+		// Keep the lock held across both map removal and file deletion to prevent
+		// a concurrent AddDataBlock (for the same hash) from writing a new file
+		// to the same path between the two operations.
 		path := cachedFile.Path
 		addr := cachedFile.Address
-		delete(bs.files, addr)
-		bs.mtx.Unlock()
 
-		log.Printf("Deleting %s", path)
+		DebugLog(DebugBlobStorage, "Deleting %s", path)
 		if err := os.Remove(path); err != nil {
 			log.Printf("Warning: couldn't delete file %s from cache: %v", path, err)
 		}
+		delete(bs.files, addr)
 		bs.tryRmdirParents(path)
+		bs.mtx.Unlock()
 		return
 	}
 
