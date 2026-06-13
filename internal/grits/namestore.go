@@ -201,10 +201,20 @@ type Principal struct {
 var BackendPrincipal = &Principal{User: "backend", Origin: ""}
 var AnonPrincipal = &Principal{}
 
+// LookupRequest captures the original parameters that were passed to a Lookup call.
+type LookupRequest struct {
+	Paths     []string
+	StartAddr BlobAddr
+	Principal *Principal
+}
+
 // LookupCallback is called just before Lookup returns its response.
+// resp is the proposed response (paths resolved).
+// req is the original request parameters.
+// root is the FileNode used as the volume root for this lookup.
 // It may prune paths or return an error to reject the entire lookup.
 // Called with no locks held.
-type LookupCallback func(*LookupResponse, *Principal) (*LookupResponse, error)
+type LookupCallback func(resp *LookupResponse, req *LookupRequest, root FileNode) (*LookupResponse, error)
 
 func (ns *NameStore) AddLookupCallback(cb LookupCallback) {
 	ns.lookupCallbacks = append(ns.lookupCallbacks, cb)
@@ -256,6 +266,23 @@ func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, holdRef RefHoldF
 		holdRef(usedAddr)
 	}
 
+	// Snapshot the volume root for callbacks, so they resolve against the same
+	// tree the paths were resolved from.
+	var cbRoot FileNode
+	if len(ns.lookupCallbacks) > 0 {
+		ns.mtx.Lock()
+		rootAddr := ns.rootAddr
+		ns.mtx.Unlock()
+		if rootAddr != "" {
+			var err error
+			cbRoot, err = ns.loadFileNode(rootAddr, false)
+			if err == nil && cbRoot != nil {
+				cbRoot.Take()
+				defer cbRoot.Release()
+			}
+		}
+	}
+
 	seenPaths := make(map[string]bool)
 	response := &LookupResponse{
 		Paths:        make([]*PathNodePair, 0),
@@ -276,15 +303,30 @@ func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, holdRef RefHoldF
 		}
 	}
 
+	req := &LookupRequest{
+		Paths:     paths,
+		StartAddr: startAddr,
+		Principal: principal,
+	}
 	for _, cb := range ns.lookupCallbacks {
 		var err error
-		response, err = cb(response, principal)
+		response, err = cb(response, req, cbRoot)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	return response, nil
+}
+
+// LookupFromRoot resolves a single path relative to a specific root node.
+// Unlike Lookup, it does not invoke any callbacks and does not consult remote
+// fetchers. rootNode must be non-nil.
+func (ns *NameStore) LookupFromRoot(path string, rootNode FileNode) (*LookupResponse, error) {
+	if rootNode == nil {
+		return nil, fmt.Errorf("LookupFromRoot: rootNode must be non-nil")
+	}
+	return ns.resolvePath(path, rootNode)
 }
 
 // FIXME - Clean up this API a lot.
@@ -506,6 +548,19 @@ func matchesAddr(a FileNode, b BlobAddr) bool {
 	}
 }
 
+func extractPaths(requests []*LinkRequest) []string {
+	paths := make([]string, 0, len(requests))
+	seen := make(map[string]bool)
+	for _, req := range requests {
+		p := strings.TrimRight(req.Path, "/")
+		if !seen[p] {
+			paths = append(paths, p)
+			seen[p] = true
+		}
+	}
+	return paths
+}
+
 func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool, principal *Principal) (*LookupResponse, error) {
 	DebugLog(DebugLinks, "MultiLink - %d elements", len(requests))
 
@@ -677,8 +732,12 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool, prin
 		}
 
 		// Lookup callback — veto or prune the response before committing.
+		req := &LookupRequest{
+			Paths:     extractPaths(requests),
+			Principal: principal,
+		}
 		for _, cb := range ns.lookupCallbacks {
-			response, err = cb(response, principal)
+			response, err = cb(response, req, newRoot)
 			if err != nil {
 				return nil, err
 			}

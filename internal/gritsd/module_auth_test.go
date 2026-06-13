@@ -849,7 +849,7 @@ func TestResolvePermissionDefaultDeny(t *testing.T) {
 	auth := &grits.Principal{User: "alice"}
 
 	for _, princ := range []*grits.Principal{anon, auth} {
-		perm := authMod.resolvePermission(vol, "anything", princ)
+		perm := authMod.resolvePermissionAtRoot(vol, nil, "anything", princ)
 		if perm != "" {
 			t.Errorf("expected deny, got %q for %+v", perm, princ)
 		}
@@ -864,13 +864,13 @@ func TestResolvePermissionReadInherited(t *testing.T) {
 	anon := &grits.Principal{}
 
 	for _, path := range []string{"data", "data/sub", "data/sub/deep"} {
-		perm := authMod.resolvePermission(vol, path, anon)
+		perm := authMod.resolvePermissionAtRoot(vol, nil, path, anon)
 		if !CanRead(perm) {
 			t.Errorf("expected read for %q, got %q", path, perm)
 		}
 	}
 
-	perm := authMod.resolvePermission(vol, "other", anon)
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "other", anon)
 	if CanRead(perm) {
 		t.Errorf("expected deny for 'other', got %q", perm)
 	}
@@ -884,7 +884,7 @@ func TestResolvePermissionWriteInherited(t *testing.T) {
 	anon := &grits.Principal{}
 
 	for _, path := range []string{"work", "work/sub"} {
-		perm := authMod.resolvePermission(vol, path, anon)
+		perm := authMod.resolvePermissionAtRoot(vol, nil, path, anon)
 		if !CanWrite(perm) {
 			t.Errorf("expected write for %q, got %q", path, perm)
 		}
@@ -898,18 +898,18 @@ func TestResolvePermissionInsertNotInherited(t *testing.T) {
 
 	anon := &grits.Principal{}
 
-	perm := authMod.resolvePermission(vol, "parent", anon)
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "parent", anon)
 	if !CanInsert(perm) {
 		t.Errorf("expected insert at 'parent', got %q", perm)
 	}
 
-	perm = authMod.resolvePermission(vol, "parent/child", anon)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "parent/child", anon)
 	if CanInsert(perm) {
 		t.Errorf("insert should NOT be inherited, got %q", perm)
 	}
 	vol2, authMod2 := setupPermTest(t, "base",
 		AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadInsert}}})
-	perm = authMod2.resolvePermission(vol2, "base/child", anon)
+	perm = authMod2.resolvePermissionAtRoot(vol2, nil, "base/child", anon)
 	if !CanRead(perm) {
 		t.Errorf("expected read at 'base/child', got %q", perm)
 	}
@@ -928,7 +928,7 @@ func TestResolvePermissionGritsProtection(t *testing.T) {
 
 	anon := &grits.Principal{}
 
-	perm := authMod.resolvePermission(vol, "data/.grits", anon)
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "data/.grits", anon)
 	if !CanRead(perm) {
 		t.Errorf("expected read for .grits, got %q", perm)
 	}
@@ -936,7 +936,7 @@ func TestResolvePermissionGritsProtection(t *testing.T) {
 		t.Errorf("expected write for .grits (read+write inherited as owner), got %q", perm)
 	}
 
-	perm = authMod.resolvePermission(vol, "data/.grits/access.json", anon)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "data/.grits/access.json", anon)
 	if !CanRead(perm) {
 		t.Errorf("expected read for .grits/file, got %q", perm)
 	}
@@ -952,12 +952,12 @@ func TestResolvePermissionOwnerBypassesGritsProtection(t *testing.T) {
 	admin := &grits.Principal{User: "admin"}
 	anon := &grits.Principal{}
 
-	perm := authMod.resolvePermission(vol, "data/.grits/access.json", admin)
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "data/.grits/access.json", admin)
 	if !CanWrite(perm) {
 		t.Errorf("owner should be able to write .grits, got %q", perm)
 	}
 
-	perm = authMod.resolvePermission(vol, "data/.grits/access.json", anon)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "data/.grits/access.json", anon)
 	if CanRead(perm) {
 		t.Errorf("anonymous should NOT be able to read .grits, got %q", perm)
 	}
@@ -996,12 +996,12 @@ func TestResolvePermissionMultiLevelMerge(t *testing.T) {
 	bob := &grits.Principal{User: "bob"}
 	alice := &grits.Principal{User: "alice"}
 
-	perm := authMod.resolvePermission(vol, "projects", anon)
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "projects", anon)
 	if !CanRead(perm) {
 		t.Errorf("anon should read 'projects', got %q", perm)
 	}
 
-	perm = authMod.resolvePermission(vol, "projects/alice", bob)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "projects/alice", bob)
 	if !CanRead(perm) {
 		t.Errorf("bob should read 'projects/alice' via root grant, got %q", perm)
 	}
@@ -1009,7 +1009,7 @@ func TestResolvePermissionMultiLevelMerge(t *testing.T) {
 		t.Errorf("bob should NOT write 'projects/alice', got %q", perm)
 	}
 
-	perm = authMod.resolvePermission(vol, "projects/alice", alice)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "projects/alice", alice)
 	if !CanWrite(perm) {
 		t.Errorf("alice should write 'projects/alice', got %q", perm)
 	}
@@ -1025,40 +1025,40 @@ func TestResolvePermissionOriginConstraint(t *testing.T) {
 
 	// Same origin should get read
 	sameOrigin := &grits.Principal{Origin: "https://app.example.com"}
-	perm := authMod.resolvePermission(vol, "data", sameOrigin)
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "data", sameOrigin)
 	if !CanRead(perm) {
 		t.Errorf("expected read for same origin, got %q", perm)
 	}
 
 	// Different origin should get nothing
 	diffOrigin := &grits.Principal{Origin: "https://evil.com"}
-	perm = authMod.resolvePermission(vol, "data", diffOrigin)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "data", diffOrigin)
 	if CanRead(perm) {
 		t.Errorf("expected deny for different origin, got %q", perm)
 	}
 
 	// Empty origin (direct nav) passes the origin check
 	emptyOrigin := &grits.Principal{}
-	perm = authMod.resolvePermission(vol, "data", emptyOrigin)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "data", emptyOrigin)
 	if !CanRead(perm) {
 		t.Errorf("expected read for empty origin (direct nav), got %q", perm)
 	}
 
 	// Admin with origin: "*" should get owner regardless of origin
 	adminSame := &grits.Principal{User: "admin", Origin: "https://app.example.com"}
-	perm = authMod.resolvePermission(vol, "data", adminSame)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "data", adminSame)
 	if !CanOwn(perm) {
 		t.Errorf("expected owner for admin same origin, got %q", perm)
 	}
 
 	adminDiff := &grits.Principal{User: "admin", Origin: "https://evil.com"}
-	perm = authMod.resolvePermission(vol, "data", adminDiff)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "data", adminDiff)
 	if !CanOwn(perm) {
 		t.Errorf("expected owner for admin diff origin, got %q", perm)
 	}
 
 	adminEmpty := &grits.Principal{User: "admin"}
-	perm = authMod.resolvePermission(vol, "data", adminEmpty)
+	perm = authMod.resolvePermissionAtRoot(vol, nil, "data", adminEmpty)
 	if !CanOwn(perm) {
 		t.Errorf("expected owner for admin empty origin, got %q", perm)
 	}
@@ -1073,14 +1073,14 @@ func TestResolvePermissionOriginConstraint(t *testing.T) {
 
 	// Principal with matching resolved origin should get read
 	matchOrigin := &grits.Principal{Origin: "https://allowed.example.com"}
-	perm = authModRel.resolvePermission(volRel, "other", matchOrigin)
+	perm = authModRel.resolvePermissionAtRoot(volRel, nil, "other", matchOrigin)
 	if !CanRead(perm) {
 		t.Errorf("bare hostname: expected read for matching resolved origin, got %q", perm)
 	}
 
 	// Principal with wrong origin should get nothing
 	wrongOrigin := &grits.Principal{Origin: "https://other.example.com"}
-	perm = authModRel.resolvePermission(volRel, "other", wrongOrigin)
+	perm = authModRel.resolvePermissionAtRoot(volRel, nil, "other", wrongOrigin)
 	if CanRead(perm) {
 		t.Errorf("bare hostname: expected deny for wrong origin, got %q", perm)
 	}

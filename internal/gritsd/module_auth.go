@@ -461,6 +461,54 @@ func (m *AuthModule) readAccessConfig(vol Volume, dirPath string) (*AccessConfig
 	return &cfg, nil
 }
 
+// readAccessConfigFromRoot reads .grits/access.json using LookupFromRoot against
+// a pinned root node, avoiding re-entrant Lookup calls and their TOCTOU race.
+func (m *AuthModule) readAccessConfigFromRoot(vol Volume, rootNode grits.FileNode, dirPath string) (*AccessConfig, error) {
+	accessPath := dirPath + "/.grits/access.json"
+	if dirPath == "" {
+		accessPath = ".grits/access.json"
+	}
+
+	resp, err := vol.lookupFromRoot(accessPath, rootNode)
+	if err != nil {
+		return nil, fmt.Errorf("reading %q: %w", accessPath, err)
+	}
+	leaf := resp.Leaf()
+	if leaf == nil || leaf.Error == "not_found" {
+		return nil, nil
+	}
+	if leaf.Error != "" {
+		return nil, nil
+	}
+
+	node, err := vol.GetFileNode(leaf.Addr)
+	if err != nil {
+		return nil, fmt.Errorf("loading node for %q: %w", accessPath, err)
+	}
+	defer node.Release()
+
+	blob, err := node.ExportedBlob()
+	if err != nil {
+		return nil, fmt.Errorf("getting blob for %q: %w", accessPath, err)
+	}
+
+	data, err := blob.Read(0, blob.GetSize())
+	if err != nil {
+		return nil, fmt.Errorf("reading %q: %w", accessPath, err)
+	}
+
+	var cfg AccessConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, fmt.Errorf("parsing %q: %w", accessPath, err)
+	}
+
+	for i := range cfg.Allow {
+		cfg.Allow[i].Origin = m.resolveOrigin(cfg.Allow[i].Origin)
+	}
+
+	return &cfg, nil
+}
+
 // grantMatchesPrincipal checks if a grant applies to the given principal.
 //
 // Matching priority (first wins):
@@ -526,7 +574,13 @@ func grantMatchesPrincipal(g Grant, principal *grits.Principal) bool {
 //   - insert does NOT apply downward (only the exact directory with the grant)
 //
 // If no access.json is found anywhere, the default is deny (empty Permission).
-func (m *AuthModule) resolvePermission(vol Volume, dirPath string, principal *grits.Principal) Permission {
+//
+// resolvePermissionAtRoot resolves .grits/access.json
+// files against a pinned root node, avoiding TOCTOU between path resolution and
+// permission checking. If rootNode is nil, falls back to the old behavior.
+// files against a pinned root node, avoiding TOCTOU between path resolution and
+// permission checking. If rootNode is nil, falls back to the old behavior.
+func (m *AuthModule) resolvePermissionAtRoot(vol Volume, rootNode grits.FileNode, dirPath string, principal *grits.Principal) Permission {
 	dirPath = strings.TrimRight(dirPath, "/")
 
 	// Collect all matching grants from the path up to root.
@@ -545,7 +599,7 @@ func (m *AuthModule) resolvePermission(vol Volume, dirPath string, principal *gr
 			acc = acc + "/" + seg
 		}
 
-		cfg, err := m.readAccessConfig(vol, acc)
+		cfg, err := m.readAccessConfigAtRoot(vol, rootNode, acc)
 		if err != nil {
 			grits.DebugLog(grits.DebugAuth, "Auth [permission]: error reading %q: %v", acc+"/.grits/access.json", err)
 			continue
@@ -569,7 +623,7 @@ func (m *AuthModule) resolvePermission(vol Volume, dirPath string, principal *gr
 	}
 
 	// Also check root
-	rootCfg, err := m.readAccessConfig(vol, "")
+	rootCfg, err := m.readAccessConfigAtRoot(vol, rootNode, "")
 	if err == nil && rootCfg != nil {
 		for _, g := range rootCfg.Allow {
 			if grantMatchesPrincipal(g, principal) {
@@ -621,13 +675,15 @@ func (m *AuthModule) resolvePermission(vol Volume, dirPath string, principal *gr
 	return merged
 }
 
-// hasPermission checks whether the principal has the required permission at
-// the given path within the volume. BackendPrincipal always passes.
-func (m *AuthModule) hasPermission(vol Volume, path string, principal *grits.Principal, required Permission) bool {
+// hasPermissionAtRoot checks whether the principal has the required permission at
+// the given path within the volume, resolving .grits/access.json files against a
+// pinned root node. BackendPrincipal always passes. If rootNode is nil,
+// falls back to resolving via ReadVolumeFile (TOCTOU possible).
+func (m *AuthModule) hasPermissionAtRoot(vol Volume, rootNode grits.FileNode, path string, principal *grits.Principal, required Permission) bool {
 	if principal == grits.BackendPrincipal {
 		return true
 	}
-	effective := m.resolvePermission(vol, path, principal)
+	effective := m.resolvePermissionAtRoot(vol, rootNode, path, principal)
 	switch required {
 	case PermRead:
 		return CanRead(effective)
@@ -641,11 +697,20 @@ func (m *AuthModule) hasPermission(vol Volume, path string, principal *grits.Pri
 	return false
 }
 
+// readAccessConfigAtRoot dispatches to readAccessConfigFromRoot when rootNode is
+// non-nil, otherwise falls back to the old readAccessConfig (via ReadVolumeFile).
+func (m *AuthModule) readAccessConfigAtRoot(vol Volume, rootNode grits.FileNode, dirPath string) (*AccessConfig, error) {
+	if rootNode != nil {
+		return m.readAccessConfigFromRoot(vol, rootNode, dirPath)
+	}
+	return m.readAccessConfig(vol, dirPath)
+}
+
 // MakeLookupCallback returns a LookupCallback that enforces filesystem-based
 // permissions by reading .grits/access.json files along the path. The volume
 // is captured so the callback reads access.json from the correct volume.
 func (m *AuthModule) MakeLookupCallback(vol Volume) grits.LookupCallback {
-	return func(resp *grits.LookupResponse, principal *grits.Principal) (*grits.LookupResponse, error) {
+	return func(resp *grits.LookupResponse, req *grits.LookupRequest, root grits.FileNode) (*grits.LookupResponse, error) {
 		if resp == nil {
 			return nil, nil
 		}
@@ -655,7 +720,7 @@ func (m *AuthModule) MakeLookupCallback(vol Volume) grits.LookupCallback {
 		result := make([]*grits.PathNodePair, 0, len(resp.Paths))
 
 		for _, pair := range resp.Paths {
-			if !m.hasPermission(vol, pair.Path, principal, PermRead) {
+			if !m.hasPermissionAtRoot(vol, root, pair.Path, req.Principal, PermRead) {
 				grits.DebugLog(grits.DebugAuth, "Auth [lookup]: access denied for %q", pair.Path)
 				result = append(result, &grits.PathNodePair{
 					Path:  pair.Path,
@@ -677,6 +742,7 @@ func (m *AuthModule) MakeLookupCallback(vol Volume) grits.LookupCallback {
 // MakeLinkCallback returns a LinkCallback that enforces filesystem-based
 // permissions by reading .grits/access.json files along the path. The volume
 // is captured so the callback reads access.json from the correct volume.
+// writeMtx IS held during this callback, so ns.rootAddr == oldRoot.
 func (m *AuthModule) MakeLinkCallback(vol Volume) grits.LinkCallback {
 	return func(oldRoot, newRoot grits.FileNode, requests []*grits.LinkRequest, principal *grits.Principal) error {
 		grits.DebugLog(grits.DebugAuth, "Auth [link]: checking %d requests", len(requests))
@@ -685,16 +751,18 @@ func (m *AuthModule) MakeLinkCallback(vol Volume) grits.LinkCallback {
 			reqPath := strings.TrimRight(req.Path, "/")
 			parent := parentPath(reqPath)
 
-			if m.hasPermission(vol, parent, principal, PermReadWrite) {
+			if m.hasPermissionAtRoot(vol, oldRoot, parent, principal, PermReadWrite) {
 				grits.DebugLog(grits.DebugAuth, "Auth [link]: ALLOW %q (has write)", reqPath)
 				continue
 			}
 
-			if m.hasPermission(vol, parent, principal, PermInsert) {
+			if m.hasPermissionAtRoot(vol, oldRoot, parent, principal, PermInsert) {
 				// Insert only allows creating new files (paths that don't exist yet).
-				// Do a backend-principal lookup to check existence without recursion.
-				_, err := vol.LookupNode(reqPath, grits.BackendPrincipal)
-				if err != nil {
+				// Check existence against oldRoot — the file isn't in newRoot yet
+				// from the perspective of the committed tree.
+				insertResp, err := vol.lookupFromRoot(reqPath, oldRoot)
+				exists := err == nil && insertResp != nil && insertResp.Leaf() != nil && insertResp.Leaf().Error == ""
+				if !exists {
 					// File doesn't exist — this is a genuine insert.
 					grits.DebugLog(grits.DebugAuth, "Auth [link]: ALLOW %q (insert)", reqPath)
 					continue

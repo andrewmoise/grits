@@ -20,6 +20,7 @@ type Volume interface {
 
 	Lookup(paths []string, startAddr grits.BlobAddr, holdRef grits.RefHoldFunc, principal *grits.Principal) (*grits.LookupResponse, error)
 	LookupNode(path string, principal *grits.Principal) (grits.FileNode, error)
+	lookupFromRoot(path string, rootNode grits.FileNode) (*grits.LookupResponse, error)
 	GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error)
 
 	CreateTreeNode() (grits.FileNode, error)
@@ -190,6 +191,10 @@ func (v *LocalVolume) GetBlob(addr grits.BlobAddr) (grits.CachedFile, error) {
 // LocalVolume implementation
 func (wv *LocalVolume) Lookup(paths []string, startAddr grits.BlobAddr, holdRef grits.RefHoldFunc, principal *grits.Principal) (*grits.LookupResponse, error) {
 	return wv.ns.Lookup(paths, startAddr, holdRef, principal)
+}
+
+func (wv *LocalVolume) lookupFromRoot(path string, rootNode grits.FileNode) (*grits.LookupResponse, error) {
+	return wv.ns.LookupFromRoot(path, rootNode)
 }
 
 func (wv *LocalVolume) LookupNode(path string, principal *grits.Principal) (grits.FileNode, error) {

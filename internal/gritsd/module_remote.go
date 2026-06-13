@@ -184,6 +184,10 @@ func (rv *RemoteVolume) Lookup(paths []string, startAddr grits.BlobAddr, holdRef
 	return rv.localCache.Lookup(paths, startAddr, holdRef, principal)
 }
 
+func (rv *RemoteVolume) lookupFromRoot(path string, rootNode grits.FileNode) (*grits.LookupResponse, error) {
+	return rv.localCache.lookupFromRoot(path, rootNode)
+}
+
 // GetFileNode implements Volume interface
 func (rv *RemoteVolume) GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error) {
 	return rv.localCache.GetFileNode(metadataAddr)
