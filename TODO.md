@@ -1,11 +1,5 @@
 # In Progress
 
-* Sort out losing root blob reference
-* Think about race conditions in lookup auth check
-
-# Near future annoyances
-
-* Fix copy and paste from Gimbal shell
 * Fix download test failure
 * Make the corner icons a little bigger
 * Look into service worker not unregistering
@@ -15,8 +9,8 @@
   differences between the two contexts
 * Consolidate client/ and skel/ into a single gimbal/ directory
 * Make a more secure way to input passwords for login()
-* s/cell/creature/g
 * Fix test /tmp/tmp scratch dir
+* Move to $HOME/tmp
 * Make a more friendly vhost setup in the instructions
 * Session tokens in cookies or something
 * What's up with sessionStorage in GritsClient.js?
@@ -45,6 +39,8 @@ Shell history arrow-key reliability — most recent command not always at end
 Make rm() and rmdir() (at least) a lot more simple into a single multilink() (maybe after a quick check first)
 
 bg()
+
+Make test() in the foreground once bg() exists
 
 .null()
 
@@ -80,6 +76,10 @@ More tools: Diff, patch
 
 adduser() and deluser() from frontend
 
+Make skel() function
+
+Fix copy and paste from Gimbal shell
+
 ## gwm
 
 Syncing cwd between files() and cd() in a shell optionally
@@ -110,6 +110,7 @@ Add index.html to path lookups pre-emptively
 XX Change GritsClient to be per serverUrl
 (Probably superceded now; instead we need to look at having the SW bounce every blob read to immutable accesses to /grits/v1/blob in the core vhost)
 
+s/cell/creature/g
 
 ## backend
 
