@@ -705,15 +705,22 @@ class GritsVolume {
 
   async _uploadMissingBlob(addr) {
     const local = this._parent._local.get(addr);
-    if (!local) {
-      throw new Error(
-        `multiLink: server needs blob ${addr} but it's not in local cache. ` +
-        `Did you call vol.mkfile/mkdir to build the tree before linking?`
-      );
+    if (local) {
+      await this._uploadBlob(addr, local);
+      await this._parent._blobCachePut(addr, new Response(local, { status: 200 }));
+      this._parent._local.delete(addr);
+      return;
     }
-    await this._uploadBlob(addr, local);
-    await this._parent._blobCachePut(addr, new Response(local, { status: 200 }));
-    this._parent._local.delete(addr); // FIXME -- Probably this is fine to leave... maybe check size
+
+    // Blob not in _local — a concurrent upload may have put it on the server
+    // (and deleted it from _local) while our 422 was in flight. Check the
+    // server; if it has the blob, just retry the link.
+    if (await this._serverHasBlob(addr)) return;
+
+    throw new Error(
+      `multiLink: server needs blob ${addr} but it's not in local cache ` +
+      `or on the server. Did you call vol.mkfile/mkdir to build the tree before linking?`
+    );
   }
 
   // ── Get ───────────────────────────────────────────────────────
