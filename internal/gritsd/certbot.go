@@ -292,6 +292,7 @@ func (hm *HTTPModule) listContentHostnames(volume Volume) ([]string, error) {
 
 	blob, err := node.ExportedBlob()
 	if err != nil {
+		volume.FatalIfBlobMissing(err)
 		return nil, fmt.Errorf("failed to read sites directory: %v", err)
 	}
 

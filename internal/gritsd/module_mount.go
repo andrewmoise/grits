@@ -355,12 +355,14 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 	if grits.IsNotExist(err) {
 		return nil, syscall.ENOENT
 	} else if err != nil {
+		gn.module.volume.FatalIfBlobMissing(err)
 		return nil, syscall.EIO
 	}
 	defer node.Release()
 
 	children, err := node.Children()
 	if err != nil {
+		gn.module.volume.FatalIfBlobMissing(err)
 		log.Printf("Couldn't load children: %v", err)
 		return nil, fs.ToErrno(err)
 	}
@@ -379,6 +381,7 @@ func (gn *gritsNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) 
 			log.Printf("  metadata: %v", childNode.Metadata())
 		}
 		if err != nil {
+			gn.module.volume.FatalIfBlobMissing(err)
 			log.Printf("Readdir fail %v", err)
 			return nil, syscall.EIO
 		}
@@ -522,6 +525,7 @@ func (gn *gritsNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut
 	if grits.IsNotExist(err) {
 		return nil, syscall.ENOENT
 	} else if err != nil {
+		gn.module.volume.FatalIfBlobMissing(err)
 		return nil, syscall.EIO
 	}
 	defer node.Release()
@@ -756,6 +760,7 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 		if grits.IsNotExist(err) {
 			return syscall.ENOENT
 		} else if err != nil {
+			gn.module.volume.FatalIfBlobMissing(err)
 			log.Printf("1 OCF fail %v", err)
 			return syscall.EIO
 		}
@@ -763,6 +768,7 @@ func (gn *gritsNode) openCachedFile() syscall.Errno {
 
 		gn.cachedFile, err = fileNode.ExportedBlob()
 		if err != nil {
+			gn.module.volume.FatalIfBlobMissing(err)
 			log.Printf("Can't open cached file %s: %v", gn.path, err)
 			return syscall.EIO
 		}
@@ -1416,6 +1422,7 @@ func (gn *gritsNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	if grits.IsNotExist(err) {
 		return syscall.EEXIST
 	} else if err != nil {
+		gn.module.volume.FatalIfBlobMissing(err)
 		return syscall.EIO
 	}
 	defer dirNode.Release()
@@ -1519,6 +1526,7 @@ func (gn *gritsNode) Rename(ctx context.Context, name string, newParent fs.Inode
 		if grits.IsNotExist(err) {
 			return syscall.ENOENT
 		} else if err != nil {
+			gn.module.volume.FatalIfBlobMissing(err)
 			log.Printf("Error on rename: %v", err)
 			return syscall.EIO
 		}

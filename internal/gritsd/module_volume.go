@@ -40,6 +40,8 @@ type Volume interface {
 
 	RegisterWatcher(watcher grits.FileTreeWatcher)
 	UnregisterWatcher(watcher grits.FileTreeWatcher)
+
+	FatalIfBlobMissing(err error)
 }
 
 type LocalVolume struct {
@@ -229,6 +231,15 @@ func (wv *LocalVolume) LookupNode(path string, principal *grits.Principal) (grit
 		return nil, err
 	}
 	return node, nil
+}
+
+func (wv *LocalVolume) FatalIfBlobMissing(err error) {
+	if err == nil {
+		return
+	}
+	if _, ok := grits.IsBlobMissing(err); ok {
+		log.Fatalf("FATAL: blob missing: %v", err)
+	}
 }
 
 func (wv *LocalVolume) MultiLink(requests []*grits.LinkRequest, returnResults bool, principal *grits.Principal) (*grits.LookupResponse, error) {

@@ -188,6 +188,10 @@ func (rv *RemoteVolume) lookupFromRoot(path string, rootNode grits.FileNode) (*g
 	return rv.localCache.lookupFromRoot(path, rootNode)
 }
 
+// FatalIfBlobMissing implements Volume interface.
+// Remote volumes may encounter transient missing blobs from fetchers — no-op for now.
+func (rv *RemoteVolume) FatalIfBlobMissing(err error) {}
+
 // GetFileNode implements Volume interface
 func (rv *RemoteVolume) GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error) {
 	return rv.localCache.GetFileNode(metadataAddr)

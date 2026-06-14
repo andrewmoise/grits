@@ -838,6 +838,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 			})
 			return
 		}
+		volume.FatalIfBlobMissing(err)
 		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
 		return
 	}
@@ -870,6 +871,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		if node.Metadata().Type == grits.GNodeTypeDirectory {
 			contentBlob, err := node.ExportedBlob()
 			if err != nil {
+				volume.FatalIfBlobMissing(err)
 				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -1010,6 +1012,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 
 		node, err := volume.GetFileNode(pair.Addr)
 		if err != nil {
+			volume.FatalIfBlobMissing(err)
 			http.Error(w, fmt.Sprintf("Couldn't load node for %s: %v", pair.Path, err), http.StatusInternalServerError)
 			return
 		}
@@ -1018,6 +1021,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		if node.Metadata().Type == grits.GNodeTypeDirectory {
 			contentBlob, err := node.ExportedBlob()
 			if err != nil {
+				volume.FatalIfBlobMissing(err)
 				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -1101,6 +1105,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 
 	lookupResponse, err := volume.Lookup([]string{path}, "", nil, principalFromContext(r))
 	if err != nil {
+		volume.FatalIfBlobMissing(err)
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -1194,6 +1199,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 
 	blobContent, err := leafNode.ExportedBlob()
 	if err != nil {
+		volume.FatalIfBlobMissing(err)
 		http.Error(w, fmt.Sprintf("Can't read content for %s: %v", path, err), http.StatusInternalServerError)
 		return
 	}

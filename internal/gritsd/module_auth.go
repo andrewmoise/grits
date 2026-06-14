@@ -471,6 +471,7 @@ func (m *AuthModule) readAccessConfigFromRoot(vol Volume, rootNode grits.FileNod
 
 	resp, err := vol.lookupFromRoot(accessPath, rootNode)
 	if err != nil {
+		vol.FatalIfBlobMissing(err)
 		return nil, fmt.Errorf("reading %q: %w", accessPath, err)
 	}
 	leaf := resp.Leaf()
@@ -483,12 +484,14 @@ func (m *AuthModule) readAccessConfigFromRoot(vol Volume, rootNode grits.FileNod
 
 	node, err := vol.GetFileNode(leaf.Addr)
 	if err != nil {
+		vol.FatalIfBlobMissing(err)
 		return nil, fmt.Errorf("loading node for %q: %w", accessPath, err)
 	}
 	defer node.Release()
 
 	blob, err := node.ExportedBlob()
 	if err != nil {
+		vol.FatalIfBlobMissing(err)
 		return nil, fmt.Errorf("getting blob for %q: %w", accessPath, err)
 	}
 

@@ -118,6 +118,9 @@ func (swm *ServiceWorkerModule) serveFromVolume(volumePath string, applyTemplate
 
 		fileNode, err := vol.LookupNode(volumePath, grits.BackendPrincipal)
 		if err != nil || fileNode == nil {
+			if err != nil {
+				vol.FatalIfBlobMissing(err)
+			}
 			http.Error(w, "File not found", http.StatusInternalServerError)
 			return
 		}
@@ -125,6 +128,7 @@ func (swm *ServiceWorkerModule) serveFromVolume(volumePath string, applyTemplate
 
 		blob, err := fileNode.ExportedBlob()
 		if err != nil {
+			vol.FatalIfBlobMissing(err)
 			http.Error(w, "Error loading file", http.StatusInternalServerError)
 			return
 		}

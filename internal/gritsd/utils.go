@@ -164,12 +164,14 @@ func ReadVolumeFile(srv *Server, volumeName, path string, principal *grits.Princ
 
 	fileNode, err := volume.LookupNode(path, principal)
 	if err != nil {
+		volume.FatalIfBlobMissing(err)
 		return nil, fmt.Errorf("ReadVolumeFile: lookup %q in %q: %w", path, volumeName, err)
 	}
 	defer fileNode.Release()
 
 	blob, err := fileNode.ExportedBlob()
 	if err != nil {
+		volume.FatalIfBlobMissing(err)
 		return nil, fmt.Errorf("ReadVolumeFile: exported blob for %q: %w", path, err)
 	}
 
