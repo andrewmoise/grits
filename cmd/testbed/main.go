@@ -160,7 +160,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 			continue // Skip modules that can't be unmarshaled
 		}
 
-		if moduleType, ok := moduleMap["type"].(string); ok && moduleType == "http" {
+		if moduleType, ok := moduleMap["module"].(string); ok && moduleType == "http" {
 			// Create a new HTTPModuleConfig instance
 			originHttpConfig = &gritsd.HTTPModuleConfig{}
 
@@ -192,7 +192,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	log.Printf("Configuring origin with allowed mirrors: %v", allowedMirrors)
 
 	originModuleConfig, err := json.Marshal(map[string]any{
-		"type":                "origin",
+		"module":              "origin",
 		"allowedMirrors":      allowedMirrors,
 		"inactiveTimeoutSecs": INACTIVE_TIMEOUT,
 	})
@@ -204,7 +204,7 @@ func setupOriginServer() (*gritsd.Server, *gritsd.HTTPModuleConfig, error) {
 	// For testing purposes, override cert verification
 	trackerOverride := true
 	trackerModuleConfig, err := json.Marshal(map[string]any{
-		"type":                     "tracker",
+		"module":                   "tracker",
 		"peerSubdomain":            fmt.Sprintf("cache.%s", originHttpConfig.ThisHost),
 		"heartbeatIntervalSec":     60, // More frequent for testing
 		"overrideCertVerification": trackerOverride,
@@ -516,7 +516,7 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 	}
 
 	httpModuleConfig, err := json.Marshal(map[string]any{
-		"type":      "http",
+		"module":    "http",
 		"thisPort":  mirrorPort,
 		"thisHost":  thisHost,
 		"enableTls": originHttpConfig.EnableTls,
@@ -529,7 +529,7 @@ func addHttpAndMirrorModulesToServer(server *gritsd.Server, originHttpConfig *gr
 
 	// Create Mirror module configuration
 	mirrorModuleConfig, err := json.Marshal(map[string]any{
-		"type":         "mirror",
+		"module":       "mirror",
 		"remoteHost":   originHttpConfig.ThisHost,
 		"remoteVolume": "",
 		"maxStorageMB": 100,

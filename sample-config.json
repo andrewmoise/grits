@@ -4,17 +4,17 @@
   "runAsUser": "%USER%",
   "modules": [
     {
-      "type": "volume",
+      "module": "volume",
       "volumeName": "root"
     },
     {
-      "type": "mount",
+      "module": "mount",
       "volume": "root",
       "mountPoint": "mnt"
     },
 
     {
-      "type": "http",
+      "module": "http",
       "thisPort": 443,
       "enableTls": true,
       "readOnly": true,
@@ -23,11 +23,11 @@
     },
 
     {
-      "type": "cmdline"
+      "module": "cmdline"
     },
 
     {
-      "type": "auth",
+      "module": "auth",
       "coreVhost": "https://%YOUR_SERVER%"
     }
   ]

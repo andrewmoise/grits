@@ -41,7 +41,7 @@ type Dependency struct {
 
 // ModuleConfig represents a generic module configuration.
 type ModuleConfig struct {
-	Type   string          `json:"type"`
+	Type   string          `json:"module"`
 	Config json.RawMessage `json:"config"`
 }
 
@@ -387,7 +387,7 @@ func SerializeModuleConfig(module Module, config any) (json.RawMessage, error) {
 	}
 
 	// Set the type from the module's name
-	configMap["type"] = module.GetModuleName()
+	configMap["module"] = module.GetModuleName()
 
 	// Marshal back to JSON
 	return json.Marshal(configMap)

@@ -1,7 +1,6 @@
 # In Progress
 
 * Look into service worker not unregistering
-* Change "type" to "module" in modules config
 * Double-check permissions within .grits directories — the access.json in
   foo/.grits should apply to both foo/ and foo/.grits/ itself, with slight
   differences between the two contexts
