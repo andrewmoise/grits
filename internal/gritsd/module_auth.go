@@ -587,8 +587,13 @@ func (m *AuthModule) resolvePermissionAtRoot(vol Volume, rootNode grits.FileNode
 	dirPath = strings.TrimRight(dirPath, "/")
 
 	// Collect all matching grants from the path up to root.
+	// Grants are split into three buckets:
+	//   - inheritedGrants: grants at ancestor levels whose next segment is NOT .grits
+	//   - gritsParentGrants: grants at the immediate parent of a .grits directory
+	//   - localGrants: grants at the target directory itself
 	var inheritedGrants []Grant
-	var localGrants []Grant // used for insert (non-inherited)
+	var gritsParentGrants []Grant
+	var localGrants []Grant
 
 	segments := strings.Split(dirPath, "/")
 	acc := ""
@@ -615,10 +620,13 @@ func (m *AuthModule) resolvePermissionAtRoot(vol Volume, rootNode grits.FileNode
 			if !grantMatchesPrincipal(g, principal) {
 				continue
 			}
-			// Grants at the target directory are local (for insert).
-			// Grants at ancestor directories are inherited.
 			if i == len(segments)-1 {
+				// Grants at the target directory are local.
 				localGrants = append(localGrants, g)
+			} else if i+1 < len(segments) && segments[i+1] == ".grits" {
+				// This grant is at the direct parent of a .grits directory.
+				// read+write doesn't escalate to owner across this boundary.
+				gritsParentGrants = append(gritsParentGrants, g)
 			} else {
 				inheritedGrants = append(inheritedGrants, g)
 			}
@@ -635,7 +643,8 @@ func (m *AuthModule) resolvePermissionAtRoot(vol Volume, rootNode grits.FileNode
 		}
 	}
 
-	// Merge inherited grants. Permission transformations:
+	// Merge inherited grants (ancestors that don't cross .grits next).
+	// Permission transformations:
 	//   - Insert → not inherited (only applies at the exact directory)
 	//   - read+insert → read (only the read part is inherited)
 	//   - read+write → owner (write at an ancestor lets you replace any
@@ -655,24 +664,32 @@ func (m *AuthModule) resolvePermissionAtRoot(vol Volume, rootNode grits.FileNode
 		merged = mergePerm(merged, inherited)
 	}
 
-	// Merge local (directory-level) grants. Insert applies only at the
-	// exact directory that contains the access.json.
-	for _, g := range localGrants {
-		merged = mergePerm(merged, g.Permission)
+	// Merge grants at the direct parent of a .grits directory.
+	// read+write does NOT escalate to owner here — it contributes
+	// only read access inside .grits. insert doesn't cross at all.
+	for _, g := range gritsParentGrants {
+		p := g.Permission
+		switch p {
+		case PermInsert:
+			continue
+		case PermReadInsert:
+			p = PermRead
+		case PermReadWrite:
+			p = PermRead
+		}
+		merged = mergePerm(merged, p)
 	}
 
-	// If the path is under .grits/, enforce special rules:
-	//   - read+write can READ .grits but not write it
-	//   - owner can do everything
-	//   - read-only can also read .grits
-	if strings.Contains(dirPath, "/.grits") || strings.HasPrefix(dirPath, ".grits") {
-		if CanOwn(merged) {
-			return merged
+	// Merge local (directory-level) grants.
+	// If the target directory itself is named .grits, read+write
+	// grants placed there also contribute only read.
+	for _, g := range localGrants {
+		p := g.Permission
+		lastSegIsGrits := len(segments) > 0 && segments[len(segments)-1] == ".grits"
+		if lastSegIsGrits && p == PermReadWrite {
+			p = PermRead
 		}
-		if CanWrite(merged) || CanRead(merged) {
-			return PermRead // .grits is read-only without owner
-		}
-		return ""
+		merged = mergePerm(merged, p)
 	}
 
 	return merged
@@ -754,7 +771,11 @@ func (m *AuthModule) MakeLinkCallback(vol Volume) grits.LinkCallback {
 			reqPath := strings.TrimRight(req.Path, "/")
 			parent := parentPath(reqPath)
 
-			if m.hasPermissionAtRoot(vol, oldRoot, parent, principal, PermReadWrite) {
+			// Check write permission on the target path itself, so that
+			// the .grits barrier in resolvePermissionAtRoot naturally
+			// catches writes into .grits directories. (The parent path
+			// wouldn't contain .grits, so the barrier wouldn't fire.)
+			if m.hasPermissionAtRoot(vol, oldRoot, reqPath, principal, PermReadWrite) {
 				grits.DebugLog(grits.DebugAuth, "Auth [link]: ALLOW %q (has write)", reqPath)
 				continue
 			}

@@ -920,9 +920,8 @@ func TestResolvePermissionInsertNotInherited(t *testing.T) {
 
 func TestResolvePermissionGritsProtection(t *testing.T) {
 	bt := boolTrue()
-	// Grant read+write at "data". Since write at an ancestor grants effective
-	// ownership over descendants (you can replace the entire subtree), the
-	// inherited permission at data/.grits is owner — bypassing .grits protection.
+	// Grant read+write at "data". Since .grits is the immediate child,
+	// read+write should NOT escalate to owner — it contributes only read.
 	vol, authMod := setupPermTest(t, "data",
 		AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadWrite}}})
 
@@ -932,17 +931,207 @@ func TestResolvePermissionGritsProtection(t *testing.T) {
 	if !CanRead(perm) {
 		t.Errorf("expected read for .grits, got %q", perm)
 	}
-	if !CanWrite(perm) {
-		t.Errorf("expected write for .grits (read+write inherited as owner), got %q", perm)
+	if CanWrite(perm) {
+		t.Errorf("expected NO write for .grits (read+write at parent should NOT escalate to owner), got %q", perm)
 	}
 
 	perm = authMod.resolvePermissionAtRoot(vol, nil, "data/.grits/access.json", anon)
 	if !CanRead(perm) {
 		t.Errorf("expected read for .grits/file, got %q", perm)
 	}
-	if !CanWrite(perm) {
-		t.Errorf("expected write for .grits/file (read+write inherited as owner), got %q", perm)
+	if CanWrite(perm) {
+		t.Errorf("expected NO write for .grits/file (read+write at parent should NOT escalate to owner), got %q", perm)
 	}
+}
+
+func TestResolvePermissionGritsBarrierNonImmediate(t *testing.T) {
+	bt := boolTrue()
+	// Grant read+write at "foo". For path "foo/bar/.grits", the .grits is NOT
+	// the immediate child of "foo" — "bar" is. So read+write escalates to owner
+	// at "foo/bar", and owner passes through .grits normally.
+	vol, authMod := setupPermTest(t, "foo",
+		AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadWrite}}})
+
+	anon := &grits.Principal{}
+
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "foo/bar/.grits", anon)
+	if !CanWrite(perm) {
+		t.Errorf("expected write at foo/bar/.grits (read+write at foo, not direct parent), got %q", perm)
+	}
+	if !CanRead(perm) {
+		t.Errorf("expected read at foo/bar/.grits, got %q", perm)
+	}
+}
+
+func TestResolvePermissionGritsBarrierNested(t *testing.T) {
+	bt := boolTrue()
+	// Grant read+write at "projects". For path "projects/alice/docs/.grits",
+	// the .grits is three levels deep. read+write escalates to owner at
+	// "projects/alice", then "projects/alice/docs", and owner passes through
+	// .grits normally.
+	vol, authMod := setupPermTest(t, "projects",
+		AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadWrite}}})
+
+	anon := &grits.Principal{}
+
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "projects/alice/docs/.grits", anon)
+	if !CanWrite(perm) {
+		t.Errorf("expected write at projects/alice/docs/.grits (read+write at projects, not direct parent), got %q", perm)
+	}
+}
+
+func TestResolvePermissionGritsBarrierDirectOnly(t *testing.T) {
+	bt := boolTrue()
+	// Two-level grant: read+write at "projects" and read+write at "projects/alice".
+	// For path "projects/alice/.grits":
+	//   - grant at "projects" -> next seg is "alice" (not .grits) -> inherits as owner
+	//   - grant at "projects/alice" -> next seg is .grits -> contributes only read
+	// Merged: owner + read = owner. The higher-level read+write that already
+	// escalated before reaching .grits should still give effective ownership.
+	server, _ := SetupTestServer(t)
+	defer func() { server.Stop() }()
+
+	volConfig := &LocalVolumeConfig{VolumeName: "root"}
+	vol, err := NewLocalVolume(volConfig, server, false, false)
+	if err != nil {
+		t.Fatalf("NewLocalVolume: %v", err)
+	}
+	server.AddModule(vol)
+	server.AddVolume(vol)
+	server.Start()
+
+	authMod, err := NewAuthModule(server, &AuthModuleConfig{CoreVhost: "http://test.local"})
+	if err != nil {
+		t.Fatalf("NewAuthModule: %v", err)
+	}
+
+	// read+write at root level
+	rootAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadWrite}}}
+	raw, _ := json.Marshal(rootAccess)
+	ensureVolumeParentDirs(vol, ".grits")
+	WriteVolumeFile(server, "root", ".grits/access.json", raw, grits.BackendPrincipal)
+
+	// read+write at "projects/alice" — this is the direct parent of .grits
+	aliceAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadWrite}}}
+	raw2, _ := json.Marshal(aliceAccess)
+	ensureVolumeParentDirs(vol, "projects/alice/.grits")
+	WriteVolumeFile(server, "root", "projects/alice/.grits/access.json", raw2, grits.BackendPrincipal)
+
+	anon := &grits.Principal{}
+
+	perm := authMod.resolvePermissionAtRoot(vol, nil, "projects/alice/.grits", anon)
+	if !CanWrite(perm) {
+		t.Errorf("expected write at projects/alice/.grits (owner from root combines with read from alice), got %q", perm)
+	}
+}
+
+func TestLinkCallbackGritsWritePermission(t *testing.T) {
+	server, cleanup := SetupTestServer(t,
+		WithLocalVolume("root"),
+		WithHttpModule(1924),
+		WithAuthModule(),
+	)
+	defer cleanup()
+	server.Start()
+	defer server.Stop()
+
+	vol := server.FindVolumeByName("root")
+
+	// r+w dir: user "alice" has read+write
+	ensureVolumeParentDirs(vol, "readwritedir/.grits")
+	rwAccess := AccessConfig{Allow: []Grant{{User: "alice", Origin: "*", Permission: PermReadWrite}}}
+	raw, _ := json.Marshal(rwAccess)
+	WriteVolumeFile(server, "root", "readwritedir/.grits/access.json", raw, grits.BackendPrincipal)
+
+	// owner dir: user "bob" has owner
+	ensureVolumeParentDirs(vol, "ownerdir/.grits")
+	ownAccess := AccessConfig{Allow: []Grant{{User: "bob", Origin: "*", Permission: PermOwner}}}
+	raw2, _ := json.Marshal(ownAccess)
+	WriteVolumeFile(server, "root", "ownerdir/.grits/access.json", raw2, grits.BackendPrincipal)
+
+	// Setup users for auth
+	pwdHashAlice := hashPasswordForTest(t, "alice-pass")
+	pwdHashBob := hashPasswordForTest(t, "bob-pass")
+	records := []map[string]any{
+		{"username": "alice", "pwdHash": pwdHashAlice},
+		{"username": "bob", "pwdHash": pwdHashBob},
+	}
+	ensureVolumeParentDirs(vol, "sys/etc")
+	WriteJSONL(server, "root", "sys/etc/users.jsonl", records, grits.BackendPrincipal)
+
+	baseURL := "http://127.0.0.1:1924"
+
+	// Login helpers
+	login := func(user, pass string) string {
+		resp, body := doReq(t, http.MethodPost, baseURL+"/grits/v1/auth/login", "",
+			[]byte(`{"username":"`+user+`","password":"`+pass+`"}`))
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("login failed: %d %s", resp.StatusCode, string(body))
+		}
+		var loginResp struct {
+			Ok    bool   `json:"ok"`
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(body, &loginResp); err != nil {
+			t.Fatalf("unmarshal login response: %v", err)
+		}
+		return loginResp.Token
+	}
+
+	aliceToken := login("alice", "alice-pass")
+	bobToken := login("bob", "bob-pass")
+
+	t.Run("read+write cannot write .grits", func(t *testing.T) {
+		// alice has read+write on readwritedir — trying to create readwritedir/.grits/newfile should fail
+		resp, _ := doReq(t, http.MethodPut,
+			contentURL(baseURL, "root", "readwritedir/.grits/newfile"), aliceToken,
+			[]byte("should be denied"))
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("write to .grits with read+write: expected 403, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("read+write cannot overwrite .grits entry", func(t *testing.T) {
+		// First create the .grits dir as backend so it exists
+		ensureVolumeParentDirs(vol, "readwritedir/.grits")
+
+		// alice tries to replace .grits entirely — should be denied
+		resp, _ := doReq(t, http.MethodPut,
+			contentURL(baseURL, "root", "readwritedir/.grits"), aliceToken,
+			[]byte("should be denied"))
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("replace .grits with read+write: expected 403, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("owner can write .grits", func(t *testing.T) {
+		resp, _ := doReq(t, http.MethodPut,
+			contentURL(baseURL, "root", "ownerdir/.grits/newfile"), bobToken,
+			[]byte("owner content"))
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("write to .grits with owner: expected 200, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("owner can overwrite .grits entry", func(t *testing.T) {
+		ensureVolumeParentDirs(vol, "ownerdir/.grits")
+
+		resp, _ := doReq(t, http.MethodPut,
+			contentURL(baseURL, "root", "ownerdir/.grits"), bobToken,
+			[]byte("owner replaces .grits"))
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("replace .grits with owner: expected 200, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("read+write can write regular files", func(t *testing.T) {
+		resp, _ := doReq(t, http.MethodPut,
+			contentURL(baseURL, "root", "readwritedir/regular.txt"), aliceToken,
+			[]byte("regular content"))
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("write regular file with read+write: expected 200, got %d", resp.StatusCode)
+		}
+	})
 }
 
 func TestResolvePermissionOwnerBypassesGritsProtection(t *testing.T) {
