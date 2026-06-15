@@ -15,12 +15,33 @@ import (
 // namestore.go implements a content-addressable namespace with path-based lookup.
 //
 // LOCKING STRATEGY:
-// - ns.mtx (RWMutex): Protects fileCache, rootAddr, serialNumber
-//   Used with brief locks for cache access and root snapshots
-// - ns.writeMtx (Mutex): Serializes all link/write operations
-//   Held for the duration of link operations to ensure atomicity
-// - Read operations (resolvePath, loadFileNode) are mostly lock-free:
-//   They snapshot the root, take a reference, then traverse without locks
+//
+// Two mutexes with a fixed nesting order:
+//
+//   writeMtx (outer) → mtx (inner)
+//
+// ns.writeMtx (sync.Mutex, "outer" lock):
+//   Serializes all link/write operations (MultiLink, DeserializeNameStore)
+//   and protects the ref manager structure (rm.refCount, taken lists).
+//   Held for the full duration of any tree mutation. Always acquired before
+//   ns.mtx when both are needed.
+//
+// ns.mtx (sync.Mutex, "inner" lock):
+//   Protects fileCache, rootAddr, serialNumber. Used for brief cache access
+//   and root snapshots. Never acquired before writeMtx — any code path that
+//   needs both must take writeMtx first.
+//
+// Who holds what:
+//   MultiLink / LinkByMetadata     — writeMtx(Lock) → mtx(Lock, briefly)
+//   DenseRefManager.recursiveTake  — inherited from caller's writeMtx
+//   DenseRefManager.recursiveRelease — inherited from caller's writeMtx
+//   DenseRefManager.releaseTaken   — inherited writeMtx → mtx(Lock)
+//   DenseRefManager.cleanup        — writeMtx(Lock) → mtx(Lock) *OWN*
+//   loadFileNode / resolveFromLocal — mtx(Lock) only (no writeMtx needed)
+//   Lookup / resolvePath           — mtx(Lock, briefly) only
+//
+// When code holds only ns.mtx it must NOT access rm.refCount or any other
+// ref-manager state — that requires writeMtx.
 //
 // Key structs:
 // - FileNode / TreeNode / BlobNode: A file or directory
@@ -61,9 +82,9 @@ type NameStore struct {
 	rootAddr  BlobAddr
 	fileCache map[BlobAddr]*fileCacheEntry
 
-	mtx       sync.Mutex   // Protects fileCache, rootAddr, serialNumber
-	cacheCond *sync.Cond   // Broadcast when in-flight stuff in the cache gets updated
-	writeMtx  sync.RWMutex // Serializes all link/write operations, as well as ref manager structure access
+	mtx       sync.Mutex // Inner lock — protects fileCache, rootAddr, serialNumber
+	cacheCond *sync.Cond // Broadcast when in-flight stuff in the cache gets updated
+	writeMtx  sync.Mutex // Outer lock — serializes link/write ops + protects rm.refCount
 
 	watchers []FileTreeWatcher
 	wmtx     sync.RWMutex   // Separate mutex for watchers list
@@ -2460,61 +2481,40 @@ func (rm *DenseRefManager) flatRelease(ns *NameStore, fn FileNode) error {
 func (rm *DenseRefManager) cleanup(ns *NameStore) {
 	log.Printf("DRM cleanup")
 
+	ns.writeMtx.Lock()
 	ns.mtx.Lock()
+	defer ns.writeMtx.Unlock()
+	defer ns.mtx.Unlock()
 
-	// First, identify all nodes with zero references
-	nodesToRemove := make([]BlobAddr, 0)
 	for metadataAddr, entry := range ns.fileCache {
 		if entry.node == nil {
 			continue
 		}
 
-		// Check if the node has zero references
-		if entry.node.RefCount() == 0 {
-			// Double check it's not in the RefManager structure
-			metadataHash := entry.node.MetadataBlob().GetAddress()
-
-			_, exists := rm.refCount[metadataHash]
-
-			if exists {
-				log.Panicf("Node %s has 0 refCount but exists in RefManager structure", metadataHash)
-				continue
-			}
-
-			nodesToRemove = append(nodesToRemove, metadataAddr)
-		}
-	}
-	ns.mtx.Unlock()
-
-	// Now remove the nodes and release their storage (without holding the main lock)
-	for _, metadataAddr := range nodesToRemove {
-		ns.mtx.Lock()
-		entry, exists := ns.fileCache[metadataAddr]
-		ns.mtx.Unlock()
-
-		if !exists || entry.node == nil {
+		if entry.node.RefCount() != 0 {
 			continue
 		}
 
-		node := entry.node
+		metadataHash := entry.node.MetadataBlob().GetAddress()
+		if _, exists := rm.refCount[metadataHash]; exists {
+			log.Panicf("Node %s has 0 refCount but exists in RefManager structure", metadataHash)
+			continue
+		}
 
-		metadataBlob := node.MetadataBlob()
+		metadataBlob := entry.node.MetadataBlob()
 		if metadataBlob != nil {
 			metadataBlob.Release()
 		}
 
-		contentBlob, err := node.ExportedBlob()
+		contentBlob, err := entry.node.ExportedBlob()
 		if err != nil {
 			log.Printf("Couldn't load content for %s: %v", metadataAddr, err)
 		} else if contentBlob != nil {
 			contentBlob.Release()
 		}
 
-		// Remove from cache
-		ns.mtx.Lock()
 		delete(ns.fileCache, metadataAddr)
-		ns.mtx.Unlock()
 	}
 
-	DebugLog(DebugBlobStorage, "NS cleanup complete. Removed %d unreferenced nodes", len(nodesToRemove))
+	DebugLog(DebugBlobStorage, "NS cleanup complete")
 }
