@@ -1175,6 +1175,10 @@ func (ns *NameStore) actuallyLoadFileNode(metadataAddr BlobAddr, printDebug bool
 	// FIXME this is a bit of a hack
 	if _, ok := ns.refManager.(*DenseRefManager); ok {
 		blob, blobErr = ns.BlobStore.ReadFile(metadata.ContentHash)
+		if blobErr != nil {
+			metadataCf.Release()
+			return nil, fmt.Errorf("content blob missing for %s: %w", metadataAddr, blobErr)
+		}
 	}
 
 	if metadata.Type == GNodeTypeFile {
@@ -1826,9 +1830,8 @@ func (bn *BlobNode) ExportedBlob() (CachedFile, error) {
 	bn.mtx.Lock()
 	defer bn.mtx.Unlock()
 
-	// TODO: Handle transient errors better - currently we cache errors forever
-	if bn.blob != nil || bn.blobErr != nil {
-		return bn.blob, bn.blobErr
+	if bn.blob != nil {
+		return bn.blob, nil
 	}
 
 	contentHash := bn.metadata.ContentHash
@@ -1924,12 +1927,10 @@ func (tn *TreeNode) ExportedBlob() (CachedFile, error) {
 	tn.mtx.Lock()
 	defer tn.mtx.Unlock()
 
-	// TODO: Handle transient errors better - currently we cache errors forever
-	if tn.blob != nil || tn.blobErr != nil {
-		return tn.blob, tn.blobErr
+	if tn.blob != nil {
+		return tn.blob, nil
 	}
 
-	// We need metadata to know the content hash
 	if tn.metadata == nil {
 		tn.blobErr = fmt.Errorf("no metadata available")
 		return nil, tn.blobErr
@@ -1961,9 +1962,8 @@ func (tn *TreeNode) Children() (map[string]BlobAddr, error) {
 	tn.mtx.Lock()
 	defer tn.mtx.Unlock()
 
-	// TODO: Handle transient errors better - currently we cache errors forever
-	if tn.ChildrenMap != nil || tn.blobErr != nil {
-		return tn.ChildrenMap, tn.blobErr
+	if tn.ChildrenMap != nil {
+		return tn.ChildrenMap, nil
 	}
 
 	// Parse the directory structure from the blob
