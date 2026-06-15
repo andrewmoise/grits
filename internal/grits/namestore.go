@@ -18,30 +18,33 @@ import (
 //
 // Two mutexes with a fixed nesting order:
 //
-//   writeMtx (outer) → mtx (inner)
+//   treeMtx (outer) → cacheMtx (inner)
 //
-// ns.writeMtx (sync.Mutex, "outer" lock):
-//   Serializes all link/write operations (MultiLink, DeserializeNameStore)
-//   and protects the ref manager structure (rm.refCount, taken lists).
-//   Held for the full duration of any tree mutation. Always acquired before
-//   ns.mtx when both are needed.
+// ns.treeMtx (sync.RWMutex, "outer" lock):
+//   Protects the tree topology — rootAddr changes and the ref manager
+//   structure (rm.refCount, taken lists).
+//   Write-side: serializes link/write operations (MultiLink, DeserializeNameStore).
+//   Held for the full duration of any tree mutation. Also held for *reading*
+//   during root-relative lookups to close the gap between reading rootAddr
+//   and taking a reference on the root node. Always acquired before cacheMtx
+//   when both are needed.
 //
-// ns.mtx (sync.Mutex, "inner" lock):
+// ns.cacheMtx (sync.Mutex, "inner" lock):
 //   Protects fileCache, rootAddr, serialNumber. Used for brief cache access
-//   and root snapshots. Never acquired before writeMtx — any code path that
-//   needs both must take writeMtx first.
+//   and root snapshots. Never acquired before treeMtx — any code path that
+//   needs both must take treeMtx first.
 //
 // Who holds what:
-//   MultiLink / LinkByMetadata     — writeMtx(Lock) → mtx(Lock, briefly)
-//   DenseRefManager.recursiveTake  — inherited from caller's writeMtx
-//   DenseRefManager.recursiveRelease — inherited from caller's writeMtx
-//   DenseRefManager.releaseTaken   — inherited writeMtx → mtx(Lock)
-//   DenseRefManager.cleanup        — writeMtx(Lock) → mtx(Lock) *OWN*
-//   loadFileNode / resolveFromLocal — mtx(Lock) only (no writeMtx needed)
-//   Lookup / resolvePath           — mtx(Lock, briefly) only
+//   MultiLink / LinkByMetadata         — treeMtx(Lock) → cacheMtx(Lock, briefly)
+//   LookupNode / LookupAndOpen         — treeMtx(RLock) → cacheMtx(Lock, briefly)
+//   Lookup (root-relative)             — treeMtx(RLock) → cacheMtx(Lock, briefly)
+//   Lookup (with startAddr)            — cacheMtx(Lock) only (no treeMtx needed)
+//   resolveFromLocal / loadFileNode    — cacheMtx(Lock) only (no treeMtx needed)
+//   RefManager ops                     — inherited treeMtx → cacheMtx(Lock)
+//   DenseRefManager.cleanup            — treeMtx(Lock) → cacheMtx(Lock)
 //
-// When code holds only ns.mtx it must NOT access rm.refCount or any other
-// ref-manager state — that requires writeMtx.
+// When code holds only cacheMtx it must NOT access rm.refCount or any other
+// ref-manager state — that requires treeMtx.
 //
 // Key structs:
 // - FileNode / TreeNode / BlobNode: A file or directory
@@ -82,9 +85,9 @@ type NameStore struct {
 	rootAddr  BlobAddr
 	fileCache map[BlobAddr]*fileCacheEntry
 
-	mtx       sync.Mutex // Inner lock — protects fileCache, rootAddr, serialNumber
-	cacheCond *sync.Cond // Broadcast when in-flight stuff in the cache gets updated
-	writeMtx  sync.Mutex // Outer lock — serializes link/write ops + protects rm.refCount
+	cacheMtx  sync.Mutex   // Inner lock — protects fileCache, rootAddr, serialNumber
+	cacheCond *sync.Cond   // Broadcast when in-flight stuff in the cache gets updated
+	treeMtx   sync.RWMutex // Outer lock — protects tree topology + rm.refCount (RLock for reads)
 
 	watchers []FileTreeWatcher
 	wmtx     sync.RWMutex   // Separate mutex for watchers list
@@ -116,12 +119,15 @@ type BlobFetcher interface {
 }
 
 func (ns *NameStore) GetRoot() string {
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
+	ns.cacheMtx.Lock()
+	defer ns.cacheMtx.Unlock()
 	return string(ns.rootAddr)
 }
 
 func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
+	ns.treeMtx.RLock()
+	defer ns.treeMtx.RUnlock()
+
 	lookupResp, err := ns.resolvePath(name, nil)
 	if err != nil {
 		return nil, err
@@ -147,6 +153,10 @@ func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 
 func (ns *NameStore) LookupNode(path string, principal *Principal) (FileNode, error) {
 	path = strings.TrimRight(path, "/") // FIXME
+
+	ns.treeMtx.RLock()
+	defer ns.treeMtx.RUnlock()
+
 	resp, err := ns.Lookup([]string{path}, "", nil, principal)
 	if err != nil {
 		return nil, err
@@ -243,7 +253,7 @@ func (ns *NameStore) AddLookupCallback(cb LookupCallback) {
 
 // LinkCallback is called after all recursiveLink calls succeed but before
 // references are committed. Both oldRoot and newRoot are live at this point.
-// writeMtx IS held; ns.mtx is NOT held (so the callback may safely read the tree).
+// treeMtx IS held; ns.cacheMtx is NOT held (so the callback may safely read the tree).
 // Return a non-nil error to abort the commit with no tree changes.
 type LinkCallback func(oldRoot, newRoot FileNode, requests []*LinkRequest, principal *Principal) error
 
@@ -260,10 +270,15 @@ func (ns *NameStore) AddLinkCallback(cb LinkCallback) {
 // If holdRef is non-nil it is called with the address of the starting node
 // before Lookup returns.
 
+// Note: There is no locking on this function; you as the caller must be responsible for
+// holding a read lock before calling this function, and then releasing it once
+// you've taken steps to make sure the addresses out of this that you care about
+// will stay valid.
+
 func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, holdRef RefHoldFunc, principal *Principal) (*LookupResponse, error) {
-	ns.mtx.Lock()
+	ns.cacheMtx.Lock()
 	serialNumber := ns.serialNumber
-	ns.mtx.Unlock()
+	ns.cacheMtx.Unlock()
 
 	// Resolve the starting node.
 	var startNode FileNode
@@ -277,9 +292,9 @@ func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, holdRef RefHoldF
 		}
 		usedAddr = startAddr
 	} else {
-		ns.mtx.Lock()
+		ns.cacheMtx.Lock()
 		usedAddr = ns.rootAddr
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 		// startNode stays nil — resolvePath will load from root itself.
 	}
 
@@ -291,9 +306,9 @@ func (ns *NameStore) Lookup(paths []string, startAddr BlobAddr, holdRef RefHoldF
 	// tree the paths were resolved from.
 	var cbRoot FileNode
 	if len(ns.lookupCallbacks) > 0 {
-		ns.mtx.Lock()
+		ns.cacheMtx.Lock()
 		rootAddr := ns.rootAddr
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 		if rootAddr != "" {
 			var err error
 			cbRoot, err = ns.loadFileNode(rootAddr, false)
@@ -377,9 +392,9 @@ func (ns *NameStore) resolvePath(path string, startNode FileNode) (*LookupRespon
 	DebugLog(DebugNameStore, "We resolve path '%s'\n", path)
 
 	if startNode == nil {
-		ns.mtx.Lock()
+		ns.cacheMtx.Lock()
 		forceFetch := len(ns.fetchers) > 0 && time.Since(ns.lastFetch) > ns.CacheDuration
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 
 		if forceFetch {
 			DebugLog(DebugNameStore, "  from fetchers (forced)")
@@ -419,9 +434,9 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 		return nil, fmt.Errorf("paths must be relative")
 	}
 
-	ns.mtx.Lock()
+	ns.cacheMtx.Lock()
 	serialNumber := ns.serialNumber
-	ns.mtx.Unlock()
+	ns.cacheMtx.Unlock()
 
 	var rootAddr BlobAddr
 	var node FileNode
@@ -430,9 +445,9 @@ func (ns *NameStore) resolveFromLocal(path string, startNode FileNode) (*LookupR
 		node = startNode
 		rootAddr = startNode.MetadataBlob().GetAddress()
 	} else {
-		ns.mtx.Lock()
+		ns.cacheMtx.Lock()
 		rootAddr = ns.rootAddr
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 
 		var err error
 		node, err = ns.loadFileNode(rootAddr, false)
@@ -586,8 +601,8 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool, prin
 	DebugLog(DebugLinks, "MultiLink - %d elements", len(requests))
 
 	// Serialize all link operations
-	ns.writeMtx.Lock()
-	defer ns.writeMtx.Unlock()
+	ns.treeMtx.Lock()
+	defer ns.treeMtx.Unlock()
 
 	// Phase 1: Pre-fetch and validate assertions
 	// We do this without holding the main lock (except for brief periods)
@@ -676,10 +691,10 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool, prin
 
 	// Phase 2: Build new tree
 
-	ns.mtx.Lock()
+	ns.cacheMtx.Lock()
 	oldRootAddr := ns.rootAddr
 	newSerialNumber := ns.serialNumber + 1
-	ns.mtx.Unlock()
+	ns.cacheMtx.Unlock()
 
 	oldRoot, err := ns.loadFileNode(oldRootAddr, false)
 	if err != nil {
@@ -703,7 +718,7 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool, prin
 	}
 
 	// Phase 3: Link callback — veto the write before anything that'd be hard to undo.
-	// Both oldRoot and newRoot have refs held. writeMtx held, ns.mtx NOT held.
+	// Both oldRoot and newRoot have refs held. treeMtx held, ns.cacheMtx NOT held.
 
 	for _, cb := range ns.linkCallbacks {
 		if err := cb(oldRoot, newRoot, requests, principal); err != nil {
@@ -784,10 +799,10 @@ func (ns *NameStore) MultiLink(requests []*LinkRequest, returnResults bool, prin
 		return nil, err
 	}
 
-	ns.mtx.Lock()
+	ns.cacheMtx.Lock()
 	ns.rootAddr = newRoot.MetadataBlob().GetAddress()
 	ns.serialNumber++
-	ns.mtx.Unlock()
+	ns.cacheMtx.Unlock()
 
 	return response, nil
 }
@@ -965,7 +980,7 @@ func EmptyNameStore(bs BlobStore, sparse bool) (*NameStore, error) {
 		refManager:   refManager,
 		serialNumber: 1,
 	}
-	ns.cacheCond = sync.NewCond(&ns.mtx)
+	ns.cacheCond = sync.NewCond(&ns.cacheMtx)
 
 	// For access control debugging
 	// ns.DebugWhitelist = []string{"one", "two", "lib", "tmp", "home"}
@@ -988,15 +1003,15 @@ func EmptyNameStore(bs BlobStore, sparse bool) (*NameStore, error) {
 }
 
 func (ns *NameStore) GetSerialNumber() int64 {
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
+	ns.cacheMtx.Lock()
+	defer ns.cacheMtx.Unlock()
 	return ns.serialNumber
 }
 
 func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64, cacheDuration time.Duration) error {
 	// Take write lock since we're updating the root
-	ns.writeMtx.Lock()
-	defer ns.writeMtx.Unlock()
+	ns.treeMtx.Lock()
+	defer ns.treeMtx.Unlock()
 
 	root, err := ns.loadFileNode(rootAddr, true)
 	if err != nil {
@@ -1020,11 +1035,11 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64,
 		}
 	}
 
-	ns.mtx.Lock()
+	ns.cacheMtx.Lock()
 	ns.rootAddr = root.MetadataBlob().GetAddress()
 	ns.serialNumber = serialNumber
 	ns.CacheDuration = cacheDuration
-	ns.mtx.Unlock()
+	ns.cacheMtx.Unlock()
 
 	return nil
 }
@@ -1034,14 +1049,14 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64,
 // broken nodes and an error if any are missing. Only meaningful for
 // DenseRefManager (sparse allows transiently missing blobs).
 func (ns *NameStore) ValidateContentExists() (int, error) {
-	ns.mtx.Lock()
+	ns.cacheMtx.Lock()
 	var toCheck []FileNode
 	for _, entry := range ns.fileCache {
 		if entry.node != nil {
 			toCheck = append(toCheck, entry.node)
 		}
 	}
-	ns.mtx.Unlock()
+	ns.cacheMtx.Unlock()
 
 	var broken []BlobAddr
 	for _, node := range toCheck {
@@ -1098,8 +1113,8 @@ func (ns *NameStore) typeToMetadata(addr *TypedFileAddr) (CachedFile, error) {
 func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileNode, error) {
 	DebugLog(DebugFileCache && printDebug, "We try to chase down %s\n", metadataAddr)
 
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
+	ns.cacheMtx.Lock()
+	defer ns.cacheMtx.Unlock()
 
 	for {
 		entry, exists := ns.fileCache[metadataAddr]
@@ -1118,9 +1133,9 @@ func (ns *NameStore) loadFileNode(metadataAddr BlobAddr, printDebug bool) (FileN
 			ns.fileCache[metadataAddr] = entry
 
 			// Unlock to do the fetch
-			ns.mtx.Unlock()
+			ns.cacheMtx.Unlock()
 			node, err := ns.actuallyLoadFileNode(metadataAddr, printDebug)
-			ns.mtx.Lock()
+			ns.cacheMtx.Lock()
 
 			if err != nil {
 				// Don't cache failures — remove the entry so the next caller retries
@@ -1317,10 +1332,10 @@ func (ns *NameStore) CreateTreeNode(children map[string]BlobAddr) (*TreeNode, er
 
 	// Check if this tree node already exists in cache
 	// Use brief lock for cache check/update
-	ns.mtx.Lock()
+	ns.cacheMtx.Lock()
 	existingEntry, exists := ns.fileCache[tn.metadataBlob.GetAddress()]
 	if exists && existingEntry.node != nil {
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 
 		contentBlob.Release()
 		metadataBlob.Release()
@@ -1337,7 +1352,7 @@ func (ns *NameStore) CreateTreeNode(children map[string]BlobAddr) (*TreeNode, er
 			node:     tn,
 			inFlight: false,
 		}
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 		return tn, nil
 	}
 
@@ -1346,8 +1361,8 @@ func (ns *NameStore) CreateTreeNode(children map[string]BlobAddr) (*TreeNode, er
 }
 
 func (ns *NameStore) DumpFileCache() error {
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
+	ns.cacheMtx.Lock()
+	defer ns.cacheMtx.Unlock()
 
 	log.Printf("=== File Cache Contents ===")
 	for cid, entry := range ns.fileCache {
@@ -1391,8 +1406,8 @@ func (ns *NameStore) DumpFileCache() error {
 }
 
 func (ns *NameStore) DumpTree() {
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
+	ns.cacheMtx.Lock()
+	defer ns.cacheMtx.Unlock()
 
 	log.Printf("=== Name Store Tree Dump ===")
 	ns.dumpTreeNode("", ns.rootAddr, "(root)")
@@ -1477,17 +1492,33 @@ func (ns *NameStore) dumpTreeNode(indent string, nodeAddr BlobAddr, name string)
 // DebugReferenceCountsRecursive walks the entire namespace tree and prints reference count information
 // for all nodes, while also identifying orphaned blobs
 func (ns *NameStore) PrintBlobStorageDebugging() error {
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
-
-	// Map to track which blobs we've seen
 	seenBlobs := make(map[BlobAddr]bool)
 
-	log.Println("=== Reference Count Debugging ===")
-	log.Println("Root node:", ns.GetRoot())
+	// Atomically read rootAddr and take a reference on the root node.
+	// treeMtx.RLock prevents writes from changing the root between reading
+	// the address and pinning the node with Take().
+	ns.treeMtx.RLock()
+	ns.cacheMtx.Lock()
+	rootAddr := ns.rootAddr
+	ns.cacheMtx.Unlock()
 
-	// Start recursive walk from root
-	ns.debugRefCountsWalk("", ns.rootAddr, seenBlobs)
+	rootNode, err := ns.loadFileNode(rootAddr, false)
+	if rootNode != nil {
+		rootNode.Take()
+	}
+	ns.treeMtx.RUnlock()
+
+	if rootNode == nil {
+		log.Printf("Error loading root node: %v", err)
+		return nil
+	}
+	defer rootNode.Release()
+
+	log.Println("=== Reference Count Debugging ===")
+	log.Println("Root node:", string(rootNode.MetadataBlob().GetAddress()))
+
+	// Start recursive walk from root (acquires its own locks internally)
+	ns.debugRefCountsWalk("", rootNode.MetadataBlob().GetAddress(), seenBlobs)
 
 	// Now check for orphaned blobs
 	log.Println("\n=== Orphaned Blobs ===")
@@ -2230,12 +2261,12 @@ func (ns *NameStore) resolveFromFetchers(path string, _ *LookupResponse, origErr
 		}
 
 		// Take write lock to update root atomically
-		ns.writeMtx.Lock()
-		defer ns.writeMtx.Unlock() // Note, we're all done at this point with anything that might loop again
+		ns.treeMtx.Lock()
+		defer ns.treeMtx.Unlock() // Note, we're all done at this point with anything that might loop again
 
-		ns.mtx.Lock()
+		ns.cacheMtx.Lock()
 		currentSerialNumber := ns.serialNumber
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 
 		if lookupResp.SerialNumber < currentSerialNumber {
 			log.Printf("Warning! Out of order lookup response")
@@ -2260,10 +2291,10 @@ func (ns *NameStore) resolveFromFetchers(path string, _ *LookupResponse, origErr
 			return nil, err
 		}
 
-		ns.mtx.Lock()
+		ns.cacheMtx.Lock()
 		oldRootAddr := ns.rootAddr
 		ns.lastFetch = time.Now()
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 
 		if oldRootAddr != "" {
 			oldRoot, err := ns.loadFileNode(oldRootAddr, false)
@@ -2277,13 +2308,13 @@ func (ns *NameStore) resolveFromFetchers(path string, _ *LookupResponse, origErr
 			}
 		}
 
-		ns.mtx.Lock()
+		ns.cacheMtx.Lock()
 		log.Printf("We're updating the root now. Testing %d > %d", lookupResp.SerialNumber, ns.serialNumber)
 		if lookupResp.SerialNumber > ns.serialNumber {
 			ns.rootAddr = lookupResp.Paths[0].Addr
 			ns.serialNumber = lookupResp.SerialNumber
 		}
-		ns.mtx.Unlock()
+		ns.cacheMtx.Unlock()
 
 		// Return the lookup response directly
 		return lookupResp, nil
@@ -2310,7 +2341,7 @@ type RefManager interface {
 type SparseRefManager struct {
 	nodeDropTimes map[BlobAddr]time.Time
 	timeout       time.Duration
-	// mtx protected under NameStore.writeMtx
+	// access protected under NameStore.treeMtx
 }
 
 func NewSparseRefManager(timeout time.Duration) *SparseRefManager {
@@ -2336,8 +2367,8 @@ func (rm *SparseRefManager) flatTake(ns *NameStore, fn FileNode) error {
 }
 
 func (rm *SparseRefManager) flatRelease(ns *NameStore, fn FileNode) error {
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
+	ns.cacheMtx.Lock()
+	defer ns.cacheMtx.Unlock()
 
 	metadataAddr := fn.MetadataBlob().GetAddress()
 	if fn.RefCount() == 0 {
@@ -2348,38 +2379,32 @@ func (rm *SparseRefManager) flatRelease(ns *NameStore, fn FileNode) error {
 }
 
 func (rm *SparseRefManager) cleanup(ns *NameStore) {
-	// Brief lock to get entries to clean up
-	ns.mtx.Lock()
+	ns.cacheMtx.Lock()
+	defer ns.cacheMtx.Unlock()
 
 	now := time.Now()
-	entriesToClean := make(map[BlobAddr]*fileCacheEntry)
 	for metadataAddr, dropTime := range rm.nodeDropTimes {
 		if now.Sub(dropTime) > rm.timeout {
-			if entry, exists := ns.fileCache[metadataAddr]; exists {
-				entriesToClean[metadataAddr] = entry
-				delete(ns.fileCache, metadataAddr)
+			entry, exists := ns.fileCache[metadataAddr]
+			if !exists {
+				delete(rm.nodeDropTimes, metadataAddr)
+				continue
 			}
-		}
-	}
-	for metadataAddr, _ := range entriesToClean {
-		delete(rm.nodeDropTimes, metadataAddr)
-	}
+			delete(ns.fileCache, metadataAddr)
+			delete(rm.nodeDropTimes, metadataAddr)
 
-	ns.mtx.Unlock()
+			if entry.node != nil {
+				metadataBlob := entry.node.MetadataBlob()
+				if metadataBlob != nil {
+					metadataBlob.Release()
+				}
 
-	// Clean up without holding lock
-	for metadataAddr, entry := range entriesToClean {
-		if entry.node != nil {
-			metadataBlob := entry.node.MetadataBlob()
-			if metadataBlob != nil {
-				metadataBlob.Release()
-			}
-
-			contentBlob, err := entry.node.ExportedBlob()
-			if err != nil {
-				log.Printf("Problem cleaning up %s: %v", metadataAddr, err)
-			} else if contentBlob != nil {
-				contentBlob.Release()
+				contentBlob, err := entry.node.ExportedBlob()
+				if err != nil {
+					log.Printf("Problem cleaning up %s: %v", metadataAddr, err)
+				} else if contentBlob != nil {
+					contentBlob.Release()
+				}
 			}
 		}
 	}
@@ -2390,7 +2415,7 @@ func (rm *SparseRefManager) cleanup(ns *NameStore) {
 type DenseRefManager struct {
 	path     string
 	refCount map[BlobAddr]int
-	// mtx protected under NameStore.writeMtx
+	// access protected under NameStore.treeMtx
 }
 
 func NewDenseRefManager(path string) *DenseRefManager {
@@ -2456,11 +2481,11 @@ func (rm *DenseRefManager) releaseTaken(ns *NameStore, taken *[]BlobAddr) {
 		count := rm.refCount[addr]
 		if count <= 1 {
 			delete(rm.refCount, addr)
-			ns.mtx.Lock()
+			ns.cacheMtx.Lock()
 			if entry, exists := ns.fileCache[addr]; exists && entry.node != nil {
 				entry.node.Release()
 			}
-			ns.mtx.Unlock()
+			ns.cacheMtx.Unlock()
 		} else {
 			rm.refCount[addr] = count - 1
 		}
@@ -2522,10 +2547,10 @@ func (rm *DenseRefManager) flatRelease(ns *NameStore, fn FileNode) error {
 func (rm *DenseRefManager) cleanup(ns *NameStore) {
 	DebugLog(DebugRefCounts, "DRM cleanup")
 
-	ns.writeMtx.Lock()
-	ns.mtx.Lock()
-	defer ns.writeMtx.Unlock()
-	defer ns.mtx.Unlock()
+	ns.treeMtx.Lock()
+	ns.cacheMtx.Lock()
+	defer ns.treeMtx.Unlock()
+	defer ns.cacheMtx.Unlock()
 
 	for metadataAddr, entry := range ns.fileCache {
 		if entry.node == nil {

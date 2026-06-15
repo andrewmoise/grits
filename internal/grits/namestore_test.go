@@ -422,8 +422,8 @@ func TestConcurrentAccess(t *testing.T) {
 
 // Helper to find a FileNode by its content blob address
 func (ns *NameStore) lookupNodeByContent(contentHash BlobAddr) FileNode {
-	ns.mtx.Lock()
-	defer ns.mtx.Unlock()
+	ns.cacheMtx.Lock()
+	defer ns.cacheMtx.Unlock()
 
 	for _, entry := range ns.fileCache {
 		blob, err := entry.node.ExportedBlob()
