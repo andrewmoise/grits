@@ -42,7 +42,7 @@ import PerformanceTracker from './PerformanceTracker.js';  // %FOR MODULE%
 //importScripts('/grits-PerformanceTracker-sw.js');  // %FOR SERVICEWORKER%
 
 const DEBUG       = false;
-const DEBUG_STATS = true;
+const DEBUG_STATS = false;
 const JSON_CACHE_MAX_AGE          = 5 * 60 * 1000;
 const JSON_CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 const DEFAULT_HARD_TIMEOUT        = 1 * 60 * 1000; // 1 minute, matches Go-side default
