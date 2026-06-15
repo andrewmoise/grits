@@ -764,6 +764,7 @@ class GritsVolume {
       const resp = await fetch(`${this._serverUrl}/grits/v1/blob/${cid}`, {
         method:  'HEAD',
         headers: this._serverHeaders(),
+        cache:   'no-cache',
       });
       DEBUG && console.log(`[_serverHasBlob] HEAD ${cid} → ${resp.status} ${resp.statusText}`);
       return resp.ok;            // 200 present, 404 absent
