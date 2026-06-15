@@ -124,6 +124,18 @@ func (ns *NameStore) GetRoot() string {
 	return string(ns.rootAddr)
 }
 
+// RLockTree acquires a read lock on the tree topology, preventing writes from
+// changing the root or releasing nodes while the caller resolves paths and takes
+// references on the results. Must be paired with RUnlockTree.
+func (ns *NameStore) RLockTree() {
+	ns.treeMtx.RLock()
+}
+
+// RUnlockTree releases a read lock previously acquired by RLockTree.
+func (ns *NameStore) RUnlockTree() {
+	ns.treeMtx.RUnlock()
+}
+
 func (ns *NameStore) LookupAndOpen(name string) (CachedFile, error) {
 	ns.treeMtx.RLock()
 	defer ns.treeMtx.RUnlock()

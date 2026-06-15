@@ -23,6 +23,12 @@ type Volume interface {
 	lookupFromRoot(path string, rootNode grits.FileNode) (*grits.LookupResponse, error)
 	GetFileNode(metadataAddr grits.BlobAddr) (grits.FileNode, error)
 
+	// RLockTree / RUnlockTree provide access to the tree read lock so callers
+	// can prevent the tree topology from changing while resolving paths and
+	// taking references on results.
+	RLockTree()
+	RUnlockTree()
+
 	CreateTreeNode() (grits.FileNode, error)
 	CreateBlobNode(contentAddr grits.BlobAddr, size int64) (grits.FileNode, error)
 
@@ -198,6 +204,9 @@ func (wv *LocalVolume) Lookup(paths []string, startAddr grits.BlobAddr, holdRef 
 func (wv *LocalVolume) lookupFromRoot(path string, rootNode grits.FileNode) (*grits.LookupResponse, error) {
 	return wv.ns.LookupFromRoot(path, rootNode)
 }
+
+func (wv *LocalVolume) RLockTree()   { wv.ns.RLockTree() }
+func (wv *LocalVolume) RUnlockTree() { wv.ns.RUnlockTree() }
 
 func (wv *LocalVolume) LookupNode(path string, principal *grits.Principal) (grits.FileNode, error) {
 	path = strings.TrimRight(path, "/") // FIXME

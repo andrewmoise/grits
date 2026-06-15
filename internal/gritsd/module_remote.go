@@ -176,6 +176,9 @@ func (rv *RemoteVolume) Checkpoint() error {
 	return rv.localCache.Checkpoint()
 }
 
+func (rv *RemoteVolume) RLockTree()   { rv.localCache.RLockTree() }
+func (rv *RemoteVolume) RUnlockTree() { rv.localCache.RUnlockTree() }
+
 func (rv *RemoteVolume) LookupNode(path string, principal *grits.Principal) (grits.FileNode, error) {
 	return rv.localCache.LookupNode(path, principal)
 }
