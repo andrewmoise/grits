@@ -1,6 +1,5 @@
 # In Progress
 
-* Fix download test failure
 * Make the corner icons a little bigger
 * Look into service worker not unregistering
 * Change "type" to "module" in modules config
@@ -15,6 +14,8 @@
 * Session tokens in cookies or something
 * What's up with sessionStorage in GritsClient.js?
 * Reorient the initial paradigm to vhosts instead of /grits/v1/content
+* Make sure only one instance can run at once
+* Change "root" volume name to something less collide-y
 
 # Backlog
 
@@ -80,6 +81,8 @@ Make skel() function
 
 Fix copy and paste from Gimbal shell
 
+cwd() shell command
+
 ## gwm
 
 Syncing cwd between files() and cd() in a shell optionally
@@ -112,6 +115,10 @@ XX Change GritsClient to be per serverUrl
 
 s/cell/creature/g
 
+Sort out a way to upload unlimited amounts of stuff without timing out the "PUTs get ref-held for 45 seconds only" issue
+
+Lookup and link multiple things in one request when possible
+
 ## backend
 
 Be smart about sending small blobs directly with the answer, for stuff like lookup(), to save RTT
@@ -135,6 +142,8 @@ Make more complete auth-timeout-force-re-login system (an endpoint to verify use
 Make mkdir('one/two') return a sensible error, not a 500
 
 Change 404 returns during normal operations, so we don't spam the console
+
+Verify that stores with missing blobs either still work, or else panic. Add tests for that case.
 
 ## Old TODOs
 
