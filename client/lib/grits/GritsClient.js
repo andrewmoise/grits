@@ -704,21 +704,21 @@ class GritsVolume {
   }
 
   async _uploadMissingBlob(addr) {
-    const local = this._parent._local.get(addr);
-    if (local) {
-      await this._uploadBlob(addr, local);
-      await this._parent._blobCachePut(addr, new Response(local, { status: 200 }));
-      this._parent._local.delete(addr);
+    // Check the blob cache — content (from put()) and metadata (from
+    // mkfile/mkdir with _storeBlob) are stored here.
+    const cached = await this._parent._blobCacheGet(addr);
+    if (cached) {
+      DEBUG && console.log(`[_uploadMissingBlob] re-uploading ${addr} from blobCache`);
+      const bytes = new Uint8Array(await cached.arrayBuffer());
+      await this._uploadBlob(addr, bytes);
       return;
     }
 
-    // Blob not in _local — a concurrent upload may have put it on the server
-    // (and deleted it from _local) while our 422 was in flight. Check the
-    // server; if it has the blob, just retry the link.
+    // Not in local cache — a concurrent upload may have put it on the server.
     if (await this._serverHasBlob(addr)) return;
 
     throw new Error(
-      `multiLink: server needs blob ${addr} but it's not in local cache ` +
+      `multiLink: server needs blob ${addr} but it's not available locally ` +
       `or on the server. Did you call vol.mkfile/mkdir to build the tree before linking?`
     );
   }
@@ -741,9 +741,6 @@ class GritsVolume {
 
     const startTime = performance.now();
 
-    const local = this._parent._local.get(cid);
-    if (local) { DEBUG && console.log(`[get] CID=${cid} source=local`); return new Response(local, { status: 200 }); }
-
     const cached = await this._parent._blobCacheGet(cid);
     if (cached) {
       this._parent._tracker.record('blobCacheHit', performance.now() - startTime);
@@ -754,7 +751,6 @@ class GritsVolume {
     const resp = await this._fetchBlob(cid);
     if (resp.ok) {
       this._parent._tracker.record('blobCacheMiss', performance.now() - startTime);
-      await this._parent._blobCachePut(cid, resp.clone());
       DEBUG && console.log(`[get] CID=${cid} source=network`);
       return resp;
     }
@@ -769,6 +765,7 @@ class GritsVolume {
         method:  'HEAD',
         headers: this._serverHeaders(),
       });
+      DEBUG && console.log(`[_serverHasBlob] HEAD ${cid} → ${resp.status} ${resp.statusText}`);
       return resp.ok;            // 200 present, 404 absent
     } catch {
       return false;              // network error → don't know → fall through and upload
@@ -858,10 +855,12 @@ class GritsVolume {
         headers: this._serverHeaders(),
         body:    bytes,
       });
+      DEBUG && console.log(`[_uploadBlob] PUT ${cid} → ${resp.status} ${resp.statusText}`);
     } catch (err) {
       // A reset / "Failed to fetch" could be a false negative: the server had
       // the blob and dropped the connection on its dedup early-return, or committed
       // it just before the reset. Confirm absence before reporting failure.
+      DEBUG && console.log(`[_uploadBlob] PUT ${cid} → network error: ${err.message}`);
       if (await this._serverHasBlob(cid)) return cid;
       throw err;
     }
@@ -1364,7 +1363,6 @@ class GritsClient {
     this._swReloadTriggered = false;   // one-shot guard for navigate-reload on stale SW
     this._swRegistrationAttempted  = false;
 
-    this._local     = new Map(); // cid → Uint8Array  (synthesized, pending upload)
     this._jsonCache = new Map(); // cid → { data, lastAccessed }
     this._blobCache = null;      // browser Cache API
     this._volumes   = new Map(); // volKey → GritsVolume
@@ -1452,7 +1450,6 @@ class GritsClient {
   get tracker() { return this._tracker; }
 
   _flushCaches() {
-    this._local.clear();
     this._jsonCache.clear();
     if (this._blobCache) this._blobCache.keys().then(keys =>
       keys.forEach(key => this._blobCache.delete(key)));
@@ -1490,13 +1487,25 @@ class GritsClient {
     };
   }
 
+  // ── _storeBlob ──────────────────────────────────────────────
+  // Try local cache first; if that fails, upload to the server.
+  async _storeBlob(cid, bytes) {
+    try {
+      if (this._blobCache) {
+        await this._blobCache.put(cid, new Response(bytes.slice(0), { status: 200 }));
+        return;
+      }
+    } catch (_) {}
+    // Cache unavailable or write failed — upload to the server directly.
+    // The server dedup check means it won't re-store if already present.
+    await this._uploadBlob(cid, bytes);
+  }
+
   // ── cacheGet ─────────────────────────────────────────────────
   // Read from local or browser cache only. Returns null if not found.
 
   async cacheGet(cid) {
     _assertString(cid, 'cacheGet');
-    const local = this._local.get(cid);
-    if (local) return new Response(local, { status: 200 });
     return this._blobCacheGet(cid);
   }
 
@@ -1507,7 +1516,7 @@ class GritsClient {
     _assertBytes(bytes, 'cachePut');
     const data = await _toUint8Array(bytes);
     const cid  = await _computeCID(data);
-    if (!this._local.has(cid)) this._local.set(cid, data);
+    await this._storeBlob(cid, data);
     return cid;
   }
 
@@ -1529,7 +1538,7 @@ class GritsClient {
     };
     const bytes = new TextEncoder().encode(JSON.stringify(meta));
     const cid   = await _computeCID(bytes);
-    if (!this._local.has(cid)) this._local.set(cid, bytes);
+    await this._storeBlob(cid, bytes);
     return cid;
   }
 
@@ -1557,7 +1566,7 @@ class GritsClient {
 
     const dirBytes  = new TextEncoder().encode(JSON.stringify(listing));
     const dirCID    = await _computeCID(dirBytes);
-    if (!this._local.has(dirCID)) this._local.set(dirCID, dirBytes);
+    await this._storeBlob(dirCID, dirBytes);
 
     const meta      = {
       type:        'dir',
@@ -1568,7 +1577,7 @@ class GritsClient {
     };
     const metaBytes = new TextEncoder().encode(JSON.stringify(meta));
     const metaCID   = await _computeCID(metaBytes);
-    if (!this._local.has(metaCID)) this._local.set(metaCID, metaBytes);
+    await this._storeBlob(metaCID, metaBytes);
 
     return metaCID;
   }
@@ -1577,8 +1586,6 @@ class GritsClient {
 
   gc(cid = null) {
     if (cid !== null) _assertString(cid, 'gc');
-    if (cid === null) this._local.clear();
-    else this._local.delete(cid);
   }
 
   // ── Internal: JSON cache (used by GritsVolume) ────────────────
@@ -1592,18 +1599,8 @@ class GritsClient {
       return [cached.data, 'memory'];
     }
 
-    // 2. Local synthesized blobs (mkfile/mkdir output not yet uploaded).
-    const local = this._local.get(hash);
-    if (local) {
-      try {
-        const data = JSON.parse(new TextDecoder().decode(local));
-        this._jsonCache.set(hash, { data: _deepFreeze(data), lastAccessed: Date.now() });
-        DEBUG && console.log(`[_unmarshal] ${hash} source=local`);
-        return [data, 'local'];
-      } catch (_) {}
-    }
-
-    // 3. Browser blob cache — no network I/O, just IndexedDB.
+    // 2. Browser blob cache — no network I/O, just IndexedDB.
+    //    mkfile/mkdir now store directly here via _storeBlob.
     const blobResp = await this._blobCacheGet(hash);
     if (blobResp) {
       try {
