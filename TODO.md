@@ -1,6 +1,5 @@
 # In Progress
 
-* Make the corner icons a little bigger
 * Look into service worker not unregistering
 * Change "type" to "module" in modules config
 * Double-check permissions within .grits directories — the access.json in
@@ -101,6 +100,8 @@ Make files widget sync to changes in the directory
 Image / video / random binary file output in terminal
 
 Make light mode
+
+Add a menu (to edit() if nothing else)
 
 ## grits client
 

@@ -269,13 +269,16 @@ export const FS = {
    ══════════════════════════════════════════════════════════ */
 
 export const CHROME = {
-  stripW:  '2.8rem',
-  titleH:  '2rem',
-  iconSize:'2.4rem',
-  btnSize: '1.75rem',
-  iconR:   '0.5rem',
-  widgetR: '0.625rem',
-  gap:     '0.4rem',
+  stripW:     '3.2rem',
+  titleH:     '2rem',
+  iconSize:   '2.9rem',
+  btnSize:    '2.1rem',
+  iconR:      '0.5rem',
+  widgetR:    '0.625rem',
+  gap:        '0.4rem',
+  btnSvgSz:   '0.98em',
+  stripSvgSz: '1.56em',
+  thumbSvgSz: '1.32em',
 };
 
 /* ══════════════════════════════════════════════════════════
@@ -359,6 +362,9 @@ export function injectTheme() {
     ['--icon-r',       CHROME.iconR],
     ['--widget-r',     CHROME.widgetR],
     ['--gap',          CHROME.gap],
+    ['--btn-svg-sz',   CHROME.btnSvgSz],
+    ['--strip-svg-sz', CHROME.stripSvgSz],
+    ['--thumb-svg-sz', CHROME.thumbSvgSz],
 
     /* motion */
     ['--ease-sine',    EASE_SINE],

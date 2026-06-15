@@ -101,7 +101,7 @@ if (!document.getElementById(STYLE_ID)) {
       flex-shrink: 0;
       transition: color 0.15s;
     }
-    #gimbal-overlay-icon svg { width: 0.82em; height: 0.82em; stroke-width: 1.7; }
+    #gimbal-overlay-icon svg { width: var(--btn-svg-sz, 0.98em); height: var(--btn-svg-sz, 0.98em); stroke-width: 1.7; }
     #gimbal-overlay:focus-within #gimbal-overlay-icon { color: var(--text); }
     #gimbal-overlay-name {
       flex: 1;
@@ -133,7 +133,7 @@ if (!document.getElementById(STYLE_ID)) {
     }
     .gimbal-overlay-btn:hover { background: var(--bg-hover); color: var(--text-hi); }
     .gimbal-overlay-btn.close:hover { background: var(--red-dim); color: var(--red); }
-    .gimbal-overlay-btn svg { width: 0.82em; height: 0.82em; stroke-width: 1.7; }
+    .gimbal-overlay-btn svg { width: var(--btn-svg-sz, 0.98em); height: var(--btn-svg-sz, 0.98em); stroke-width: 1.7; }
     #gimbal-overlay-body {
       flex: 1;
       min-height: 0;

@@ -85,7 +85,7 @@
     display: flex; align-items: center; justify-content: center;
     color: var(--text-dim); flex-shrink: 0;
   }
-  .widget-icon svg { width: 0.82em; height: 0.82em; stroke-width: 1.7; }
+  .widget-icon svg { width: var(--btn-svg-sz); height: var(--btn-svg-sz); stroke-width: 1.7; }
   .widget:focus-within .widget-icon { color: var(--text); }
 
   /* clickable main icon */
@@ -148,7 +148,7 @@
   }
   .widget-btn:hover { background: var(--bg-hover); color: var(--text-hi); }
   .widget-btn.close:hover { background: var(--red-dim); color: var(--red); }
-  .widget-btn svg { width: 0.82em; height: 0.82em; stroke-width: 1.7; }
+  .widget-btn svg { width: var(--btn-svg-sz); height: var(--btn-svg-sz); stroke-width: 1.7; }
 
   .widget-body {
     flex: 1; overflow: auto; min-height: 0; color: var(--text);
@@ -177,7 +177,7 @@
   }
   .strip-launcher:hover { background: var(--a1-dim); border-color: var(--a1); color: var(--text-hi); transform: scale(1.06); }
   .strip-launcher:active { transform: scale(0.96); }
-  .strip-launcher svg { width: 1.3em; height: 1.3em; stroke-width: 1.5; }
+  .strip-launcher svg { width: var(--strip-svg-sz); height: var(--strip-svg-sz); stroke-width: 1.5; }
 
   #strip-separator {
     width: var(--icon-size); display: flex; align-items: center;
@@ -205,7 +205,7 @@
     position: relative;
   }
   .min-thumb:hover { background: var(--bg-hover); border-color: var(--border-hi); color: var(--text); transform: scale(1.06); }
-  .min-thumb svg { width: 1.1em; height: 1.1em; stroke-width: 1.5; }
+  .min-thumb svg { width: var(--thumb-svg-sz); height: var(--thumb-svg-sz); stroke-width: 1.5; }
 
   .strip-launcher .tip, .min-thumb .tip {
     display: none; position: absolute;
