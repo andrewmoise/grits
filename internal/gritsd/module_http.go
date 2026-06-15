@@ -827,57 +827,57 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	lookupResponse, err := volume.Lookup(req.Paths, req.StartAddr, holdRef, principalFromContext(r))
-	if err != nil {
-		if denied, ok := grits.IsAccessDenied(err); ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error": "access_denied",
-				"path":  denied.Path,
-			})
-			return
-		}
-		volume.FatalIfBlobMissing(err)
-		http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
-		return
-	}
-
-	// Hold refs on all returned nodes so blobs don't get GC'd before
-	// the client fetches them. Only successful entries (no error, non-empty addr)
-	// get a ref hold — intermediate paths with permission denials are skipped.
-	//
-	// The HTTP status code is determined solely by the leaf (last) entry in the
-	// response. If the leaf itself succeeded we return 200 even when intermediate
-	// paths (e.g. the root "/") were pruned by the permissions callback. This
-	// avoids confusing clients that check resp.ok before examining individual
-	// path results. Intermediate errors are still present in the JSON payload
-	// for clients that want to inspect them, but they don't drive the wire status.
+	// Resolve paths and take refs on the results while holding the tree
+	// read lock. Once refs are held the lock can be released — the refHolder
+	// keeps blobs alive for the client independently.
 	leafErr := ""
-	if len(lookupResponse.Paths) > 0 {
-		leafErr = lookupResponse.Paths[len(lookupResponse.Paths)-1].Error
-	}
-	for _, pair := range lookupResponse.Paths {
-		if pair.Error != "" || pair.Addr == "" {
-			continue
-		}
-		node, err := volume.GetFileNode(pair.Addr)
+	var lookupResponse *grits.LookupResponse
+	func() {
+		volume.RLockTree()
+		defer volume.RUnlockTree()
+
+		var err error
+		lookupResponse, err = volume.Lookup(req.Paths, req.StartAddr, holdRef, principalFromContext(r))
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
-			return
-		}
-		defer node.Release()
-		s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
-		if node.Metadata().Type == grits.GNodeTypeDirectory {
-			contentBlob, err := node.ExportedBlob()
-			if err != nil {
-				volume.FatalIfBlobMissing(err)
-				http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
+			if denied, ok := grits.IsAccessDenied(err); ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error": "access_denied",
+					"path":  denied.Path,
+				})
 				return
 			}
-			s.refHolder.Hold(contentBlob, 45*time.Second)
+			volume.FatalIfBlobMissing(err)
+			http.Error(w, fmt.Sprintf("Lookup failed: %v", err), http.StatusNotFound)
+			return
 		}
-	}
+
+		if len(lookupResponse.Paths) > 0 {
+			leafErr = lookupResponse.Paths[len(lookupResponse.Paths)-1].Error
+		}
+		for _, pair := range lookupResponse.Paths {
+			if pair.Error != "" || pair.Addr == "" {
+				continue
+			}
+			node, err := volume.GetFileNode(pair.Addr)
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Error looking up %s: %v", pair.Addr, err), http.StatusInternalServerError)
+				return
+			}
+			defer node.Release()
+			s.refHolder.Hold(node.MetadataBlob(), 45*time.Second)
+			if node.Metadata().Type == grits.GNodeTypeDirectory {
+				contentBlob, err := node.ExportedBlob()
+				if err != nil {
+					volume.FatalIfBlobMissing(err)
+					http.Error(w, fmt.Sprintf("Couldn't load content: %v", err), http.StatusInternalServerError)
+					return
+				}
+				s.refHolder.Hold(contentBlob, 45*time.Second)
+			}
+		}
+	}()
 
 	w.Header().Set("Content-Type", "application/json")
 	status := http.StatusOK
