@@ -1010,6 +1010,16 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64,
 		return err
 	}
 
+	if _, ok := ns.refManager.(*DenseRefManager); ok {
+		count, err := ns.ValidateContentExists()
+		if err != nil {
+			log.Fatalf("FATAL: volume is corrupt at startup: %v", err)
+		}
+		if count > 0 {
+			log.Printf("Volume integrity: %d nodes with missing content found during load", count)
+		}
+	}
+
 	ns.mtx.Lock()
 	ns.rootAddr = root.MetadataBlob().GetAddress()
 	ns.serialNumber = serialNumber
@@ -1017,6 +1027,37 @@ func (ns *NameStore) DeserializeNameStore(rootAddr BlobAddr, serialNumber int64,
 	ns.mtx.Unlock()
 
 	return nil
+}
+
+// ValidateContentExists checks all nodes in the cache to ensure their
+// content blobs are present in the blob store. Returns the count of
+// broken nodes and an error if any are missing. Only meaningful for
+// DenseRefManager (sparse allows transiently missing blobs).
+func (ns *NameStore) ValidateContentExists() (int, error) {
+	ns.mtx.Lock()
+	var toCheck []FileNode
+	for _, entry := range ns.fileCache {
+		if entry.node != nil {
+			toCheck = append(toCheck, entry.node)
+		}
+	}
+	ns.mtx.Unlock()
+
+	var broken []BlobAddr
+	for _, node := range toCheck {
+		_, err := node.ExportedBlob()
+		if err != nil {
+			metaAddr := node.MetadataBlob().GetAddress()
+			contentHash := node.Metadata().ContentHash
+			log.Printf("INTEGRITY: missing content blob — metadata %s content %s", metaAddr, contentHash)
+			broken = append(broken, metaAddr)
+		}
+	}
+
+	if len(broken) > 0 {
+		return len(broken), fmt.Errorf("%d nodes have missing content blobs — run 'grits fix-volume' to repair", len(broken))
+	}
+	return 0, nil
 }
 
 // Getting file nodes from a NameStore
