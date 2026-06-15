@@ -1103,41 +1103,18 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET start\n")
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Looking up in volume\n")
 
-	lookupResponse, err := volume.Lookup([]string{path}, "", nil, principalFromContext(r))
+	leafNode, err := volume.LookupNode(path, principalFromContext(r))
 	if err != nil {
+		if grits.IsNotExist(err) {
+			http.Error(w, "File not found", http.StatusNotFound)
+			return
+		}
+		if _, ok := grits.IsAccessDenied(err); ok {
+			http.Error(w, "Access denied", http.StatusForbidden)
+			return
+		}
 		volume.FatalIfBlobMissing(err)
 		http.Error(w, fmt.Sprintf("Internal error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	leaf := lookupResponse.Leaf()
-	if leaf == nil {
-		http.Error(w, "No nodes returned", http.StatusInternalServerError)
-		return
-	}
-	if leaf.Path != path {
-		http.Error(w, fmt.Sprintf("Internal error: expected leaf at %q, got %q", path, leaf.Path), http.StatusInternalServerError)
-		return
-	}
-	if leaf.Error == "not_found" {
-		http.Error(w, "File not found", http.StatusNotFound)
-		return
-	}
-	if leaf.Error == "access_denied" {
-		http.Error(w, "Access denied", http.StatusForbidden)
-		return
-	}
-	if leaf.Error != "" {
-		http.Error(w, fmt.Sprintf("Unexpected error resolving path: %s", leaf.Error), http.StatusInternalServerError)
-		return
-	}
-
-	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Getting leaf node\n")
-
-	leafNode, err := volume.GetFileNode(leaf.Addr)
-
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Can't read leaf node: %v", err), http.StatusInternalServerError)
 		return
 	}
 	defer leafNode.Release()
@@ -1167,10 +1144,6 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 			// Otherwise, just silently serve index.html
 			path = indexPath
 			leafNode = indexNode
-			lookupResponse.Paths = append(lookupResponse.Paths, &grits.PathNodePair{
-				Path: indexPath,
-				Addr: indexNode.MetadataBlob().GetAddress(),
-			})
 		}
 	}
 
