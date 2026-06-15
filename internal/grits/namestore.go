@@ -2520,7 +2520,7 @@ func (rm *DenseRefManager) flatRelease(ns *NameStore, fn FileNode) error {
 }
 
 func (rm *DenseRefManager) cleanup(ns *NameStore) {
-	log.Printf("DRM cleanup")
+	DebugLog(DebugRefCounts, "DRM cleanup")
 
 	ns.writeMtx.Lock()
 	ns.mtx.Lock()
