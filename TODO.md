@@ -1,11 +1,5 @@
 # In Progress
 
-* Session tokens in cookies or something
-  * Make timeout configurable
-  * Make non user initiated actions not remove the timeout
-  * Handle multiple identities
-  * More friendly error messages on expired identity / need to log in to access this resource
-  * Better prompt for password for login
 * Reorient the initial paradigm to vhosts instead of /grits/v1/content
 * Make sure only one instance can run at once
 * Change "root" volume name to something less collide-y
@@ -165,6 +159,14 @@ Verify that stores with missing blobs either still work, or else panic. Add test
 gzip, maybe
 
 Implement quotas
+
+Auth improvements
+  * Make timeout configurable
+  * Make non user initiated actions not remove the timeout
+  * Handle multiple identities
+  * More friendly error messages on expired identity / need to log in to access this resource
+  * Better prompt for password for login
+  * Add documentation
 
 ## Old TODOs
 

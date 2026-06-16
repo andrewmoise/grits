@@ -288,6 +288,16 @@ Note that the `origin` is such a critical piece of this security that it *must* 
 
 Note: Permissions are enforced only at the namespace level — blobs are stored in plaintext and served to anyone who has the CID. Don't store anything secret here. In particular, content with few possible values can have its CID guessed, so this can bite even where you didn't think you were storing a secret — a PIN or password check can leak this way. (Real confidentiality is a someday-feature via client-side crypto, not CID secrecy. And don't use this in production yet regardless.)
 
+#### Authentication
+
+Auth has two layers: **global** (persistent cookie) and **per-session** (tab-local header). By default `login('user', 'pass')` logs in just the current tab. Pass `{g:1}` (e.g. `login('glenda', 'pass', {g:1})`) to also set a persistent cookie so new tabs pick up the login automatically.
+
+The server checks the tab's session header first, then falls back to the global cookie. This means you can have a global identity (cookie) while a specific tab runs as a different user (session header).
+
+For a superuser operation, do `login('glenda')`, then `logout()` when done, and optionally `login(normal_user, {g:1})` after to restore your global identity. It's a little clunky but it works. (Down the road, opening a separate tab as `glenda` for isolated commands would be cleaner — and when we have configurable session timeouts, you could set a shorter one for admin sessions and close the tab when done.)
+
+Use `whoami()` to see who you're authenticated as.
+
 #### Chaining
 
 The way commands chain is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which then go via the same proxy as the shell uses to find commands. When called on a `Result`, commands will chain together with the output from the command that created that `Result`.
