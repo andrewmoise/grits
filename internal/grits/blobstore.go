@@ -535,7 +535,7 @@ func (bs *LocalBlobStore) EvictOldFiles() {
 	}
 
 	if evictedCount > 0 {
-		log.Printf("Evicted %d expired blobs, freed %d bytes", evictedCount, evictedBytes)
+		DebugLog(DebugBlobStorage, "Evicted %d expired blobs, freed %d bytes", evictedCount, evictedBytes)
 	}
 }
 
