@@ -34,16 +34,6 @@ Pass actual column width to _display() for correct pretty-print wrapping
 
 Shell history arrow-key reliability — most recent command not always at end
 
-Make rm() and rmdir() (at least) a lot more simple into a single multilink() (maybe after a quick check first)
-
-bg()
-
-Make test() in the foreground once bg() exists
-
-.null()
-
-time()
-
 Line the result __[n] up with the output, not the input
 
 Sync up the /lib directory with a particular snapshot
@@ -54,8 +44,6 @@ Detect un-handled options and give an error on those
 
 Fix problem where glob() will return .. which will then get re-resolved
 
-Make editor "Save as" and editing of scratch files more sensible
-
 Tab completion
 
 Don't add void returns to history
@@ -64,7 +52,21 @@ Do away with doHistory
 
 Shell environment variables
 
-Some indication when things disconnect
+Fix copy and paste from Gimbal shell
+
+Make a better self-hosting setup
+
+Fix test /tmp/tmp scratch dir
+
+Move to $HOME/tmp
+
+## shell tools
+
+facl() supporting directory recursion up and down
+
+signup()
+
+cwd() shell command
 
 Import git tools libs
 
@@ -76,19 +78,17 @@ adduser() and deluser() from frontend
 
 Make skel() function
 
-Fix copy and paste from Gimbal shell
+Make editor "Save as" and editing of scratch files more sensible
 
-cwd() shell command
+Make rm() and rmdir() (at least) a lot more simple into a single multilink() (maybe after a quick check first)
 
-Make a better self-hosting setup
+bg()
 
-Make a more secure way to input passwords for login()
+Make test() in the foreground once bg() exists
 
-Fix test /tmp/tmp scratch dir
+.null()
 
-Move to $HOME/tmp
-
-signup()
+time()
 
 ## gwm
 
@@ -112,6 +112,8 @@ Make light mode
 Add a menu (to edit() if nothing else)
 
 ssh widget
+
+Some indication when things disconnect
 
 ## grits client
 
