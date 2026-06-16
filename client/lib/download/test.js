@@ -18,9 +18,9 @@ export const tests = [
       // Create a scratch file and verify consistency across HTTP and volume
       await shell.eval(`echo('hello world').to('${scratch}/file.txt')`);
 
-      // scratch looks like /tmp/...; derive path for HTTP
-      const relPath = `${scratch}`.replace(/^\/tmp\//, '') + '/file.txt';
-      const url = `${shell.serverUrl}/grits/v1/content/root/tmp/${relPath}`;
+      // scratch looks like //root/tmp/gimbal-test/...; derive HTTP URL
+      const relPath = scratch.replace(/^\/\//, '');
+      const url = `${shell.serverUrl}/grits/v1/content/${relPath}/file.txt`;
 
       const downloadedResp = await shell.eval(`download('${url}')`);
       const fetchedResp = await fetch(url);
