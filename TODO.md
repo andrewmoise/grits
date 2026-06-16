@@ -1,19 +1,13 @@
 # In Progress
 
-* Look into service worker not unregistering
-* Double-check permissions within .grits directories — the access.json in
-  foo/.grits should apply to both foo/ and foo/.grits/ itself, with slight
-  differences between the two contexts
-* Consolidate client/ and skel/ into a single gimbal/ directory
-* Make a more secure way to input passwords for login()
-* Fix test /tmp/tmp scratch dir
-* Move to $HOME/tmp
-* Make a more friendly vhost setup in the instructions
 * Session tokens in cookies or something
-* What's up with sessionStorage in GritsClient.js?
 * Reorient the initial paradigm to vhosts instead of /grits/v1/content
 * Make sure only one instance can run at once
 * Change "root" volume name to something less collide-y
+* Self-hosted git repo in startup
+* MD renderer
+* MOTD
+* Make a more friendly vhost setup in the instructions
 
 # Backlog
 
@@ -81,6 +75,16 @@ Fix copy and paste from Gimbal shell
 
 cwd() shell command
 
+Make a better self-hosting setup
+
+Make a more secure way to input passwords for login()
+
+Fix test /tmp/tmp scratch dir
+
+Move to $HOME/tmp
+
+signup()
+
 ## gwm
 
 Syncing cwd between files() and cd() in a shell optionally
@@ -102,6 +106,8 @@ Make light mode
 
 Add a menu (to edit() if nothing else)
 
+ssh widget
+
 ## grits client
 
 Blob volume
@@ -118,6 +124,10 @@ s/cell/creature/g
 Sort out a way to upload unlimited amounts of stuff without timing out the "PUTs get ref-held for 45 seconds only" issue
 
 Lookup and link multiple things in one request when possible
+
+Look into service worker not unregistering
+
+What's up with sessionStorage in GritsClient.js?
 
 ## backend
 
@@ -144,6 +154,10 @@ Make mkdir('one/two') return a sensible error, not a 500
 Change 404 returns during normal operations, so we don't spam the console
 
 Verify that stores with missing blobs either still work, or else panic. Add tests for that case.
+
+gzip, maybe
+
+Implement quotas
 
 ## Old TODOs
 
