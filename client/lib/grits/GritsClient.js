@@ -1379,21 +1379,12 @@ class GritsClient {
     // lookup/link/upload requests without modifying GritsClient internals.
     this.extraHeaders = {};
 
-    // Bootstrap auth token from sessionStorage (set by login.html).
-    // Guarded for environments without sessionStorage (e.g. service workers).
-    let savedToken = null;
-    try { savedToken = sessionStorage.getItem('grits-auth-token'); } catch { /* no sessionStorage */ }
-    if (savedToken) {
-      this._authToken = savedToken;
-      this.extraHeaders['X-Grits-Auth-Token'] = savedToken;
-      try {
-        const raw = atob(savedToken);
-        this._username = raw.split(':')[1] || '';
-      } catch { this._username = ''; }
-    } else {
-      this._authToken = null;
-      this._username  = '';
-    }
+    // Auth state. The session token (X-Grits-Auth-Token header) is set only
+    // on explicit login() calls for tab-specific sessions. The persistent
+    // grits_auth cookie is sent automatically by the browser and handled by
+    // the server as a fallback — no need to read it here.
+    this._authToken = null;
+    this._username  = '';
 
     this._verifier = new HashVerifier({ debug: DEBUG });
     this._tracker  = new PerformanceTracker({
@@ -1411,12 +1402,16 @@ class GritsClient {
   // returned by the server on login. It's stored in memory only
   // and sent as X-Grits-Auth-Token on every request.
 
-  /** Log in to the given server URL. Stores the token and username. */
-  async login(serverUrl, username, password) {
+  /** Log in to the given server URL. Stores the token and username.
+   *  Options:
+   *    global (bool) — if true, also sets the grits_auth cookie via the server. */
+  async login(serverUrl, username, password, options = {}) {
+    const body = { username, password };
+    if (options.global) body.global = true;
     const res = await fetch(`${serverUrl}/grits/v1/auth/login`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ username, password }),
+      body:    JSON.stringify(body),
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
@@ -1429,17 +1424,43 @@ class GritsClient {
     this.extraHeaders['X-Grits-Auth-Token'] = token;
   }
 
-  /** Log out — clears the stored token. */
-  logout() {
+  /** Log out. If serverUrl is provided, notifies the server (which clears any
+   *  cookies). If username is also provided, only that user's cookie is cleared.
+   *  Always clears the local session token and flushes volume caches so stale
+   *  auth-level entries cannot be resolved via fastWalk after logout. */
+  async logout(serverUrl, username) {
+    if (serverUrl) {
+      const body = username ? JSON.stringify({ username }) : '{}';
+      try {
+        await fetch(`${serverUrl}/grits/v1/auth/logout`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        });
+      } catch { /* best-effort */ }
+    }
     delete this.extraHeaders['X-Grits-Auth-Token'];
     this._authToken = null;
     this._username  = '';
-    sessionStorage.removeItem('grits-auth-token');
+    for (const vol of this._volumes.values()) {
+      vol._miniRoots.clear();
+    }
+    this._flushCaches();
   }
 
-  /** Returns the current username, or empty string if not logged in. */
-  whoami() {
-    return this._username ?? '';
+  /** Queries the /grits/v1/whoami endpoint and returns the identities array
+   *  (each entry: { username, status, expiry }). */
+  async whoami(serverUrl) {
+    try {
+      const headers = {};
+      if (this._authToken) headers['X-Grits-Auth-Token'] = this._authToken;
+      const res = await fetch(`${serverUrl}/grits/v1/whoami`, { headers });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.identities ?? [];
+    } catch {
+      return [];
+    }
   }
 
   destroy() {

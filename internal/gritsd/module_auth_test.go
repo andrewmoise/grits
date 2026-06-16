@@ -191,6 +191,59 @@ func TestAuthLoginSuccess(t *testing.T) {
 	if token, ok := result["token"].(string); !ok || token == "" {
 		t.Errorf("expected non-empty token, got %v", result["token"])
 	}
+
+	// Session-only login (no global) should NOT set a cookie
+	if setCookie := resp.Header.Get("Set-Cookie"); setCookie != "" {
+		t.Errorf("session-only login should not set cookie, got Set-Cookie: %s", setCookie)
+	}
+}
+
+func TestAuthLoginGlobalSetsCookie(t *testing.T) {
+	server, cleanup := SetupTestServer(t,
+		WithLocalVolume("root"),
+		WithHttpModule(1918),
+		WithAuthModule(),
+	)
+	defer cleanup()
+
+	server.Start()
+	defer server.Stop()
+
+	pwdHash := hashPasswordForTest(t, "test-password")
+	writeUserRecord(t, server, "testuser", pwdHash)
+
+	body := `{"username":"testuser","password":"test-password","global":true}`
+	resp, err := http.Post("http://127.0.0.1:1918/grits/v1/auth/login",
+		"application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST login: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+
+	setCookie := resp.Header.Get("Set-Cookie")
+	if setCookie == "" {
+		t.Fatal("global login should set Set-Cookie header")
+	}
+	if !strings.Contains(setCookie, "grits-auth-user=") {
+		t.Errorf("expected cookie grits-auth-user, got: %s", setCookie)
+	}
+	if !strings.Contains(setCookie, "Max-Age=") {
+		t.Errorf("expected Max-Age in cookie, got: %s", setCookie)
+	}
+
+	// Response should still include the token for session use
+	respBody, _ := io.ReadAll(resp.Body)
+	var result map[string]any
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if token, ok := result["token"].(string); !ok || token == "" {
+		t.Errorf("expected non-empty token in body, got %v", result["token"])
+	}
 }
 
 func TestAuthLoginWrongPassword(t *testing.T) {
@@ -283,6 +336,28 @@ func TestAuthLogout(t *testing.T) {
 	server.Start()
 	defer server.Stop()
 
+	// First do a global login to set a cookie
+	pwdHash := hashPasswordForTest(t, "test-password")
+	writeUserRecord(t, server, "testuser", pwdHash)
+
+	loginBody := `{"username":"testuser","password":"test-password","global":true}`
+	loginResp, err := http.Post("http://127.0.0.1:1915/grits/v1/auth/login",
+		"application/json", strings.NewReader(loginBody))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	loginResp.Body.Close()
+
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("login expected 200, got %d", loginResp.StatusCode)
+	}
+
+	// Check that Set-Cookie was present
+	if lc := loginResp.Header.Get("Set-Cookie"); !strings.Contains(lc, "grits-auth-user=") {
+		t.Fatalf("login should set grits-auth-user cookie, got: %s", lc)
+	}
+
+	// Now log out with no username (clears all)
 	resp, err := http.Post("http://127.0.0.1:1915/grits/v1/auth/logout",
 		"application/json", bytes.NewReader(nil))
 	if err != nil {
@@ -301,6 +376,70 @@ func TestAuthLogout(t *testing.T) {
 	}
 	if result["ok"] != true {
 		t.Errorf("expected ok=true, got %v", result)
+	}
+
+	// Check that the cookie was cleared
+	setCookie := resp.Header.Values("Set-Cookie")
+	foundClear := false
+	for _, sc := range setCookie {
+		if strings.HasPrefix(sc, "grits-auth-user=;") || strings.HasPrefix(sc, "grits-auth-user=") {
+			foundClear = true
+			if !strings.Contains(sc, "Max-Age=0") && !strings.Contains(sc, "max-age=0") {
+				t.Errorf("expected Max-Age=0 (or negative) in clearing cookie, got: %s", sc)
+			}
+		}
+	}
+	if !foundClear {
+		t.Errorf("logout should return Set-Cookie to clear grits-auth-user, got: %v", setCookie)
+	}
+}
+
+func TestAuthLogoutWithUsername(t *testing.T) {
+	server, cleanup := SetupTestServer(t,
+		WithLocalVolume("root"),
+		WithHttpModule(1919),
+		WithAuthModule(),
+	)
+	defer cleanup()
+
+	server.Start()
+	defer server.Stop()
+
+	// Login globally to set cookie
+	pwdHash := hashPasswordForTest(t, "test-password")
+	writeUserRecord(t, server, "testuser", pwdHash)
+
+	loginResp, err := http.Post("http://127.0.0.1:1919/grits/v1/auth/login",
+		"application/json",
+		strings.NewReader(`{"username":"testuser","password":"test-password","global":true}`))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	loginResp.Body.Close()
+
+	// Logout with username specified
+	resp, err := http.Post("http://127.0.0.1:1919/grits/v1/auth/logout",
+		"application/json",
+		strings.NewReader(`{"username":"testuser"}`))
+	if err != nil {
+		t.Fatalf("logout: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+
+	// Cookie should be cleared
+	setCookie := resp.Header.Values("Set-Cookie")
+	foundClear := false
+	for _, sc := range setCookie {
+		if strings.HasPrefix(sc, "grits-auth-user=") {
+			foundClear = true
+		}
+	}
+	if !foundClear {
+		t.Errorf("logout with username should clear grits-auth-user cookie, got: %v", setCookie)
 	}
 }
 
@@ -322,6 +461,207 @@ func TestAuthLoginMethodNotAllowed(t *testing.T) {
 
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", resp.StatusCode)
+	}
+}
+
+func TestWhoamiWithSessionToken(t *testing.T) {
+	server, cleanup := SetupTestServer(t,
+		WithLocalVolume("root"),
+		WithHttpModule(1925),
+		WithAuthModule(),
+	)
+	defer cleanup()
+
+	server.Start()
+	defer server.Stop()
+
+	pwdHash := hashPasswordForTest(t, "test-password")
+	writeUserRecord(t, server, "whoamiuser", pwdHash)
+
+	// Login (session-only, no cookie) and get token
+	loginResp, loginBody := doReq(t, http.MethodPost, "http://127.0.0.1:1925/grits/v1/auth/login", "",
+		[]byte(`{"username":"whoamiuser","password":"test-password"}`))
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("login failed: %d %s", loginResp.StatusCode, string(loginBody))
+	}
+	var loginResult struct {
+		Token string `json:"token"`
+	}
+	json.Unmarshal(loginBody, &loginResult)
+
+	// Query whoami with session token
+	whoamiResp, whoamiBody := doReq(t, http.MethodGet, "http://127.0.0.1:1925/grits/v1/whoami",
+		loginResult.Token, nil)
+	if whoamiResp.StatusCode != http.StatusOK {
+		t.Fatalf("whoami: expected 200, got %d: %s", whoamiResp.StatusCode, string(whoamiBody))
+	}
+
+	var whoamiResult struct {
+		Identities []struct {
+			Username string      `json:"username"`
+			Status   TokenStatus `json:"status"`
+			Expiry   int64       `json:"expiry"`
+		} `json:"identities"`
+	}
+	if err := json.Unmarshal(whoamiBody, &whoamiResult); err != nil {
+		t.Fatalf("unmarshal whoami: %v", err)
+	}
+	if len(whoamiResult.Identities) == 0 {
+		t.Fatal("whoami: expected at least 1 identity")
+	}
+	found := false
+	for _, id := range whoamiResult.Identities {
+		if id.Username == "whoamiuser" && id.Status == TokenActive {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("whoami: expected active identity for whoamiuser, got %+v", whoamiResult.Identities)
+	}
+}
+
+func TestWhoamiWithCookie(t *testing.T) {
+	server, cleanup := SetupTestServer(t,
+		WithLocalVolume("root"),
+		WithHttpModule(1926),
+		WithAuthModule(),
+	)
+	defer cleanup()
+
+	server.Start()
+	defer server.Stop()
+
+	pwdHash := hashPasswordForTest(t, "test-password")
+	writeUserRecord(t, server, "cookieuser", pwdHash)
+
+	// Login globally to set cookie
+	loginResp, err := http.Post("http://127.0.0.1:1926/grits/v1/auth/login",
+		"application/json",
+		strings.NewReader(`{"username":"cookieuser","password":"test-password","global":true}`))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	defer loginResp.Body.Close()
+	if loginResp.StatusCode != http.StatusOK {
+		t.Fatalf("login failed: %d", loginResp.StatusCode)
+	}
+
+	// Read the Set-Cookie from login response
+	cookieHeader := loginResp.Header.Get("Set-Cookie")
+
+	// Query whoami with the cookie but no session token
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:1926/grits/v1/whoami", nil)
+	req.Header.Set("Cookie", extractCookieValue(cookieHeader))
+	client := &http.Client{}
+	whoamiResp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("whoami request: %v", err)
+	}
+	defer whoamiResp.Body.Close()
+	whoamiBody, _ := io.ReadAll(whoamiResp.Body)
+
+	if whoamiResp.StatusCode != http.StatusOK {
+		t.Fatalf("whoami: expected 200, got %d: %s", whoamiResp.StatusCode, string(whoamiBody))
+	}
+
+	var whoamiResult struct {
+		Identities []struct {
+			Username string      `json:"username"`
+			Status   TokenStatus `json:"status"`
+			Expiry   int64       `json:"expiry"`
+		} `json:"identities"`
+	}
+	if err := json.Unmarshal(whoamiBody, &whoamiResult); err != nil {
+		t.Fatalf("unmarshal whoami: %v", err)
+	}
+	found := false
+	for _, id := range whoamiResult.Identities {
+		if id.Username == "cookieuser" && id.Status == TokenActive {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("whoami with cookie: expected active identity for cookieuser, got %+v", whoamiResult.Identities)
+	}
+}
+
+// extractCookieValue pulls out "name=value" from a Set-Cookie header string.
+func extractCookieValue(setCookie string) string {
+	if idx := strings.Index(setCookie, ";"); idx >= 0 {
+		return setCookie[:idx]
+	}
+	return setCookie
+}
+
+func TestCookieAuthFallback(t *testing.T) {
+	port := 1927
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	server, cleanup := SetupTestServer(t,
+		WithLocalVolume("root"),
+		WithHttpModule(port),
+		WithAuthModule(),
+	)
+	defer cleanup()
+
+	server.Start()
+	defer server.Stop()
+
+	// Setup: public grant + user-specific grant
+	bt := boolTrue()
+	vol := server.FindVolumeByName("root")
+	ensureVolumeParentDirs(vol, "sites/.grits")
+	sitesAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermRead}}}
+	raw, _ := json.Marshal(sitesAccess)
+	WriteVolumeFile(server, "root", "sites/.grits/access.json", raw, grits.BackendPrincipal)
+
+	ensureVolumeParentDirs(vol, "home/user/.grits")
+	homeAccess := AccessConfig{Allow: []Grant{{User: "testuser", Origin: "*", Permission: PermReadWrite}}}
+	raw2, _ := json.Marshal(homeAccess)
+	WriteVolumeFile(server, "root", "home/user/.grits/access.json", raw2, grits.BackendPrincipal)
+
+	WriteVolumeFile(server, "root", "sites/test.txt", []byte("site content"), grits.BackendPrincipal)
+
+	// Create a file in user's home directory
+	WriteVolumeFile(server, "root", "home/user/myfile.txt", []byte("user content"), grits.BackendPrincipal)
+
+	// Create user
+	pwdHash := hashPasswordForTest(t, "test-password")
+	writeUserRecord(t, server, "testuser", pwdHash)
+
+	// Login globally to get a cookie
+	loginResp, err := http.Post(baseURL+"/grits/v1/auth/login",
+		"application/json",
+		strings.NewReader(`{"username":"testuser","password":"test-password","global":true}`))
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	loginResp.Body.Close()
+	cookieValue := extractCookieValue(loginResp.Header.Get("Set-Cookie"))
+
+	// Request content with cookie but NO X-Grits-Auth-Token header
+	req, _ := http.NewRequest("GET", contentURL(baseURL, "root", "sites/test.txt"), nil)
+	req.Header.Set("Cookie", cookieValue)
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("cookie auth: expected 200 for public file, got %d", resp.StatusCode)
+	}
+
+	// Request user-specific content with cookie
+	req2, _ := http.NewRequest("GET", contentURL(baseURL, "root", "home/user/myfile.txt"), nil)
+	req2.Header.Set("Cookie", cookieValue)
+	resp2, err := client.Do(req2)
+	if err != nil {
+		t.Fatalf("request2: %v", err)
+	}
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("cookie auth: expected 200 for user's file, got %d", resp2.StatusCode)
 	}
 }
 

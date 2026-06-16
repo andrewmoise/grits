@@ -26,10 +26,19 @@ type AuthModuleConfig struct {
 	// Grants with origin "/" get resolved to this origin.
 	CoreVhost string `json:"coreVhost"`
 
-	// SessionMaxAge is the sliding expiry window for session tokens.
-	// Defaults to 30 minutes. After this long without any API request,
-	// the user must log in again.
+	// SessionMaxAge is the expiry window for HMAC tokens.
+	// Defaults to 24 hours. After this long the token becomes expired
+	// (but the cookie persists for display).
 	SessionMaxAge time.Duration `json:"sessionMaxAge,omitempty"`
+
+	// CookieMaxAge is the Max-Age for the grits_auth cookie.
+	// Defaults to 365 days. The HMAC token inside expires after
+	// SessionMaxAge, but the cookie remains as a placeholder.
+	CookieMaxAge time.Duration `json:"cookieMaxAge,omitempty"`
+
+	// CookieDomain optionally scopes the grits_auth cookie to a domain
+	// (e.g. ".example.org") so it is sent to all subdomains.
+	CookieDomain string `json:"cookieDomain,omitempty"`
 }
 
 type AuthModule struct {
@@ -37,13 +46,23 @@ type AuthModule struct {
 	Server        *Server
 	authSecret    []byte
 	sessionMaxAge time.Duration
+	cookieMaxAge  time.Duration
 }
+
+type TokenStatus string
+
+const (
+	TokenActive  TokenStatus = "active"
+	TokenExpired TokenStatus = "expired"
+	TokenInvalid TokenStatus = "invalid"
+)
 
 const (
 	usersFilePath        = "sys/etc/users.jsonl"
 	rootVolume           = "root"
 	authCookie           = "grits-auth-user"
-	defaultSessionMaxAge = 30 * time.Minute
+	defaultSessionMaxAge = 24 * time.Hour
+	defaultCookieMaxAge  = 365 * 24 * time.Hour
 )
 
 func NewAuthModule(server *Server, config *AuthModuleConfig) (*AuthModule, error) {
@@ -57,16 +76,22 @@ func NewAuthModule(server *Server, config *AuthModuleConfig) (*AuthModule, error
 		return nil, fmt.Errorf("auth: %v", err)
 	}
 
-	maxAge := config.SessionMaxAge
-	if maxAge <= 0 {
-		maxAge = defaultSessionMaxAge
+	sessionMaxAge := config.SessionMaxAge
+	if sessionMaxAge <= 0 {
+		sessionMaxAge = defaultSessionMaxAge
+	}
+
+	cookieMaxAge := config.CookieMaxAge
+	if cookieMaxAge <= 0 {
+		cookieMaxAge = defaultCookieMaxAge
 	}
 
 	m := &AuthModule{
 		Config:        config,
 		Server:        server,
 		authSecret:    secret,
-		sessionMaxAge: maxAge,
+		sessionMaxAge: sessionMaxAge,
+		cookieMaxAge:  cookieMaxAge,
 	}
 
 	// Hook into HTTP module to register auth endpoints and store a reference
@@ -83,6 +108,8 @@ func NewAuthModule(server *Server, config *AuthModuleConfig) (*AuthModule, error
 			httpModule.requestMiddleware(m.handleLogin))
 		httpModule.Mux.HandleFunc("/grits/v1/auth/logout",
 			httpModule.requestMiddleware(m.handleLogout))
+		httpModule.Mux.HandleFunc("/grits/v1/whoami",
+			httpModule.requestMiddleware(m.handleWhoami))
 	})
 
 	return m, nil
@@ -121,6 +148,36 @@ func (*AuthModule) GetDependencies() []*Dependency {
 }
 func (m *AuthModule) GetConfig() any { return m.Config }
 
+// setAuthCookie writes the grits_auth cookie with the given token value.
+func (m *AuthModule) setAuthCookie(w http.ResponseWriter, token string) {
+	c := &http.Cookie{
+		Name:     authCookie,
+		Value:    token,
+		Path:     "/",
+		MaxAge:   int(m.cookieMaxAge.Seconds()),
+		SameSite: http.SameSiteLaxMode,
+	}
+	if m.Config.CookieDomain != "" {
+		c.Domain = m.Config.CookieDomain
+	}
+	http.SetCookie(w, c)
+}
+
+// clearAuthCookie removes the grits_auth cookie.
+func (m *AuthModule) clearAuthCookie(w http.ResponseWriter) {
+	c := &http.Cookie{
+		Name:     authCookie,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		SameSite: http.SameSiteLaxMode,
+	}
+	if m.Config.CookieDomain != "" {
+		c.Domain = m.Config.CookieDomain
+	}
+	http.SetCookie(w, c)
+}
+
 func (m *AuthModule) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
@@ -130,6 +187,7 @@ func (m *AuthModule) handleLogin(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Username string `json:"username"`
 		Password string `json:"password"`
+		Global   bool   `json:"global,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -177,6 +235,10 @@ func (m *AuthModule) handleLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		if body.Global {
+			m.setAuthCookie(w, token)
+		}
+
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "token": token})
 		return
 	}
@@ -190,7 +252,55 @@ func (m *AuthModule) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var body struct {
+		Username string `json:"username,omitempty"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+
+	if body.Username == "" {
+		m.clearAuthCookie(w)
+	} else {
+		m.clearAuthCookie(w)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (m *AuthModule) handleWhoami(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+
+	type identityEntry struct {
+		Username string      `json:"username"`
+		Status   TokenStatus `json:"status"`
+		Expiry   int64       `json:"expiry"`
+	}
+
+	seen := map[string]bool{}
+	entries := []identityEntry{}
+
+	// Collect session tokens from X-Grits-Auth-Token headers.
+	for _, token := range r.Header.Values("X-Grits-Auth-Token") {
+		user, status, expiry := m.verifyHMACToken(token)
+		if status == TokenInvalid || seen[user] {
+			continue
+		}
+		seen[user] = true
+		entries = append(entries, identityEntry{user, status, expiry})
+	}
+
+	// Collect cookie identity if present and not already seen.
+	if cookie, err := r.Cookie(authCookie); err == nil {
+		user, status, expiry := m.verifyHMACToken(cookie.Value)
+		if status != TokenInvalid && !seen[user] {
+			seen[user] = true
+			entries = append(entries, identityEntry{user, status, expiry})
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{"identities": entries})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -276,29 +386,33 @@ func (m *AuthModule) hmacToken(username string) (string, error) {
 	return base64.RawStdEncoding.EncodeToString([]byte(token)), nil
 }
 
-// verifyHMACToken parses and validates a session token. Returns the username
-// if valid, or "" if the token is stale, forged, or malformed.
-func (m *AuthModule) verifyHMACToken(token string) string {
+// verifyHMACToken parses and validates a session token.
+// Returns (username, status, expiry_unix_timestamp).
+// status is TokenActive if within SessionMaxAge, TokenExpired if past
+// SessionMaxAge but HMAC matches, or TokenInvalid if forged/malformed.
+// expiry_unix_timestamp is the time when the token expires (creation + maxAge),
+// or 0 for invalid tokens.
+func (m *AuthModule) verifyHMACToken(token string) (string, TokenStatus, int64) {
 	if m == nil || len(m.authSecret) == 0 {
-		return ""
+		return "", TokenInvalid, 0
 	}
 	raw, err := base64.RawStdEncoding.DecodeString(token)
 	if err != nil {
-		return ""
+		return "", TokenInvalid, 0
 	}
 	parts := strings.SplitN(string(raw), ":", 3)
 	if len(parts) != 3 {
-		return ""
+		return "", TokenInvalid, 0
 	}
 
 	ts, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		return ""
+		return "", TokenInvalid, 0
 	}
 	username := parts[1]
 	providedSig, err := base64.RawStdEncoding.DecodeString(parts[2])
 	if err != nil {
-		return ""
+		return "", TokenInvalid, 0
 	}
 
 	// Recompute HMAC.
@@ -308,15 +422,16 @@ func (m *AuthModule) verifyHMACToken(token string) string {
 	expectedSig := mac.Sum(nil)
 
 	if subtle.ConstantTimeCompare(providedSig, expectedSig) != 1 {
-		return ""
+		return "", TokenInvalid, 0
 	}
 
-	// Check expiry.
-	if time.Now().Unix()-ts > int64(m.sessionMaxAge.Seconds()) {
-		return ""
+	expiry := ts + int64(m.sessionMaxAge.Seconds())
+
+	if time.Now().Unix() > expiry {
+		return username, TokenExpired, expiry
 	}
 
-	return username
+	return username, TokenActive, expiry
 }
 
 /////
@@ -393,7 +508,7 @@ type Grant struct {
 	User       string     `json:"user,omitempty"` // specific username
 	Auth       *bool      `json:"auth,omitempty"` // any authenticated user
 	All        *bool      `json:"all,omitempty"`  // any principal including unauthenticated
-	Origin     string     `json:"origin"`          // ""=inert; "*"=any; URL or bare hostname
+	Origin     string     `json:"origin"`         // ""=inert; "*"=any; URL or bare hostname
 	Permission Permission `json:"permission"`
 }
 

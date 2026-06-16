@@ -472,12 +472,28 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 			}
 		}
 
-		// Extract principal from auth token. Origin comes from the HTTP
-		// Origin header. If empty (direct navigation), Origin stays empty
-		// and grantMatchesPrincipal passes the check.
+		// Extract principal from session token (X-Grits-Auth-Token header)
+		// or fall back to the grits_auth cookie. The session header takes
+		// priority; the cookie is a fallback e.g. for raw browser requests.
 		user := ""
-		if token := r.Header.Get("X-Grits-Auth-Token"); token != "" && srv.authModule != nil {
-			user = srv.authModule.verifyHMACToken(token)
+		active := false
+		if srv.authModule != nil {
+			// Try session token from header first.
+			for _, token := range r.Header.Values("X-Grits-Auth-Token") {
+				if u, status, _ := srv.authModule.verifyHMACToken(token); status == TokenActive {
+					user = u
+					active = true
+					break
+				}
+			}
+			// Fall back to cookie if no active session token.
+			if !active {
+				if cookie, err := r.Cookie(authCookie); err == nil {
+					if u, status, _ := srv.authModule.verifyHMACToken(cookie.Value); status == TokenActive {
+						user = u
+					}
+				}
+			}
 		}
 		origin := r.Header.Get("Origin")
 		principal := &grits.Principal{
