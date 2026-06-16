@@ -1,4 +1,4 @@
-<!-- CREATURE.md — AI context file for this project cell -->
+<!-- AGENTS.md — AI context file for this project cell -->
 
 This is a file designed for AI coding tools, to give the lay of the land of the project.
 
@@ -11,9 +11,9 @@ The `grits` package is the foundation — it defines the `BlobStore`, `NameStore
 
 For more information, you should look at:
 
-* `internal/grits/CREATURE.md` — Core library: blob store, name store, config, structures
-* `internal/gritsd/CREATURE.md` — Server daemon: module system, all modules, server lifecycle
+* `internal/grits/AGENTS.md` — Core library: blob store, name store, config, structures
+* `internal/gritsd/AGENTS.md` — Server daemon: module system, all modules, server lifecycle
 
-If you observe the project to be out of sync with any CREATURE.md files, or if there is a module that doesn't have enough explanation to quickly get the lay of the land, feel free to update (sparingly!) to add more explanations or update them. As a general guideline, any source directory (or batch of source directories) that has more than 10 source files probably needs its own CREATURE.md file.
+If you observe the project to be out of sync with any AGENTS.md files, or if there is a module that doesn't have enough explanation to quickly get the lay of the land, feel free to update (sparingly!) to add more explanations or update them. As a general guideline, any source directory (or batch of source directories) that has more than 10 source files probably needs its own AGENTS.md file.
 
 Cheers

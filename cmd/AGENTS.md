@@ -9,6 +9,6 @@ This is a file designed for AI coding tools, to give the lay of the land of the 
 | `certbot-helper/main.go` | `bin/certbot-helper` | Certificate helper — runs as root (launched by gritsd before privilege drop), reads hostnames from stdin, runs certbot, writes cert/key PEM as JSON lines to stdout (~116 lines) |
 | `testbed/main.go`        | (build tag `ignore`) | Test harness for mirror/origin/peer scenarios — spins up multiple server instances with various modules for integration testing (~670 lines, currently disabled with `//go:build ignore`) |
 
-If you observe the project to be out of sync with any CREATURE.md files, or if there is a module that doesn't have enough explanation to quickly get the lay of the land, feel free to update (sparingly!) to add more explanations or update them. As a general guideline, any source directory (or batch of source directories) that has more than 10 source files probably needs its own CREATURE.md file.
+If you observe the project to be out of sync with any AGENTS.md files, or if there is a module that doesn't have enough explanation to quickly get the lay of the land, feel free to update (sparingly!) to add more explanations or update them. As a general guideline, any source directory (or batch of source directories) that has more than 10 source files probably needs its own AGENTS.md file.
 
 Cheers

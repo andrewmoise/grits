@@ -102,6 +102,6 @@ The window manager itself (`gwm`) doesn't have its own directory yet — its log
 | `shop/`     | `SHOP_DATA_CONTRACT.md` — data contract docs |
 | `test/`     | `main.js` — test runner |
 
-If you observe the project to be out of sync with any CREATURE.md files, or if there is a module that doesn't have enough explanation to quickly get the lay of the land, feel free to update (sparingly!) to add more explanations or update them. As a general guideline, any source directory (or batch of source directories) that has more than 10 source files probably needs its own CREATURE.md file.
+If you observe the project to be out of sync with any AGENTS.md files, or if there is a module that doesn't have enough explanation to quickly get the lay of the land, feel free to update (sparingly!) to add more explanations or update them. As a general guideline, any source directory (or batch of source directories) that has more than 10 source files probably needs its own AGENTS.md file.
 
 Cheers
