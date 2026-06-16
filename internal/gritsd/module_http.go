@@ -229,9 +229,8 @@ func (hm *HTTPModule) Start() error {
 
 	time.Sleep(250 * time.Millisecond)
 
-	if grits.DebugHttp {
-		log.Printf("HTTP module started on %s (TLS: %v)", hm.HTTPServer.Addr, hm.Config.EnableTls)
-	}
+	grits.DebugLog(grits.DebugHttp, "HTTP module started on %s (TLS: %v)", hm.HTTPServer.Addr, hm.Config.EnableTls)
+
 	return nil
 }
 
@@ -298,9 +297,7 @@ func PreopenPrivilegedPorts(serverConfig *grits.Config, rawModuleConfigs []json.
 		}
 		preopenedListeners[httpConfig.ThisPort] = listener
 
-		if grits.DebugHttp {
-			log.Printf("Pre-opened port %d", httpConfig.ThisPort)
-		}
+		grits.DebugLog(grits.DebugHttp, "Pre-opened port %d", httpConfig.ThisPort)
 
 		// Note if certd is needed.
 		if httpConfig.EnableTls && httpConfig.AutoCertificate {
@@ -348,9 +345,7 @@ func (hm *HTTPModule) addServiceWorkerModule(module Module) {
 	if hm.serviceWorkerModule != nil {
 		log.Fatalf("Only one ServiceWorkerModule can be registered")
 	}
-	if grits.DebugHttp {
-		log.Printf("Registering ServiceWorkerModule in HTTP module")
-	}
+	grits.DebugLog(grits.DebugHttp, "Registering ServiceWorkerModule in HTTP module")
 	hm.serviceWorkerModule = swModule
 }
 
@@ -422,10 +417,7 @@ func principalFromContext(r *http.Request) *grits.Principal {
 
 func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if grits.DebugHttp {
-			log.Printf("Incoming request: %s %s (Proto: %s)", r.Method, r.URL.Path, r.Proto)
-		}
-
+		grits.DebugLog(grits.DebugHttp, "Incoming request: %s %s (Proto: %s)", r.Method, r.URL.Path, r.Proto)
 		grits.DebugLogWithTime(grits.DebugHttpPerformance, r.URL.Path, "Request start\n")
 
 		thisScheme := "http"
@@ -685,9 +677,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 		if existingCf != nil {
 			existingCf.Release()
 			// We already have this blob, no need to upload again
-			if grits.DebugHttp {
-				log.Printf("Blob %s already exists, skipping upload", expectedHash)
-			}
+			grits.DebugLog(grits.DebugHttp, "Blob %s already exists, skipping upload", expectedHash)
 			grits.DebugLogWithTime(grits.DebugHttpPerformance, expectedHash, "Upload skipped (already exists)\n")
 			w.WriteHeader(http.StatusNoContent)
 			json.NewEncoder(w).Encode(expectedHash)
@@ -766,10 +756,7 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	s.refHolder.Hold(cachedFile, 5*time.Minute)
 
 	// Log that we're holding a temporary reference
-	if grits.DebugHttp {
-		log.Printf("Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress())
-	}
-
+	grits.DebugLog(grits.DebugHttp, "Holding temporary reference to %s for 5 minutes", cachedFile.GetAddress())
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, string(actualHash), "Upload complete\n")
 
 	// Return the hash of the uploaded blob
@@ -914,7 +901,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 	if encodeErr != nil {
 		log.Printf("[lookup] marshal error: %v", encodeErr)
 	} else {
-		log.Printf("[lookup] status=%d leafErr=%q response=%s", status, leafErr, string(encoded))
+		grits.DebugLog(grits.DebugHttp, "[lookup] status=%d leafErr=%q response=%s", status, leafErr, string(encoded))
 	}
 
 	if err := json.NewEncoder(w).Encode(lookupResponse); err != nil {
@@ -925,9 +912,7 @@ func (s *HTTPModule) handleLookup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
-	if grits.DebugHttp {
-		log.Printf("Handling link request\n")
-	}
+	grits.DebugLog(grits.DebugHttp, "Handling link request\n")
 
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST is supported", http.StatusMethodNotAllowed)
@@ -993,7 +978,7 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 
 	linkResponse, err := volume.MultiLink(req.Requests, true, principalFromContext(r))
 	if err != nil {
-		log.Printf("HTTP API MultiLink() failed: %v", err)
+		grits.DebugLog(grits.DebugHttp, "HTTP API MultiLink() failed: %v", err)
 		if missing, ok := grits.IsBlobMissing(err); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnprocessableEntity) // 422
@@ -1112,10 +1097,7 @@ func (s *HTTPModule) handleContentRequest(volumeName, filePath string, w http.Re
 }
 
 func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *http.Request) {
-	if grits.DebugHttp {
-		log.Printf("Received %s request for file: %s\n", r.Method, path)
-	}
-
+	grits.DebugLog(grits.DebugHttp, "Received %s request for file: %s\n", r.Method, path)
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET start\n")
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Looking up in volume\n")
 
@@ -1212,9 +1194,7 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 }
 
 func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.ResponseWriter, r *http.Request, maxSize int64) {
-	if grits.DebugHttp {
-		log.Printf("Received PUT request for file: %s\n", path)
-	}
+	grits.DebugLog(grits.DebugHttp, "Received PUT request for file: %s\n", path)
 
 	if path == "" || path == "/" {
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
@@ -1256,9 +1236,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 	defer metadataNode.Release()
 
 	// Link using the metadata address
-	if grits.DebugHttp {
-		log.Printf("Linking %s to %s", path, metadataNode.Metadata().ContentHash)
-	}
+	grits.DebugLog(grits.DebugHttp, "Linking %s to %s", path, metadataNode.Metadata().ContentHash)
 
 	err = volume.LinkByMetadata(path, metadataNode.MetadataBlob().GetAddress(), principalFromContext(r))
 	if err != nil {
@@ -1280,9 +1258,7 @@ func handleNamespacePut(bs grits.BlobStore, volume Volume, path string, w http.R
 }
 
 func handleNamespaceDelete(volume Volume, path string, w http.ResponseWriter, r *http.Request) {
-	if grits.DebugHttp {
-		log.Printf("Received DELETE request for file: %s\n", path)
-	}
+	grits.DebugLog(grits.DebugHttp, "Received DELETE request for file: %s\n", path)
 
 	if path == "" || path == "/" {
 		http.Error(w, "Cannot modify root of namespace", http.StatusForbidden)
