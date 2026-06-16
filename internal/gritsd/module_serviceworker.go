@@ -105,7 +105,7 @@ func NewServiceWorkerModule(server *Server, config *ServiceWorkerModuleConfig) (
 }
 
 func (swm *ServiceWorkerModule) rootVolume() Volume {
-	return swm.Server.FindVolumeByName("root")
+	return swm.Server.FindVolumeByName("primary")
 }
 
 func (swm *ServiceWorkerModule) serveFromVolume(volumePath string, applyTemplate bool) http.HandlerFunc {

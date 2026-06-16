@@ -222,7 +222,7 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("failed to hash password: %v", err)}
 		}
 
-		lines, err := ReadJSONL(s, "root", usersFilePath, grits.BackendPrincipal)
+		lines, err := ReadJSONL(s, "primary", usersFilePath, grits.BackendPrincipal)
 		if err != nil && !errors.Is(err, grits.ErrNotExist) {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("reading users file: %v", err)}
 		}
@@ -247,13 +247,13 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			})
 		}
 
-		if err := WriteJSONL(s, "root", usersFilePath, records, grits.BackendPrincipal); err != nil {
+		if err := WriteJSONL(s, "primary", usersFilePath, records, grits.BackendPrincipal); err != nil {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("writing users file: %v", err)}
 		}
 
 		// Create home directory with owner permission.
 		homeDir := "home/" + username
-		volume := s.FindVolumeByName("root")
+		volume := s.FindVolumeByName("primary")
 		if volume != nil {
 			// Ensure home parent exists, then import skeleton files first
 			// so the access.json write below is the final step and won't
@@ -280,7 +280,7 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 					{User: username, Origin: "/", Permission: PermOwner},
 				},
 			})
-			if err := WriteVolumeFile(s, "root", homeDir+"/.grits/access.json", homeAccess, grits.BackendPrincipal); err != nil {
+			if err := WriteVolumeFile(s, "primary", homeDir+"/.grits/access.json", homeAccess, grits.BackendPrincipal); err != nil {
 				log.Printf("adduser: writing home access.json: %v", err)
 			}
 		}
@@ -294,7 +294,7 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 		}
 		username := cmd[1]
 
-		lines, err := ReadJSONL(s, "root", usersFilePath, grits.BackendPrincipal)
+		lines, err := ReadJSONL(s, "primary", usersFilePath, grits.BackendPrincipal)
 		if err != nil {
 			if errors.Is(err, grits.ErrNotExist) {
 				return CommandResponse{Status: 1, Output: "users file not found"}
@@ -314,7 +314,7 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			records = append(records, rec)
 		}
 
-		if err := WriteJSONL(s, "root", usersFilePath, records, grits.BackendPrincipal); err != nil {
+		if err := WriteJSONL(s, "primary", usersFilePath, records, grits.BackendPrincipal); err != nil {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("writing users file: %v", err)}
 		}
 		return CommandResponse{Status: 0, Output: "user deleted"}

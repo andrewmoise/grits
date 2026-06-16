@@ -5,11 +5,11 @@
   "modules": [
     {
       "module": "volume",
-      "volumeName": "root"
+      "volumeName": "primary"
     },
     {
       "module": "mount",
-      "volume": "root",
+      "volume": "primary",
       "mountPoint": "mnt"
     },
 

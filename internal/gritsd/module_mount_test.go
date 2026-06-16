@@ -18,8 +18,8 @@ func TestBasicMountOperations(t *testing.T) {
 	defer os.RemoveAll(mountPoint)
 
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
-		WithMountModule("root", mountPoint))
+		WithLocalVolume("primary"),
+		WithMountModule("primary", mountPoint))
 	defer cleanup()
 
 	err = server.Start()
@@ -208,8 +208,8 @@ func TestExternalModificationsWithInvalidation(t *testing.T) {
 	defer os.RemoveAll(mountPoint)
 
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
-		WithMountModule("root", mountPoint))
+		WithLocalVolume("primary"),
+		WithMountModule("primary", mountPoint))
 	defer cleanup()
 
 	err = server.Start()
@@ -222,7 +222,7 @@ func TestExternalModificationsWithInvalidation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Get the volume for direct manipulation
-	vol := server.Volumes["root"]
+	vol := server.Volumes["primary"]
 	if vol == nil {
 		t.Fatalf("Could not find root volume")
 	}

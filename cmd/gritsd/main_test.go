@@ -17,7 +17,7 @@ import (
 func TestFileOperations(t *testing.T) {
 	// Setup
 	baseURL := "http://localhost:2187"
-	s, cleanup := gritsd.SetupTestServer(t, gritsd.WithHttpModule(2187), gritsd.WithLocalVolume("root"))
+	s, cleanup := gritsd.SetupTestServer(t, gritsd.WithHttpModule(2187), gritsd.WithLocalVolume("primary"))
 	defer cleanup()
 
 	s.Start()
@@ -28,7 +28,7 @@ func TestFileOperations(t *testing.T) {
 
 	// 1. Create 5 files
 	for i := 1; i <= 5; i++ {
-		url := fmt.Sprintf("%s/grits/v1/content/root/%d", baseURL, i)
+		url := fmt.Sprintf("%s/grits/v1/content/primary/%d", baseURL, i)
 		content := fmt.Sprintf("Test data %d", i)
 		req, err := http.NewRequest(http.MethodPut, url, bytes.NewBufferString(content))
 		if err != nil {
@@ -52,7 +52,7 @@ func TestFileOperations(t *testing.T) {
 	// 2. Get the list of files
 	lookupURL := fmt.Sprintf("%s/grits/v1/lookup", baseURL)
 	lookupPayload, _ := json.Marshal(gritsd.LookupRequestBody{
-		Volume: "root",
+		Volume: "primary",
 		Paths:  []string{""},
 	})
 	resp, err := http.Post(lookupURL, "application/json", bytes.NewBuffer(lookupPayload))
@@ -69,7 +69,7 @@ func TestFileOperations(t *testing.T) {
 		t.Fatalf("Lookup failed with status code %d - %s", resp.StatusCode, string(respBody))
 	}
 
-	volume := s.FindVolumeByName("root")
+	volume := s.FindVolumeByName("primary")
 	if volume == nil {
 		t.Fatalf("Couldn't load root volume")
 	}
@@ -172,7 +172,7 @@ func TestFileOperations(t *testing.T) {
 	}
 
 	// 3. Delete file 3
-	url := fmt.Sprintf("%s/grits/v1/content/root/3", baseURL)
+	url := fmt.Sprintf("%s/grits/v1/content/primary/3", baseURL)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		t.Fatalf("Creating DELETE request failed: %v", err)
@@ -189,7 +189,7 @@ func TestFileOperations(t *testing.T) {
 	resp.Body.Close()
 
 	// 4. Overwrite file 5
-	url = fmt.Sprintf("%s/grits/v1/content/root/5", baseURL)
+	url = fmt.Sprintf("%s/grits/v1/content/primary/5", baseURL)
 	content := "Overwritten test data 5"
 	req, err = http.NewRequest(http.MethodPut, url, bytes.NewBufferString(content))
 	if err != nil {

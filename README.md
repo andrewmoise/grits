@@ -145,13 +145,13 @@ mkdir mnt/sites/{your hostname}
 
 Once you've done that, you should be able to log in to see the Gimbal shell at:
 
-`https://{your server}/grits/v1/content/root/gimbal/index.html`
+`https://{your server}/grits/v1/content/primary/gimbal/index.html`
 
 If you see the graphical interface from the screenshots, you're in.
 
 Run `test()` at the command line to run a detailed frontend test. It'll take a while.
 
-If you are brave enough to try the service worker, you can also enable the module, and then go to `https://{your server name}/grits/v1/content/root/lib/serviceworker/swtest.html` for some self tests of loading and updating the service worker. Assuming that checks out, you can re-run the client side `test()` tests from the shell, with the SW active, to give it a more substantive test. Bear in mind that the SW currently works in Chrome, but not in Firefox, and I don't know why.
+If you are brave enough to try the service worker, you can also enable the module, and then go to `https://{your server name}/grits/v1/content/primary/lib/serviceworker/swtest.html` for some self tests of loading and updating the service worker. Assuming that checks out, you can re-run the client side `test()` tests from the shell, with the SW active, to give it a more substantive test. Bear in mind that the SW currently works in Chrome, but not in Firefox, and I don't know why.
 
 ### Web Serving
 
@@ -172,7 +172,7 @@ If you want to work on a v2 of the site:
 ln('dev/v1','dev/v2',{ff:1})
 ```
 
-And then, make edits to `dev/v2`, and then you can observe them at `https://{your server}/grits/v1/content/root/sites/{your server}/dev/v2/`, and then if you like them you can use another `ln` command to deploy them to `content/` which will place them onto the "live site."
+And then, make edits to `dev/v2`, and then you can observe them at `https://{your server}/grits/v1/content/primary/sites/{your server}/dev/v2/`, and then if you like them you can use another `ln` command to deploy them to `content/` which will place them onto the "live site."
 
 Hopefully this all gives the flavor of the intent. When you're done, hit Ctrl-C on the backend and the server should shut down cleanly. If it hangs because it can't unmount the FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
 

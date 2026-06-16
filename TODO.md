@@ -1,8 +1,6 @@
 # In Progress
 
 * Reorient the initial paradigm to vhosts instead of /grits/v1/content
-* Make sure only one instance can run at once
-* Change "root" volume name to something less collide-y
 * Self-hosted git repo in startup
 * MD renderer
 * MOTD
@@ -167,6 +165,10 @@ Auth improvements
   * More friendly error messages on expired identity / need to log in to access this resource
   * Better prompt for password for login
   * Add documentation
+
+Some kind of better window, in the frontend, into HTTP traffic and requests (log / dashboard) if nowhere else
+
+Clean up places where "primary" as the volume name is hard coded: `rootVolume` → `mainVolume` (module_auth.go), `rootVolume()` → `mainVolume()` (module_serviceworker.go), `rootVolume` variable name (cmd/testbed/main.go)
 
 ## Old TODOs
 

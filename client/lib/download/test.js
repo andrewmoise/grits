@@ -4,7 +4,7 @@ export const tests = [
     label: 'download fetches a URL and returns a Response',
     async fn(shell, scratch) {
       const value = await shell.eval(
-        `download('${shell.serverUrl}/grits/v1/content/root/lib/grits/GritsClient.js')`
+        `download('${shell.serverUrl}/grits/v1/content/primary/lib/grits/GritsClient.js')`
       );
       if (!(value instanceof Response))
         throw new Error(`expected Response, got ${value?.constructor?.name}`);
@@ -18,7 +18,7 @@ export const tests = [
       // Create a scratch file and verify consistency across HTTP and volume
       await shell.eval(`echo('hello world').to('${scratch}/file.txt')`);
 
-      // scratch looks like //root/tmp/gimbal-test/...; derive HTTP URL
+      // scratch looks like //primary/tmp/gimbal-test/...; derive HTTP URL
       const relPath = scratch.replace(/^\/\//, '');
       const url = `${shell.serverUrl}/grits/v1/content/${relPath}/file.txt`;
 
@@ -39,7 +39,7 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval(`echo('hi').download('${shell.serverUrl}/grits/v1/content/root/lib/grits/GritsClient.js')`);
+        await shell.eval(`echo('hi').download('${shell.serverUrl}/grits/v1/content/primary/lib/grits/GritsClient.js')`);
       } catch (e) {
         if (e.message.includes('pipeline input')) threw = true;
         else throw e;

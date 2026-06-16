@@ -68,7 +68,7 @@ type HTTPModuleConfig struct {
 	CertPath string `json:"certPath,omitempty"`
 	KeyPath  string `json:"keyPath,omitempty"`
 
-	// Which volume holds deployed content. Defaults to "root".
+	// Which volume holds deployed content. Defaults to "primary".
 	// Content is served from /sites/{hostname}/content/{path}.
 	ContentVolume string `json:"contentVolume,omitempty"`
 
@@ -129,7 +129,7 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 		config.MaxUploadSize = DefaultMaxUploadSize
 	}
 	if config.ContentVolume == "" {
-		config.ContentVolume = "root"
+		config.ContentVolume = "primary"
 	}
 	if config.EnableTls {
 		if config.AutoCertificate && config.CertbotEmail == "" {

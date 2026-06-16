@@ -314,7 +314,7 @@ func testOriginMirrorSystem(originServer *gritsd.Server, originPort int, originH
 	log.Printf("Uploaded test content, got blob address: %s", blobAddr)
 
 	// Get a reference to the root volume
-	rootVolume := originServer.FindVolumeByName("root")
+	rootVolume := originServer.FindVolumeByName("primary")
 	if rootVolume == nil {
 		return fmt.Errorf("couldn't find root volume on origin server")
 	}

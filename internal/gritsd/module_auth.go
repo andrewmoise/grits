@@ -59,7 +59,7 @@ const (
 
 const (
 	usersFilePath        = "sys/etc/users.jsonl"
-	rootVolume           = "root"
+	rootVolume           = "primary"
 	authCookie           = "grits-auth-user"
 	defaultSessionMaxAge = 24 * time.Hour
 	defaultCookieMaxAge  = 365 * 24 * time.Hour

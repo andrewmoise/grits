@@ -24,7 +24,7 @@ func hashPasswordForTest(t *testing.T, password string) string {
 func writeUserRecord(t *testing.T, s *Server, username, pwdHash string) {
 	t.Helper()
 
-	lines, err := ReadJSONL(s, "root", usersFilePath, grits.BackendPrincipal)
+	lines, err := ReadJSONL(s, "primary", usersFilePath, grits.BackendPrincipal)
 	if err != nil {
 		// File doesn't exist yet — that's fine, start empty
 		lines = nil
@@ -51,7 +51,7 @@ func writeUserRecord(t *testing.T, s *Server, username, pwdHash string) {
 		})
 	}
 
-	if err := WriteJSONL(s, "root", usersFilePath, records, grits.BackendPrincipal); err != nil {
+	if err := WriteJSONL(s, "primary", usersFilePath, records, grits.BackendPrincipal); err != nil {
 		t.Fatalf("WriteJSONL: %v", err)
 	}
 }
@@ -155,7 +155,7 @@ func TestReadWriteJSONL(t *testing.T) {
 
 func TestAuthLoginSuccess(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1911),
 		WithAuthModule(),
 	)
@@ -200,7 +200,7 @@ func TestAuthLoginSuccess(t *testing.T) {
 
 func TestAuthLoginGlobalSetsCookie(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1918),
 		WithAuthModule(),
 	)
@@ -248,7 +248,7 @@ func TestAuthLoginGlobalSetsCookie(t *testing.T) {
 
 func TestAuthLoginWrongPassword(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1912),
 		WithAuthModule(),
 	)
@@ -275,7 +275,7 @@ func TestAuthLoginWrongPassword(t *testing.T) {
 
 func TestAuthLoginUnknownUser(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1913),
 		WithAuthModule(),
 	)
@@ -302,7 +302,7 @@ func TestAuthLoginUnknownUser(t *testing.T) {
 
 func TestAuthLoginInvalidUsername(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1914),
 		WithAuthModule(),
 	)
@@ -327,7 +327,7 @@ func TestAuthLoginInvalidUsername(t *testing.T) {
 
 func TestAuthLogout(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1915),
 		WithAuthModule(),
 	)
@@ -396,7 +396,7 @@ func TestAuthLogout(t *testing.T) {
 
 func TestAuthLogoutWithUsername(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1919),
 		WithAuthModule(),
 	)
@@ -466,7 +466,7 @@ func TestAuthLoginMethodNotAllowed(t *testing.T) {
 
 func TestWhoamiWithSessionToken(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1925),
 		WithAuthModule(),
 	)
@@ -522,7 +522,7 @@ func TestWhoamiWithSessionToken(t *testing.T) {
 
 func TestWhoamiWithCookie(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1926),
 		WithAuthModule(),
 	)
@@ -598,7 +598,7 @@ func TestCookieAuthFallback(t *testing.T) {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(port),
 		WithAuthModule(),
 	)
@@ -609,21 +609,21 @@ func TestCookieAuthFallback(t *testing.T) {
 
 	// Setup: public grant + user-specific grant
 	bt := boolTrue()
-	vol := server.FindVolumeByName("root")
+	vol := server.FindVolumeByName("primary")
 	ensureVolumeParentDirs(vol, "sites/.grits")
 	sitesAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermRead}}}
 	raw, _ := json.Marshal(sitesAccess)
-	WriteVolumeFile(server, "root", "sites/.grits/access.json", raw, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "sites/.grits/access.json", raw, grits.BackendPrincipal)
 
 	ensureVolumeParentDirs(vol, "home/user/.grits")
 	homeAccess := AccessConfig{Allow: []Grant{{User: "testuser", Origin: "*", Permission: PermReadWrite}}}
 	raw2, _ := json.Marshal(homeAccess)
-	WriteVolumeFile(server, "root", "home/user/.grits/access.json", raw2, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "home/user/.grits/access.json", raw2, grits.BackendPrincipal)
 
-	WriteVolumeFile(server, "root", "sites/test.txt", []byte("site content"), grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "sites/test.txt", []byte("site content"), grits.BackendPrincipal)
 
 	// Create a file in user's home directory
-	WriteVolumeFile(server, "root", "home/user/myfile.txt", []byte("user content"), grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "home/user/myfile.txt", []byte("user content"), grits.BackendPrincipal)
 
 	// Create user
 	pwdHash := hashPasswordForTest(t, "test-password")
@@ -640,7 +640,7 @@ func TestCookieAuthFallback(t *testing.T) {
 	cookieValue := extractCookieValue(loginResp.Header.Get("Set-Cookie"))
 
 	// Request content with cookie but NO X-Grits-Auth-Token header
-	req, _ := http.NewRequest("GET", contentURL(baseURL, "root", "sites/test.txt"), nil)
+	req, _ := http.NewRequest("GET", contentURL(baseURL, "primary", "sites/test.txt"), nil)
 	req.Header.Set("Cookie", cookieValue)
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -653,7 +653,7 @@ func TestCookieAuthFallback(t *testing.T) {
 	}
 
 	// Request user-specific content with cookie
-	req2, _ := http.NewRequest("GET", contentURL(baseURL, "root", "home/user/myfile.txt"), nil)
+	req2, _ := http.NewRequest("GET", contentURL(baseURL, "primary", "home/user/myfile.txt"), nil)
 	req2.Header.Set("Cookie", cookieValue)
 	resp2, err := client.Do(req2)
 	if err != nil {
@@ -667,7 +667,7 @@ func TestCookieAuthFallback(t *testing.T) {
 
 func TestAuthNoUsersFile(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1917),
 		WithAuthModule(),
 	)
@@ -724,7 +724,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(port),
 		WithAuthModule(),
 	)
@@ -737,7 +737,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// Create directory structure and .grits directories for access control
 	for _, dir := range []string{"sys/etc", "sites", "sites/.grits", "home", "home/user", "home/user/.grits"} {
-		if err := ensureVolumeParentDirs(server.FindVolumeByName("root"), dir); err != nil {
+		if err := ensureVolumeParentDirs(server.FindVolumeByName("primary"), dir); err != nil {
 			t.Fatalf("creating dir %q: %v", dir, err)
 		}
 	}
@@ -750,7 +750,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 		},
 	}
 	sitesAccessData, _ := json.Marshal(sitesAccess)
-	if err := WriteVolumeFile(server, "root", "sites/.grits/access.json", sitesAccessData, grits.BackendPrincipal); err != nil {
+	if err := WriteVolumeFile(server, "primary", "sites/.grits/access.json", sitesAccessData, grits.BackendPrincipal); err != nil {
 		t.Fatalf("writing sites/.grits/access.json: %v", err)
 	}
 
@@ -761,12 +761,12 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 		},
 	}
 	homeAccessData, _ := json.Marshal(homeAccess)
-	if err := WriteVolumeFile(server, "root", "home/user/.grits/access.json", homeAccessData, grits.BackendPrincipal); err != nil {
+	if err := WriteVolumeFile(server, "primary", "home/user/.grits/access.json", homeAccessData, grits.BackendPrincipal); err != nil {
 		t.Fatalf("writing home/user/.grits/access.json: %v", err)
 	}
 
 	// Write a test file at /sites/test.txt
-	if err := WriteVolumeFile(server, "root", "sites/test.txt", []byte("site content"), grits.BackendPrincipal); err != nil {
+	if err := WriteVolumeFile(server, "primary", "sites/test.txt", []byte("site content"), grits.BackendPrincipal); err != nil {
 		t.Fatalf("writing sites/test.txt: %v", err)
 	}
 
@@ -777,13 +777,13 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 		{"username": "user", "pwdHash": pwdHashUser},
 		{"username": "admin", "pwdHash": pwdHashAdmin},
 	}
-	if err := WriteJSONL(server, "root", "sys/etc/users.jsonl", records, grits.BackendPrincipal); err != nil {
+	if err := WriteJSONL(server, "primary", "sys/etc/users.jsonl", records, grits.BackendPrincipal); err != nil {
 		t.Fatalf("writing users.jsonl: %v", err)
 	}
 
 	// --- Test 1: Unauthenticated read of path with public grant ---
 	t.Run("unauthenticated read allowed", func(t *testing.T) {
-		resp, _ := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sites/test.txt"), "", nil)
+		resp, _ := doReq(t, http.MethodGet, contentURL(baseURL, "primary", "sites/test.txt"), "", nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected 200, got %d", resp.StatusCode)
 		}
@@ -791,7 +791,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 2: Unauthenticated read of non-whitelisted path ---
 	t.Run("unauthenticated read denied", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sys/etc/users.jsonl"), "", nil)
+		resp, body := doReq(t, http.MethodGet, contentURL(baseURL, "primary", "sys/etc/users.jsonl"), "", nil)
 		if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 			t.Errorf("expected 403 or 404, got %d: %s", resp.StatusCode, string(body))
 		}
@@ -820,7 +820,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 4: Authenticated read of whitelisted path ---
 	t.Run("authed read allowed", func(t *testing.T) {
-		resp, _ := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sites/test.txt"), authToken, nil)
+		resp, _ := doReq(t, http.MethodGet, contentURL(baseURL, "primary", "sites/test.txt"), authToken, nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected 200, got %d", resp.StatusCode)
 		}
@@ -828,7 +828,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 5: Authenticated read of non-whitelisted path ---
 	t.Run("authed read denied", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodGet, contentURL(baseURL, "root", "sys/etc/users.jsonl"), authToken, nil)
+		resp, body := doReq(t, http.MethodGet, contentURL(baseURL, "primary", "sys/etc/users.jsonl"), authToken, nil)
 		if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 			t.Errorf("expected 403 or 404, got %d: %s", resp.StatusCode, string(body))
 		}
@@ -836,7 +836,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 6: Authenticated write to whitelisted path ---
 	t.Run("authed write allowed", func(t *testing.T) {
-		resp, _ := doReq(t, http.MethodPut, contentURL(baseURL, "root", "home/user/foo.txt"), authToken,
+		resp, _ := doReq(t, http.MethodPut, contentURL(baseURL, "primary", "home/user/foo.txt"), authToken,
 			[]byte("user content"))
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -845,7 +845,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 7: Authenticated write to non-whitelisted path ---
 	t.Run("authed write denied", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodPut, contentURL(baseURL, "root", "sites/bar.txt"), authToken,
+		resp, body := doReq(t, http.MethodPut, contentURL(baseURL, "primary", "sites/bar.txt"), authToken,
 			[]byte("should be denied"))
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("expected 403, got %d: %s", resp.StatusCode, string(body))
@@ -854,7 +854,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 8: Authenticated delete from whitelisted path ---
 	t.Run("authed delete allowed", func(t *testing.T) {
-		resp, _ := doReq(t, http.MethodDelete, contentURL(baseURL, "root", "home/user/foo.txt"), authToken, nil)
+		resp, _ := doReq(t, http.MethodDelete, contentURL(baseURL, "primary", "home/user/foo.txt"), authToken, nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("expected 200, got %d", resp.StatusCode)
 		}
@@ -862,7 +862,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 9: Authenticated delete from non-whitelisted path ---
 	t.Run("authed delete denied", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodDelete, contentURL(baseURL, "root", "sites/test.txt"), authToken, nil)
+		resp, body := doReq(t, http.MethodDelete, contentURL(baseURL, "primary", "sites/test.txt"), authToken, nil)
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("expected 403, got %d: %s", resp.StatusCode, string(body))
 		}
@@ -878,7 +878,7 @@ func TestAuthPermissionsEndToEnd(t *testing.T) {
 
 	// --- Test 11: Post-logout write denied (no valid cookie) ---
 	t.Run("post-logout write denied", func(t *testing.T) {
-		resp, body := doReq(t, http.MethodPut, contentURL(baseURL, "root", "home/user/foo.txt"), "", nil)
+		resp, body := doReq(t, http.MethodPut, contentURL(baseURL, "primary", "home/user/foo.txt"), "", nil)
 		// Without auth, the principal is AnonPrincipal. The access.json at
 		// /home/user only grants write to user "user", so AnonPrincipal gets denied.
 		if resp.StatusCode != http.StatusForbidden {
@@ -1075,7 +1075,7 @@ func TestReadAccessConfig(t *testing.T) {
 	server, cleanup := SetupTestServer(t)
 	defer cleanup()
 
-	volConfig := &LocalVolumeConfig{VolumeName: "root"}
+	volConfig := &LocalVolumeConfig{VolumeName: "primary"}
 	vol, err := NewLocalVolume(volConfig, server, false, false)
 	if err != nil {
 		t.Fatalf("NewLocalVolume: %v", err)
@@ -1110,7 +1110,7 @@ func TestReadAccessConfig(t *testing.T) {
 		},
 	}
 	raw, _ := json.Marshal(access)
-	WriteVolumeFile(server, "root", "data/.grits/access.json", raw, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "data/.grits/access.json", raw, grits.BackendPrincipal)
 
 	cfg, err = authMod.readAccessConfig(vol, "data")
 	if err != nil {
@@ -1135,7 +1135,7 @@ func TestReadAccessConfig(t *testing.T) {
 		Allow: []Grant{{User: "glenda", Origin: "*", Permission: PermOwner}},
 	}
 	raw2, _ := json.Marshal(rootAccess)
-	WriteVolumeFile(server, "root", ".grits/access.json", raw2, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", ".grits/access.json", raw2, grits.BackendPrincipal)
 
 	cfg, err = authMod.readAccessConfig(vol, "")
 	if err != nil {
@@ -1149,13 +1149,13 @@ func TestReadAccessConfig(t *testing.T) {
 /////
 // resolvePermission tests
 
-// setupPermTest creates a server with a "root" volume and an auth module,
+// setupPermTest creates a server with a "primary" volume and an auth module,
 // creates a .grits/access.json at the given path, and returns the volume and auth module.
 func setupPermTest(t *testing.T, accessPath string, access AccessConfig) (Volume, *AuthModule) {
 	t.Helper()
 	server, _ := SetupTestServer(t)
 
-	volConfig := &LocalVolumeConfig{VolumeName: "root"}
+	volConfig := &LocalVolumeConfig{VolumeName: "primary"}
 	vol, err := NewLocalVolume(volConfig, server, false, false)
 	if err != nil {
 		t.Fatalf("NewLocalVolume: %v", err)
@@ -1175,7 +1175,7 @@ func setupPermTest(t *testing.T, accessPath string, access AccessConfig) (Volume
 			t.Fatalf("ensureVolumeParentDirs(%q): %v", gritsDir, err)
 		}
 		raw, _ := json.Marshal(access)
-		if err := WriteVolumeFile(server, "root", gritsDir+"/access.json", raw, grits.BackendPrincipal); err != nil {
+		if err := WriteVolumeFile(server, "primary", gritsDir+"/access.json", raw, grits.BackendPrincipal); err != nil {
 			t.Fatalf("WriteVolumeFile access.json: %v", err)
 		}
 	}
@@ -1331,7 +1331,7 @@ func TestResolvePermissionGritsBarrierDirectOnly(t *testing.T) {
 	server, _ := SetupTestServer(t)
 	defer func() { server.Stop() }()
 
-	volConfig := &LocalVolumeConfig{VolumeName: "root"}
+	volConfig := &LocalVolumeConfig{VolumeName: "primary"}
 	vol, err := NewLocalVolume(volConfig, server, false, false)
 	if err != nil {
 		t.Fatalf("NewLocalVolume: %v", err)
@@ -1349,13 +1349,13 @@ func TestResolvePermissionGritsBarrierDirectOnly(t *testing.T) {
 	rootAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadWrite}}}
 	raw, _ := json.Marshal(rootAccess)
 	ensureVolumeParentDirs(vol, ".grits")
-	WriteVolumeFile(server, "root", ".grits/access.json", raw, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", ".grits/access.json", raw, grits.BackendPrincipal)
 
 	// read+write at "projects/alice" — this is the direct parent of .grits
 	aliceAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadWrite}}}
 	raw2, _ := json.Marshal(aliceAccess)
 	ensureVolumeParentDirs(vol, "projects/alice/.grits")
-	WriteVolumeFile(server, "root", "projects/alice/.grits/access.json", raw2, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "projects/alice/.grits/access.json", raw2, grits.BackendPrincipal)
 
 	anon := &grits.Principal{}
 
@@ -1367,7 +1367,7 @@ func TestResolvePermissionGritsBarrierDirectOnly(t *testing.T) {
 
 func TestLinkCallbackGritsWritePermission(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1924),
 		WithAuthModule(),
 	)
@@ -1375,19 +1375,19 @@ func TestLinkCallbackGritsWritePermission(t *testing.T) {
 	server.Start()
 	defer server.Stop()
 
-	vol := server.FindVolumeByName("root")
+	vol := server.FindVolumeByName("primary")
 
 	// r+w dir: user "alice" has read+write
 	ensureVolumeParentDirs(vol, "readwritedir/.grits")
 	rwAccess := AccessConfig{Allow: []Grant{{User: "alice", Origin: "*", Permission: PermReadWrite}}}
 	raw, _ := json.Marshal(rwAccess)
-	WriteVolumeFile(server, "root", "readwritedir/.grits/access.json", raw, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "readwritedir/.grits/access.json", raw, grits.BackendPrincipal)
 
 	// owner dir: user "bob" has owner
 	ensureVolumeParentDirs(vol, "ownerdir/.grits")
 	ownAccess := AccessConfig{Allow: []Grant{{User: "bob", Origin: "*", Permission: PermOwner}}}
 	raw2, _ := json.Marshal(ownAccess)
-	WriteVolumeFile(server, "root", "ownerdir/.grits/access.json", raw2, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "ownerdir/.grits/access.json", raw2, grits.BackendPrincipal)
 
 	// Setup users for auth
 	pwdHashAlice := hashPasswordForTest(t, "alice-pass")
@@ -1397,7 +1397,7 @@ func TestLinkCallbackGritsWritePermission(t *testing.T) {
 		{"username": "bob", "pwdHash": pwdHashBob},
 	}
 	ensureVolumeParentDirs(vol, "sys/etc")
-	WriteJSONL(server, "root", "sys/etc/users.jsonl", records, grits.BackendPrincipal)
+	WriteJSONL(server, "primary", "sys/etc/users.jsonl", records, grits.BackendPrincipal)
 
 	baseURL := "http://127.0.0.1:1924"
 
@@ -1424,7 +1424,7 @@ func TestLinkCallbackGritsWritePermission(t *testing.T) {
 	t.Run("read+write cannot write .grits", func(t *testing.T) {
 		// alice has read+write on readwritedir — trying to create readwritedir/.grits/newfile should fail
 		resp, _ := doReq(t, http.MethodPut,
-			contentURL(baseURL, "root", "readwritedir/.grits/newfile"), aliceToken,
+			contentURL(baseURL, "primary", "readwritedir/.grits/newfile"), aliceToken,
 			[]byte("should be denied"))
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("write to .grits with read+write: expected 403, got %d", resp.StatusCode)
@@ -1437,7 +1437,7 @@ func TestLinkCallbackGritsWritePermission(t *testing.T) {
 
 		// alice tries to replace .grits entirely — should be denied
 		resp, _ := doReq(t, http.MethodPut,
-			contentURL(baseURL, "root", "readwritedir/.grits"), aliceToken,
+			contentURL(baseURL, "primary", "readwritedir/.grits"), aliceToken,
 			[]byte("should be denied"))
 		if resp.StatusCode != http.StatusForbidden {
 			t.Errorf("replace .grits with read+write: expected 403, got %d", resp.StatusCode)
@@ -1446,7 +1446,7 @@ func TestLinkCallbackGritsWritePermission(t *testing.T) {
 
 	t.Run("owner can write .grits", func(t *testing.T) {
 		resp, _ := doReq(t, http.MethodPut,
-			contentURL(baseURL, "root", "ownerdir/.grits/newfile"), bobToken,
+			contentURL(baseURL, "primary", "ownerdir/.grits/newfile"), bobToken,
 			[]byte("owner content"))
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("write to .grits with owner: expected 200, got %d", resp.StatusCode)
@@ -1457,7 +1457,7 @@ func TestLinkCallbackGritsWritePermission(t *testing.T) {
 		ensureVolumeParentDirs(vol, "ownerdir/.grits")
 
 		resp, _ := doReq(t, http.MethodPut,
-			contentURL(baseURL, "root", "ownerdir/.grits"), bobToken,
+			contentURL(baseURL, "primary", "ownerdir/.grits"), bobToken,
 			[]byte("owner replaces .grits"))
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("replace .grits with owner: expected 200, got %d", resp.StatusCode)
@@ -1466,7 +1466,7 @@ func TestLinkCallbackGritsWritePermission(t *testing.T) {
 
 	t.Run("read+write can write regular files", func(t *testing.T) {
 		resp, _ := doReq(t, http.MethodPut,
-			contentURL(baseURL, "root", "readwritedir/regular.txt"), aliceToken,
+			contentURL(baseURL, "primary", "readwritedir/regular.txt"), aliceToken,
 			[]byte("regular content"))
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("write regular file with read+write: expected 200, got %d", resp.StatusCode)
@@ -1497,7 +1497,7 @@ func TestResolvePermissionMultiLevelMerge(t *testing.T) {
 	server, _ := SetupTestServer(t)
 	defer func() { server.Stop() }()
 
-	volConfig := &LocalVolumeConfig{VolumeName: "root"}
+	volConfig := &LocalVolumeConfig{VolumeName: "primary"}
 	vol, err := NewLocalVolume(volConfig, server, false, false)
 	if err != nil {
 		t.Fatalf("NewLocalVolume: %v", err)
@@ -1514,12 +1514,12 @@ func TestResolvePermissionMultiLevelMerge(t *testing.T) {
 	rootAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermRead}}}
 	raw, _ := json.Marshal(rootAccess)
 	ensureVolumeParentDirs(vol, ".grits")
-	WriteVolumeFile(server, "root", ".grits/access.json", raw, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", ".grits/access.json", raw, grits.BackendPrincipal)
 
 	aliceAccess := AccessConfig{Allow: []Grant{{User: "alice", Origin: "*", Permission: PermReadWrite}}}
 	raw2, _ := json.Marshal(aliceAccess)
 	ensureVolumeParentDirs(vol, "projects/alice/.grits")
-	WriteVolumeFile(server, "root", "projects/alice/.grits/access.json", raw2, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "projects/alice/.grits/access.json", raw2, grits.BackendPrincipal)
 
 	anon := &grits.Principal{}
 	bob := &grits.Principal{User: "bob"}
@@ -1620,7 +1620,7 @@ func TestResolvePermissionOriginConstraint(t *testing.T) {
 
 func TestLookupCallbackAccessControl(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1921),
 		WithAuthModule(),
 	)
@@ -1631,26 +1631,26 @@ func TestLookupCallbackAccessControl(t *testing.T) {
 	// Create dirs and permissions
 	bt := boolTrue()
 	for _, dir := range []string{"public", "public/.grits", "private"} {
-		ensureVolumeParentDirs(server.FindVolumeByName("root"), dir)
+		ensureVolumeParentDirs(server.FindVolumeByName("primary"), dir)
 	}
 
 	// public: anyone can read
 	pubAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermRead}}}
 	raw, _ := json.Marshal(pubAccess)
-	WriteVolumeFile(server, "root", "public/.grits/access.json", raw, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "public/.grits/access.json", raw, grits.BackendPrincipal)
 
 	// Write files
-	WriteVolumeFile(server, "root", "public/hello.txt", []byte("hello"), grits.BackendPrincipal)
-	WriteVolumeFile(server, "root", "private/secret.txt", []byte("secret"), grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "public/hello.txt", []byte("hello"), grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "private/secret.txt", []byte("secret"), grits.BackendPrincipal)
 
 	// Public file should be readable by anon
-	resp, _ := doReq(t, http.MethodGet, contentURL("http://127.0.0.1:1921", "root", "public/hello.txt"), "", nil)
+	resp, _ := doReq(t, http.MethodGet, contentURL("http://127.0.0.1:1921", "primary", "public/hello.txt"), "", nil)
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("public file: expected 200, got %d", resp.StatusCode)
 	}
 
 	// Private file should be denied
-	resp, _ = doReq(t, http.MethodGet, contentURL("http://127.0.0.1:1921", "root", "private/secret.txt"), "", nil)
+	resp, _ = doReq(t, http.MethodGet, contentURL("http://127.0.0.1:1921", "primary", "private/secret.txt"), "", nil)
 	if resp.StatusCode != http.StatusForbidden && resp.StatusCode != http.StatusNotFound {
 		t.Errorf("private file: expected 403/404, got %d", resp.StatusCode)
 	}
@@ -1661,7 +1661,7 @@ func TestLookupCallbackAccessControl(t *testing.T) {
 
 func TestLinkCallbackWritePermission(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(1922),
 		WithAuthModule(),
 	)
@@ -1670,26 +1670,26 @@ func TestLinkCallbackWritePermission(t *testing.T) {
 	defer server.Stop()
 
 	bt := boolTrue()
-	vol := server.FindVolumeByName("root")
+	vol := server.FindVolumeByName("primary")
 
 	// write-allowed dir: anyone can read+write
 	ensureVolumeParentDirs(vol, "writabledir/.grits")
 	writeAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadWrite}}}
 	raw, _ := json.Marshal(writeAccess)
-	WriteVolumeFile(server, "root", "writabledir/.grits/access.json", raw, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "writabledir/.grits/access.json", raw, grits.BackendPrincipal)
 
 	// insert-only dir: anyone can read+insert
 	ensureVolumeParentDirs(vol, "insertdir/.grits")
 	insAccess := AccessConfig{Allow: []Grant{{All: bt, Origin: "*", Permission: PermReadInsert}}}
 	raw2, _ := json.Marshal(insAccess)
-	WriteVolumeFile(server, "root", "insertdir/.grits/access.json", raw2, grits.BackendPrincipal)
+	WriteVolumeFile(server, "primary", "insertdir/.grits/access.json", raw2, grits.BackendPrincipal)
 
 	// deny dir: no permissions
 	ensureVolumeParentDirs(vol, "denydir")
 
 	// Write to writable dir — should succeed
 	resp, _ := doReq(t, http.MethodPut,
-		contentURL("http://127.0.0.1:1922", "root", "writabledir/test.txt"), "",
+		contentURL("http://127.0.0.1:1922", "primary", "writabledir/test.txt"), "",
 		[]byte("content"))
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("write to writable dir: expected 200, got %d", resp.StatusCode)
@@ -1697,7 +1697,7 @@ func TestLinkCallbackWritePermission(t *testing.T) {
 
 	// Insert new file to insert dir — should succeed (file doesn't exist yet)
 	resp, _ = doReq(t, http.MethodPut,
-		contentURL("http://127.0.0.1:1922", "root", "insertdir/newfile.txt"), "",
+		contentURL("http://127.0.0.1:1922", "primary", "insertdir/newfile.txt"), "",
 		[]byte("new content"))
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("insert to insert dir: expected 200, got %d", resp.StatusCode)
@@ -1705,7 +1705,7 @@ func TestLinkCallbackWritePermission(t *testing.T) {
 
 	// Write to denied dir — should fail
 	resp, _ = doReq(t, http.MethodPut,
-		contentURL("http://127.0.0.1:1922", "root", "denydir/test.txt"), "",
+		contentURL("http://127.0.0.1:1922", "primary", "denydir/test.txt"), "",
 		[]byte("content"))
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("write to denied dir: expected 403, got %d", resp.StatusCode)
@@ -1714,7 +1714,7 @@ func TestLinkCallbackWritePermission(t *testing.T) {
 	// Insert to a path that already exists — should fail for insert-only dir
 	// The file was created above, so trying again should be denied (insert only)
 	resp, _ = doReq(t, http.MethodPut,
-		contentURL("http://127.0.0.1:1922", "root", "insertdir/newfile.txt"), "",
+		contentURL("http://127.0.0.1:1922", "primary", "insertdir/newfile.txt"), "",
 		[]byte("modified"))
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("modify in insert dir: expected 403, got %d", resp.StatusCode)
@@ -1725,7 +1725,7 @@ func TestLookupCallbackOriginEnforcement(t *testing.T) {
 	port := 1923
 	coreVhost := fmt.Sprintf("http://127.0.0.1:%d", port)
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 		WithHttpModule(port),
 		WithAuthModuleVhost(coreVhost),
 	)
@@ -1734,17 +1734,17 @@ func TestLookupCallbackOriginEnforcement(t *testing.T) {
 	defer server.Stop()
 
 	bt := boolTrue()
-	vol := server.FindVolumeByName("root")
+	vol := server.FindVolumeByName("primary")
 	client := &http.Client{}
-	fileURL := contentURL(coreVhost, "root", "originprotected/file.txt")
+	fileURL := contentURL(coreVhost, "primary", "originprotected/file.txt")
 
 	ensureVolumeParentDirs(vol, "originprotected/.grits")
 
 	t.Run("absolute origin grant", func(t *testing.T) {
 		access := AccessConfig{Allow: []Grant{{All: bt, Origin: "https://allowed.example.com", Permission: PermRead}}}
 		raw, _ := json.Marshal(access)
-		WriteVolumeFile(server, "root", "originprotected/.grits/access.json", raw, grits.BackendPrincipal)
-		WriteVolumeFile(server, "root", "originprotected/file.txt", []byte("content"), grits.BackendPrincipal)
+		WriteVolumeFile(server, "primary", "originprotected/.grits/access.json", raw, grits.BackendPrincipal)
+		WriteVolumeFile(server, "primary", "originprotected/file.txt", []byte("content"), grits.BackendPrincipal)
 
 		// Matching origin
 		req, _ := http.NewRequest("GET", fileURL, nil)
@@ -1781,8 +1781,8 @@ func TestLookupCallbackOriginEnforcement(t *testing.T) {
 		// "/" resolves to the coreVhost's origin.
 		access := AccessConfig{Allow: []Grant{{All: bt, Origin: "/", Permission: PermRead}}}
 		raw, _ := json.Marshal(access)
-		WriteVolumeFile(server, "root", "originprotected/.grits/access.json", raw, grits.BackendPrincipal)
-		WriteVolumeFile(server, "root", "originprotected/file.txt", []byte("content"), grits.BackendPrincipal)
+		WriteVolumeFile(server, "primary", "originprotected/.grits/access.json", raw, grits.BackendPrincipal)
+		WriteVolumeFile(server, "primary", "originprotected/file.txt", []byte("content"), grits.BackendPrincipal)
 
 		// Matching core vhost origin
 		req, _ := http.NewRequest("GET", fileURL, nil)
@@ -1820,7 +1820,7 @@ func TestLookupCallbackOriginEnforcement(t *testing.T) {
 
 func TestAdduserCreatesHomeDir(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
-		WithLocalVolume("root"),
+		WithLocalVolume("primary"),
 	)
 	defer cleanup()
 	server.Start()
@@ -1833,7 +1833,7 @@ func TestAdduserCreatesHomeDir(t *testing.T) {
 	}
 
 	// Verify user was added to users.jsonl
-	lines, err := ReadJSONL(server, "root", "sys/etc/users.jsonl", grits.BackendPrincipal)
+	lines, err := ReadJSONL(server, "primary", "sys/etc/users.jsonl", grits.BackendPrincipal)
 	if err != nil {
 		t.Fatalf("reading users.jsonl: %v", err)
 	}
@@ -1859,7 +1859,7 @@ func TestAdduserCreatesHomeDir(t *testing.T) {
 	}
 
 	// Verify home directory exists with owner permission
-	cfg, err := authModReadAccessConfig(t, server, server.FindVolumeByName("root"), "home/testuser__")
+	cfg, err := authModReadAccessConfig(t, server, server.FindVolumeByName("primary"), "home/testuser__")
 	if err != nil {
 		t.Fatalf("reading home access.json: %v", err)
 	}

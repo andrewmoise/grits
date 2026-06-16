@@ -52,7 +52,7 @@ export const tests = [
 
 1. **Discovery** — `test()` scans `lib/*/` for directories containing a `test.js` file
 2. **Filtering** — run a subset with `test('cp', 'echo')`
-3. **Isolation** — each test gets a unique scratch directory at `//root/tmp/gimbal-test/<random>` (auto-created with `mkdir -p`)
+3. **Isolation** — each test gets a unique scratch directory at `//primary/tmp/gimbal-test/<random>` (auto-created with `mkdir -p`)
 4. **Test signature** — `fn(shell, scratch)` where `shell` gives access to `shell.eval()`, `shell.resolvePath()`, and `shell._vol()`, and `scratch` is the scratch path string
 5. **Assertions** — throw on failure: `throw new Error('expected ...')`
 6. **Output** — streamed as plain text with ✓/✗ marks and a summary

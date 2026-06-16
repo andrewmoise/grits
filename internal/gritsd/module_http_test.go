@@ -118,7 +118,7 @@ func setupEmptyDir(volume Volume, remoteUrl string) (grits.BlobAddr, error) {
 
 func TestLookupAndLinkEndpoints(t *testing.T) {
 	url := "http://localhost:1887/grits/v1"
-	server, cleanup := SetupTestServer(t, WithHttpModule(1887), WithLocalVolume("root"))
+	server, cleanup := SetupTestServer(t, WithHttpModule(1887), WithLocalVolume("primary"))
 	defer cleanup()
 
 	server.Start()
@@ -126,14 +126,14 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	emptyDirAddr, err := setupEmptyDir(server.FindVolumeByName("root"), url)
+	emptyDirAddr, err := setupEmptyDir(server.FindVolumeByName("primary"), url)
 	if err != nil {
 		t.Fatalf("Couldn't make empty dir: %v", err)
 	}
 
 	// Set up directory structure
 	linkPayload, _ := json.Marshal(LinkRequestBody{
-		Volume: "root",
+		Volume: "primary",
 		Requests: []*grits.LinkRequest{
 			{Path: "dir", NewAddr: emptyDirAddr},
 			{Path: "dir/subdir", NewAddr: emptyDirAddr},
@@ -163,7 +163,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 		resp.Body.Close()
 
 		// Create metadata for the blob
-		volume := server.FindVolumeByName("root")
+		volume := server.FindVolumeByName("primary")
 
 		contentCf, err := server.BlobStore.AddDataBlock([]byte(content))
 		if err != nil {
@@ -178,7 +178,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 		// Link the blob to two paths using metadata address
 		linkPayload, _ := json.Marshal(LinkRequestBody{
-			Volume: "root",
+			Volume: "primary",
 			Requests: []*grits.LinkRequest{
 				{Path: content, NewAddr: metadataBlob},
 				{Path: "dir/subdir/" + content, NewAddr: metadataBlob},
@@ -194,7 +194,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 	// Perform a lookup on "dir/subdir/one"
 	lookupPayload, _ := json.Marshal(LookupRequestBody{
-		Volume: "root",
+		Volume: "primary",
 		Paths:  []string{"dir/subdir/one"},
 	})
 	resp, err = http.Post(url+"/lookup", "application/json", bytes.NewBuffer(lookupPayload))
@@ -250,7 +250,7 @@ func TestLookupAndLinkEndpoints(t *testing.T) {
 
 func TestLinkReturnsPathMetadata(t *testing.T) {
 	url := "http://localhost:1888/grits/v1"
-	server, cleanup := SetupTestServer(t, WithHttpModule(1888), WithLocalVolume("root"))
+	server, cleanup := SetupTestServer(t, WithHttpModule(1888), WithLocalVolume("primary"))
 	defer cleanup()
 
 	server.Start()
@@ -274,7 +274,7 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	uploadResp.Body.Close()
 
 	// Upload an empty directory to put it in
-	emptyDirAddr, err := setupEmptyDir(server.FindVolumeByName("root"), url)
+	emptyDirAddr, err := setupEmptyDir(server.FindVolumeByName("primary"), url)
 	if err != nil {
 		t.Fatalf("Couldn't make empty directory: %v", err)
 	}
@@ -286,14 +286,14 @@ func TestLinkReturnsPathMetadata(t *testing.T) {
 	}
 	defer contentCf.Release()
 
-	blobMetadataAddr, err := CreateAndUploadMetadata(server.FindVolumeByName("root"), contentCf, url)
+	blobMetadataAddr, err := CreateAndUploadMetadata(server.FindVolumeByName("primary"), contentCf, url)
 	if err != nil {
 		t.Fatalf("Couldn't create and upload metadata: %v", err)
 	}
 
 	linkPaths := []string{"", "test", "test/nested", "test/nested/path.txt"}
 	linkPayload, _ := json.Marshal(LinkRequestBody{
-		Volume: "root",
+		Volume: "primary",
 		Requests: []*grits.LinkRequest{
 			{Path: linkPaths[1], NewAddr: emptyDirAddr},
 			{Path: linkPaths[2], NewAddr: emptyDirAddr},
@@ -369,7 +369,7 @@ func TestBlobEndpoint(t *testing.T) {
 	// Use the provided helper to set up a test server with HTTP module and local volume
 	server, cleanup := SetupTestServer(t,
 		WithHttpModule(2288),
-		WithLocalVolume("root"))
+		WithLocalVolume("primary"))
 	defer cleanup()
 
 	// Start the server and defer stopping it
@@ -628,7 +628,7 @@ func TestUploadAndDownloadBlob(t *testing.T) {
 	// Use the helper function to set up the server
 	server, cleanup := SetupTestServer(t,
 		WithHttpModule(2287),
-		WithLocalVolume("root"))
+		WithLocalVolume("primary"))
 	defer cleanup()
 
 	server.Start()
