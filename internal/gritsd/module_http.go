@@ -67,7 +67,7 @@ type HTTPModuleConfig struct {
 	KeyPath  string `json:"keyPath,omitempty"`
 
 	// Which volume holds deployed content. Defaults to "primary".
-	// Content is served from /sites/{hostname}/content/{path}.
+	// Content is served from /sites/{hostname}/live/{path}.
 	ContentVolume string `json:"contentVolume,omitempty"`
 
 	MaxUploadSize int64 `json:"maxUploadSize,omitempty"`
@@ -540,7 +540,7 @@ func (s *HTTPModule) handleDeployedContent(w http.ResponseWriter, r *http.Reques
 	urlPath := strings.TrimPrefix(r.URL.Path, "/")
 	urlPath = strings.TrimRight(urlPath, "/")
 
-	volumePath := path.Join("sites", hostname, "content", urlPath)
+	volumePath := path.Join("sites", hostname, "live", urlPath)
 
 	if !Validate("relativePath", volumePath) {
 		http.Error(w, "Invalid path", http.StatusBadRequest)

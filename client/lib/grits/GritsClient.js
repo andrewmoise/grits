@@ -1494,11 +1494,11 @@ class GritsClient {
     const u = new URL(moduleUrl);
     const parts = u.pathname.split('/').filter(Boolean);
 
-    // https://{server}/{path...} maps to //primary/sites/{server}/content/{path}
+    // https://{server}/{path...} maps to //primary/sites/{server}/live/{path}
     return {
       serverUrl: u.origin,
       volume: 'primary',
-      path: 'sites/' + u.hostname + '/content/' + parts.join('/'),
+      path: 'sites/' + u.hostname + '/live/' + parts.join('/'),
     };
   }
 

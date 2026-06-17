@@ -288,7 +288,7 @@ injectTheme();
 const _gg     = new GritsClient();
 
 // Derive runtime location from module URL.
-// Maps https://{server}/{path} to //primary/sites/{server}/content/{path} in Grits space.
+// Maps https://{server}/{path} to //primary/sites/{server}/live/{path} in Grits space.
 const _origin = window.location.origin;
 
 const { serverUrl: _serverUrl, volume: _vol, path: _path } = _gg.fromModule(import.meta.url);
