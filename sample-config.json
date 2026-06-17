@@ -19,7 +19,7 @@
       "enableTls": true,
       "readOnly": true,
       "autoCertificate": true,
-      "certbotEmail": "%EMAIL%"
+      "certbotEmail": "%YOUR_EMAIL%"
     },
 
     {
@@ -29,6 +29,13 @@
     {
       "module": "auth",
       "coreVhost": "https://%YOUR_SERVER%"
+    },
+
+    {
+      "module": "startup",
+      "commands": [
+        ["import", "-p", "./client", "//primary/sites/gimbal.%YOUR_SERVER%/live"]
+      ]
     }
   ]
 }
