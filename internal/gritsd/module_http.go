@@ -638,6 +638,7 @@ func getContentTypeFromExtension(ext string) string {
 		"woff2": "font/woff2",
 		"ttf":   "font/ttf",
 		"eot":   "application/vnd.ms-fontobject",
+		"ico":   "image/x-icon",
 	}
 	return mimeTypes[strings.ToLower(ext)]
 }
