@@ -12,10 +12,10 @@ Commands return a `Result` (thenable), which wraps a proxy so chained method cal
 
 | Directory        | Files                                                                 | Purpose |
 |------------------|-----------------------------------------------------------------------|---------|
-| `gimbal/`        | `gsh.js`, `glob.js`, `overlay.js`, `index.html`, `login.html`         | Shell environment — GimbalShell, Result, path resolution, eval, glob expansion (~455 lines in gsh.js) |
+| `gimbal/`        | `gsh.js`, `glob.js`, `overlay.js`                                                | Shell environment — GimbalShell, Result, path resolution, eval, glob expansion (~455 lines in gsh.js) |
 | `grits/`         | `GritsClient.js`, `MirrorManager.js`, `HashVerifier.js`, `PerformanceTracker.js` | Client-side filesystem — `GritsClient` (cache), `GritsVolume` (server ops), `GritsFile` (file handles), mirror management, content integrity verification (~1564 lines in GritsClient.js) |
 | `style/`         | `style.js`, `style.css`                                                | Single source of truth for design tokens — colors, spacing, typography; all derived color utilities live here (~389 lines) |
-| `vendor/`        | `json-stringify-pretty-compact/`                                        | Vendored npm package for compact JSON pretty-printing |
+| `node_modules/`  | (gitignored)                                                           | npm-managed dependencies (CodeMirror, json-stringify-pretty-compact, isomorphic-git); populated by `make deps` |
 | `serviceworker/` | `grits-serviceworker.js`, `test.html`                                   | Service worker for offline/PWA — caches Grits content client-side, handles SW update flow |
 
 ## Shell commands (each `dir/main.js`)

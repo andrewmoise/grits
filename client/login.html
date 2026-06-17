@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>gimbal — login</title>
-<link rel="stylesheet" href="../style/style.css">
+<link rel="stylesheet" href="./lib/style/style.css">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
@@ -119,7 +119,7 @@
 </div>
 
 <script type="module">
-import { injectTheme } from '../style/style.js';
+import { injectTheme } from './lib/style/style.js';
 injectTheme();
 
 const usernameEl = document.getElementById('username');
@@ -150,7 +150,7 @@ async function doLogin() {
 
     if (res.ok) {
       statusEl.textContent = 'success — redirecting…';
-      window.location.href = '/grits/v1/content/primary/lib/gimbal/';
+      window.location.href = '/grits/v1/content/primary/';
     } else {
       const data = await res.json().catch(() => ({}));
       errorEl.textContent = data.error || 'login failed';

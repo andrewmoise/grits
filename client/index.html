@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>gimbal</title>
-<link rel="stylesheet" href="../style/style.css">
+<title>Gimbal</title>
+<link rel="stylesheet" href="./lib/style/style.css">
 <style>
   /* ═══════════════════════════════════════════════════
      BASE
@@ -231,6 +231,38 @@
     height: 0.6rem;
   }
 </style>
+
+<script type="importmap">
+{
+  "imports": {
+    "@codemirror/autocomplete": "/lib/node_modules/@codemirror/autocomplete/dist/index.js",
+    "@codemirror/commands": "/lib/node_modules/@codemirror/commands/dist/index.js",
+    "@codemirror/lang-css": "/lib/node_modules/@codemirror/lang-css/dist/index.js",
+    "@codemirror/lang-html": "/lib/node_modules/@codemirror/lang-html/dist/index.js",
+    "@codemirror/lang-javascript": "/lib/node_modules/@codemirror/lang-javascript/dist/index.js",
+    "@codemirror/lang-json": "/lib/node_modules/@codemirror/lang-json/dist/index.js",
+    "@codemirror/lang-markdown": "/lib/node_modules/@codemirror/lang-markdown/dist/index.js",
+    "@codemirror/lang-python": "/lib/node_modules/@codemirror/lang-python/dist/index.js",
+    "@codemirror/language": "/lib/node_modules/@codemirror/language/dist/index.js",
+    "@codemirror/search": "/lib/node_modules/@codemirror/search/dist/index.js",
+    "@codemirror/state": "/lib/node_modules/@codemirror/state/dist/index.js",
+    "@codemirror/view": "/lib/node_modules/@codemirror/view/dist/index.js",
+    "@lezer/common": "/lib/node_modules/@lezer/common/dist/index.js",
+    "@lezer/css": "/lib/node_modules/@lezer/css/dist/index.js",
+    "@lezer/highlight": "/lib/node_modules/@lezer/highlight/dist/index.js",
+    "@lezer/html": "/lib/node_modules/@lezer/html/dist/index.js",
+    "@lezer/javascript": "/lib/node_modules/@lezer/javascript/dist/index.js",
+    "@lezer/json": "/lib/node_modules/@lezer/json/dist/index.js",
+    "@lezer/markdown": "/lib/node_modules/@lezer/markdown/dist/index.js",
+    "@lezer/python": "/lib/node_modules/@lezer/python/dist/index.js",
+    "@marijn/find-cluster-break": "/lib/node_modules/@marijn/find-cluster-break/src/index.js",
+    "crelt": "/lib/node_modules/crelt/index.js",
+    "style-mod": "/lib/node_modules/style-mod/src/style-mod.js",
+    "w3c-keyname": "/lib/node_modules/w3c-keyname/index.js"
+  }
+}
+</script>
+
 </head>
 <body>
 
@@ -247,28 +279,25 @@
 
 <script type="module">
 
-import GritsClient                             from '../grits/GritsClient.js';
-import { makeShell }                           from '../gimbal/gsh.js';
-import { injectTheme, EASE_SINE, EASE_IN, DUR } from '../style/style.js';
+import GritsClient                             from './lib/grits/GritsClient.js';
+import { makeShell }                           from './lib/gimbal/gsh.js';
+import { injectTheme, EASE_SINE, EASE_IN, DUR } from './lib/style/style.js';
 
 injectTheme();
 
 const _gg     = new GritsClient();
 
-// Derive runtime location using canonical GritsClient.fromModule()
-// FIXME: If this throws (non /grits/v1/content/ URL), we may want a
-// fallback strategy (e.g. default volume/cwd or alternate detection).
+// Derive runtime location from module URL.
+// Maps https://{server}/{path} to //primary/sites/{server}/content/{path} in Grits space.
 const _origin = window.location.origin;
 
 const { serverUrl: _serverUrl, volume: _vol, path: _path } = _gg.fromModule(import.meta.url);
 
-// Strip filename from path to get cwd
-
-// FIXME - This strips off /gimbal/ because it doesn't know we're looking at index.html, and lands in lib/. That's
-// actually fine, it's a better place to start, but it would be better to do that on purpose than accidentally.
-
-const _parts = (_path || '').split('/').filter(Boolean);
-const _cwd = _parts.slice(0, -1).join('/');
+// Strip filename from path to get cwd.
+// If the path already ends with / it's a directory — use as-is.
+const _cwd = (_path && !_path.endsWith('/'))
+  ? _path.split('/').slice(0, -1).join('/')
+  : _path || '';
 
 // Initialize shell with correct runtime context
 const _shell = makeShell({ fs: _gg });
@@ -281,15 +310,15 @@ const evalContext = { fs: _gg, shell: _shell };
 const WIDGET_REGISTRY = {
   files: {
     name: 'files', icon: 'files',
-    module: '../files/gwm-widget.js', _cache: null,
+    module: './lib/files/gwm-widget.js', _cache: null,
   },
   gterm: {
     name: 'gterm', icon: 'gterm',
-    module: '../gterm/gwm-widget.js', _cache: null,
+    module: './lib/gterm/gwm-widget.js', _cache: null,
   },
   editor: {
     name: 'editor', icon: 'editor',
-    module: '../codemirror/gwm-widget.js', _cache: null,
+    module: './lib/codemirror/gwm-widget.js', _cache: null,
   },
 };
 
@@ -1073,9 +1102,9 @@ buildStrip();
 
 // Launch initial widgets
 (async () => {
-  const filesMod = await import('../files/gwm-widget.js');
+  const filesMod = await import('./lib/files/gwm-widget.js');
   await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', evalContext });
-  const gtermMod = await import('../gterm/gwm-widget.js');
+  const gtermMod = await import('./lib/gterm/gwm-widget.js');
   await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', evalContext });
 })();
 
