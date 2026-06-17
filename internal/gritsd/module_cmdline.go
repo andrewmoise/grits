@@ -179,17 +179,23 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 		return CommandResponse{Status: 0, Output: "pong"}
 
 	case "import":
-		// import local/src/path //volume/dest/path
-		if len(cmd) != 3 {
-			return CommandResponse{Status: 1, Output: "usage: import local/src/path //volume/dest/path"}
+		// import [-p] local/src/path //volume/dest/path
+		parents := false
+		args := cmd[1:]
+		if len(args) > 0 && (args[0] == "-p" || args[0] == "--parents") {
+			parents = true
+			args = args[1:]
+		}
+		if len(args) != 2 {
+			return CommandResponse{Status: 1, Output: "usage: import [-p] local/src/path //volume/dest/path"}
 		}
 
-		srcPath := cmd[1]
+		srcPath := args[0]
 		if !filepath.IsAbs(srcPath) {
 			srcPath = s.Config.ServerPath(srcPath)
 		}
 
-		volumeName, destPath, err := parseVolumePath(cmd[2])
+		volumeName, destPath, err := parseVolumePath(args[1])
 		if err != nil {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("invalid destination: %v", err)}
 		}
@@ -198,10 +204,22 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("volume %q not found", volumeName)}
 		}
 
+		if parents {
+			parentDir := destPath
+			if idx := strings.LastIndex(parentDir, "/"); idx >= 0 {
+				parentDir = parentDir[:idx]
+			} else {
+				parentDir = ""
+			}
+			if err := ensureVolumeParentDirs(volume, parentDir); err != nil {
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("creating parent dirs: %v", err)}
+			}
+		}
+
 		if err := ImportLocalDir(volume, srcPath, destPath); err != nil {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("import failed: %v", err)}
 		}
-		return CommandResponse{Status: 0, Output: fmt.Sprintf("imported %s into //%s/%s", cmd[2], volumeName, destPath)}
+		return CommandResponse{Status: 0, Output: fmt.Sprintf("imported %s into //%s/%s", args[1], volumeName, destPath)}
 
 	case "adduser":
 		// adduser <username> <password>
