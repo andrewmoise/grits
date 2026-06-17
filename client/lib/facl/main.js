@@ -3,11 +3,11 @@ export const help = `\
 facl — display or modify file ACL grants
 
 Usage:
-  facl()                                    list grants on current dir
-  facl('/sites')                            list grants on /sites
-  facl({u:'moise'}, {p:'owner'})            add/modify on current dir
-  facl({u:'moise'}, {x:1})                  remove on current dir
-  facl('/sites', {u:'moise'}, {p:'owner'})
+  facl()                                      list grants on current dir
+  facl('/sites')                              list grants on /sites
+  facl({u:'moise', o:'gimbal'}, {p:'owner'})  add/modify on current dir
+  facl({u:'moise'}, {x:1})                    remove on current dir
+  facl('/sites', {u:'moise', o:'gimbal'}, {p:'owner'})
   facl('/sites', {u:'moise'}, {x:1})
 
 Auth/wildcard principals:
@@ -17,20 +17,22 @@ Auth/wildcard principals:
   facl({all:true}, {x:1})                       remove grant for everyone
 
 Multiple paths and principals can be combined:
-  facl('/a', '/b', {u:'alice'}, {x:1})          remove on both paths
-  facl({u:'alice'}, {u:'bob'}, {p:'read'})     add two grants on one path
-  facl({x:1})                                   clear all grants on current dir
-  facl({p:'read'}, {x:1})                       remove all read grants
+  facl('/a', '/b', {u:'alice'}, {x:1})                     remove on both paths
+  facl({u:'alice', o:'*'}, {u:'bob', o:'*'}, {p:'read'})   add two grants on one path
+  facl({x:1})                                              clear all grants on current dir
+  facl({p:'read'}, {x:1})                                  remove all read grants
 
 Principal fields:  u / user, o / origin (required)
-                   auth, all
+                   auth
+                   all
 Grant fields:      p / permission, x
 
 Permissions: read, insert, read+insert, read+write, owner
 
 Note: origin must be specified when adding grants.
-  Use {o:"*"} for any origin, or {o:"/"} for the core vhost origin,
-  or {o:"https://app.example.com"} for a specific origin.`;
+  Use {o:"*"} for any origin, a single word like {o:"gimbal"} to
+  expand to your server's subdomain, or an explicit URL like
+  {o:"https://app.example.com"} for a specific origin.`;
 
 import { isVoid, VOID, _isPlainObject, responseFromJSON } from '../gimbal/gsh.js';
 
@@ -148,7 +150,7 @@ export async function invoke(shell, previous, args) {
     throw new Error('facl: specify at least one principal (u:, auth, all) to add grants');
   }
 	if (!remove && principals.every(p => p.origin === undefined)) {
-		throw new Error('facl: origin is required. Use {o:"*"} for any origin, or {o:"/"} for the core vhost origin.');
+		throw new Error('facl: origin is required. Use {o:"*"} for any origin, a single word like {o:"gimbal"} to expand to the matching subdomain, or an explicit URL.');
 	}
 
   // Process each path.

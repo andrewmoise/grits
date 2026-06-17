@@ -1009,11 +1009,15 @@ func TestResolveOrigin(t *testing.T) {
 	}{
 		{"star passthrough", "*", "http://test.local", "*"},
 		{"empty passthrough", "", "http://test.local", ""},
-		{"slash resolves to coreVhost", "/", "http://test.local", "http://test.local"},
-		{"slash with trailing slash coreVhost stripped", "/", "http://test.local/", "http://test.local"},
+		{"single-word expands to subdomain", "gimbal", "http://test.local", "https://gimbal.local"},
+		{"single-word with https coreVhost", "music", "https://gimbal.example.org", "https://music.example.org"},
+		{"single-word with dotless coreVhost becomes bare", "foo", "http://localhost:8080", "https://foo"},
 		{"absolute http passthrough", "http://example.com/path", "http://test.local", "http://example.com/path"},
 		{"absolute https passthrough", "https://app.example.com/foo", "http://test.local", "https://app.example.com/foo"},
 		{"bare hostname gets https", "gimbal.example.com", "http://test.local", "https://gimbal.example.com"},
+		{"slash becomes inert", "/", "http://test.local", ""},
+		{"slash with text becomes inert", "foo/bar", "http://test.local", ""},
+		{"asterisk in origin becomes inert", "foo*", "http://test.local", ""},
 	}
 	for _, tc := range tests {
 		m := &AuthModule{Config: &AuthModuleConfig{CoreVhost: tc.coreVhost}}
@@ -1778,8 +1782,7 @@ func TestLookupCallbackOriginEnforcement(t *testing.T) {
 
 	t.Run("core vhost origin grant", func(t *testing.T) {
 		// Grant read only from the core vhost origin.
-		// "/" resolves to the coreVhost's origin.
-		access := AccessConfig{Allow: []Grant{{All: bt, Origin: "/", Permission: PermRead}}}
+		access := AccessConfig{Allow: []Grant{{All: bt, Origin: coreVhost, Permission: PermRead}}}
 		raw, _ := json.Marshal(access)
 		WriteVolumeFile(server, "primary", "originprotected/.grits/access.json", raw, grits.BackendPrincipal)
 		WriteVolumeFile(server, "primary", "originprotected/file.txt", []byte("content"), grits.BackendPrincipal)

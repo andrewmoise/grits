@@ -277,7 +277,7 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			// Write owner access.json last so it's not overwritten.
 			homeAccess, _ := json.Marshal(AccessConfig{
 				Allow: []Grant{
-					{User: username, Origin: "/", Permission: PermOwner},
+					{User: username, Origin: "gimbal", Permission: PermOwner},
 				},
 			})
 			if err := WriteVolumeFile(s, "primary", homeDir+"/.grits/access.json", homeAccess, grits.BackendPrincipal); err != nil {
