@@ -23,7 +23,7 @@ import (
 
 type AuthModuleConfig struct {
 	// CoreVhost is the URL of the main admin vhost (e.g. "https://gimbal.example.com").
-	// Grants with origin "/" get resolved to this origin.
+	// Single-word grant origins (no dots) get expanded to subdomains of this vhost's domain.
 	CoreVhost string `json:"coreVhost"`
 
 	// SessionMaxAge is the expiry window for HMAC tokens.
@@ -497,9 +497,10 @@ func mergePerm(a, b Permission) Permission {
 //
 // Origin is a cross-cutting constraint on top of user/auth/all:
 //
-//	""  → grant is inert (never matches)
-//	"*" → any origin (no constraint)
-//	"/" → resolves to coreVhost origin
+//	""       → grant is inert (never matches)
+//	"*"      → any origin (no constraint)
+//	"gimbal" → single-word: expanded to subdomain of coreVhost's domain
+//	           (e.g. "gimbal" + "example.org" → "https://gimbal.example.org")
 //	otherwise → must match principal.Origin exactly (bare hostnames
 //	            like "gimbal.example.com" are resolved to "https://...")
 //
@@ -530,20 +531,34 @@ func parentPath(path string) string {
 //
 //	""              → inert (pass through)
 //	"*"             → any origin (pass through)
-//	"/"             → coreVhost's origin
+//	"gimbal"        → single-word: expanded to subdomain of coreVhost's domain
 //	http(s)://…     → absolute URL, use as-is
 //	anything else   → bare hostname: prepend "https://"
+//	origin with / or * (not exactly "*") → inert, logged as warning
 func (m *AuthModule) resolveOrigin(origin string) string {
-	switch {
-	case origin == "" || origin == "*":
+	if origin == "" || origin == "*" {
 		return origin
-	case origin == "/":
-		return strings.TrimRight(m.Config.CoreVhost, "/")
-	case strings.HasPrefix(origin, "http://") || strings.HasPrefix(origin, "https://"):
-		return origin
-	default:
-		return "https://" + origin
 	}
+	if strings.HasPrefix(origin, "http://") || strings.HasPrefix(origin, "https://") {
+		return origin
+	}
+	if strings.ContainsAny(origin, "/*") {
+		log.Printf("auth: invalid origin %q — contains / or *; grant treated as inert", origin)
+		return ""
+	}
+	if !strings.Contains(origin, ".") {
+		// Single-word origin — expand to subdomain of coreVhost's domain.
+		// e.g. "gimbal" with coreVhost "https://gimbal.example.org" → "https://gimbal.example.org"
+		coreHost := m.Config.CoreVhost
+		for _, prefix := range []string{"https://", "http://"} {
+			coreHost = strings.TrimPrefix(coreHost, prefix)
+		}
+		coreHost = strings.TrimRight(coreHost, "/")
+		if dotIdx := strings.IndexByte(coreHost, '.'); dotIdx >= 0 {
+			return "https://" + origin + coreHost[dotIdx:]
+		}
+	}
+	return "https://" + origin
 }
 
 // readAccessConfig reads and parses .grits/access.json from the given directory
