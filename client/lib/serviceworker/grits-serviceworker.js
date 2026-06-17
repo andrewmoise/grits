@@ -169,7 +169,7 @@ async function handleRequest(parsed, request) {
         }
     }
 
-    let lookupPath = `${hostname}/content${urlPath}`.replace(/\/+$/, '');
+    let lookupPath = `${hostname}/live${urlPath}`.replace(/\/+$/, '');
 
     console.log('[SW] about to lookup: ' + lookupPath);
 
