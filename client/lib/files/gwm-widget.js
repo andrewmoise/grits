@@ -149,7 +149,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   if (shell) {
     serverUrl = shell.serverUrl;
     volume    = shell.volume;
-    basePath  = (shell.cwd || '').replace(/^\/+/, '');
+    basePath  = (shell.cwd || '').replace(/^\/+|\/+$/g, '');
   }
 
   if (args && args.length === 1) {
@@ -163,7 +163,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
         const r = shell.resolvePath(p);
         serverUrl = r.serverUrl;
         volume    = r.volume;
-        basePath  = r.path; // already normalized (no leading slash)
+        basePath  = r.path; // already normalized by resolvePath — no leading or trailing slash
       } catch (e) {
         console.warn('[files] failed to resolve path, using cwd');
       }
@@ -171,7 +171,10 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   }
 
   // Set widget title
-  const title = basePath ? `//${volume}/${basePath}` : `//${volume}/`;
+  let title = basePath ? `//${volume}/${basePath}/` : `//${volume}/`;
+  if (title.startsWith('//primary')) {
+    title = title.slice(9);
+  }
   const decoration = { title };
 
   const vol = fs.volume(serverUrl, volume);

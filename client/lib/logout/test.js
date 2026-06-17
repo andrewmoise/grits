@@ -5,7 +5,7 @@ export const tests = [
     async fn(shell, scratch) {
       await shell.eval(`logout()`);
       await shell.eval(`login('test', 'test')`);
-      const vol = shell._vol(shell.serverUrl, 'root');
+      const vol = shell._vol(shell.serverUrl, 'primary');
       await vol.lookup('home/test');
       await shell.eval(`logout()`);
       try {
@@ -23,7 +23,7 @@ export const tests = [
     async fn(shell, scratch) {
       await shell.eval(`logout()`);
       await shell.eval(`login('test', 'test', {g:1})`);
-      const vol = shell._vol(shell.serverUrl, 'root');
+      const vol = shell._vol(shell.serverUrl, 'primary');
       await vol.lookup('home/test');
       await shell.eval(`logout()`);
       // Simulate fresh tab — no session header

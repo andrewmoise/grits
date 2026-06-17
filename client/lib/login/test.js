@@ -25,7 +25,7 @@ export const tests = [
     async fn(shell, scratch) {
       await shell.eval(`logout()`);
       await shell.eval(`login('test', 'test')`);
-      const vol = shell._vol(shell.serverUrl, 'root');
+      const vol = shell._vol(shell.serverUrl, 'primary');
       await vol.lookup('home/test');
     },
   },
@@ -37,7 +37,7 @@ export const tests = [
       // Simulate a fresh tab: clear the session header, rely on cookie alone
       shell.fs._authToken = null;
       delete shell.fs.extraHeaders['X-Grits-Auth-Token'];
-      const vol = shell._vol(shell.serverUrl, 'root');
+      const vol = shell._vol(shell.serverUrl, 'primary');
       await vol.lookup('home/test');
     },
   },
