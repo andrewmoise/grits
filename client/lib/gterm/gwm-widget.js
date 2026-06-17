@@ -14,7 +14,7 @@
 
 import { GritsFile } from '../grits/GritsClient.js';
 import { VOID, isVoid, makeShell, _isPlainObject } from '../gimbal/gsh.js';
-import stringify from '../vendor/json-stringify-pretty-compact/index.js';
+import stringify from '/lib/node_modules/json-stringify-pretty-compact/index.js';
 import { FONT_MONO, injectStyles } from '../style/style.js';
 
 // ── cwd display label ─────────────────────────────────────

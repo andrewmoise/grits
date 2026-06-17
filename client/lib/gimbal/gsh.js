@@ -53,7 +53,7 @@
 
 import { GritsFile } from '../grits/GritsClient.js';
 import { glob } from './glob.js';
-import stringify from '../vendor/json-stringify-pretty-compact/index.js';
+import stringify from '/lib/node_modules/json-stringify-pretty-compact/index.js';
 
 // ─────────────────────────────────────────────────────────────────
 // Void sentinel — returned by commands with no meaningful output

@@ -18,7 +18,7 @@ export async function invoke(shell, previous, args) {
 
   const name = path ? path.split('/').pop() : 'editor';
 
-  const mod = await import('../codemirror/gwm-widget.js');
+  const mod = await import('./gwm-widget.js');
   await window.gimbal.openWidget(mod, { name, icon: 'editor', zone: 'master', path, r, fs: shell.fs });
 
   return VOID;

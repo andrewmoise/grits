@@ -21,7 +21,7 @@ There are some main libraries here, that are generally imported directly and use
 * `gimbal/` also has libraries for the window manager frontend, and contains the command shell in `gsh.js`.
 * `grits/` has client-side Grits code which provides filesystem operations for content from the server.
 * `style/` defines colors and styles for all UI elements.
-* `vendor/` should have json-stringify-pretty-compact in it. I would like to have a better way to organize this.
+* `node_modules/` has npm-managed dependencies (CodeMirror, json-stringify-pretty-compact, isomorphic-git). Populated via `make deps`.
 
 ## Shell commands
 

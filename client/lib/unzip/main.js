@@ -9,7 +9,7 @@ Usage:
 
 import { isVoid, VOID, _isPlainObject } from '../gimbal/gsh.js';
 import { GritsFile, AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
-import { Unzip, AsyncUnzipInflate } from 'https://esm.sh/fflate';
+import { Unzip, AsyncUnzipInflate } from '/lib/node_modules/fflate/esm/browser.js';
 
 export async function invoke(shell, previous, args) {
   const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};

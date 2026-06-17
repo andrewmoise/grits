@@ -20,6 +20,14 @@
  */
 
 import { FONT_MONO, injectStyles } from '../style/style.js';
+import { EditorView, keymap, lineNumbers, highlightActiveLine,
+         highlightActiveLineGutter, drawSelection, dropCursor } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
+import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { bracketMatching } from '@codemirror/language';
+import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
+import { syntaxTheme } from './theme.js';
 
 const STYLE_ID = 'gimbal-codemirror-styles';
 
@@ -87,30 +95,8 @@ function ensureStyles() {
   `);
 }
 
-// ── CodeMirror loader ─────────────────────────────────────
-const CM_BASE = 'https://esm.sh/@codemirror';
-
-async function loadCM(path) {
-  const [
-    { EditorView, keymap, lineNumbers, highlightActiveLine,
-      highlightActiveLineGutter, drawSelection, dropCursor },
-    { EditorState },
-    { defaultKeymap, history, historyKeymap, indentWithTab },
-    { bracketMatching },
-    { searchKeymap, highlightSelectionMatches },
-    { closeBrackets, closeBracketsKeymap },
-    { syntaxTheme },
-  ] = await Promise.all([
-    import(`${CM_BASE}/view@6`),
-    import(`${CM_BASE}/state@6`),
-    import(`${CM_BASE}/commands@6`),
-    import(`${CM_BASE}/language@6`),
-    import(`${CM_BASE}/search@6`),
-    import(`${CM_BASE}/autocomplete@6`),
-    import('./theme.js'),
-  ]);
-
-  let lang = null;
+// ── Language pack loader ─────────────────────────────────
+async function loadLang(path) {
   const ext = path?.split('.').pop()?.toLowerCase();
   const langMap = {
     js: 'lang-javascript', mjs: 'lang-javascript', ts: 'lang-javascript',
@@ -118,28 +104,16 @@ async function loadCM(path) {
     md: 'lang-markdown', py: 'lang-python',
   };
   const langPkg = langMap[ext];
-  if (langPkg) {
-    try {
-      const mod = await import(`${CM_BASE}/${langPkg}@6`);
-      const fn  = mod.javascript ?? mod.css ?? mod.html ?? mod.json
-                ?? mod.markdown  ?? mod.python ?? Object.values(mod)[0];
-      if (typeof fn === 'function') lang = fn();
-    } catch (e) {
-      console.warn(`[codemirror] language pack ${langPkg} unavailable:`, e.message);
-    }
+  if (!langPkg) return null;
+  try {
+    const mod = await import(`/lib/node_modules/@codemirror/${langPkg}/dist/index.js`);
+    const fn  = mod.javascript ?? mod.css ?? mod.html ?? mod.json
+              ?? mod.markdown  ?? mod.python ?? Object.values(mod)[0];
+    return typeof fn === 'function' ? fn() : null;
+  } catch (e) {
+    console.warn(`[codemirror] language pack ${langPkg} unavailable:`, e.message);
+    return null;
   }
-
-  return {
-    EditorView, EditorState, keymap, lineNumbers,
-    highlightActiveLine, highlightActiveLineGutter,
-    drawSelection, dropCursor,
-    history, historyKeymap, defaultKeymap, indentWithTab,
-    bracketMatching,
-    searchKeymap, highlightSelectionMatches,
-    closeBrackets, closeBracketsKeymap,
-    syntaxTheme,
-    lang,
-  };
 }
 
 // ── Widget factory ────────────────────────────────────────
@@ -242,18 +216,7 @@ export default function createWidget({ name, path = null, r = null, fs }) {
 
   // ── mount ─────────────────────────────────────────────
   async function mountCM(initialText) {
-    const cm = await loadCM(path);
-    const {
-      EditorView, EditorState, keymap, lineNumbers,
-      highlightActiveLine, highlightActiveLineGutter,
-      drawSelection, dropCursor,
-      history, historyKeymap, defaultKeymap, indentWithTab,
-      bracketMatching,
-      searchKeymap, highlightSelectionMatches,
-      closeBrackets, closeBracketsKeymap,
-      syntaxTheme,
-      lang,
-    } = cm;
+    const lang = await loadLang(path);
 
     const extensions = [
       lineNumbers(),

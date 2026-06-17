@@ -1494,18 +1494,11 @@ class GritsClient {
     const u = new URL(moduleUrl);
     const parts = u.pathname.split('/').filter(Boolean);
 
-    // Expect: grits/v1/content/{volume}/{path...}
-    if (parts.length < 4 || parts[0] !== 'grits' || parts[2] !== 'content') {
-      throw new Error(`fromModule: unsupported URL format: ${moduleUrl}`);
-    }
-
-    const volume = parts[3];
-    const path   = parts.slice(4).join('/');
-
+    // https://{server}/{path...} maps to //primary/sites/{server}/content/{path}
     return {
       serverUrl: u.origin,
-      volume,
-      path,
+      volume: 'primary',
+      path: 'sites/' + u.hostname + '/content/' + parts.join('/'),
     };
   }
 
