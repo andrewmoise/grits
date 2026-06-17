@@ -82,21 +82,21 @@ Basically, the idea for this project is to provide a framework which is akin to 
 
 ## Quickstart
 
+It only works on Linux right now. To play around with it, do this:
+
 ### Build
 
-It only works on Linux right now.
-
-To play around with it, do this:
+Set up prerequisites:
 
 * Install golang >= 1.22.12
-* `sudo apt install fuse3 certbot` or equivalent
-* Check out the source
-* Run tests: `go test ./internal/... ./cmd/...`
-* Assuming the smoke tests pass, build:
-    * `go build -o bin/certbot-helper cmd/certbot-helper/main.go`
-    * `go build -o bin/gritsd cmd/gritsd/main.go`
-    * `go build -o bin/grits cmd/grits/main.go`
+* `sudo apt install fuse3 certbot npm` or equivalent
 
+Install and build source:
+
+* Check out the Gimbal source and `cd` to the project dir
+* `make test` to do backend smoke tests
+* `make deps` to fetch JS modules
+* `make` to build the server
 
 ### Configure
 
