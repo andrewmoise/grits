@@ -197,19 +197,38 @@ func (hm *HTTPModule) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certifica
 		return nil, fmt.Errorf("no content configured for %s", hostname)
 	}
 
-	// Not cached — acquire if AutoCertificate is on.
+	// Not cached — acquire in background if AutoCertificate is on.
 	if !hm.Config.AutoCertificate {
 		return nil, fmt.Errorf("no certificate available for %s", hostname)
 	}
 
-	log.Printf("HTTP: no cert for %s, acquiring on demand", hostname)
-	v, err, _ := hm.certGroup.Do(hostname, func() (any, error) {
-		return hm.acquireAndCacheCert(hostname)
-	})
-	if err != nil {
-		return nil, err
+	hm.startAcquisition(hostname)
+	return nil, fmt.Errorf("certificate for %s is being acquired, please retry", hostname)
+}
+
+// startAcquisition fires off certificate acquisition in a background goroutine.
+// It is safe to call concurrently — duplicate calls for the same hostname are
+// silently dropped. The acquiring flag is cleared after the goroutine completes
+// (success or failure) so a future request will retry on error.
+func (hm *HTTPModule) startAcquisition(hostname string) {
+	hm.acquiringMu.Lock()
+	if hm.acquiring[hostname] {
+		hm.acquiringMu.Unlock()
+		return
 	}
-	return v.(*tls.Certificate), nil
+	hm.acquiring[hostname] = true
+	hm.acquiringMu.Unlock()
+
+	go func() {
+		log.Printf("HTTP: no cert for %s, acquiring on demand", hostname)
+		_, err := hm.acquireAndCacheCert(hostname)
+		hm.acquiringMu.Lock()
+		delete(hm.acquiring, hostname)
+		hm.acquiringMu.Unlock()
+		if err != nil {
+			log.Printf("HTTP: cert acquisition failed for %s: %v", hostname, err)
+		}
+	}()
 }
 
 func (hm *HTTPModule) acquireAndCacheCert(hostname string) (*tls.Certificate, error) {

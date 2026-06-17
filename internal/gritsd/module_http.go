@@ -16,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/sync/singleflight"
 )
 
 /////
@@ -92,12 +90,16 @@ type HTTPModule struct {
 	// Dynamic TLS certificate management.
 	// certCache holds the most recently loaded cert per hostname.
 	certMu    sync.RWMutex
-	certGroup singleflight.Group
 
 	certCache map[string]*tls.Certificate // hostname → cert
 	// renewalStopFns holds a cancel func per hostname renewal goroutine.
 	renewalMu      sync.Mutex
 	renewalStopFns map[string]context.CancelFunc
+
+	// acquiring tracks hostnames whose cert is being fetched in the background.
+	// Guards against launching duplicate acquisition goroutines.
+	acquiringMu sync.Mutex
+	acquiring   map[string]bool
 
 	stopCh chan struct{}
 }
@@ -155,7 +157,8 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 		refHolder:      NewReferenceHolder(45 * time.Second),
 		certCache:      make(map[string]*tls.Certificate),
 		renewalStopFns: make(map[string]context.CancelFunc),
-		stopCh:         make(chan struct{}),
+		acquiring:     make(map[string]bool),
+		stopCh:        make(chan struct{}),
 	}
 
 	if config.EnableTls {
