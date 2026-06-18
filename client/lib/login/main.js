@@ -6,7 +6,7 @@ Usage:
   login('username', 'password')
   login('username', 'password', {g:1})   — also set global cookie`;
 
-import { isVoid, responseFromText, _isPlainObject } from '../gimbal/gsh.js';
+import { VOID, isVoid, responseFromText, _isPlainObject } from '../gimbal/gsh.js';
 
 export async function invoke(shell, previous, args, cmd = 'login') {
   const prev = await previous;
@@ -20,5 +20,5 @@ export async function invoke(shell, previous, args, cmd = 'login') {
     throw new Error(`${cmd}: usage: login('username', 'password' [, {g:1}])`);
 
   await shell.fs.login(shell.serverUrl, username, password, { global: !!opts.g });
-  return responseFromText(`logged in as ${username}`);
+  return VOID;
 }
