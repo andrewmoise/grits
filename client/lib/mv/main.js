@@ -8,7 +8,7 @@ Usage:
 
 import { isVoid, VOID, _isPlainObject } from '../gimbal/gsh.js';
 import { AssertionError, ASSERT_PREV_MATCHES } from '../grits/GritsClient.js';
-import { resolveDestPath } from '../ln/main.js';
+import { resolveDestPaths, isPathNotFound } from '../ln/main.js';
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
@@ -31,55 +31,66 @@ export async function invoke(shell, previous, args) {
   const srcFile = await srcVol.lookup(srcR.path);
   const srcName = srcR.path.split('/').at(-1);
 
-  const destPath = opts.ff
-    ? destR.path
-    : await resolveDestPath(destVol, destR, srcName, 'mv');
+  const candidates = opts.ff
+    ? [destR.path]
+    : resolveDestPaths(destR, srcName);
 
   const isCrossVolume = srcR.serverUrl !== destR.serverUrl || srcR.volume !== destR.volume;
 
   if (isCrossVolume) {
-    try {
-      await destVol.multiLink([{
-        path:     destPath,
-        addr:     srcFile.cid(),
-        prevAddr: (opts.f || opts.ff) ? undefined : '',
-        assert:   (opts.f || opts.ff) ? 0 : ASSERT_PREV_MATCHES,
-      }]);
-    } catch (e) {
-      if (e instanceof AssertionError)
-        throw new Error(`mv: destination already exists — use {f:1} to overwrite`);
-      throw e;
+    let destPath;
+    let lastError;
+    for (const path of candidates) {
+      try {
+        await destVol.multiLink([{
+          path, addr: srcFile.cid(),
+          prevAddr: (opts.f || opts.ff) ? undefined : '',
+          assert:   (opts.f || opts.ff) ? 0 : ASSERT_PREV_MATCHES,
+        }]);
+        destPath = path;
+        break;
+      } catch (e) {
+        if (e instanceof AssertionError)
+          throw new Error(`mv: destination already exists — use {f:1} to overwrite`);
+        if (isPathNotFound(e)) { lastError = e; continue; }
+        throw e;
+      }
     }
-    // Best-effort unlink of source — if this fails, data is safe at dest.
+    if (!destPath) {
+      if (destR.trailingSlash) throw new Error(`mv: destination is not a directory: '${positional[1]}'`);
+      throw lastError || new Error('mv: cannot resolve destination');
+    }
     try {
       await srcVol.multiLink([{
-        path:     srcR.path,
-        addr:     '',
-        prevAddr: srcFile.cid(),
-        assert:   ASSERT_PREV_MATCHES,
+        path: srcR.path, addr: '',
+        prevAddr: srcFile.cid(), assert: ASSERT_PREV_MATCHES,
       }]);
     } catch (_) {}
   } else {
-    try {
-      await srcVol.multiLink([
-        {
-          path:     destPath,
-          addr:     srcFile.cid(),
-          prevAddr: (opts.f || opts.ff) ? undefined : '',
-          assert:   (opts.f || opts.ff) ? 0 : ASSERT_PREV_MATCHES,
-        },
-        {
-          path:     srcR.path,
-          addr:     '',
-          prevAddr: srcFile.cid(),
-          assert:   ASSERT_PREV_MATCHES,
-        },
-      ]);
-    } catch (e) {
-      if (e instanceof AssertionError)
-        throw new Error(`mv: destination already exists or source changed — use {f:1} to overwrite`);
-      throw e;
+    let lastError;
+    for (const destPath of candidates) {
+      try {
+        await srcVol.multiLink([
+          {
+            path: destPath, addr: srcFile.cid(),
+            prevAddr: (opts.f || opts.ff) ? undefined : '',
+            assert:   (opts.f || opts.ff) ? 0 : ASSERT_PREV_MATCHES,
+          },
+          {
+            path: srcR.path, addr: '',
+            prevAddr: srcFile.cid(), assert: ASSERT_PREV_MATCHES,
+          },
+        ]);
+        return VOID;
+      } catch (e) {
+        if (e instanceof AssertionError)
+          throw new Error(`mv: destination already exists or source changed — use {f:1} to overwrite`);
+        if (isPathNotFound(e)) { lastError = e; continue; }
+        throw e;
+      }
     }
+    if (destR.trailingSlash) throw new Error(`mv: destination is not a directory: '${positional[1]}'`);
+    throw lastError || new Error('mv: cannot resolve destination');
   }
 
   return VOID;

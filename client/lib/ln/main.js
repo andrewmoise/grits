@@ -14,23 +14,16 @@ Use to() to write a bytestream to a path.`;
 import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
 import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
-export async function resolveDestPath(destVol, destR, srcName, cmd) {
+export function resolveDestPaths(destR, srcName) {
   if (destR.trailingSlash) {
-    const dirPath = destR.path;
-    const dir = await destVol.lookup(dirPath);
-    if (!dir.isDir())
-      throw new Error(`${cmd}: destination is not a directory: '${destR.path}/'`);
-    return `${dirPath}/${srcName}`;
+    return [`${destR.path}/${srcName}`];
   }
-  let existing = null;
-  try {
-    existing = await destVol.lookup(destR.path);
-  } catch (e) {
-    if (!e.message.includes(': not found')) throw e;
-  }
-  if (existing?.isDir())
-    return `${destR.path}/${srcName}`;
-  return destR.path;
+  return [`${destR.path}/${srcName}`, destR.path];
+}
+
+export function isPathNotFound(e) {
+  const msg = e.message || '';
+  return msg.includes('file does not exist') || msg.includes('is not a directory');
 }
 
 export async function invoke(shell, previous, args, cmd = 'ln') {
@@ -53,54 +46,73 @@ export async function invoke(shell, previous, args, cmd = 'ln') {
   const srcVol  = shell._vol(srcR.serverUrl, srcR.volume);
   const destVol = shell._vol(destR.serverUrl, destR.volume);
 
-  const srcFile  = await srcVol.lookup(srcR.path);
-  const srcName  = srcR.path.split('/').at(-1);
-  const destPath = opts.ff
-    ? destR.path
-    : await resolveDestPath(destVol, destR, srcName, cmd);
+  const srcFile = await srcVol.lookup(srcR.path);
+  const srcName = srcR.path.split('/').at(-1);
+  const candidates = opts.ff
+    ? [destR.path]
+    : resolveDestPaths(destR, srcName);
 
   if (opts.f || opts.ff) {
-    await destVol.multiLink([{ path: destPath, addr: srcFile.cid() }]);
-    return VOID;
+    let lastError;
+    for (const path of candidates) {
+      try {
+        await destVol.multiLink([{ path, addr: srcFile.cid() }]);
+        return VOID;
+      } catch (e) {
+        if (e instanceof AssertionError) throw e;
+        if (isPathNotFound(e)) { lastError = e; continue; }
+        throw e;
+      }
+    }
+    if (destR.trailingSlash) throw new Error(`${cmd}: destination is not a directory: '${destArg}'`);
+    throw lastError || new Error(`${cmd}: cannot resolve destination: '${destArg}'`);
   }
 
   if (opts.i) {
+    let lastError;
+    for (const path of candidates) {
+      try {
+        await destVol.multiLink([{
+          path, addr: srcFile.cid(),
+          prevAddr: '', assert: ASSERT_PREV_MATCHES,
+        }]);
+        return VOID;
+      } catch (e) {
+        if (e instanceof AssertionError)
+          throw new Error(`${cmd}: destination already exists: '${destArg}'`);
+        if (isPathNotFound(e)) { lastError = e; continue; }
+        throw e;
+      }
+    }
+    if (destR.trailingSlash) throw new Error(`${cmd}: destination is not a directory: '${destArg}'`);
+    throw lastError || new Error(`${cmd}: cannot resolve destination: '${destArg}'`);
+  }
+
+  let lastError;
+  for (const path of candidates) {
     try {
       await destVol.multiLink([{
-        path:     destPath,
-        addr:     srcFile.cid(),
-        prevAddr: '',
-        assert:   ASSERT_PREV_MATCHES,
+        path, addr: srcFile.cid(), assert: ASSERT_IS_BLOB,
       }]);
+      return VOID;
+    } catch (e) {
+      if (!(e instanceof AssertionError)) {
+        if (isPathNotFound(e)) { lastError = e; continue; }
+        throw e;
+      }
+    }
+    try {
+      await destVol.multiLink([{
+        path, addr: srcFile.cid(),
+        prevAddr: '', assert: ASSERT_PREV_MATCHES,
+      }]);
+      return VOID;
     } catch (e) {
       if (e instanceof AssertionError)
-        throw new Error(`${cmd}: destination already exists: '${destArg}'`);
+        throw new Error(`${cmd}: destination is a directory: '${destArg}' — use {f:1} to overwrite`);
       throw e;
     }
-    return VOID;
   }
-
-  try {
-    await destVol.multiLink([{
-      path:   destPath,
-      addr:   srcFile.cid(),
-      assert: ASSERT_IS_BLOB,
-    }]);
-    return VOID;
-  } catch (e) {
-    if (!(e instanceof AssertionError)) throw e;
-  }
-
-  try {
-    await destVol.multiLink([{
-      path:     destPath,
-      addr:     srcFile.cid(),
-      prevAddr: '',
-      assert:   ASSERT_PREV_MATCHES,
-    }]);
-    return VOID;
-  } catch (e) {
-    if (!(e instanceof AssertionError)) throw e;
-    throw new Error(`${cmd}: destination is a directory: '${destArg}' — use {f:1} to overwrite`);
-  }
+  if (destR.trailingSlash) throw new Error(`${cmd}: destination is not a directory: '${destArg}'`);
+  throw lastError || new Error(`${cmd}: cannot resolve destination: '${destArg}'`);
 }
