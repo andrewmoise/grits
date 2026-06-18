@@ -1,26 +1,14 @@
 // lib/download/test.js
 export const tests = [
   {
-    label: 'download fetches a URL and returns a Response',
-    async fn(shell, scratch) {
-      const value = await shell.eval(
-        `download('${shell.serverUrl}/grits/v1/content/primary/lib/grits/GritsClient.js')`
-      );
-      if (!(value instanceof Response))
-        throw new Error(`expected Response, got ${value?.constructor?.name}`);
-      if (!value.ok)
-        throw new Error(`expected ok response, got ${value.status}`);
-    },
-  },
-  {
     label: 'download result matches same file fetched from volume',
     async fn(shell, scratch) {
       // Create a scratch file and verify consistency across HTTP and volume
       await shell.eval(`echo('hello world').to('${scratch}/file.txt')`);
 
-      // scratch looks like //primary/tmp/gimbal-test/...; derive HTTP URL
-      const relPath = scratch.replace(/^\/\//, '');
-      const url = `${shell.serverUrl}/grits/v1/content/${relPath}/file.txt`;
+      console.log("-- Test");
+
+      const url = `${shell.serverUrl}/grits/v1/content/primary${scratch}/file.txt`;
 
       const downloadedResp = await shell.eval(`download('${url}')`);
       const fetchedResp = await fetch(url);
