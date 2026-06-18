@@ -240,6 +240,51 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("failed to hash password: %v", err)}
 		}
 
+		// Assert home directory doesn't exist and create home + .grits
+		// before touching the users file, so we don't orphan the entry.
+		homeDir := "home/" + username
+		volume := s.FindVolumeByName("primary")
+		if volume != nil {
+			if err := ensureVolumeParentDirs(volume, "home"); err != nil {
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("ensuring home dir: %v", err)}
+			}
+
+			// Assert+create home/<username> — fails if already exists.
+			emptyNode, err := volume.CreateTreeNode()
+			if err != nil {
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("creating dir node: %v", err)}
+			}
+			_, err = volume.MultiLink([]*grits.LinkRequest{{
+				Path:     homeDir,
+				NewAddr:  emptyNode.MetadataBlob().GetAddress(),
+				PrevAddr: grits.NilAddr,
+				Assert:   grits.AssertPrevValueMatches,
+			}}, false, grits.BackendPrincipal)
+			emptyNode.Release()
+			if grits.IsAssertionFailed(err) {
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("Home directory %q already exists", homeDir)}
+			} else if err != nil {
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("Error linking home dir: %v", err)}
+			}
+
+			// Assert+create home/<username>/.grits.
+			gritsNode, err := volume.CreateTreeNode()
+			if err != nil {
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("creating .grits dir node: %v", err)}
+			}
+			_, err = volume.MultiLink([]*grits.LinkRequest{{
+				Path:     homeDir + "/.grits",
+				NewAddr:  gritsNode.MetadataBlob().GetAddress(),
+				PrevAddr: grits.NilAddr,
+				Assert:   grits.AssertPrevValueMatches,
+			}}, false, grits.BackendPrincipal)
+			gritsNode.Release()
+			if err != nil {
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("linking .grits dir: %v", err)}
+			}
+		}
+
+		// Now write the users file entry.
 		lines, err := ReadJSONL(s, "primary", usersFilePath, grits.BackendPrincipal)
 		if err != nil && !errors.Is(err, grits.ErrNotExist) {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("reading users file: %v", err)}
@@ -269,35 +314,13 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("writing users file: %v", err)}
 		}
 
-		// Create home directory with owner permission.
-		homeDir := "home/" + username
-		volume := s.FindVolumeByName("primary")
+		// Write owner access.json.
+		homeAccess, _ := json.Marshal(AccessConfig{
+			Allow: []Grant{
+				{User: username, Origin: "gimbal", Permission: PermOwner},
+			},
+		})
 		if volume != nil {
-			// Ensure home parent exists, then import skeleton files first
-			// so the access.json write below is the final step and won't
-			// be overwritten by a later LinkByMetadata.
-			if err := ensureVolumeParentDirs(volume, "home"); err != nil {
-				log.Printf("adduser: ensuring home dir: %v", err)
-			}
-
-			skelPath := s.Config.ServerPath("skel/sys/skel")
-			if info, statErr := os.Stat(skelPath); statErr == nil && info.IsDir() {
-				if importErr := ImportLocalDir(volume, skelPath, homeDir); importErr != nil {
-					log.Printf("adduser: importing skel: %v", importErr)
-				}
-			} else {
-				// No skel — at least create the empty home directory.
-				if err := ensureVolumeParentDirs(volume, homeDir); err != nil {
-					log.Printf("adduser: creating home dir: %v", err)
-				}
-			}
-
-			// Write owner access.json last so it's not overwritten.
-			homeAccess, _ := json.Marshal(AccessConfig{
-				Allow: []Grant{
-					{User: username, Origin: "gimbal", Permission: PermOwner},
-				},
-			})
 			if err := WriteVolumeFile(s, "primary", homeDir+"/.grits/access.json", homeAccess, grits.BackendPrincipal); err != nil {
 				log.Printf("adduser: writing home access.json: %v", err)
 			}
