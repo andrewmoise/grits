@@ -996,6 +996,14 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusConflict) // 409
 			return
 		}
+		if grits.IsNotExist(err) {
+			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusNotFound) // 404
+			return
+		}
+		if grits.IsNotDir(err) {
+			http.Error(w, fmt.Sprintf("Link failed: %v", err), http.StatusBadRequest) // 400
+			return
+		}
 		if denied, ok := grits.IsAccessDenied(err); ok {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
