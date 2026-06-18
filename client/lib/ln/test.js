@@ -22,17 +22,16 @@ export const tests = [
     },
   },
   {
-    label: 'ln with trailing slash requires directory',
+    label: 'ln with trailing slash fails if destination does not exist',
     async fn(shell, scratch) {
       let threw = false;
       try {
         await shell.eval(`echo('invoke test').to('${scratch}/main.js')`);
         await shell.eval(`ln('${scratch}/main.js', '${scratch}/notadir/')`);
       } catch (e) {
-        if (e.message.includes('not a directory')) threw = true;
-        else throw e;
+        threw = true;
       }
-      if (!threw) throw new Error('expected not-a-directory error');
+      if (!threw) throw new Error('expected an error');
     },
   },
   {

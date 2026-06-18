@@ -17,12 +17,17 @@ import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/Gr
 export async function resolveDestPath(destVol, destR, srcName, cmd) {
   if (destR.trailingSlash) {
     const dirPath = destR.path;
-    const dir = await destVol.lookup(dirPath).catch(() => null);
-    if (!dir?.isDir())
+    const dir = await destVol.lookup(dirPath);
+    if (!dir.isDir())
       throw new Error(`${cmd}: destination is not a directory: '${destR.path}/'`);
     return `${dirPath}/${srcName}`;
   }
-  const existing = await destVol.lookup(destR.path).catch(() => null);
+  let existing = null;
+  try {
+    existing = await destVol.lookup(destR.path);
+  } catch (e) {
+    if (!e.message.includes(': not found')) throw e;
+  }
   if (existing?.isDir())
     return `${destR.path}/${srcName}`;
   return destR.path;
