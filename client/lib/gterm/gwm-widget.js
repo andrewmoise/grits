@@ -6,10 +6,8 @@
  *
  * decoration interface:
  *   icon    — 'gterm'
+ *   title   — '' (blank)
  *   (no rightButtons, no onCloseRequest — terminal is always safely closeable)
- *
- * controls interface (injected by shell after mount):
- *   controls.setTitle(str) — used to reflect the current cwd in the titlebar
  */
 
 import { GritsFile } from '../grits/GritsClient.js';
@@ -181,9 +179,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
 
   ensureStyles();
 
-  // controls injected by shell after mount
-  let controls = null;
-
   // ── history — single source of truth ──────────────────
   const history = [];
   let running    = false;
@@ -288,12 +283,11 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   }, { passive: true });
 
   // ── cwd sync ──────────────────────────────────────────
-  // Keeps the input prompt and the titlebar in sync with the
-  // current working directory after each command completes.
+  // Keeps the input prompt in sync with the current working
+  // directory after each command completes.
   function syncCwd() {
     const label = cwdLabel(shell);
     inputLoc.textContent = label;
-    controls?.setTitle(label);
   }
 
   // ── DOM builders ──────────────────────────────────────
@@ -421,7 +415,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     rec.status = 'running';
     applyRunning(rec);
     inputLoc.textContent = '';
-    controls?.setTitle('…');
 
     try {
       const value = await shell.eval(rec.src, {}, { doHistory: true });
@@ -530,6 +523,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   // ── decoration declaration ────────────────────────────
   const decoration = {
     icon: 'gterm',
+    title: '',
     // No rightButtons, no onCloseRequest — terminal is always closeable
   };
 
@@ -554,9 +548,6 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
   return {
     el,
     decoration,
-
-    get controls() { return controls; },
-    set controls(c) { controls = c; },
 
     focus()   { textarea.focus(); },
     destroy() {},
