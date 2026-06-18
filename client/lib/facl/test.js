@@ -1,19 +1,11 @@
 // lib/facl/test.js
 export const tests = [
   {
-    label: 'facl() lists empty when no access.json',
+    label: 'facl() returns void when no access.json',
     async fn(shell, scratch) {
-      let threw = false;
-      let result;
-      try {
-        result = await shell.eval(`facl('${scratch}')`);
-      } catch {
-        threw = true;
-      }
-      if (threw) return;
-      const data = await result.json();
-      if (!Array.isArray(data.allow)) {
-        throw new Error('expected { allow: [...] }');
+      const result = await shell.eval(`facl('${scratch}')`);
+      if (result != null && !result._gimbalVoid) {
+        throw new Error('expected void for directory with no ACL');
       }
     },
   },

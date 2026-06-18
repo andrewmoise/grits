@@ -134,12 +134,14 @@ export async function invoke(shell, previous, args) {
     const r   = shell.resolvePath(paths[0]);
     const vol = shell._vol(r.serverUrl, r.volume);
     const jsonPath = r.path ? r.path + '/.grits/access.json' : '.grits/access.json';
-    let cfg;
     try {
       const file = await vol.lookup(jsonPath);
-      cfg = await file.json();
-    } catch { cfg = { allow: [] }; }
-    return responseFromJSON(cfg);
+      const cfg = await file.json();
+      return responseFromJSON(cfg);
+    } catch (e) {
+      if (e.message.includes('not found')) return VOID;
+      throw e;
+    }
   }
 
   // Validate.
@@ -167,7 +169,10 @@ export async function invoke(shell, previous, args) {
     try {
       const file = await vol.lookup(jsonPath);
       cfg = JSON.parse(JSON.stringify(await file.json()));
-    } catch { cfg = { allow: [] }; }
+    } catch (e) {
+      if (e.message.includes('not found')) { cfg = { allow: [] }; }
+      else throw e;
+    }
 
     if (remove) {
       // ── Remove mode ──────────────────────────────────────────
