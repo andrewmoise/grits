@@ -28,6 +28,7 @@ import { bracketMatching } from '@codemirror/language';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { closeBrackets, closeBracketsKeymap } from '@codemirror/autocomplete';
 import { syntaxTheme } from './theme.js';
+import { toast, promptInput, confirmDialog } from '../gimbal/dialog.js';
 
 const STYLE_ID = 'gimbal-codemirror-styles';
 
@@ -121,44 +122,56 @@ async function loadLang(path) {
 // path : string file path (used for language detection)
 // r    : { serverUrl, volume, path } — resolved path object
 // fs   : GritsClient instance
-export default function createWidget({ name, path = null, r = null, fs }) {
+export default function createWidget({ name, path = null, r = null, evalContext }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'ge-wrap';
 
-  let view  = null;
-  let dirty = false;
+  let view      = null;
+  let dirty     = false;
+  let currentName = name;
+  let currentPath = path;
+  let currentR    = r;
+
+  const fs    = evalContext?.fs;
+  const shell = evalContext?.shell ?? null;
 
   // controls is injected by the shell after mount
   let controls = null;
 
   // ── save button descriptor ────────────────────────────
-  // Kept as an object so we can mutate .enabled and the shell
-  // re-reads it on the next render cycle, but we also update
-  // the live DOM element directly via _el for instant feedback.
   const saveBtn = {
     icon:    'save',
     label:   'save  (⌘S)',
-    enabled: false,
+    enabled: !!r,
     action() { save(); },
   };
 
+  const saveAsBtn = {
+    icon:    'saveAs',
+    label:   'save as…',
+    enabled: true,
+    action() { saveAs(); },
+  };
+
+  const newBtn = {
+    icon:    'newDoc',
+    label:   'new document',
+    enabled: true,
+    action() { newDocument(); },
+  };
+
   // ── decoration declaration ────────────────────────────
-  // The shell reads this once after the factory resolves,
-  // then keeps controls in sync via the controls object.
   const decoration = {
     icon: 'editor',
+    title: r ? undefined : '',
+    leftButtons: [saveBtn, saveAsBtn, newBtn],
 
-    // title is left as undefined here; the shell uses the
-    // name passed to the factory until we call controls.setTitle()
-
-    leftButtons:  [saveBtn],
-
-    // Called by the shell before closing — return false to cancel
-    onCloseRequest() {
+    async onCloseRequest() {
       if (!dirty) return true;
-      return confirm(`"${name}" has unsaved changes. Close anyway?`);
+      const displayName = currentName || 'Untitled';
+      return confirmDialog({ message: `"${displayName}" has unsaved changes. Close anyway?` });
     },
   };
 
@@ -167,56 +180,120 @@ export default function createWidget({ name, path = null, r = null, fs }) {
     if (dirty === isDirty) return;
     dirty = isDirty;
 
-    // Update the save button's appearance immediately via its live DOM element
-    if (saveBtn._el) {
-      saveBtn._el.style.opacity = isDirty ? '1' : '0.3';
-      saveBtn._el.disabled = !isDirty;
-    }
-    saveBtn.enabled = isDirty;
+    const hasPath = !!currentR;
 
-    // Push title color + save button state through the controls interface
+    if (saveBtn._el) {
+      saveBtn._el.style.color  = (isDirty && hasPath) ? 'var(--a2)' : '';
+      saveBtn._el.disabled     = !hasPath;
+      saveBtn._el.style.opacity = hasPath ? '1' : '0.3';
+    }
+
+    if (saveAsBtn._el) {
+      saveAsBtn._el.style.color = (isDirty && !hasPath) ? 'var(--a2)' : '';
+    }
+
     controls?.setDirty(isDirty);
   }
 
-  function vol() {
-    if (!r || !fs) throw new Error('codemirror: no resolved path or fs');
-    return fs.volume(r.serverUrl, r.volume);
+  function volFor(rr) {
+    if (!rr || !fs) throw new Error('codemirror: no resolved path or fs');
+    return fs.volume(rr.serverUrl, rr.volume);
   }
 
   // ── load ──────────────────────────────────────────────
   async function load() {
-    if (!r) { mountCM(''); return; }
+    if (!currentR) { mountCM(''); return; }
     try {
-      const file = await vol().lookup(r.path);
+      const file = await volFor(currentR).lookup(currentR.path);
       const text = await file.text();
       mountCM(text);
     } catch (e) {
       const errEl = document.createElement('div');
       errEl.className = 'ge-error';
-      errEl.textContent = `Error loading ${path}: ${e.message}`;
+      errEl.textContent = `Error loading ${currentPath}: ${e.message}`;
       el.appendChild(errEl);
     }
   }
 
   // ── save ──────────────────────────────────────────────
   async function save() {
-    if (!r || !view) return;
+    if (!currentR || !view) return;
     try {
-      const v      = vol();
+      const v      = volFor(currentR);
       const text   = view.state.doc.toString();
       const bytes  = new TextEncoder().encode(text);
       const contentCID = await v.put(bytes);
       const metaCID    = await v.mkfile(contentCID, bytes.byteLength);
-      await v.link(metaCID, r.path);
+      await v.link(metaCID, currentR.path);
       markDirty(false);
     } catch (e) {
-      console.error('[codemirror] save failed:', e);
+      toast(`Save failed: ${e.message}`);
+    }
+  }
+
+  // ── new document ─────────────────────────────────────
+  async function newDocument() {
+    const displayName = currentName || 'Untitled';
+    if (dirty && !(await confirmDialog({ message: `"${displayName}" has unsaved changes. Discard?` }))) return;
+
+    currentName = '';
+    currentPath = null;
+    currentR    = null;
+
+    if (view) {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: '' } });
+      markDirty(false);
+    } else {
+      mountCM('');
+    }
+
+    controls?.setTitle(currentName);
+  }
+
+  // ── save as ───────────────────────────────────────────
+  async function saveAs() {
+    if (!view) return;
+
+    const defaultName = currentR
+      ? (currentR.volume === 'primary' ? `/${currentR.path}` : `//${currentR.volume}/${currentR.path}`)
+      : shell
+        ? (shell.volume === 'primary' ? `/${shell.cwd || ''}` : `//${shell.volume}/${shell.cwd || ''}`)
+        : '(untitled)';
+    const answer = await promptInput({ message: 'Save as…', defaultValue: defaultName });
+    if (!answer) return;
+
+    let resolved;
+    if (shell) {
+      resolved = shell.resolvePath(answer);
+    } else if (currentR) {
+      // Fall back to current volume if no shell
+      resolved = { ...currentR, path: answer };
+    } else {
+      toast('Cannot save: no shell context to resolve path');
+      return;
+    }
+
+    try {
+      const v      = volFor(resolved);
+      const text   = view.state.doc.toString();
+      const bytes  = new TextEncoder().encode(text);
+      const contentCID = await v.put(bytes);
+      const metaCID    = await v.mkfile(contentCID, bytes.byteLength);
+      await v.link(metaCID, resolved.path);
+
+      currentR    = resolved;
+      currentPath = answer;
+      currentName = answer.split('/').pop();
+      controls?.setTitle(currentName);
+      markDirty(false);
+    } catch (e) {
+      toast(`Save failed: ${e.message}`);
     }
   }
 
   // ── mount ─────────────────────────────────────────────
   async function mountCM(initialText) {
-    const lang = await loadLang(path);
+    const lang = await loadLang(currentPath);
 
     const extensions = [
       lineNumbers(),

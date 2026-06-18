@@ -8,6 +8,7 @@
  */
 
 import { FONT_MONO, injectStyles } from '../style/style.js';
+import { toast } from '../gimbal/dialog.js';
 
 const SVG_CARET = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
@@ -142,6 +143,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   let volume    = 'client';
   let basePath  = '';
   let selected = null;
+  let controls = null;
 
   // ── Parse args → path ───────────────────────────────────────
   // Parse args → (serverUrl, volume, basePath)
@@ -170,12 +172,29 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
     }
   }
 
-  // Set widget title
-  let title = basePath ? `//${volume}/${basePath}/` : `//${volume}/`;
-  if (title.startsWith('//primary')) {
-    title = title.slice(9);
+  function makeTitle(path) {
+    let t = path ? `//${volume}/${path}/` : `//${volume}/`;
+    if (t.startsWith('//primary')) t = t.slice(9);
+    return t;
   }
-  const decoration = { title };
+
+  const atRoot = !basePath || !basePath.includes('/');
+
+  const parentBtn = {
+    icon:    'parentDir',
+    label:   'parent directory',
+    enabled: !atRoot,
+    action() { goToParent(); },
+  };
+
+  const reloadBtn = {
+    icon:    'reload',
+    label:   'reload',
+    enabled: true,
+    action() { reload(); },
+  };
+
+  const decoration = { title: makeTitle(basePath), leftButtons: [parentBtn, reloadBtn] };
 
   const vol = fs.volume(serverUrl, volume);
 
@@ -268,6 +287,40 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
     return depth;
   }
 
+  function updateParentBtnState() {
+    const atRoot = !basePath || !basePath.includes('/');
+    if (parentBtn._el) {
+      parentBtn._el.disabled = atRoot;
+      parentBtn._el.style.opacity = atRoot ? '0.3' : '1';
+    }
+  }
+
+  async function goToParent() {
+    if (!basePath || !basePath.includes('/')) return;
+
+    const parent = basePath.split('/').slice(0, -1).join('/');
+
+    try {
+      await vol.lookup(parent);
+    } catch (e) {
+      toast(`Cannot open parent: ${e.message}`);
+      return;
+    }
+
+    el.innerHTML = '';
+    basePath = parent;
+    decoration.title = makeTitle(basePath);
+    controls?.setTitle(decoration.title);
+    await loadRoot();
+    updateParentBtnState();
+  }
+
+  async function reload() {
+    el.innerHTML = '';
+    await loadRoot();
+    updateParentBtnState();
+  }
+
   async function loadRoot() {
     try {
       const rootFile = await vol.lookup(basePath);
@@ -311,5 +364,12 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
 
   el.tabIndex = 0;
   el.style.outline = 'none';
-  return { el, focus() { el.focus(); }, destroy() {}, decoration };
+  return {
+    el,
+    decoration,
+    get controls() { return controls; },
+    set controls(c) { controls = c; },
+    focus() { el.focus(); },
+    destroy() {},
+  };
 }
