@@ -12,6 +12,7 @@ import (
 	"grits/internal/grits"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,8 +23,9 @@ import (
 )
 
 type AuthModuleConfig struct {
-	// CoreVhost is the URL of the main admin vhost (e.g. "https://gimbal.example.com").
-	// Single-word grant origins (no dots) get expanded to subdomains of this vhost's domain.
+	// CoreVhost is the root domain of this server deployment (e.g. "example.org").
+	// Single-word grant origins (no dots) get expanded to subdomains of this domain.
+	// The auth cookie's Domain attribute is derived from this automatically.
 	CoreVhost string `json:"coreVhost"`
 
 	// SessionMaxAge is the expiry window for HMAC tokens.
@@ -35,10 +37,6 @@ type AuthModuleConfig struct {
 	// Defaults to 365 days. The HMAC token inside expires after
 	// SessionMaxAge, but the cookie remains as a placeholder.
 	CookieMaxAge time.Duration `json:"cookieMaxAge,omitempty"`
-
-	// CookieDomain optionally scopes the grits_auth cookie to a domain
-	// (e.g. ".example.org") so it is sent to all subdomains.
-	CookieDomain string `json:"cookieDomain,omitempty"`
 }
 
 type AuthModule struct {
@@ -148,17 +146,31 @@ func (*AuthModule) GetDependencies() []*Dependency {
 }
 func (m *AuthModule) GetConfig() any { return m.Config }
 
+// cookieDomain returns the Domain attribute for the auth cookie,
+// derived from coreVhost. e.g. coreVhost "melanic.org" → ".melanic.org".
+// Returns "" if coreVhost can't be parsed (cookie becomes host-only).
+func (m *AuthModule) cookieDomain() string {
+	raw := m.Config.CoreVhost
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	return "." + u.Hostname()
+}
+
 // setAuthCookie writes the grits_auth cookie with the given token value.
 func (m *AuthModule) setAuthCookie(w http.ResponseWriter, token string) {
 	c := &http.Cookie{
 		Name:     authCookie,
 		Value:    token,
 		Path:     "/",
+		Domain:   m.cookieDomain(),
 		MaxAge:   int(m.cookieMaxAge.Seconds()),
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
-	}
-	if m.Config.CookieDomain != "" {
-		c.Domain = m.Config.CookieDomain
 	}
 	http.SetCookie(w, c)
 }
@@ -169,11 +181,10 @@ func (m *AuthModule) clearAuthCookie(w http.ResponseWriter) {
 		Name:     authCookie,
 		Value:    "",
 		Path:     "/",
+		Domain:   m.cookieDomain(),
 		MaxAge:   -1,
+		Secure:   true,
 		SameSite: http.SameSiteLaxMode,
-	}
-	if m.Config.CookieDomain != "" {
-		c.Domain = m.Config.CookieDomain
 	}
 	http.SetCookie(w, c)
 }
@@ -532,6 +543,7 @@ func parentPath(path string) string {
 //	""              → inert (pass through)
 //	"*"             → any origin (pass through)
 //	"gimbal"        → single-word: expanded to subdomain of coreVhost's domain
+//	                 (e.g. "gimbal" + "example.org" → "https://gimbal.example.org")
 //	http(s)://…     → absolute URL, use as-is
 //	anything else   → bare hostname: prepend "https://"
 //	origin with / or * (not exactly "*") → inert, logged as warning
@@ -548,17 +560,28 @@ func (m *AuthModule) resolveOrigin(origin string) string {
 	}
 	if !strings.Contains(origin, ".") {
 		// Single-word origin — expand to subdomain of coreVhost's domain.
-		// e.g. "gimbal" with coreVhost "https://gimbal.example.org" → "https://gimbal.example.org"
-		coreHost := m.Config.CoreVhost
-		for _, prefix := range []string{"https://", "http://"} {
-			coreHost = strings.TrimPrefix(coreHost, prefix)
+		coreHost := m.authHostname()
+		if coreHost == "" {
+			log.Printf("auth: invalid coreVhost %q; grant %q treated as inert", m.Config.CoreVhost, origin)
+			return ""
 		}
-		coreHost = strings.TrimRight(coreHost, "/")
-		if dotIdx := strings.IndexByte(coreHost, '.'); dotIdx >= 0 {
-			return "https://" + origin + coreHost[dotIdx:]
-		}
+		return "https://" + origin + "." + coreHost
 	}
 	return "https://" + origin
+}
+
+// authHostname parses coreVhost and returns just the hostname part,
+// handling bare domains and URLs with or without a scheme.
+func (m *AuthModule) authHostname() string {
+	raw := m.Config.CoreVhost
+	if !strings.HasPrefix(raw, "http://") && !strings.HasPrefix(raw, "https://") {
+		raw = "https://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // readAccessConfig reads and parses .grits/access.json from the given directory

@@ -1009,9 +1009,9 @@ func TestResolveOrigin(t *testing.T) {
 	}{
 		{"star passthrough", "*", "http://test.local", "*"},
 		{"empty passthrough", "", "http://test.local", ""},
-		{"single-word expands to subdomain", "gimbal", "http://test.local", "https://gimbal.local"},
-		{"single-word with https coreVhost", "music", "https://gimbal.example.org", "https://music.example.org"},
-		{"single-word with dotless coreVhost becomes bare", "foo", "http://localhost:8080", "https://foo"},
+		{"single-word expands to subdomain of coreVhost", "gimbal", "http://test.local", "https://gimbal.test.local"},
+		{"single-word with https coreVhost", "music", "https://gimbal.example.org", "https://music.gimbal.example.org"},
+		{"single-word with dotless coreVhost", "foo", "http://localhost:8080", "https://foo.localhost"},
 		{"absolute http passthrough", "http://example.com/path", "http://test.local", "http://example.com/path"},
 		{"absolute https passthrough", "https://app.example.com/foo", "http://test.local", "https://app.example.com/foo"},
 		{"bare hostname gets https", "gimbal.example.com", "http://test.local", "https://gimbal.example.com"},
