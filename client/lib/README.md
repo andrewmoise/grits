@@ -4,13 +4,9 @@ This is where all the frontend code lives.
 
 A few different concerns are flattened together into subdirectories of this single `lib/` directory, which may or may not be a good idea.
 
-There is also `//client/serviceworker` which contains the SW. It's only enabled if the `serviceworker` backend module is active, and unlike the rest of this, cannot be changed per-user.
-
 ## Client-side Gimbal app
 
-`gimbal/` contains a "window manager" or full-featured graphical frontend.
-
-Open https://{your server}/grits/v1/content/client/lib/gimbal to interact with it. There are also some JS libraries.
+`gimbal/` contains a "window manager" or full-featured graphical frontend. In a normal installation, you can open https://gimbal.{your domain}.com/ to interact with it.
 
 Conceptually, `gsh` is the command shell, and `gwm` is the window manager. Gimbal is the whole frontend package.
 
@@ -37,6 +33,8 @@ Some are custom:
 * `help()` prints some pretty brief help text.
 * `test()` runs a self test on a bunch of shell commands.
 
+`login()`, `logout()`, and `whoami()` are useful for authenticated access.
+
 ## Widgets
 
 Widgets are windows within the window environment. You can launch these either from the launcher icons in gwm, or by typing their shell commands:
@@ -45,6 +43,6 @@ Widgets are windows within the window environment. You can launch these either f
 * `edit(filename)` just launches Codemirror, but you could override it if you wanted a different editor by default.
 * `files(path)` is a file browser. You can give it an argument to open a specific directory.
 * `gterm()` is a terminal.
-* `iframe(url)` launches a widget which displays a web page. Like `download()`, CORS makes it almost entirely useless in practice, except for testing your own cooperating applications.
+* `iframe(url)` launches a widget which displays a web page. Like `download()`, CORS makes it almost entirely useless in practice except for testing your own cooperating applications.
 
 ## Enjoy!
