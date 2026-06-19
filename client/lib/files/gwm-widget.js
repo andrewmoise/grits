@@ -115,6 +115,7 @@ function buildRow(node, depth, onSelect, onToggle, onOpenFile) {
     childrenEl.className = 'gf-children';
   }
 
+  row.dataset.cid = node.file.cid();
   node.el = { row, caretEl, childrenEl };
 
   row.addEventListener('click', () => {
@@ -144,6 +145,9 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   let basePath  = '';
   let selected = null;
   let controls = null;
+  let rootNode = null;
+  let domBusy = 0;
+  let refreshTimer = null;
 
   // ── Parse args → path ───────────────────────────────────────
   // Parse args → (serverUrl, volume, basePath)
@@ -187,14 +191,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
     action() { goToParent(); },
   };
 
-  const reloadBtn = {
-    icon:    'reload',
-    label:   'reload',
-    enabled: true,
-    action() { reload(); },
-  };
-
-  const decoration = { title: makeTitle(basePath), leftButtons: [parentBtn, reloadBtn] };
+  const decoration = { title: makeTitle(basePath), leftButtons: [parentBtn] };
 
   const vol = fs.volume(serverUrl, volume);
 
@@ -218,6 +215,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
     if (!node.loaded) {
       node.loaded = true;
       childrenEl.appendChild(msgEl('gf-loading', '...', depthOf(node) + 1));
+      domBusy++;
 
       try {
         const childFiles = await node.file.children();
@@ -247,6 +245,8 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       } catch (e) {
         childrenEl.innerHTML = `<div class="gf-error">${e.message}</div>`;
         node.loaded = false;
+      } finally {
+        domBusy--;
       }
     }
   }
@@ -307,32 +307,147 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       return;
     }
 
-    el.innerHTML = '';
-    basePath = parent;
-    decoration.title = makeTitle(basePath);
-    controls?.setTitle(decoration.title);
-    await loadRoot();
-    updateParentBtnState();
+    domBusy++;
+    try {
+      rootNode = null;
+      basePath = parent;
+      decoration.title = makeTitle(basePath);
+      controls?.setTitle(decoration.title);
+      await loadRoot();
+      updateParentBtnState();
+    } finally {
+      domBusy--;
+    }
+  }
+
+  async function collectChanges(containerEl, parentNode, parentPath, newChildrenMap) {
+    const ops = [];
+    const oldChildren = parentNode.children;
+
+    for (const [name] of oldChildren) {
+      if (!newChildrenMap.has(name)) {
+        ops.push({ type: 'remove', parentNode, node: oldChildren.get(name) });
+      }
+    }
+
+    for (const [name, newFile] of newChildrenMap) {
+      if (oldChildren.has(name)) {
+        const node = oldChildren.get(name);
+        ops.push({ type: 'update', node, newFile });
+        if (newFile.isDir() && node.open && node.loaded && node.el.childrenEl) {
+          const grandChildren = await newFile.children();
+          const childOps = await collectChanges(node.el.childrenEl, node,
+            parentPath ? `${parentPath}/${name}` : name, grandChildren);
+          ops.push(...childOps);
+        }
+      } else {
+        ops.push({ type: 'add', parentNode, name, file: newFile, parentPath, containerEl });
+      }
+    }
+
+    return ops;
+  }
+
+  function applyChanges(ops) {
+    for (const op of ops) {
+      if (op.type === 'remove') {
+        op.node.el.row.remove();
+        if (op.node.el.childrenEl) op.node.el.childrenEl.remove();
+        op.parentNode.children.delete(op.node.name);
+      }
+    }
+
+    for (const op of ops) {
+      if (op.type === 'update') {
+        op.node.file = op.newFile;
+        op.node.el.row.dataset.cid = op.newFile.cid();
+      }
+    }
+
+    for (const op of ops) {
+      if (op.type === 'add') {
+        const newNode = makeNode(op.name, op.file, op.parentPath);
+        const { row, childrenEl } = buildRow(newNode, 0, onSelect, toggle, onOpenFile);
+
+        const nextSibling = [...op.parentNode.children.entries()]
+          .find(([siblingName]) => siblingName > op.name);
+
+        if (nextSibling) {
+          op.containerEl.insertBefore(row, nextSibling[1].el.row);
+          if (childrenEl) op.containerEl.insertBefore(childrenEl, nextSibling[1].el.row);
+        } else {
+          op.containerEl.appendChild(row);
+          if (childrenEl) op.containerEl.appendChild(childrenEl);
+        }
+
+        op.parentNode.children.set(op.name, newNode);
+      }
+    }
   }
 
   async function reload() {
-    el.innerHTML = '';
-    await loadRoot();
-    updateParentBtnState();
+    if (!rootNode) { await loadRoot(); return; }
+
+    domBusy++;
+    const oldScroll = el.scrollTop;
+    try {
+      const rootFile = await vol.lookup(basePath);
+      const newChildren = await rootFile.children();
+      rootNode.file = rootFile;
+      const ops = await collectChanges(el, rootNode, '', newChildren);
+      if (domBusy > 1) return;
+      applyChanges(ops);
+      el.scrollTop = oldScroll;
+      updateParentBtnState();
+    } catch (e) {
+      toast(`Reload failed: ${e.message}`);
+    } finally {
+      domBusy--;
+    }
+  }
+
+  async function refreshTick() {
+    if (!rootNode) return;
+    try {
+      const rootFile = await vol.lookup(basePath);
+      if (rootFile.cid() === rootNode.file.cid()) return;
+      const newChildren = await rootFile.children();
+      rootNode.file = rootFile;
+      const ops = await collectChanges(el, rootNode, '', newChildren);
+      if (domBusy > 0) return;
+      const oldScroll = el.scrollTop;
+      applyChanges(ops);
+      el.scrollTop = oldScroll;
+      updateParentBtnState();
+    } catch (e) {
+      // silently ignore — retry next tick
+    }
+  }
+
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    refreshTimer = setInterval(refreshTick, 2000);
+  }
+
+  function stopAutoRefresh() {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
   }
 
   async function loadRoot() {
     try {
       const rootFile = await vol.lookup(basePath);
-      // Display name: last segment or '/' for empty
       const displayName = basePath ? basePath.split('/').pop() : '/';
-      // Root node is virtual; paths are relative to basePath
-      const rootNode = makeNode('', rootFile, '');
+
+      rootNode = makeNode('', rootFile, '');
       rootNode.open   = true;
       rootNode.loaded = true;
 
       const childFiles = await rootFile.children();
       rootNode.children = new Map();
+      el.innerHTML = '';
 
       const sorted = [...childFiles.entries()].sort(([an, af], [bn, bf]) => {
         const ad = af.isDir(), bd = bf.isDir();
@@ -341,7 +456,6 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       });
 
       for (const [childName, childFile] of sorted) {
-        // children of root start at '' (relative to basePath)
         const childNode = makeNode(childName, childFile, '');
         rootNode.children.set(childName, childNode);
         const { row, childrenEl } = buildRow(childNode, 0, onSelect, toggle, onOpenFile);
@@ -360,7 +474,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
     }
   }
 
-  loadRoot();
+  loadRoot().then(startAutoRefresh);
 
   el.tabIndex = 0;
   el.style.outline = 'none';
@@ -370,6 +484,8 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
     get controls() { return controls; },
     set controls(c) { controls = c; },
     focus() { el.focus(); },
-    destroy() {},
+    destroy() {
+      stopAutoRefresh();
+    },
   };
 }
