@@ -1830,7 +1830,7 @@ func TestAdduserCreatesHomeDir(t *testing.T) {
 	defer server.Stop()
 
 	// Run adduser command
-	resp := server.ExecuteCommand([]string{"adduser", "testuser__", "testpassword"})
+	resp := server.ExecuteCommand([]string{"adduser", "testuser__", "correct horse battery staple"})
 	if resp.Status != 0 {
 		t.Fatalf("adduser failed: %s", resp.Output)
 	}
