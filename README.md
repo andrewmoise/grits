@@ -48,10 +48,10 @@ As an example of doing that, we make a copy of `gimbal.melanic.org` so we can cu
 The calls to `facl()` are necessary. Respectively, they are:
 
 1. Make `custom.melanic.org` editable by our user, from our normal shell
-2. Make our normal files editable by our user, from the new shell
-3. Make `custom.melanic.org` editable by our user from the new shell
+2. Make our normal files editable by our user, from the custom shell
+3. Make `custom.melanic.org` editable by our user from the custom shell
 
-See the "permissions" section in [REFERENCE.md](REFERENCE.md) for an in-depth explanation of how and why origin access controls work and why this facl() is necessary before this will work.
+See the "permissions" section in [REFERENCE.md](REFERENCE.md) for an in-depth explanation of how and why origin access controls work and why this `facl()` is necessary.
 
 Having made the new customized shell environment, we make it live:
 
@@ -81,9 +81,7 @@ Hopefully this shows the general idea behind this type of environment.
 
 ## Structure
 
-There is a lot of reference and details of how the system works in [REFERENCE.md](REFERENCE.md). Basically, what you need to know in order to initially operate it is this:
-
-The system is split into two cooperating pieces:
+There is a lot of reference and details of how the system works in [REFERENCE.md](REFERENCE.md). The overall system is split into two cooperating pieces:
 
 * **Gimbal** is the frontend which provides a Unix-like shell and that "window manager" shown in the examples.
 * **Grits** is the backend, the server that provides a read-writable Merkle tree with useful primitives for sharing and replicating content. More or less, it is the filesystem, and Gimbal is the desktop environment.

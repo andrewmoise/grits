@@ -2,6 +2,7 @@
   "storageSize": 0,
   "storageFreeSize": 0,
   "runAsUser": "%USER%",
+  "doLogging": true,
   "modules": [
     {
       "module": "volume",
@@ -28,13 +29,13 @@
 
     {
       "module": "auth",
-      "coreVhost": "https://%YOUR_SERVER%"
+      "coreVhost": "%YOUR_DOMAIN%.com"
     },
 
     {
       "module": "startup",
       "commands": [
-        ["import", "-p", "./client", "//primary/sites/gimbal.%YOUR_SERVER%/live"]
+        ["import", "-p", "./client", "//primary/sites/gimbal.%YOUR_DOMAIN%.com/live"]
       ]
     }
   ]
