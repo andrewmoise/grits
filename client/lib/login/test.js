@@ -5,40 +5,32 @@ export const tests = [
     async fn(shell, scratch) {
       await shell.eval(`logout()`);
       const text = await shell.eval(`whoami().toText()`);
-      if (!text.includes('anonymous')) throw new Error(`expected anonymous, got: ${text}`);
-    },
-  },
-  {
-    label: 'login fails with wrong password',
-    async fn(shell, scratch) {
-      await shell.eval(`logout()`);
-      try {
-        await shell.eval(`login('test', 'wrongpass')`);
-        throw new Error('expected login to fail with wrong password');
-      } catch (e) {
-        if (e.message.includes('expected login to fail')) throw e;
-      }
+      if (text !== '') throw new Error(`expected empty, got: ${JSON.stringify(text)}`);
     },
   },
   {
     label: 'session-only login grants access via header',
     async fn(shell, scratch) {
       await shell.eval(`logout()`);
-      await shell.eval(`login('test', 'test')`);
+      await shell.eval(`login()`);
+      const username = shell.fs._username;
+      if (!username) throw new Error('no username after login');
       const vol = shell._vol(shell.serverUrl, 'primary');
-      await vol.lookup('home/test');
+      await vol.lookup('home/' + username);
     },
   },
   {
     label: 'global login grants access via cookie alone',
     async fn(shell, scratch) {
       await shell.eval(`logout()`);
-      await shell.eval(`login('test', 'test', {g:1})`);
+      await shell.eval(`login({g:1})`);
+      const username = shell.fs._username;
+      if (!username) throw new Error('no username after login');
       // Simulate a fresh tab: clear the session header, rely on cookie alone
       shell.fs._authToken = null;
       delete shell.fs.extraHeaders['X-Grits-Auth-Token'];
       const vol = shell._vol(shell.serverUrl, 'primary');
-      await vol.lookup('home/test');
+      await vol.lookup('home/' + username);
     },
   },
 ];

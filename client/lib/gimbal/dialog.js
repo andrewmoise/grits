@@ -182,6 +182,7 @@ function ensurePromptStyles() {
 
 export function promptInput({ message, defaultValue = '' } = {}) {
   ensurePromptStyles();
+  const prevFocus = document.activeElement;
 
   return new Promise(resolve => {
     _promptResolve = resolve;
@@ -224,6 +225,7 @@ export function promptInput({ message, defaultValue = '' } = {}) {
     function close(result) {
       backdrop.remove();
       _promptResolve = null;
+      setTimeout(() => prevFocus?.focus(), 100);
       resolve(result);
     }
 
@@ -242,9 +244,149 @@ export function promptInput({ message, defaultValue = '' } = {}) {
   });
 }
 
+// ── Password prompt ───────────────────────────────────────────
+export function promptPassword({ message } = {}) {
+  ensurePromptStyles();
+  const prevFocus = document.activeElement;
+
+  return new Promise(resolve => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'gimbal-prompt-backdrop';
+
+    const box = document.createElement('div');
+    box.className = 'gimbal-prompt-box';
+
+    const msgEl = document.createElement('div');
+    msgEl.className = 'gimbal-prompt-message';
+    msgEl.textContent = message || 'Password:';
+    box.appendChild(msgEl);
+
+    const input = document.createElement('input');
+    input.className = 'gimbal-prompt-input';
+    input.type = 'password';
+    input.autocomplete = 'current-password';
+    box.appendChild(input);
+
+    const actions = document.createElement('div');
+    actions.className = 'gimbal-prompt-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'gimbal-prompt-btn';
+    cancelBtn.textContent = 'Cancel';
+    actions.appendChild(cancelBtn);
+
+    const okBtn = document.createElement('button');
+    okBtn.className = 'gimbal-prompt-btn primary';
+    okBtn.textContent = 'OK';
+    actions.appendChild(okBtn);
+
+    box.appendChild(actions);
+    backdrop.appendChild(box);
+    document.body.appendChild(backdrop);
+
+    function close(result) {
+      backdrop.remove();
+      setTimeout(() => prevFocus?.focus(), 100);
+      resolve(result);
+    }
+
+    cancelBtn.addEventListener('click', () => close(null));
+    okBtn.addEventListener('click', () => close(input.value));
+    input.addEventListener('keydown', e => {
+      if (e.key === 'Enter') close(input.value);
+      if (e.key === 'Escape') close(null);
+    });
+
+    requestAnimationFrame(() => {
+      input.focus();
+    });
+  });
+}
+
+// ── Combined login prompt (username + password) ────────────────
+export function promptCredentials({ message } = {}) {
+  ensurePromptStyles();
+  const prevFocus = document.activeElement;
+
+  return new Promise(resolve => {
+    const backdrop = document.createElement('div');
+    backdrop.className = 'gimbal-prompt-backdrop';
+
+    const box = document.createElement('div');
+    box.className = 'gimbal-prompt-box';
+
+    const msgEl = document.createElement('div');
+    msgEl.className = 'gimbal-prompt-message';
+    msgEl.textContent = message || 'Login';
+    box.appendChild(msgEl);
+
+    const userLabel = document.createElement('div');
+    userLabel.style.cssText = 'margin-bottom:0.25rem;color:var(--text);font-size:var(--fs-sm);';
+    userLabel.textContent = 'Username';
+    box.appendChild(userLabel);
+
+    const usernameInput = document.createElement('input');
+    usernameInput.className = 'gimbal-prompt-input';
+    usernameInput.type = 'text';
+    usernameInput.spellcheck = false;
+    usernameInput.autocomplete = 'username';
+    box.appendChild(usernameInput);
+
+    const passLabel = document.createElement('div');
+    passLabel.style.cssText = 'margin-top:0.6rem;margin-bottom:0.25rem;color:var(--text);font-size:var(--fs-sm);';
+    passLabel.textContent = 'Password';
+    box.appendChild(passLabel);
+
+    const passwordInput = document.createElement('input');
+    passwordInput.className = 'gimbal-prompt-input';
+    passwordInput.type = 'password';
+    passwordInput.autocomplete = 'current-password';
+    box.appendChild(passwordInput);
+
+    const actions = document.createElement('div');
+    actions.className = 'gimbal-prompt-actions';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'gimbal-prompt-btn';
+    cancelBtn.textContent = 'Cancel';
+    actions.appendChild(cancelBtn);
+
+    const okBtn = document.createElement('button');
+    okBtn.className = 'gimbal-prompt-btn primary';
+    okBtn.textContent = 'OK';
+    actions.appendChild(okBtn);
+
+    box.appendChild(actions);
+    backdrop.appendChild(box);
+    document.body.appendChild(backdrop);
+
+    function close(result) {
+      backdrop.remove();
+      setTimeout(() => prevFocus?.focus(), 100);
+      resolve(result);
+    }
+
+    cancelBtn.addEventListener('click', () => close(null));
+    okBtn.addEventListener('click', () => close({ username: usernameInput.value, password: passwordInput.value }));
+    usernameInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') { e.preventDefault(); passwordInput.focus(); }
+      if (e.key === 'Escape') close(null);
+    });
+    passwordInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter') close({ username: usernameInput.value, password: passwordInput.value });
+      if (e.key === 'Escape') close(null);
+    });
+
+    requestAnimationFrame(() => {
+      usernameInput.focus();
+    });
+  });
+}
+
 // ── Confirm dialog ──────────────────────────────────────────
 export function confirmDialog({ message }) {
   ensurePromptStyles();
+  const prevFocus = document.activeElement;
 
   return new Promise(resolve => {
     const backdrop = document.createElement('div');
@@ -277,6 +419,7 @@ export function confirmDialog({ message }) {
 
     function close(result) {
       backdrop.remove();
+      setTimeout(() => prevFocus?.focus(), 100);
       resolve(result);
     }
 

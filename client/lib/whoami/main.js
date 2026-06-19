@@ -2,10 +2,13 @@
 export const help = `\
 whoami — show identity info from the server
 
-Output is JSONL: one JSON array per identity:
-  ["username", status, "expiry_date"]`;
+Usage:
+  whoami()                   — bare quoted username per line (JSONL)
+  whoami({v:1})              — verbose: ["username", status, "expiry"] per line
 
-import { isVoid, responseFromText } from '../gimbal/gsh.js';
+When not logged in, output is empty.`;
+
+import { VOID, isVoid, responseFromText, _isPlainObject } from '../gimbal/gsh.js';
 
 function formatExpiry(ts) {
   if (!ts) return 'never';
@@ -18,15 +21,21 @@ export async function invoke(shell, previous, args, cmd = 'whoami') {
   if (!isVoid(prev))
     throw new Error(`${cmd}: does not accept pipeline input`);
 
-  if (args.length > 0)
+  if (args.length > 1)
     throw new Error(`${cmd}: too many arguments`);
+
+  const opts = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
 
   const identities = await shell.fs.whoami(shell.serverUrl);
   if (!identities || identities.length === 0) {
-    return responseFromText('(anonymous)');
+    return VOID;
   }
+
+  const verbose = !!opts.v;
   const lines = identities.map(id =>
-    JSON.stringify([id.username, id.status, formatExpiry(id.expiry)])
+    verbose
+      ? JSON.stringify([id.username, id.status, formatExpiry(id.expiry)])
+      : JSON.stringify(id.username)
   ).join('\n');
   return responseFromText(lines);
 }

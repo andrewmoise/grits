@@ -6,7 +6,7 @@ Usage:
   logout()                         — log out all users (clears session + cookie)
   logout('username')               — log out a specific user`;
 
-import { isVoid, responseFromText, _isPlainObject } from '../gimbal/gsh.js';
+import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
 
 export async function invoke(shell, previous, args, cmd = 'logout') {
   const prev = await previous;
@@ -21,5 +21,5 @@ export async function invoke(shell, previous, args, cmd = 'logout') {
 
   const username = positional[0] || undefined;
   await shell.fs.logout(shell.serverUrl, username);
-  return responseFromText(username ? `logged out ${username}` : 'logged out');
+  return VOID;
 }
