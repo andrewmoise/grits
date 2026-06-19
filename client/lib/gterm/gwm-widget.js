@@ -112,7 +112,7 @@ function ensureStyles() {
     .gt-result {
       padding-left: 0.875rem;
       white-space: pre-wrap;
-      color: var(--text-hi);
+      color: var(--a2);
       margin-bottom: 0.25rem;
     }
     .gt-result.is-response { color: var(--text-dim); }

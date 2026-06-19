@@ -167,8 +167,6 @@ chat
 
 Make it more obvious which widget has focus
 
-Distinguish user input from JS output, in gterm
-
 Make "up" not discard the line we're currently working on, in gterm
 
 Make the index.html title correspond to the vhost
