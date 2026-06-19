@@ -254,8 +254,9 @@ export const C = {
    TYPOGRAPHY
    ══════════════════════════════════════════════════════════ */
 
-export const FONT_MONO = "'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace";
-export const FONT_UI   = "'Rubik', 'Inter', sans-serif";
+export const FONT_MONO    = "'JetBrains Mono', 'IBM Plex Mono', 'Fira Mono', monospace";
+export const FONT_UI      = "'Rubik', 'Inter', sans-serif";
+export const FONT_HEADING = "'Poppins', 'Georgia', serif";
 
 export const FS = {
   sm:   '0.70rem',
@@ -349,6 +350,7 @@ export function injectTheme() {
     /* typography */
     ['--font-ui',      FONT_UI],
     ['--font-mono',    FONT_MONO],
+    ['--font-heading', FONT_HEADING],
     ['--fs-sm',        FS.sm],
     ['--fs-base',      FS.base],
     ['--fs-ui',        FS.ui],
