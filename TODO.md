@@ -136,6 +136,8 @@ Make more secure login self test than test/test user
 
 Make test() print failures as red, or a red X or something is probably easier
 
+Let people reset their own passwords
+
 
 
 ## gwm
