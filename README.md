@@ -81,7 +81,7 @@ Hopefully this shows the general idea behind this type of environment.
 
 ## Structure
 
-There is a lot of reference and details of how the system works in [REFERENCE.md](REFERENCE.md). The overall system is split into two cooperating pieces:
+The overall system is split into two cooperating pieces:
 
 * **Gimbal** is the frontend which provides a Unix-like shell and that "window manager" shown in the examples.
 * **Grits** is the backend, the server that provides a read-writable Merkle tree with useful primitives for sharing and replicating content. More or less, it is the filesystem, and Gimbal is the desktop environment.
@@ -89,6 +89,8 @@ There is a lot of reference and details of how the system works in [REFERENCE.md
 `grits` is the server piece, the Go code. Gimbal is the stuff that lives in `client/`, the Javascript code, which gets copied into the Merkle tree store to bootstrap the in-browser application system.
 
 Permissions are based on both origin and user. Permissions are additive; permissions granted at one directory will also apply to all of its subdirectories. This means you may not always be able to travel to the parent of a directory you are allowed to access.
+
+Those are the basics. If you want to know more, it is in [REFERENCE.md](REFERENCE.md), but if just want to know how to run the thing:
 
 ## Quickstart
 
@@ -158,11 +160,14 @@ Once you've done all that, you should be able to log in to see the Gimbal shell 
 
 `https://gimbal.{your domain}.com/`
 
-If you see the graphical interface from the screenshots, you're in.
+If you see the graphical interface from the screenshots, you're in. You can run the self tests if you like:
 
-Run `test()` at the command line to run a detailed frontend test. It'll take a while.
+```
+login({g:1})
+test()
+```
 
-Some of the auth tests require a test user. Run `bin/grits adduser test` and set the password to `test`. Once you've completed the frontend self test, you can `deluser` him again.
+Frontend tests will take a while.
 
 ### Web Serving
 
@@ -215,9 +220,7 @@ Currently, useful commands are:
 
 ## In Conclusion
 
-See? It's neat.
-
-(TODO - discord link)
+See? It's neat. If you're interested to give me some feedback or see what other people are saying about it, join the Discord: [https://discord.gg/c5r89wfT](https://discord.gg/c5r89wfT)
 
 ## Enjoy!
 
