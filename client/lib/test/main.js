@@ -2,9 +2,11 @@ export const help = `\
 testing — run all test.js suites found in /lib
 
 Usage:
-  testing()
-  testing({v:1})       show full stack traces on failure
-  testing({ff:1})    fail fast (immediately on first failure)`;
+  testing()                           — skip login/logout/whoami (prompting tests)
+  testing({a:1})                      — run ALL suites including login/logout/whoami
+  testing('login')                    — run only the login suite
+  testing({v:1})                      — show full stack traces on failure
+  testing({ff:1})                     — fail fast (immediately on first failure)`;
 
 import { isVoid, _isPlainObject } from '../gimbal/gsh.js';
 
@@ -12,6 +14,7 @@ export async function invoke(shell, previous, args) {
   const opts = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
   const namesFromArgs = args.filter(a => typeof a === 'string');
   const only = namesFromArgs.length > 0 ? new Set(namesFromArgs) : null;
+  const skipDefault = !only && !opts.a ? new Set(['login', 'logout', 'whoami']) : null;
   const enc = new TextEncoder();
 
   let controller;
@@ -50,6 +53,7 @@ export async function invoke(shell, previous, args) {
         const toolChildren = await file.children();
         if (!toolChildren.has('test.js')) continue;
         if (!only || only.has(name)) {
+          if (skipDefault && skipDefault.has(name)) continue;
           suites.push({ name });
         }
       }
