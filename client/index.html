@@ -1110,10 +1110,10 @@ buildStrip();
 
 // Launch initial widgets
 (async () => {
-  const filesMod = await import('./lib/files/gwm-widget.js');
-  await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', evalContext });
   const gtermMod = await import('./lib/gterm/gwm-widget.js');
   await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', evalContext });
+  const filesMod = await import('./lib/files/gwm-widget.js');
+  await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', evalContext });
 })();
 
 </script>
