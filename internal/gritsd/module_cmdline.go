@@ -342,6 +342,19 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			}
 		}
 
+		// Create local/inbox directory with insert-only permissions.
+		// Anyone can drop a message file in, but cannot read or modify.
+		if volume != nil {
+			inboxAccess, _ := json.Marshal(AccessConfig{
+				Allow: []Grant{
+					{All: boolPtr(true), Origin: "*", Permission: PermInsert},
+				},
+			})
+			if err := WriteVolumeFile(s, "primary", homeDir+"/local/inbox/.grits/access.json", inboxAccess, grits.BackendPrincipal); err != nil {
+				log.Printf("adduser: writing inbox access.json: %v", err)
+			}
+		}
+
 		return CommandResponse{Status: 0, Output: "user added"}
 
 	case "deluser":
@@ -398,3 +411,5 @@ func parseVolumePath(s string) (volume, path string, err error) {
 	// path stays "" if no slash, or if everything after the slash was trimmed
 	return volume, path, nil
 }
+
+func boolPtr(b bool) *bool { return &b }
