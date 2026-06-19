@@ -85,6 +85,7 @@
     width: var(--btn-size); height: var(--btn-size);
     display: flex; align-items: center; justify-content: center;
     color: var(--text-dim); flex-shrink: 0;
+    margin-right: 0.1rem;
   }
   .widget-icon svg { width: var(--btn-svg-sz); height: var(--btn-svg-sz); stroke-width: 1.7; }
   .widget:focus-within .widget-icon { color: var(--text); }
@@ -126,7 +127,7 @@
   /* dirty state — title text shifts to accent green */
   .widget-title.is-dirty .widget-name { color: var(--a2, #4ade80) !important; }
 
-  .title-left  { display: flex; align-items: center; gap: 0.1rem; flex-shrink: 0; }
+  .title-left  { display: flex; align-items: center; gap: 0; flex-shrink: 0; }
   .title-right { display: flex; align-items: center; justify-content: flex-end; gap: 0.1rem; flex-shrink: 0; }
 
   .widget-name {
@@ -140,7 +141,7 @@
   .widget:focus-within .widget-name { color: var(--text); }
 
   .widget-btn {
-    width: var(--btn-size); height: var(--btn-size);
+    width: 1.5rem; height: 1.5rem;
     border-radius: 0.35rem; border: none;
     background: transparent; color: var(--text-dim); cursor: pointer;
     display: flex; align-items: center; justify-content: center;
