@@ -1108,12 +1108,28 @@ window.addEventListener('resize', () => render(false));
 
 buildStrip();
 
-// Launch initial widgets
+// Launch initial widgets — try profile.jsonl first, fall back to defaults
 (async () => {
-  const gtermMod = await import('./lib/gterm/gwm-widget.js');
-  await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', evalContext });
-  const filesMod = await import('./lib/files/gwm-widget.js');
-  await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', evalContext });
+  let ranInit = false;
+  try {
+    const { serverUrl, volume, path } = _shell.resolvePath('profile.jsonl');
+    const f = await _gg.volume(serverUrl, volume).lookup(path);
+    if (f.isFile()) {
+      const text = await f.text();
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        await _shell.eval(JSON.parse(trimmed));
+      }
+      ranInit = true;
+    }
+  } catch {}
+  if (!ranInit) {
+    const gtermMod = await import('./lib/gterm/gwm-widget.js');
+    await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', evalContext });
+    const filesMod = await import('./lib/files/gwm-widget.js');
+    await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', evalContext });
+  }
 })();
 
 </script>
