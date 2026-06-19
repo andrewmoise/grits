@@ -222,17 +222,29 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 		return CommandResponse{Status: 0, Output: fmt.Sprintf("imported %s into //%s/%s", args[1], volumeName, destPath)}
 
 	case "adduser":
-		// adduser <username> <password>
-		if len(cmd) != 3 {
-			return CommandResponse{Status: 1, Output: "usage: adduser <username> <password>"}
+		// adduser [-f] <username> <password>
+		force := false
+		args := cmd[1:]
+		if len(args) > 0 && args[0] == "-f" {
+			force = true
+			args = args[1:]
 		}
-		username := cmd[1]
-		password := cmd[2]
+		if len(args) != 2 {
+			return CommandResponse{Status: 1, Output: "usage: adduser [-f] <username> <password>"}
+		}
+		username := args[0]
+		password := args[1]
 		if !Validate("username", username) {
 			return CommandResponse{Status: 1, Output: "invalid username format"}
 		}
 		if password == "" {
 			return CommandResponse{Status: 1, Output: "password must not be empty"}
+		}
+		if !force {
+			result := zxcvbn.PasswordStrength(password, nil)
+			if result.Score <= 1 {
+				return CommandResponse{Status: 1, Output: "password too weak"}
+			}
 		}
 
 		pwdHash, err := Argon2idEncode(password)

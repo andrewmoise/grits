@@ -15,6 +15,7 @@ require (
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
 	github.com/minio/sha256-simd v1.0.1 // indirect
 	github.com/multiformats/go-varint v0.0.7 // indirect
+	github.com/nbutton23/zxcvbn-go v0.0.0-20210217022336-fa2cb2858354 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
 	golang.org/x/mod v0.18.0 // indirect
 	golang.org/x/net v0.19.0 // indirect
