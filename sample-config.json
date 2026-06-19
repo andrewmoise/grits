@@ -18,7 +18,7 @@
       "module": "http",
       "thisPort": 443,
       "enableTls": true,
-      "readOnly": true,
+      "readOnly": false,
       "autoCertificate": true,
       "certbotEmail": "%YOUR_EMAIL%"
     },
