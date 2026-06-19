@@ -51,7 +51,7 @@ The calls to `facl()` are necessary. Respectively, they are:
 2. Make our normal files editable by our user, from the new shell
 3. Make `custom.melanic.org` editable by our user from the new shell
 
-See the "permissions" section in REFERENCE.md for an in-depth explanation of how and why origin access controls work and why this facl() is necessary before this will work.
+See the "permissions" section in [REFERENCE.md](REFERENCE.md) for an in-depth explanation of how and why origin access controls work and why this facl() is necessary before this will work.
 
 Having made the new customized shell environment, we make it live:
 
@@ -81,7 +81,7 @@ Hopefully this shows the general idea behind this type of environment.
 
 ## Structure
 
-There is a lot of reference and details of how the system works in REFERENCE.md. Basically, what you need to know in order to initially operate it is this:
+There is a lot of reference and details of how the system works in [REFERENCE.md](REFERENCE.md). Basically, what you need to know in order to initially operate it is this:
 
 The system is split into two cooperating pieces:
 
@@ -202,7 +202,7 @@ See REFERENCE.md for a lot more detailed explanation about how this works and ho
 
 As mentioned, you launch the server just with `sudo bin/gritsd`. Making it runnable via systemctl is on the TODOs.
 
-Server configuration lives in `config.json`. See REFERENCE.md for some detail about what's useful to configure within it.
+Server configuration lives in `config.json`. See [REFERENCE.md](REFERENCE.md) for some detail about what's useful to configure within it.
 
 When you're done, hit Ctrl-C on the backend and the server should shut down cleanly. If it hangs because it can't unmount the FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
 
