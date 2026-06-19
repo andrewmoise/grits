@@ -52,17 +52,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Special-case adduser: if only username given, prompt for password from stdin
-	// so it doesn't end up in shell history.
-	if args[0] == "adduser" && len(args) == 2 {
-		fmt.Fprintf(os.Stderr, "Password for %s: ", args[1])
-		reader := bufio.NewReader(os.Stdin)
-		password, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
+	// Special-case adduser:
+	//   - -f can appear anywhere in the flag list
+	//   - if only username given (no password arg), prompt from stdin
+	//   - normalize the command before sending to the server
+	if args[0] == "adduser" {
+		hasForce := false
+		positional := []string{}
+		for _, a := range args[1:] {
+			if a == "-f" {
+				hasForce = true
+			} else {
+				positional = append(positional, a)
+			}
+		}
+		switch len(positional) {
+		case 1:
+			fmt.Fprintf(os.Stderr, "Password for %s: ", positional[0])
+			reader := bufio.NewReader(os.Stdin)
+			password, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading password: %v\n", err)
+				os.Exit(1)
+			}
+			positional = append(positional, strings.TrimRight(password, "\n\r"))
+		case 2:
+			// already have username + password — nothing to do
+		default:
+			fmt.Fprintln(os.Stderr, "usage: adduser [-f] <username> [<password>]")
 			os.Exit(1)
 		}
-		args = append(args, strings.TrimRight(password, "\n\r"))
+		args = []string{"adduser"}
+		if hasForce {
+			args = append(args, "-f")
+		}
+		args = append(args, positional...)
 	}
 
 	// Connect to the socket
