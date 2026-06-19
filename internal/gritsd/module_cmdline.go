@@ -276,9 +276,9 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			}}, false, grits.BackendPrincipal)
 			emptyNode.Release()
 			if grits.IsAssertionFailed(err) {
-				return CommandResponse{Status: 1, Output: fmt.Sprintf("Home directory %q already exists", homeDir)}
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("home directory %q already exists", homeDir)}
 			} else if err != nil {
-				return CommandResponse{Status: 1, Output: fmt.Sprintf("Error linking home dir: %v", err)}
+				return CommandResponse{Status: 1, Output: fmt.Sprintf("error linking home dir: %v", err)}
 			}
 
 			// Assert+create home/<username>/.grits.
