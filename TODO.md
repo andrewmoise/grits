@@ -1,12 +1,54 @@
 # In Progress
 
-* Reorient the initial paradigm to vhosts instead of /grits/v1/content
 * Self-hosted git repo in startup
 * MD renderer
 * MOTD
-* Make a more friendly vhost setup in the instructions
+* Fix certbot browser badness when first accessing a new vhost, and browser visits http://{whatever}
+
+
+
+## Shell/Result design cleanup
+
+* Extract `GimbalWM` from `client/index.html` into `client/lib/gimbal/gwm.js` — expose as singleton `gwm` in eval scope
+* Expose `gsh` (GimbalShell) in eval scope; `gsh.glob()` returns JS array, `gsh.whatever()` returns JS objects
+* Add `js()` / `jsl()` terminal methods on Result — `.js()` returns `Promise<any>` (JSON decode), `.jsl()` returns `AsyncIterable` (JSONL line iterator)
+* Rename `.toJS()` → `.js()` on Result (drop `.toJS()`)
+* Add `json()` / `jsonl()` shell commands (start of pipeline, JSON-encode args)
+* Refactor the `with` proxy into a dedicated `Scope` class separating commands, builtins, user vars, and gsh methods
+* Port `glob()` from a bare eval identifier to just `gsh.glob()` (keep `glob` alias until proxy is cleaned up)
+* Add `xargs()` command for pipeline-to-argument-list pattern
+* Add `lib()` loader — convention `lib/<name>/lib.js`, inject Grits `fs`, support `gsh.lib('git')`
+* Vendor code: define convention (`client/vendor/<name>/` + `bootstrap.sh`), submodule or script
+* Git integration: vendor `isomorphic-git` as `client/vendor/isomorphic-git/`, wrap as `client/lib/git/lib.js` with Grits `fs` backend; `gsh.lib('git')` returns the adapted isomorphic-git API
+
+
+
+## Vendor dependency strategy
+
+* Use `npm` as a pure dependency resolver (not a build tool)
+* `client/vendor/package.json` lists deps (`isomorphic-git`, `codemirror`, etc.), committed
+* `client/vendor/package-lock.json` pins transitive deps, committed (for `npm audit`, Dependabot, reproducible installs)
+* `client/vendor/node_modules/` — gitignored, populated by bootstrap
+* `client/vendor/bootstrap.sh` — runs `npm install --ignore-scripts --no-audit` in `client/vendor/`
+* Wrapper libs (`client/lib/<name>/lib.js`) `import()` directly from `../vendor/node_modules/<pkg>/` using native ESM
+* `gsh.vendor_lib('isomorphic-git')` returns the raw library; `gsh.lib('git')` returns the Grits-adapted wrapper on top
+* Verify isomorphic-git's ESM bundle uses relative (not bare) imports for its deps (`ignore`, `pako`) so browser native `import()` resolves correctly
+* Medium-term: support swapping vendor packages with git checkouts via `client/vendor/overrides.json` (map pkg name → git URL + ref). `bootstrap.sh` applies overrides after `npm install` by replacing `node_modules/<pkg>` with a shallow clone. Stable refs (tags/commits) skip re-clone if already checked out, preserving local dev edits.
+* Auto-generate import map in `index.html` at `make deps` time — scan `node_modules/` for bare specifiers, write `<script type="importmap">` block so it stays in sync without manual edits
+
+
+
+## Build tooling
+
+* Flesh out Makefile targets: `test`, `install`, `lint`, `fmt`; maybe `run` for dev-server shortcut
+* Decide whether `build` should depend on `vendor` or if they should be separate invocations
+* Set up CI (GitHub Actions?) to run `make build` on push
+
+
 
 # Backlog
+
+
 
 ## shell
 
@@ -50,7 +92,13 @@ Make a better self-hosting setup
 
 Fix test /tmp/tmp scratch dir
 
-Move to $HOME/tmp
+Move to $HOME/tmp (or better a GritsClient-created temp thing)
+
+Change "command not found" error to a little more explanatory if someone shuts the server down during shell session
+
+"access denied: undefined" message should be a little better
+
+
 
 ## shell tools
 
@@ -68,7 +116,7 @@ More tools: Diff, patch
 
 adduser() and deluser() from frontend
 
-Make skel() function
+~~Make skel() function~~
 
 Make editor "Save as" and editing of scratch files more sensible
 
@@ -81,6 +129,14 @@ Make test() in the foreground once bg() exists
 .null()
 
 time()
+
+js() and json() (replacing all the .toWhatever() methods that aren't quite exactly right)
+
+Make more secure login self test than test/test user
+
+Make test() print failures as red, or a red X or something is probably easier
+
+
 
 ## gwm
 
@@ -107,9 +163,23 @@ ssh widget
 
 Some indication when things disconnect
 
+chat
+
+Make it more obvious which widget has focus
+
+Distinguish user input from JS output, in gterm
+
+Make "up" not discard the line we're currently working on, in gterm
+
+Make the index.html title correspond to the vhost
+
+
+
 ## grits client
 
 Blob volume
+
+Tmp volume
 
 Look into possible prefetch loop issue
 
@@ -127,6 +197,21 @@ Lookup and link multiple things in one request when possible
 Look into service worker not unregistering
 
 What's up with sessionStorage in GritsClient.js?
+
+Silent catches:
+-- Truly problematic (2 sites):
+1. project/gwm-widget.js:374-387 — catch (_) silently treats all errors (JSON parse failure, permission error, network timeout) as "project file doesn't exist" and overwrites with a fresh empty project. This can silently destroy the user's project data.
+2. codemirror/gwm-widget.js:204-214 — Save failure logs to console but gives the user no visible feedback. The dirty flag stays true (so the close-warning barrier works), but the user can't tell whether Ctrl+S actually persisted.
+-- Questionable — grace-degradation that silently masks non-obvious errors (7 sites):
+3. grits/GritsClient.js:680 — catch (_) {} in _desyncMultiLink(). Treats a network error or permission denial identically to "file not found". The currentFile stays null, which is the right fallback, but a real problem would be invisible.
+4. grits/GritsClient.js:1019-1022 — catch(() => new Promise(() => {})) in fast-walk path. If fastWalk has a bug, the error is silently discarded with a never-settling promise. At minimum should DEBUG && console.debug(...).
+5. grits/GritsClient.js:1626 — catch (_) {} in cache unmarshal. Corrupt cache data silently ignored. Minor, but a console.warn would help.
+6. grits/GritsClient.js:1662 — catch (_) {} in _collectMirrorStats(). Stats failures silently swallowed across all volumes.
+7. grits/PerformanceTracker.js:129 — catch (_) { /* mirror stats unavailable */ }. Same pattern.
+8. gimbal/glob.js:26,41,98 — Three catch(e){return;} / catch(e){return[];} sites. Glob silently skipping inaccessible directories is arguably correct shell-like behavior, but no log means bugs are invisible.
+9. gimbal/gsh.js:350 — catch(e){throw new Error("command not found")}. If a command module has a syntax error or import failure, the user gets a misleading "command not found" instead of the actual error.
+
+
 
 ## backend
 
@@ -165,10 +250,26 @@ Auth improvements
   * More friendly error messages on expired identity / need to log in to access this resource
   * Better prompt for password for login
   * Add documentation
+  * Make "role" things in addition to "who am I" type of things
+  * Wildcard glob matching in auth module, not just "*" only
 
 Some kind of better window, in the frontend, into HTTP traffic and requests (log / dashboard) if nowhere else
 
 Clean up places where "primary" as the volume name is hard coded: `rootVolume` → `mainVolume` (module_auth.go), `rootVolume()` → `mainVolume()` (module_serviceworker.go), `rootVolume` variable name (cmd/testbed/main.go)
+
+Change access.json to JSONL syntax
+
+Check a little more thoroughly that multiple auth tokens at once work well
+
+Eliminate /grits/v1/content
+
+Make paths in APIs require an initial slash maybe
+
+Make systemctl setup
+
+Make a monitor for /sites/ that gets certs right away when a directory is created
+
+
 
 ## Old TODOs
 
@@ -217,5 +318,3 @@ Clean up places where "primary" as the volume name is hard coded: `rootVolume` �
 * Make HTTP API more best practices (particularly how it returns errors)
 * Make test cases for validation
 * Make FUSE mounts process NodeForgetter and remove stuff from the inode cache when it happens
-* More coherent error message when a dead previous FUSE mount is in the way
-* Fix port 8080 on ACME challenge
