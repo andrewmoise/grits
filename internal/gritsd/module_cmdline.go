@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nbutton23/zxcvbn-go"
+
 	"grits/internal/grits"
 )
 
