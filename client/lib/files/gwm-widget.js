@@ -288,7 +288,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   }
 
   function updateParentBtnState() {
-    const atRoot = !basePath || !basePath.includes('/');
+  const atRoot = !basePath;
     if (parentBtn._el) {
       parentBtn._el.disabled = atRoot;
       parentBtn._el.style.opacity = atRoot ? '0.3' : '1';
@@ -296,7 +296,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   }
 
   async function goToParent() {
-    if (!basePath || !basePath.includes('/')) return;
+    if (!basePath) return;
 
     const parent = basePath.split('/').slice(0, -1).join('/');
 
