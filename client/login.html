@@ -150,7 +150,7 @@ async function doLogin() {
 
     if (res.ok) {
       statusEl.textContent = 'success — redirecting…';
-      window.location.href = '/grits/v1/content/primary/';
+      window.location.href = '/';
     } else {
       const data = await res.json().catch(() => ({}));
       errorEl.textContent = data.error || 'login failed';
