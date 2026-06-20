@@ -1,8 +1,8 @@
-# Gimbal - A framework for web-native development
+# A framework for web-native development
 
 It's a little web framework which lets you interact with a web site or application much more directly and flexibly than you usually can.
 
-As an end-user of a Gimbal using site, you can:
+As an end-user of a Gimbal-using site, you can:
 
 * Directly examine the site's underlying data(*) and code
 * Persistently edit the UI of the web site you're using, for you, without impacting other people's experience
@@ -220,7 +220,9 @@ Currently, useful commands are:
 
 ## In Conclusion
 
-See? It's neat. If you're interested to give me some feedback or see what other people are saying about it, join the Discord: [https://discord.gg/c5r89wfT](https://discord.gg/c5r89wfT)
+See? It's neat.
+
+(TODO: No more Discord link but we need a link to Matrix + the self hosted source)
 
 ## Enjoy!
 
