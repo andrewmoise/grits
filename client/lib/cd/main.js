@@ -13,7 +13,16 @@ export async function invoke(shell, previous, args) {
   if (!isVoid(prev))
     throw new Error('cd: does not accept pipeline input');
 
-  const [value = '/'] = args;
+  let value;
+  if (args.length === 0) {
+    const identities = await shell.fs.whoami(shell.serverUrl);
+    if (!identities || identities.length === 0 || !identities[0]?.username)
+      throw new Error('cd: not logged in');
+    value = '/home/' + identities[0].username;
+  } else {
+    value = args[0];
+  }
+
   if (typeof value !== 'string')
     throw new Error('cd: path must be a string');
 
