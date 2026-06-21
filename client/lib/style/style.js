@@ -206,9 +206,10 @@ export const C = {
   greenLo:   darken(HUE.green, 0.15),
 
   /* ── Teals ───────────────────────────────────────────── */
-  teal:   HUE.teal,
-  tealHi: lighten(HUE.teal, 0.20),
-  tealLo: darken(HUE.teal, 0.15),
+  teal:     HUE.teal,
+  tealDim:  alpha(HUE.teal, 0.12),
+  tealHi:   lighten(HUE.teal, 0.20),
+  tealLo:   darken(HUE.teal, 0.15),
 
   /* ── Purples ─────────────────────────────────────────── */
   purple:    HUE.purple,
@@ -246,8 +247,8 @@ export const C = {
   get a1()     { return this.blue; },
   get a1Dim()  { return this.blueDim; },
   get a1Glow() { return this.blueGlow; },
-  get a2()     { return this.green; },
-  get a2Dim()  { return this.greenDim; },
+  get a2()     { return this.teal; },
+  get a2Dim()  { return this.tealDim; },
 };
 
 /* ══════════════════════════════════════════════════════════
@@ -321,8 +322,8 @@ export function injectTheme() {
     ['--a1',           C.blue],
     ['--a1-dim',       C.blueDim],
     ['--a1-glow',      C.blueGlow],
-    ['--a2',           C.green],
-    ['--a2-dim',       C.greenDim],
+    ['--a2',           C.teal],
+    ['--a2-dim',       C.tealDim],
 
     /* full hue set */
     ['--blue',         C.blue],
