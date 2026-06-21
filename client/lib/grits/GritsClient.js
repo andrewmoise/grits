@@ -1408,6 +1408,7 @@ class GritsClient {
   async login(serverUrl, username, password, options = {}) {
     const body = { username, password };
     if (options.global) body.global = true;
+    if (options.guest)  body.guest  = true;
     const res = await fetch(`${serverUrl}/grits/v1/auth/login`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },

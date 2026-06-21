@@ -256,103 +256,17 @@ func (s *Server) ExecuteCommand(cmd []string) CommandResponse {
 			return CommandResponse{Status: 1, Output: fmt.Sprintf("failed to hash password: %v", err)}
 		}
 
-		// Assert home directory doesn't exist and create home + .grits
-		// before touching the users file, so we don't orphan the entry.
-		homeDir := "home/" + username
-		volume := s.FindVolumeByName("primary")
-		if volume != nil {
-			if err := ensureVolumeParentDirs(volume, "home"); err != nil {
-				return CommandResponse{Status: 1, Output: fmt.Sprintf("ensuring home dir: %v", err)}
-			}
-
-			// Assert+create home/<username> — fails if already exists.
-			emptyNode, err := volume.CreateTreeNode()
-			if err != nil {
-				return CommandResponse{Status: 1, Output: fmt.Sprintf("creating dir node: %v", err)}
-			}
-			_, err = volume.MultiLink([]*grits.LinkRequest{{
-				Path:     homeDir,
-				NewAddr:  emptyNode.MetadataBlob().GetAddress(),
-				PrevAddr: grits.NilAddr,
-				Assert:   grits.AssertPrevValueMatches,
-			}}, false, grits.BackendPrincipal)
-			emptyNode.Release()
-			if grits.IsAssertionFailed(err) {
-				return CommandResponse{Status: 1, Output: fmt.Sprintf("home directory %q already exists", homeDir)}
-			} else if err != nil {
-				return CommandResponse{Status: 1, Output: fmt.Sprintf("error linking home dir: %v", err)}
-			}
-
-			// Assert+create home/<username>/.grits.
-			gritsNode, err := volume.CreateTreeNode()
-			if err != nil {
-				return CommandResponse{Status: 1, Output: fmt.Sprintf("creating .grits dir node: %v", err)}
-			}
-			_, err = volume.MultiLink([]*grits.LinkRequest{{
-				Path:     homeDir + "/.grits",
-				NewAddr:  gritsNode.MetadataBlob().GetAddress(),
-				PrevAddr: grits.NilAddr,
-				Assert:   grits.AssertPrevValueMatches,
-			}}, false, grits.BackendPrincipal)
-			gritsNode.Release()
-			if err != nil {
-				return CommandResponse{Status: 1, Output: fmt.Sprintf("linking .grits dir: %v", err)}
-			}
+		authModules := s.GetModules("auth")
+		if len(authModules) == 0 {
+			return CommandResponse{Status: 1, Output: "auth module not available"}
+		}
+		authMod, ok := authModules[0].(*AuthModule)
+		if !ok {
+			return CommandResponse{Status: 1, Output: "auth module has unexpected type"}
 		}
 
-		// Now write the users file entry.
-		lines, err := ReadJSONL(s, "primary", usersFilePath, grits.BackendPrincipal)
-		if err != nil && !errors.Is(err, grits.ErrNotExist) {
-			return CommandResponse{Status: 1, Output: fmt.Sprintf("reading users file: %v", err)}
-		}
-
-		var records []map[string]any
-		found := false
-		for _, line := range lines {
-			var rec map[string]any
-			if err := json.Unmarshal(line, &rec); err != nil {
-				continue
-			}
-			if rec["username"] == username {
-				rec["pwdHash"] = pwdHash
-				found = true
-			}
-			records = append(records, rec)
-		}
-		if !found {
-			records = append(records, map[string]any{
-				"username": username,
-				"pwdHash":  pwdHash,
-			})
-		}
-
-		if err := WriteJSONL(s, "primary", usersFilePath, records, grits.BackendPrincipal); err != nil {
-			return CommandResponse{Status: 1, Output: fmt.Sprintf("writing users file: %v", err)}
-		}
-
-		// Write owner access.json.
-		homeAccess, _ := json.Marshal(AccessConfig{
-			Allow: []Grant{
-				{User: username, Origin: "gimbal", Permission: PermOwner},
-			},
-		})
-		if volume != nil {
-			if err := WriteVolumeFile(s, "primary", homeDir+"/.grits/access.json", homeAccess, grits.BackendPrincipal); err != nil {
-				log.Printf("adduser: writing home access.json: %v", err)
-			}
-		}
-
-		// Create local/inbox directory with insert-only permissions.
-		// Anyone can drop a message file in, but cannot read or modify.
-		if volume != nil {
-			inboxAccess, _ := json.Marshal(AccessConfig{
-				Allow: []Grant{
-					{All: boolPtr(true), Origin: "*", Permission: PermInsert},
-				},
-			})
-			if err := WriteVolumeFile(s, "primary", homeDir+"/local/inbox/.grits/access.json", inboxAccess, grits.BackendPrincipal); err != nil {
-				log.Printf("adduser: writing inbox access.json: %v", err)
-			}
+		if err := authMod.AddUser(username, pwdHash); err != nil {
+			return CommandResponse{Status: 1, Output: fmt.Sprintf("adduser: %v", err)}
 		}
 
 		return CommandResponse{Status: 0, Output: "user added"}

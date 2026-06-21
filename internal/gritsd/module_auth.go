@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/argon2"
@@ -37,6 +38,10 @@ type AuthModuleConfig struct {
 	// Defaults to 365 days. The HMAC token inside expires after
 	// SessionMaxAge, but the cookie remains as a placeholder.
 	CookieMaxAge time.Duration `json:"cookieMaxAge,omitempty"`
+
+	// AllowGuest enables unauthenticated guest account creation via the login
+	// endpoint with {guest:true}. Defaults to false.
+	AllowGuest bool `json:"allowGuest,omitempty"`
 }
 
 type AuthModule struct {
@@ -45,6 +50,9 @@ type AuthModule struct {
 	authSecret    []byte
 	sessionMaxAge time.Duration
 	cookieMaxAge  time.Duration
+
+	createUserMutex  sync.Mutex
+	rateLimitModule  *RateLimitModule
 }
 
 type TokenStatus string
@@ -199,9 +207,48 @@ func (m *AuthModule) handleLogin(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Global   bool   `json:"global,omitempty"`
+		Guest    bool   `json:"guest,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if body.Guest {
+		if !m.Config.AllowGuest {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "guest login not allowed"})
+			return
+		}
+		if m.rateLimitModule != nil {
+			if err := m.rateLimitModule.CheckLimit("ip:"+clientIP(r), "accountCreation", 1); err != nil {
+				writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+				return
+			}
+		}
+		anonName, err := m.createGuestUser()
+		if err != nil {
+			log.Printf("[auth] guest login: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+			return
+		}
+
+		token, err := m.hmacToken(anonName)
+		if err != nil {
+			log.Printf("[auth] creating session token: %v", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+			return
+		}
+
+		if body.Global {
+			m.setAuthCookie(w, token)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "token": token})
+		return
+	}
+
+	if body.Password == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "password is required"})
 		return
 	}
 
@@ -255,6 +302,10 @@ func (m *AuthModule) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+}
+
+func (m *AuthModule) SetRateLimitModule(rlm *RateLimitModule) {
+	m.rateLimitModule = rlm
 }
 
 func (m *AuthModule) handleLogout(w http.ResponseWriter, r *http.Request) {
@@ -380,6 +431,171 @@ func verifyArgon2id(password, encodedHash string) bool {
 	computedHash := argon2.IDKey([]byte(password), salt, time, memory, threads, keyLen)
 
 	return subtle.ConstantTimeCompare(computedHash, expectedHash) == 1
+}
+
+/////
+// Guest account support
+
+// randomDigits returns a string of n random decimal digits using crypto/rand.
+func randomDigits(n int) string {
+	buf := make([]byte, n)
+	rand.Read(buf)
+	for i := range buf {
+		buf[i] = '0' + buf[i]%10
+	}
+	return string(buf)
+}
+
+// createGuestUser generates a unique anonymous username (anonXXXX…) and
+// provisions the account. It holds createUserMutex for the entire operation so
+// concurrent guest requests don't collide. Returns the new username.
+func (m *AuthModule) createGuestUser() (string, error) {
+	m.createUserMutex.Lock()
+	defer m.createUserMutex.Unlock()
+
+	lines, err := ReadJSONL(m.Server, rootVolume, usersFilePath, grits.BackendPrincipal)
+	if err != nil && !errors.Is(err, grits.ErrNotExist) {
+		return "", fmt.Errorf("reading users file: %w", err)
+	}
+
+	existing := map[string]bool{}
+	for _, line := range lines {
+		var rec struct {
+			Username string `json:"username"`
+		}
+		if json.Unmarshal(line, &rec) == nil {
+			existing[rec.Username] = true
+		}
+	}
+
+	var anonName string
+	for digits := 4; ; digits++ {
+		name := "anon" + randomDigits(digits)
+		if !existing[name] {
+			anonName = name
+			break
+		}
+	}
+
+	if err := m.addUserLocked(anonName, ""); err != nil {
+		return "", fmt.Errorf("creating user: %w", err)
+	}
+
+	return anonName, nil
+}
+
+// AddUser creates a new user account. The pwdHash should be an argon2id
+// encoded hash string (or "" for accounts that can only authenticate via
+// session token). Returns an error if the username or home directory already
+// exists.
+func (m *AuthModule) AddUser(username, pwdHash string) error {
+	m.createUserMutex.Lock()
+	defer m.createUserMutex.Unlock()
+	return m.addUserLocked(username, pwdHash)
+}
+
+// addUserLocked assumes createUserMutex is already held. It creates the home
+// directory tree, writes the users.jsonl entry, and sets up access control.
+func (m *AuthModule) addUserLocked(username, pwdHash string) error {
+	volume := m.Server.FindVolumeByName(rootVolume)
+	if volume == nil {
+		return fmt.Errorf("primary volume not found")
+	}
+
+	// Check that the user record doesn't already exist.
+	lines, err := ReadJSONL(m.Server, rootVolume, usersFilePath, grits.BackendPrincipal)
+	if err != nil && !errors.Is(err, grits.ErrNotExist) {
+		return fmt.Errorf("reading users file: %w", err)
+	}
+	for _, line := range lines {
+		var rec struct {
+			Username string `json:"username"`
+		}
+		if json.Unmarshal(line, &rec) == nil && rec.Username == username {
+			return fmt.Errorf("user %q already exists", username)
+		}
+	}
+
+	homeDir := "home/" + username
+
+	// Ensure the home parent directory exists.
+	if err := ensureVolumeParentDirs(volume, "home"); err != nil {
+		return fmt.Errorf("ensuring home dir: %w", err)
+	}
+
+	// Create home/<username> — assertion fails if it already exists.
+	emptyNode, err := volume.CreateTreeNode()
+	if err != nil {
+		return fmt.Errorf("creating dir node: %w", err)
+	}
+	defer emptyNode.Release()
+	_, err = volume.MultiLink([]*grits.LinkRequest{{
+		Path:     homeDir,
+		NewAddr:  emptyNode.MetadataBlob().GetAddress(),
+		PrevAddr: grits.NilAddr,
+		Assert:   grits.AssertPrevValueMatches,
+	}}, false, grits.BackendPrincipal)
+	if grits.IsAssertionFailed(err) {
+		emptyNode.Release()
+		return fmt.Errorf("home directory %q already exists", homeDir)
+	} else if err != nil {
+		return fmt.Errorf("linking home dir: %w", err)
+	}
+
+	// Create home/<username>/.grits
+	gritsNode, err := volume.CreateTreeNode()
+	if err != nil {
+		return fmt.Errorf("creating .grits dir node: %w", err)
+	}
+	defer gritsNode.Release()
+	_, err = volume.MultiLink([]*grits.LinkRequest{{
+		Path:     homeDir + "/.grits",
+		NewAddr:  gritsNode.MetadataBlob().GetAddress(),
+		PrevAddr: grits.NilAddr,
+		Assert:   grits.AssertPrevValueMatches,
+	}}, false, grits.BackendPrincipal)
+	if err != nil {
+		return fmt.Errorf("linking .grits dir: %w", err)
+	}
+
+	// Append the new user record.
+	var records []map[string]any
+	for _, line := range lines {
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			continue
+		}
+		records = append(records, rec)
+	}
+	records = append(records, map[string]any{
+		"username": username,
+		"pwdHash":  pwdHash,
+	})
+	if err := WriteJSONL(m.Server, rootVolume, usersFilePath, records, grits.BackendPrincipal); err != nil {
+		return fmt.Errorf("writing users file: %w", err)
+	}
+
+	// Write owner access.json for the home directory.
+	homeAccess, _ := json.Marshal(AccessConfig{
+		Allow: []Grant{
+			{User: username, Origin: "gimbal", Permission: PermOwner},
+		},
+	})
+	if err := WriteVolumeFile(m.Server, rootVolume, homeDir+"/.grits/access.json", homeAccess, grits.BackendPrincipal); err != nil {
+		log.Printf("[auth] writing home access.json: %v", err)
+	}
+
+	// Create local/inbox with insert-only permissions.
+	inboxAccess, _ := json.Marshal(AccessConfig{
+		Allow: []Grant{
+			{All: boolPtr(true), Origin: "*", Permission: PermInsert},
+		},
+	})
+	if err := WriteVolumeFile(m.Server, rootVolume, homeDir+"/local/inbox/.grits/access.json", inboxAccess, grits.BackendPrincipal); err != nil {
+		log.Printf("[auth] writing inbox access.json: %v", err)
+	}
+
+	return nil
 }
 
 /////

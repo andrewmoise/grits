@@ -1824,6 +1824,7 @@ func TestLookupCallbackOriginEnforcement(t *testing.T) {
 func TestAdduserCreatesHomeDir(t *testing.T) {
 	server, cleanup := SetupTestServer(t,
 		WithLocalVolume("primary"),
+		WithAuthModule(),
 	)
 	defer cleanup()
 	server.Start()
