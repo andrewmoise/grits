@@ -173,6 +173,13 @@ Make "up" not discard the line we're currently working on, in gterm
 
 Make the index.html title correspond to the vhost
 
+Mouse focus
+
+Make minimized windows deduplicate
+Make minimized windows distinguishable based on their titles
+
+Fix the markdown icon in the tray
+
 
 
 ## grits client
@@ -268,6 +275,16 @@ Make paths in APIs require an initial slash maybe
 Make systemctl setup
 
 Make a monitor for /sites/ that gets certs right away when a directory is created
+
+Allow empty passwords (meaning login is disabled)
+
+Let deluser remove home directory, too, with an argument
+
+Docker, I guess
+
+Put passwords in the user's home directory, and back out the password strength checking
+
+Guest user auto-homedir-deletion
 
 
 

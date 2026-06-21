@@ -28,13 +28,12 @@ Directories of note within `//primary` are:
 
 * `/home/{username}` - Home directories
 * `/home/{username}/local/{app name}` - Intended for application-specific data (private per-user data)
-* `/opt/{app name}` - Application-specific variable data (public between users)
+* `/var/{app name}` - Application-specific variable data (public between users)
 * `/sites/{hostname}` - Development space for {hostname}
 * `/sites/{hostname}/live` - Public web space for {hostname}
 * `/sys/etc` - System configuration
-* `/tmp` - Temp files
 
-Placing shared data for an app into `/opt/{app name}`, with appropriate permissions set up, will allow users to contribute data to a communal shared data area while still keeping their own data separated. One structure is to define global `read+insert` permissions on `/opt/{app name}`, which means each user's instance of the app can make a directory there for that individual user's contributions, as well as reading the contributions of all the other users.
+Placing shared data for an app into `/var/{app name}`, with appropriate permissions set up, will allow users to contribute data to a communal shared data area while still keeping their own data separated. One structure is to define global `read+insert` permissions on `/var/{app name}`, which means each user's instance of the app can make a directory there for that individual user's contributions, as well as reading the contributions of all the other users.
 
 `/home/{username}/local/{app name}` is designed for a simpler data model, where the app simply has private data on behalf of each user that's going to run the app.
 

@@ -6,7 +6,7 @@ This is a little demo instance for my project called Gimbal.
 
 The modern web sure isn't great.
 
-One among a few different reasons is that when you're on the web, the code that is assembling your page, and the data underlying, is at best visible "under glass" and usually not visible at all. Most of the time it's just a secret. What data is this thing logging about you? What algorithm is assembling your feed? No idea, and way too much of the time, it's being done in a way that's at least a little bit malicious. It is your computer, it is your browser, but you still can't right-click and save the image / stop the video ad from playing / whatever. Why? Because they don't want you to.
+One among a few different reasons is that when you're on the web, the code that is assembling your page, and the data underlying it, is at best visible "under glass" and usually not visible at all. Most of the time it's just a secret. What data is this thing logging about you? What algorithm is assembling your feed? No idea, and way too much of the time, it's being done in a way that's at least a little bit malicious. It is your computer, it is your browser, but you still can't right-click and save the image / stop the video ad from playing / whatever. Why? Because they don't want you to.
 
 That's not great. Honestly, a *little* bit of the badness of the whole paradigm leaks in even when visiting a civilized site on Mastodon or whatever. You still cannot change the code unless you feel like doing self-hosting. If Mastodon's search sucks, there's not much realistic that you are going to do about it.
 
@@ -18,27 +18,26 @@ Honestly that is just the way it should be. Remember Usenet? Remember early Linu
 
 So in specific: This attempt at a solution to all of that is a web framework designed for in-browser admin and development. The frontend you are seeing now is called Gimbal, and it runs on a read/writable storage backend called Grits. They operate together to serve apps which provide a civilized experience, where you the web user (if you are tech savvy) can exist as a full citizen, not a helpless consumer of the preset experience the site owners have curated for you.
 
-The source is on github for now, although I plan to fully self-host it once this is a stable place to self-host. You can try out the self hosting via `git clone https://gimbal.melanic.org/src/.git gimbal`, or you can peruse the source in the file browser over on the right. That stuff is new; if it doesn't work, let me know.
+You can also go to the terminal and try some simple interactions. Try the below, and then if you are feeling like getting your hands dirty, you can try the "fixing the editor's line wrapping" example from the README.
 
-You can also go to the terminal and try:
+If you wind up deciding to work through the example, you must be logged in for them to work. If you see `whoami()` fail, you're not logged in; do `login({guest:1,g:1})` to create a guest user for yourself, and then `whoami()` and `cd()` to go to your home directory to do the rest. Also, you can't use `custom.melanic.org` as your vhost or your `facl` origin. Pick a different vhost instead, and use that for both the `sites/` directory and the `o:` argument to `facl()`.
+
+Anyway. Simple shell commands you can try, in the terminal window to your right, at the `live $` prompt:
 
 ```
+pwd()
 ls()
-cd('..')
-ls()
+files('src')
+markdown('src/README.md')
 ```
-
-(TODO: We need more interesting demos people can try)
 
 ## How is this?
 
 If you want to learn the nitty-gritty implementation, see README.md and REFERENCE.md. It's not real complete yet. It's a neat idea, according to me, but the server still needs a lot of work. Don't let the shiny colors fool you that it's polished yet. Also, this is just my dev server. It might or might not be running at any given time, and I plan at least one big metadata format change which will reset everything.
 
-(TODO: Should be a matrix link here)
+The source is on github for now, although I plan to fully self-host it once this is a stable place to self-host. For now, try out the self-hosting; you can look over the source over on the right side, or you can check it out yourself via `git clone https://gimbal.melanic.org/src/.git gimbal`. That way is new; if it doesn't work, let me know.
 
-In particular, you can't make an account, so you can't actually work through the "how to make the line wrapping work" example from the docs, which is sad. You can only look at the screenshots, dreaming of what might be.
-
-If you want an account or otherwise have any feedback or want to play around with it more, [let me know](mailto:moise@melanic.org) and I'll set you up or address it as best I can.
+If you want a real account or otherwise have any feedback, or want to play around with it more, [let me know](mailto:moise@melanic.org) and I'll set you up or address it as best I can. There should also be a Matrix room coming soon if you would like to have some chat about it.
 
 Cheers! And have fun.
 

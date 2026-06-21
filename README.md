@@ -1,8 +1,6 @@
 # A framework for web-native development
 
-It's a little web framework which lets you interact with a web site or application much more directly and flexibly than you usually can.
-
-As an end-user of a Gimbal-using site, you can:
+This project is Gimbal, a little web framework which lets you interact with a web site or application much more directly and flexibly than you usually can. As an end-user here, you can:
 
 * Directly examine the site's underlying data(*) and code
 * Persistently edit the UI of the web site you're using, for you, without impacting other people's experience
@@ -15,13 +13,9 @@ As an admin, you can:
 * Easily test, deploy or roll back versions of the site
 * Do first-class development and devops things from your browser
 
-Note: This is all still a work in progress. It's a hobby project. It works on my machine. **It also may eat your data at any time.** The permissions might fail. The service worker doesn't update properly. **Don't use this in production.** Basically, some things work and it's fun for tinkering, but it's pretty far from a working version 1.
+Note: This is all still a work in progress. It's a hobby project. It works on my machine. **It might eat your data at any time.** The permissions might fail. The service worker doesn't update properly. **Don't use this in production.** Basically, some things work and it's fun for tinkering, but it's pretty far from a working version 1.
 
-The overall motivation is this: Internet technology is and was based on a peer-to-peer and open-software vision, but the modern web is very much stuck into a mainframe style priests-and-outsiders structure. In fact, for business reasons, it is going backwards. Fewer and fewer priests are maintaining ever more massive and restricted temples, which you the user are ever more powerless to interact with as a full citizen. Anyway, as an end-user, you're incapable of interacting with web sites in ways that are natural if you are an open source type of person, even in the case when the backend is (from the administrator's POV) open source. You're left with weird little scraps, like being able to export your data or paste a custom block of CSS, that don't really scratch the surface of what you should be able to do to control your experience and your data.
 
-On the admin side, compounding those user-side issues, there are significant centralized hosting issues that still haven't gone away. Bittorrent is great, ActivityPub is great, but popular sites still run on expensive centrally-served hosting. People still invest in S3 to run their Mastodon nodes. My vision would be that, in addition to the user side getting better, it could become realistic to run something like a busy Mastodon node or Peertube instance, and have a substantial amount of the hosting and development being done by the users (those of them that are interested in that sort of thing).
-
-Basically, the idea for this project is to provide a framework which is akin to minicomputers instead of mainframes, or to open source instead of Windows.
 
 ## Examples
 
