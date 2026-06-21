@@ -13,6 +13,7 @@ export async function invoke(shell, previous, args) {
   const prev = await previous;
   let content = null;
   let title = 'markdown';
+  let sourceDir = '';
 
   if (args.length > 0 && typeof args[0] === 'string') {
     const path = args[0];
@@ -27,6 +28,19 @@ export async function invoke(shell, previous, args) {
     const file = await shell._vol(serverUrl, volume).lookup(relPath);
     const resp = await file.get();
     content = await resp.text();
+
+    const cwd = shell.cwd.replace(/^\/+|\/+$/g, '');
+    let webRel = relPath;
+    if (cwd && relPath.startsWith(cwd + '/')) {
+      webRel = relPath.slice(cwd.length + 1);
+    } else if (relPath === cwd) {
+      webRel = '.';
+    }
+    const dirParts = webRel.split('/').filter(Boolean);
+    dirParts.pop();
+    sourceDir = dirParts.length > 0
+      ? serverUrl + '/' + dirParts.join('/')
+      : serverUrl;
 
   } else if (!isVoid(prev)) {
     if (prev instanceof Response) {
@@ -49,6 +63,7 @@ export async function invoke(shell, previous, args) {
     zone: 'master',
     evalContext: { fs: shell.fs, shell },
     content,
+    sourceDir,
   });
 
   return VOID;

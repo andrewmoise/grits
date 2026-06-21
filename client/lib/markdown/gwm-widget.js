@@ -12,6 +12,17 @@ const MD_ICON = {
   svg: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4H14.5V13H18L12 20L6 13H9.5Z" fill="currentColor" stroke="none"/></svg>`,
 };
 
+function isRelativeUrl(url) {
+  return !/^(?:[a-zA-Z][a-zA-Z0-9+.-]*:|\/\/|\/)/.test(url);
+}
+
+function resolveUrl(url, sourceDir) {
+  if (sourceDir && isRelativeUrl(url)) {
+    return new URL(url, sourceDir + '/').href;
+  }
+  return url;
+}
+
 function ensureStyles() {
   if (document.getElementById(STYLE_ID)) return;
   const s = document.createElement('style');
@@ -282,14 +293,14 @@ const SKIP = new Set([
   'StrikethroughMark', 'TableDelimiter',
 ]);
 
-function attachChildren(parent, node, src) {
+function attachChildren(parent, node, src, sourceDir) {
   let pos = node.from;
   let child = node.firstChild;
   while (child) {
     if (child.from > pos) {
       parent.appendChild(document.createTextNode(src.slice(pos, child.from)));
     }
-    const el = renderNode(child, src);
+    const el = renderNode(child, src, sourceDir);
     if (el) parent.appendChild(el);
     pos = child.to;
     child = child.nextSibling;
@@ -308,7 +319,7 @@ function firstChildNamed(node, name) {
   return null;
 }
 
-function renderNode(node, src) {
+function renderNode(node, src, sourceDir) {
   const name = node.type.name;
   if (SKIP.has(name)) return null;
 
@@ -318,57 +329,57 @@ function renderNode(node, src) {
     case 'ATXHeading1':
     case 'SetextHeading1': {
       const h = document.createElement('h1');
-      attachChildren(h, node, src);
+      attachChildren(h, node, src, sourceDir);
       return h;
     }
     case 'ATXHeading2':
     case 'SetextHeading2': {
       const h = document.createElement('h2');
-      attachChildren(h, node, src);
+      attachChildren(h, node, src, sourceDir);
       return h;
     }
     case 'ATXHeading3': {
       const h = document.createElement('h3');
-      attachChildren(h, node, src);
+      attachChildren(h, node, src, sourceDir);
       return h;
     }
     case 'ATXHeading4': {
       const h = document.createElement('h4');
-      attachChildren(h, node, src);
+      attachChildren(h, node, src, sourceDir);
       return h;
     }
     case 'ATXHeading5': {
       const h = document.createElement('h5');
-      attachChildren(h, node, src);
+      attachChildren(h, node, src, sourceDir);
       return h;
     }
     case 'ATXHeading6': {
       const h = document.createElement('h6');
-      attachChildren(h, node, src);
+      attachChildren(h, node, src, sourceDir);
       return h;
     }
 
     /* ── Paragraph ────────────────────────────── */
     case 'Paragraph': {
       const p = document.createElement('p');
-      attachChildren(p, node, src);
+      attachChildren(p, node, src, sourceDir);
       return p;
     }
 
     /* ── Lists ────────────────────────────────── */
     case 'BulletList': {
       const ul = document.createElement('ul');
-      attachChildren(ul, node, src);
+      attachChildren(ul, node, src, sourceDir);
       return ul;
     }
     case 'OrderedList': {
       const ol = document.createElement('ol');
-      attachChildren(ol, node, src);
+      attachChildren(ol, node, src, sourceDir);
       return ol;
     }
     case 'ListItem': {
       const li = document.createElement('li');
-      attachChildren(li, node, src);
+      attachChildren(li, node, src, sourceDir);
       return li;
     }
 
@@ -403,7 +414,7 @@ function renderNode(node, src) {
         if (child.from > pos) {
           textSpan.appendChild(document.createTextNode(src.slice(pos, child.from)));
         }
-        const el = renderNode(child, src);
+        const el = renderNode(child, src, sourceDir);
         if (el) textSpan.appendChild(el);
         pos = child.to;
         child = child.nextSibling;
@@ -419,7 +430,7 @@ function renderNode(node, src) {
     /* ── Blockquote ───────────────────────────── */
     case 'Blockquote': {
       const bq = document.createElement('blockquote');
-      attachChildren(bq, node, src);
+      attachChildren(bq, node, src, sourceDir);
       return bq;
     }
 
@@ -466,19 +477,19 @@ function renderNode(node, src) {
     /* ── Emphasis / Strong ────────────────────── */
     case 'Emphasis': {
       const em = document.createElement('em');
-      attachChildren(em, node, src);
+      attachChildren(em, node, src, sourceDir);
       return em;
     }
     case 'StrongEmphasis': {
       const strong = document.createElement('strong');
-      attachChildren(strong, node, src);
+      attachChildren(strong, node, src, sourceDir);
       return strong;
     }
 
     /* ── Strikethrough ────────────────────────── */
     case 'Strikethrough': {
       const del = document.createElement('del');
-      attachChildren(del, node, src);
+      attachChildren(del, node, src, sourceDir);
       return del;
     }
 
@@ -488,7 +499,7 @@ function renderNode(node, src) {
 
       const urlChild = firstChildNamed(node, 'URL');
       if (urlChild) {
-        a.href = src.slice(urlChild.from, urlChild.to);
+        a.href = resolveUrl(src.slice(urlChild.from, urlChild.to), sourceDir);
       }
       a.target = '_blank';
       a.rel = 'noopener noreferrer';
@@ -510,7 +521,7 @@ function renderNode(node, src) {
         if (child.from > pos) {
           a.appendChild(document.createTextNode(src.slice(pos, child.from)));
         }
-        const el = renderNode(child, src);
+        const el = renderNode(child, src, sourceDir);
         if (el) a.appendChild(el);
         pos = Math.max(pos, child.to);
         child = child.nextSibling;
@@ -540,7 +551,7 @@ function renderNode(node, src) {
       const urlChild = firstChildNamed(node, 'URL');
       let url = '';
       if (urlChild) {
-        url = src.slice(urlChild.from, urlChild.to);
+        url = resolveUrl(src.slice(urlChild.from, urlChild.to), sourceDir);
         img.src = url;
       }
 
@@ -651,7 +662,7 @@ function renderNode(node, src) {
   }
 }
 
-async function buildContent(src) {
+async function buildContent(src, sourceDir) {
   const frag = document.createDocumentFragment();
   if (!src || !src.trim()) return frag;
 
@@ -661,7 +672,7 @@ async function buildContent(src) {
 
   let child = top.firstChild;
   while (child) {
-    const el = renderNode(child, src);
+    const el = renderNode(child, src, sourceDir);
     if (el) frag.appendChild(el);
     child = child.nextSibling;
   }
@@ -669,7 +680,7 @@ async function buildContent(src) {
   return frag;
 }
 
-export default async function createWidget({ name, evalContext = {}, content = '' }) {
+export default async function createWidget({ name, evalContext = {}, content = '', sourceDir = '' }) {
   ensureStyles();
 
   const el = document.createElement('div');
@@ -678,7 +689,7 @@ export default async function createWidget({ name, evalContext = {}, content = '
   if (content) {
     const body = document.createElement('div');
     body.className = 'gm-body';
-    const frag = await buildContent(content);
+    const frag = await buildContent(content, sourceDir);
     body.appendChild(frag);
     el.appendChild(body);
   } else {
