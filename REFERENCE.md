@@ -75,7 +75,7 @@ There are other more sophisticated access patterns possible. Notably, all users 
 
 ### `access.json`
 
-These grants of access come in plain files located at `.grits/access.json` within any directory which permissions are set for. Look around at `access.json` files in `skel/` to get a sense of how they're structured; they are simple.
+These grants of access come in plain files located at `.grits/access.json` within any directory which permissions are set for. Look around at `access.json` files in `content/skel/` to get a sense of how they're structured; they are simple.
 
 The full set of access types is:
 

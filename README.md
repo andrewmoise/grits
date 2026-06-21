@@ -139,10 +139,10 @@ Once the server is running, the FUSE mount at `mnt/` gives you access to the fil
 
 (Also note - the sample config already contains an automatic import of `client/` to the live directory for `gimbal.{your domain}.com`, meaning the vhost which provides the normal Gimbal shell. This means that any edits you make to `client/` on your backend source checkout will automatically get copied to the frontend's file store **(overwriting any local changes!)** on every server restart. This seems to be the easiest way to do the development for now. Any other vhosts created by users, including their own copies of /sites/gimbal.{your domain}.com, won't be impacted by this auto-import.)
 
-You'll need to initially populate the client store. The frontend code in `client/` gets automatically imported to the appropriate vhost on every backend server start. However, we need to do a one-time import of `skel/` to set up some other areas of the filesystem:
+You'll need to initially populate the client store. The frontend code in `client/` gets automatically imported to the appropriate vhost on every backend server start. However, we need to do a one-time import of `content/skel/` to set up some other areas of the filesystem:
 
 ```
-cp -r skel/* skel/.grits mnt/
+cp -r content/skel/* content/skel/.grits mnt/
 ```
 
 And then, we need to create some users:
