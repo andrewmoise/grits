@@ -1423,6 +1423,11 @@ class GritsClient {
     this._authToken = token;
     this._username  = username;
     this.extraHeaders['X-Grits-Auth-Token'] = token;
+
+    for (const vol of this._volumes.values()) {
+      vol._miniRoots.clear();
+    }
+    this._flushCaches();
   }
 
   /** Log out. If serverUrl is provided, notifies the server (which clears any
