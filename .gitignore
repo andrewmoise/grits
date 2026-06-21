@@ -2,4 +2,5 @@
 /var/
 /mnt/
 /config.json
-client/lib/node_modules/
+/client/lib/node_modules/
+/content/src/
