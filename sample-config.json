@@ -33,6 +33,13 @@
     },
 
     {
+      "module": "rateLimit",
+      "uploadBytes":     {"max": 10485760, "duration": "1h"},
+      "accountCreation": {"max": 3,        "duration": "1h"},
+      "siteCreation":    {"max": 5,        "duration": "1h"}
+    },
+
+    {
       "module": "startup",
       "commands": [
         ["import", "-p", "./client", "//primary/sites/gimbal.%YOUR_DOMAIN%.com/live"]

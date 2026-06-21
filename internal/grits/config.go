@@ -139,6 +139,14 @@ func UnmarshalDurationFields(data []byte, dst any) error {
 			if n, ok := rawValue.(float64); ok {
 				fieldValue.SetInt(int64(n))
 			}
+		case reflect.TypeOf(int64(0)):
+			if n, ok := rawValue.(float64); ok {
+				fieldValue.SetInt(int64(n))
+			}
+		case reflect.TypeOf(float64(0)):
+			if n, ok := rawValue.(float64); ok {
+				fieldValue.SetFloat(n)
+			}
 		}
 	}
 

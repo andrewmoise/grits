@@ -84,6 +84,7 @@ type HTTPModule struct {
 	serviceWorkerModule *ServiceWorkerModule
 	activeMirrorModule  *MirrorModule
 	authModule          *AuthModule
+	rateLimitModule     *RateLimitModule
 
 	refHolder *ReferenceHolder
 
@@ -367,6 +368,10 @@ func (hm *HTTPModule) SetAuthModule(m *AuthModule) {
 	hm.authModule = m
 }
 
+func (hm *HTTPModule) SetRateLimitModule(m *RateLimitModule) {
+	hm.rateLimitModule = m
+}
+
 func (hm *HTTPModule) WrapContentHandler(wrapper func(http.HandlerFunc) http.HandlerFunc) {
 	hm.contentHandlerChain = wrapper(hm.contentHandlerChain)
 }
@@ -646,6 +651,28 @@ func getContentTypeFromExtension(ext string) string {
 	return mimeTypes[strings.ToLower(ext)]
 }
 
+// clientIP extracts the client IP from an HTTP request.
+func clientIP(r *http.Request) string {
+	if h := r.Header.Get("X-Forwarded-For"); h != "" {
+		if ip := strings.Split(h, ",")[0]; ip != "" {
+			return strings.TrimSpace(ip)
+		}
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// isSiteCreationRequest checks whether a link path represents a site creation
+// attempt — linking at the top level of a site directory, e.g. "sites/{name}".
+func isSiteCreationRequest(path string) bool {
+	path = strings.TrimRight(path, "/")
+	parts := strings.SplitN(path, "/", 3)
+	return len(parts) >= 2 && parts[0] == "sites" && parts[1] != ""
+}
+
 // handleBlobUpload handles PUT requests to /grits/v1/blob/ and /grits/v1/blob/{hash}
 func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	if *s.Config.ReadOnly {
@@ -655,6 +682,13 @@ func (s *HTTPModule) handleBlobUpload(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength > 0 && r.ContentLength > s.Config.MaxUploadSize {
 		http.Error(w, "Upload too large", http.StatusRequestEntityTooLarge)
 		return
+	}
+
+	if s.rateLimitModule != nil && r.ContentLength > 0 {
+		if err := s.rateLimitModule.CheckLimit("ip:"+clientIP(r), "uploadBytes", r.ContentLength); err != nil {
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	blobPath := strings.TrimPrefix(r.URL.Path, "/grits/v1/blob")
@@ -965,6 +999,18 @@ func (s *HTTPModule) handleLink(w http.ResponseWriter, r *http.Request) {
 		if !Validate("relativePath", lr.Path) {
 			http.Error(w, fmt.Sprintf("Invalid path: %q", lr.Path), http.StatusBadRequest)
 			return
+		}
+	}
+
+	if s.rateLimitModule != nil {
+		for _, lr := range req.Requests {
+			if isSiteCreationRequest(lr.Path) {
+				if err := s.rateLimitModule.CheckLimit("ip:"+clientIP(r), "siteCreation", 1); err != nil {
+					writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": err.Error()})
+					return
+				}
+				break
+			}
 		}
 	}
 

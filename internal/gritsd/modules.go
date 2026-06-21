@@ -219,6 +219,18 @@ func (s *Server) createModuleFromConfig(moduleType string, rawConfig json.RawMes
 		}
 		return trackerModule, nil
 
+	case "rateLimit":
+		var rlConfig RateLimitModuleConfig
+		if err := json.Unmarshal(rawConfig, &rlConfig); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal RateLimit module config: %v", err)
+		}
+
+		rlModule, err := NewRateLimitModule(s, &rlConfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create RateLimit module: %v", err)
+		}
+		return rlModule, nil
+
 	case "volume":
 		config := &LocalVolumeConfig{}
 		if err := json.Unmarshal(rawConfig, config); err != nil {
