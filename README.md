@@ -100,7 +100,7 @@ Here's how to try. It only works on Linux right now.
 
 First, set up prerequisites:
 
-* Install golang >= 1.22.12
+* Install golang >= 1.25.0
 * `sudo apt install fuse3 certbot npm` or equivalent
 
 Install and build source:
