@@ -1107,6 +1107,12 @@ function buildStrip() {
 
 window.addEventListener('resize', () => render(false));
 
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && !e.shiftKey && !e.metaKey && !e.altKey && e.key === 'r') {
+    e.preventDefault();
+  }
+});
+
 buildStrip();
 
 // Launch initial widgets — try profile.jsonl first, fall back to defaults
