@@ -399,9 +399,6 @@ func (s *HTTPModule) setupRoutes() {
 	s.Mux.HandleFunc("/grits/v1/service-worker.js", s.requestMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, s.Server.Config.ServerPath("client/service-worker.js"))
 	}))
-	s.Mux.Handle("/grits/v1/client/", http.StripPrefix("/grits/v1/client/",
-		s.requestMiddleware(http.FileServer(http.Dir(s.Server.Config.ServerPath("client"))).ServeHTTP)))
-
 	s.HTTPServer.Handler = s.Mux
 }
 
