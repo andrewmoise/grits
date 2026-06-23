@@ -1206,6 +1206,8 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 
 	// Tell browsers to revalidate every time
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Del("Pragma")
+	w.Header().Del("Expires")
 
 	// Check If-None-Match header for conditional requests
 	if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
