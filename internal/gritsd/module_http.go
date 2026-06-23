@@ -1246,6 +1246,12 @@ func handleNamespaceGet(volume Volume, path string, w http.ResponseWriter, r *ht
 
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Serving content\n")
 
+	if ext := filepath.Ext(path); ext != "" {
+		if ct := getContentTypeFromExtension(strings.TrimPrefix(ext, ".")); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+	}
+
 	http.ServeContent(w, r, filepath.Base(path), time.Now(), reader)
 	grits.DebugLogWithTime(grits.DebugHttpPerformance, path, "Namespace GET complete\n")
 }
