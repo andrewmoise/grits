@@ -318,11 +318,16 @@ const gwm = {
 
 _shell.gwm = gwm;
 
-const STRIP_CMDS = [
-  { cmd: 'files()',  ...WIDGET_ICONS['files'] },
-  { cmd: 'gterm()',  ...WIDGET_ICONS['gterm'] },
-  { cmd: 'edit()', ...WIDGET_ICONS['edit'] },
-];
+async function loadJsonlFile(path) {
+  try {
+    const { serverUrl, volume, path: relPath } = _shell.resolvePath(path);
+    const f = await _gg.volume(serverUrl, volume).lookup(relPath);
+    if (f.isFile()) return (await f.text()).split('\n')
+      .map(l => l.trim()).filter(Boolean)
+      .map(l => JSON.parse(l));
+  } catch {}
+  return null;
+}
 
 function getPad() {
   const val = getComputedStyle(document.documentElement).getPropertyValue('--pad').trim();
@@ -1068,9 +1073,10 @@ function targetsEqual(a, b) {
   return true;
 }
 
-function buildStrip() {
+function buildStrip(entries) {
   const stripTop = $('strip-top');
-  STRIP_CMDS.forEach(entry => {
+  if (!entries) return;
+  entries.forEach(entry => {
     const b = mkEl('div', 'strip-launcher');
     b.innerHTML = getIconSvg(entry.icon, entry.iconColor)
                 + `<span class="tip">${entry.cmd}</span>`;
@@ -1087,29 +1093,27 @@ document.addEventListener('keydown', e => {
   }
 });
 
-buildStrip();
-
-// Launch initial widgets — try profile.jsonl first, fall back to defaults
 (async () => {
-  let ranInit = false;
-  try {
-    const { serverUrl, volume, path } = _shell.resolvePath('profile.jsonl');
-    const f = await _gg.volume(serverUrl, volume).lookup(path);
-    if (f.isFile()) {
-      const text = await f.text();
-      for (const line of text.split('\n')) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        await _shell.eval(JSON.parse(trimmed));
-      }
-      ranInit = true;
+  const users = await _gg.whoami(_serverUrl);
+  const username = users?.[0]?.username ?? null;
+
+  async function loadFile(name) {
+    if (username) {
+      const entries = await loadJsonlFile(
+        `//primary/home/${username}/local/gimbal/${name}`);
+      if (entries) return entries;
     }
-  } catch {}
-  if (!ranInit) {
-    const gtermMod = await import('./lib/gterm/gwm-widget.js');
-    await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', iconColor: 'blue', zone: 'master', shell: _shell });
-    const filesMod = await import('./lib/files/gwm-widget.js');
-    await openWidget(filesMod, { name: 'files', icon: 'files', iconColor: 'orange', zone: 'master', shell: _shell });
+    return loadJsonlFile(`lib/gimbal/${name}`);
+  }
+
+  const stripEntries = await loadFile('launcher.jsonl');
+  buildStrip(stripEntries);
+
+  const profileEntries = await loadFile('profile.jsonl');
+  if (profileEntries) {
+    for (const entry of profileEntries) {
+      if (typeof entry === 'string') await _shell.eval(entry);
+    }
   }
 })();
 

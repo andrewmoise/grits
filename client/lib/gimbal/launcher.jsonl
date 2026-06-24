@@ -1,0 +1,3 @@
+{"cmd":"files()","icon":"files","iconColor":"orange"}
+{"cmd":"gterm()","icon":"gterm","iconColor":"blue"}
+{"cmd":"edit()","icon":"edit","iconColor":"teal-hi"}
