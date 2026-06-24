@@ -1,11 +1,5 @@
 # In Progress
 
-* Self-hosted git repo in startup
-* MD renderer
-* MOTD
-* Fix certbot browser badness when first accessing a new vhost, and browser visits http://{whatever}
-
-
 
 ## Shell/Result design cleanup
 
@@ -126,6 +120,8 @@ bg()
 
 Make test() in the foreground once bg() exists
 
+Some sort of toast for running commands in the background like bg()
+
 .null()
 
 time()
@@ -138,7 +134,9 @@ Make test() print failures as red, or a red X or something is probably easier
 
 Let people reset their own passwords
 
+whoami() should return some better indication, if someone's login has expired
 
+Lots of tools need to realize when their arguments aren't strings and react accordingly (login() in particular doesn't do good if it gets two options bags)
 
 ## gwm
 
@@ -180,6 +178,15 @@ Make minimized windows distinguishable based on their titles
 
 Fix the markdown icon in the tray
 
+Folder color to Orange
+
+Better monospace font
+
+Some sort of customizable command pallete similar to acme
+
+MOTD
+
+Make "safe mode"
 
 
 ## grits client
@@ -203,8 +210,6 @@ Lookup and link multiple things in one request when possible
 
 Look into service worker not unregistering
 
-What's up with sessionStorage in GritsClient.js?
-
 Silent catches:
 -- Truly problematic (2 sites):
 1. project/gwm-widget.js:374-387 — catch (_) silently treats all errors (JSON parse failure, permission error, network timeout) as "project file doesn't exist" and overwrites with a fresh empty project. This can silently destroy the user's project data.
@@ -218,6 +223,7 @@ Silent catches:
 8. gimbal/glob.js:26,41,98 — Three catch(e){return;} / catch(e){return[];} sites. Glob silently skipping inaccessible directories is arguably correct shell-like behavior, but no log means bugs are invisible.
 9. gimbal/gsh.js:350 — catch(e){throw new Error("command not found")}. If a command module has a syntax error or import failure, the user gets a misleading "command not found" instead of the actual error.
 
+Delay the lookup() slightly when trying the slow path, and don't attempt it if the fast path already succeeded
 
 
 ## backend
@@ -286,6 +292,75 @@ Put passwords in the user's home directory, and back out the password strength c
 
 Guest user auto-homedir-deletion
 
+Fix certbot browser badness when first accessing a new vhost, and browser visits http://{whatever}
+
+
+## GUI destination
+
+* We need an icons pack
+* Each widget has a list of actions: Each has an icon, a snippet of code which defines what happens when you click, and an optional "enabled" state function.
+* You can edit the actions for the running widget, you can save it persistently for the current widget, you can define a profile-style override for all widgets of a particular shell command, you can put in a specific new list when you spawn a widget if you like
+* The function has w, gsh, and gwm accessible. evalContext maybe for that?
+* copy(), paste(), edit(), functions to spawn or access existing opened widgets
+* open() is a shell command where double-click or "ok" is an action
+* eval() is an action (on selected text) from within the shell
+* And so on
+
+### Specific more detailed plan, acme-style
+
+**Overall philosophy**
+- Actions are short JS snippets; power is opt-in, surface is familiar
+- Inspired by Plan 9 acme (action bar, mouse chords) but applied system-wide unlike acme which is editor-specific
+- Everything bottoms out in readable text; no hidden magic, no object model to learn
+
+**Action definitions**
+- Each action is `{ icon, label, code }` — icon can be emoji, Tabler icon name, SVG string, or short text fallback
+- Icon resolution: explicit icon on action → central registry by name → generic fallback; never breaks
+- Arguments use sigil suffixes: `$arg` = exactly one, `$arg+` = one or more, `$arg?` = optional (use selection if present, omit if not, never prompt)
+- Actions defined per-widget as a JSON array; same format for built-ins and user-defined so they're readable/copyable
+
+**Eval environment**
+- `new Function('gsh', 'gwm', 'self', ...resolvedArgs, snippet)` — no `with`, closed scope
+- `gsh` — shell: `eval()`, `cwd()`, shell commands
+- `gwm` — window manager: `toast()`, `addWidget()`, `removeWidget()`
+- `self` — current widget: `self.save()`, `self.selection`, `self.title`, etc.
+- Available names are documented and fixed; no implicit globals
+
+**Action bar / toolbar**
+- Each widget has a bar of icon buttons for its actions
+- Right-click menu shows the same full action list
+- One protected wrench slot always opens the action editor; cannot be removed
+- Action editor: action list becomes editable text, toolbar collapses to checkmark only, checkmark evals and reinstalls
+
+**Mouse behavior**
+- Left-click: select
+- Ctrl + left-click: add to selection (only valid for `$arg+` parameters)
+- Middle-click: execute word under cursor, or selection if present; triggers assembly if args unresolved
+- Shift + middle-click: hang execution, leave toast open for editing before running
+- Right-click: full action menu
+
+**Argument assembly and toast UI**
+- Toast appears at bottom when action has unresolved arguments
+- Shows command assembling live: `mv("/home/user/a.txt", …)`
+- Clicking any file/item in any widget fills next required argument
+- Typing fills current argument as text value
+- Ctrl during assembly: builds a list for `$arg+`
+- Shift or Ctrl-list or edited text: go arrow appears at right
+- States: assembling (no go arrow) → hung/ready (go arrow, editable, distinct border) → executing (spinner) → success (checkmark, fades) → failure (red `!`, error and output shown, pinnable or promotable to widget)
+- Toast also shows resolved command on success so user can see and learn what ran
+
+**Selection and argument values**
+- All values are strings or lists of strings; no richer types
+- Clicking a file in the file browser passes its fully-specified path
+- Clicking the cwd display in a terminal prompt does the same
+- Middle-clicking in terminal executes word under cursor or selection via `gsh`
+
+**Deferred / noted for later**
+- Middle-click while assembling: run clicked text and pipe output as current argument (shell `$()` as mouse gesture — expressive but complex)
+- Terminal capture of last-run command (toast is sufficient for now)
+- X11 middle-click paste compatibility (use explicit `paste()` action instead)
+- Regexp matching on action names for icon registry (probably too magic)
+- Per-instance vs per-type action serialization strategy
 
 
 ## Old TODOs
