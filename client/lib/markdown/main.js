@@ -55,7 +55,7 @@ export async function invoke(shell, previous, args) {
     name: title,
     icon: 'markdown',
     zone: 'master',
-    evalContext: { fs: shell.fs, shell },
+    shell,
     content,
     sourceDir,
   });

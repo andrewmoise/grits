@@ -118,11 +118,7 @@ async function loadLang(path) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-// name : display name passed by the shell
-// path : string file path (used for language detection)
-// r    : { serverUrl, volume, path } — resolved path object
-// fs   : GritsClient instance
-export default function createWidget({ name, path = null, r = null, evalContext }) {
+export default function createWidget({ name, r: rPath = null, shell }) {
   ensureStyles();
 
   const el = document.createElement('div');
@@ -130,12 +126,11 @@ export default function createWidget({ name, path = null, r = null, evalContext 
 
   let view      = null;
   let dirty     = false;
-  let currentName = name;
-  let currentPath = path;
-  let currentR    = r;
+  let currentPath = rPath?.path ?? null;
+  let currentName = rPath ? rPath.path.split('/').pop() : name;
+  let currentR    = rPath;
 
-  const fs    = evalContext?.fs;
-  const shell = evalContext?.shell ?? null;
+  const fs    = shell?.fs;
 
   // controls is injected by the shell after mount
   let controls = null;
@@ -144,7 +139,7 @@ export default function createWidget({ name, path = null, r = null, evalContext 
   const saveBtn = {
     icon:    'save',
     label:   'save  (⌘S)',
-    enabled: !!r,
+    enabled: !!rPath,
     action() { save(); },
   };
 
@@ -165,7 +160,7 @@ export default function createWidget({ name, path = null, r = null, evalContext 
   // ── decoration declaration ────────────────────────────
   const decoration = {
     icon: 'editor',
-    title: r ? undefined : '',
+    title: currentName,
     leftButtons: [saveBtn, saveAsBtn, newBtn],
 
     async onCloseRequest() {
