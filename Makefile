@@ -12,8 +12,10 @@ test:
 
 deps:
 	cd client/lib && npm install --ignore-scripts --no-audit
+	go install golang.org/x/vuln/cmd/govulncheck@latest
 
 audit:
+	~/go/bin/govulncheck ./internal/... ./cmd/...
 	cd client/lib && npm audit
 
 fix:
