@@ -319,19 +319,21 @@ _shell.gwm = gwm;
 
 const WIDGET_REGISTRY = {
   files: {
-    name: 'files', icon: 'files',
+    name: 'files', icon: 'files', iconColor: 'orange',
     module: './lib/files/gwm-widget.js', _cache: null,
   },
   gterm: {
-    name: 'gterm', icon: 'gterm',
+    name: 'gterm', icon: 'gterm', iconColor: 'blue',
     module: './lib/gterm/gwm-widget.js', _cache: null,
   },
   editor: {
-    name: 'editor', icon: 'editor',
+    name: 'editor', icon: 'editor',     iconColor: 'teal-hi',
     module: './lib/codemirror/gwm-widget.js', _cache: null,
   },
 };
 
+// All icons use stroke="currentColor" — no hardcoded color values.
+// Use getIconSvg(icon, color) to inject a CSS variable color at render time.
 const ICONS = {
   project:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><polyline points="8 14 10 16 16 13"/></svg>`,
   minimize: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="5" y1="19" x2="19" y2="19"/></svg>`,
@@ -340,16 +342,29 @@ const ICONS = {
   close:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`,
   save:     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><rect x="7" y="13" width="10" height="6" rx="1" fill="currentColor" stroke="none"/></svg>`,
   saveAs:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><rect x="7" y="13" width="10" height="6" rx="1" fill="currentColor" stroke="none"/><line x1="9" y1="8" x2="15" y2="8"/><polyline points="13 6 15 8 13 10"/></svg>`,
-  newDoc:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`,  forward:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`,
+  newDoc:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`,
+  forward:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>`,
   parentDir:`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`,
   reload:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 3 21 9 15 9"/><path d="M18.49 14a8 8 0 1 1-1.88-8.32L21 9"/></svg>`,
 
-  files:    `<svg viewBox="0 0 24 24" fill="none" stroke="var(--amber-hi)" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
-  editor:   `<svg viewBox="0 0 24 24" fill="none" stroke="var(--teal-hi)" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
-  gterm:    `<svg viewBox="0 0 24 24" fill="none" stroke="var(--blue)" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
-  message:  `<svg viewBox="0 0 24 24" fill="none" stroke="var(--teal-hi)" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 13 2 6"/></svg>`,
-  inbox:    `<svg viewBox="0 0 24 24" fill="none" stroke="var(--blue-hi)" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 13 2 6"/></svg>`,
+  files:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>`,
+  editor:   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
+  gterm:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>`,
+  message:  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 13 2 6"/></svg>`,
+  inbox:    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 13 2 6"/></svg>`,
 };
+
+// ── Icon color helper ─────────────────────────────────────
+// Returns the SVG string for an icon with an optional color applied.
+// color: a CSS variable slug like 'blue-hi', 'teal-hi', 'amber', etc. (no leading '--').
+// If color is falsy, currentColor is left as-is and inherits from the element's CSS color.
+// For decoration objects that supply a raw SVG ({ svg: '...' }), pass the svg directly
+// instead — this helper only handles named ICONS map entries.
+function getIconSvg(icon, color) {
+  const raw = ICONS[icon] ?? ICONS.gterm;
+  if (!color) return raw;
+  return raw.replace(/stroke="currentColor"/g, `stroke="var(--${color})"`);
+}
 
 function getPad() {
   const val = getComputedStyle(document.documentElement).getPropertyValue('--pad').trim();
@@ -363,13 +378,14 @@ const domCache = new Map();
 
 // ── Core widget opener ────────────────────────────────────
 // mod: ES module object with a default export factory function
-// opts: { name, icon, zone, iconRect, ...rest passed to factory }
+// opts: { name, icon, iconColor, zone, iconRect, ...rest passed to factory }
 async function openWidget(mod, opts = {}) {
   const {
-    zone     = 'master',
-    name     = 'widget',
-    icon     = 'editor',
-    iconRect = null,
+    zone      = 'master',
+    name      = 'widget',
+    icon      = 'editor',
+    iconColor = null,
+    iconRect  = null,
     shell: passedShell,
     ...rest
   } = opts;
@@ -402,7 +418,7 @@ async function openWidget(mod, opts = {}) {
   }
 
   widgets.set(id, {
-    id, name, icon, zone,
+    id, name, icon, iconColor, zone,
     masterHistory: zone === 'master' ? now : 0,
     stackOrder:    zone === 'stack'  ? stackMaxOrder() + 1 : 0,
     flexRatio: newRatio, cellEl: null, cellInstance: null,
@@ -416,7 +432,7 @@ async function openWidget(mod, opts = {}) {
     
     const childShell = (passedShell ?? _shell).fork();
     
-    const instance     = await Promise.resolve(createWidget({ name, shell: childShell, ...rest }));
+    const instance     = await Promise.resolve(createWidget({ name, iconColor, shell: childShell, ...rest }));
     const w            = widgets.get(id);
     if (!w) return;
 
@@ -426,9 +442,10 @@ async function openWidget(mod, opts = {}) {
     // ── Read initial decoration from the instance ─────────
     const dec = instance.decoration ?? {};
 
-    // Override name/icon if the widget declares them
-    if (dec.title !== undefined) w.name = dec.title;
-    if (dec.icon  !== undefined) w.icon = dec.icon;
+    // Override name/icon/iconColor if the widget declares them
+    if (dec.title     !== undefined) w.name      = dec.title;
+    if (dec.icon      !== undefined) w.icon      = dec.icon;
+    if (dec.iconColor !== undefined) w.iconColor = dec.iconColor;
 
     // ── Build and inject the controls object ──────────────
     // The widget mutates its own decoration object then calls controls.update()
@@ -478,10 +495,11 @@ async function launchFromStrip(registryEntry, iconRect) {
     registryEntry._cache = mod;
   }
   await openWidget(registryEntry._cache, {
-    name:     registryEntry.name,
-    icon:     registryEntry.icon,
+    name:      registryEntry.name,
+    icon:      registryEntry.icon,
+    iconColor: registryEntry.iconColor,
     iconRect,
-    zone:     'master',
+    zone:      'master',
   });
 }
 
@@ -507,7 +525,7 @@ function mkBtn(iconName, label, extraClass, onClick) {
 function mkDecBtn(desc) {
   const svgContent = typeof desc.icon === 'object' && desc.icon.svg
     ? desc.icon.svg
-    : (ICONS[desc.icon] ?? ICONS.gterm);
+    : getIconSvg(desc.icon, desc.iconColor ?? null);
   const b = mkEl('button', 'widget-btn');
   b.innerHTML = svgContent;
   b.title = desc.label ?? '';
@@ -590,8 +608,12 @@ function syncDecoration(wrap, w) {
   if (wrap._titleEl) wrap._titleEl.classList.toggle('is-dirty', !!dec.dirty);
 
   // Left-side icon + buttons — rebuild only when the button set may have changed.
-  // Keyed on icon + actionability + button count so incidental re-renders don't thrash listeners.
-  const leftSig = `${dec.icon ?? w.icon}|${dec.iconAction ? '1' : '0'}|${(dec.leftButtons ?? []).length}`;
+  // Keyed on icon + color + actionability + button count so incidental re-renders
+  // don't thrash listeners.
+  const effectiveIcon  = dec.icon      ?? w.icon;
+  const effectiveColor = dec.iconColor ?? w.iconColor ?? null;
+  const leftSig = `${effectiveIcon}|${effectiveColor}|${dec.iconAction ? '1' : '0'}|${(dec.leftButtons ?? []).length}`;
+
   if (wrap._leftSig !== leftSig) {
     wrap._leftSig = leftSig;
     const left = wrap._leftEl;
@@ -599,8 +621,10 @@ function syncDecoration(wrap, w) {
 
     const iconEl = mkEl('div', `widget-icon${dec.iconAction ? ' is-action' : ''}`);
     iconEl.innerHTML = (() => {
+      // Widget supplied a raw SVG object — use it verbatim
       if (dec.icon && typeof dec.icon === 'object' && dec.icon.svg) return dec.icon.svg;
-      return ICONS[dec.icon ?? w.icon] ?? ICONS.gterm;
+      // Named icon slug — inject color via helper
+      return getIconSvg(effectiveIcon, effectiveColor);
     })();
     if (dec.iconAction) {
       iconEl.addEventListener('click', e => { e.stopPropagation(); dec.iconAction(); });
@@ -716,7 +740,8 @@ function render(animate = false) {
   [...widgets.values()].filter(w => w.zone === 'minimized').forEach(w => {
     const thumb = mkEl('div', 'min-thumb');
     thumb.dataset.id = w.id;
-    thumb.innerHTML = (ICONS[w.icon]||ICONS.gterm) + `<span class="tip">${w.name}</span>`;
+    thumb.innerHTML = getIconSvg(w.icon, w.iconColor)
+                    + `<span class="tip">${w.name}</span>`;
     thumb.addEventListener('click', () => restoreWidget(w.id, thumb.getBoundingClientRect()));
     minEl.appendChild(thumb);
   });
@@ -1107,7 +1132,8 @@ function buildStrip() {
   const stripTop = $('strip-top');
   Object.entries(WIDGET_REGISTRY).forEach(([id, entry]) => {
     const b = mkEl('div', 'strip-launcher');
-    b.innerHTML = (ICONS[entry.icon] || ICONS.gterm) + `<span class="tip">${entry.name}</span>`;
+    b.innerHTML = getIconSvg(entry.icon, entry.iconColor)
+                + `<span class="tip">${entry.name}</span>`;
     b.addEventListener('click', () => launchFromStrip(entry, b.getBoundingClientRect()));
     stripTop.appendChild(b);
   });
@@ -1141,9 +1167,9 @@ buildStrip();
   } catch {}
   if (!ranInit) {
     const gtermMod = await import('./lib/gterm/gwm-widget.js');
-    await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', shell: _shell });
+    await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', iconColor: 'blue', zone: 'master', shell: _shell });
     const filesMod = await import('./lib/files/gwm-widget.js');
-    await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', shell: _shell });
+    await openWidget(filesMod, { name: 'files', icon: 'files', iconColor: 'orange', zone: 'master', shell: _shell });
   }
 })();
 
