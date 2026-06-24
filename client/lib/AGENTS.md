@@ -22,7 +22,7 @@ Commands return a `Result` (thenable), which wraps a proxy so chained method cal
 
 Standard Unix-like commands: `cat`, `cd`, `cp`, `echo`, `grep`, `ln`, `ls`, `mkdir`, `mv`, `pwd`, `rm`, `rmdir`, `wget`
 
-Gimbal-specific: `from(filename)` / `to(filename)` for `<` / `>` style piping, `download(url)`, `upload()`, `help()`, `test()`, `unzip()`
+Gimbal-specific: `from(filename)` / `to(filename)` for `<` / `>` style piping, `download(url)`, `upload()`, `help()`, `test()`, `unzip()`, `message(to, subject, body)` to send a message to another user's inbox
 
 Each command directory typically has `main.js` and optionally `test.js`.
 
@@ -84,11 +84,13 @@ Widgets are windows within the Gimbal window environment. Each has a `main.js` (
 | Directory                   | Widget                       | `@cell` tag               |
 |-----------------------------|------------------------------|---------------------------|
 | `gterm/`                    | Terminal widget              | `@cell terminal-widget`   |
+| `message/`                  | Message compose widget       | `@cell compose-widget`     |
 | `files/`                    | File browser                 | `@cell files-widget`      |
 | `codemirror/`               | Code editor                  | `@cell codemirror-widget` |
 | `project/`                  | Project/tracker panel        | `@cell tracker-widget`    |
 | `iframe/`                   | iframe web viewer            | `@cell iframe-widget`     |
 | `edit/`                     | Editor (thin wrapper around codemirror) | (none yet)      |
+| `inbox/`                    | Inbox reader — lists messages from `local/inbox/` with expand/trash | `@cell inbox-widget` |
 | `jqterminal/terminal.js`    | Terminal widget (alternate)  | `@cell terminal-widget`   |
 
 The window manager itself (`gwm`) doesn't have its own directory yet — its logic is spread across `gimbal/` files. Widgets implement a decoration interface (icon, rightButtons, onCloseRequest) and receive a `controls` interface (setTitle) from the shell.
