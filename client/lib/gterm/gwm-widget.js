@@ -180,6 +180,7 @@ export default function createWidget({ name, shell, runOnInit = null }) {
     get fs()         { return shell.fs; },
     resolvePath:     (p) => shell.resolvePath(p),
     runCommand:      (name, args, opts) => shell.runCommand(name, args, opts),
+    importLib:       (p) => shell.importLib(p),
   };
 
   // ── root element ──────────────────────────────────────

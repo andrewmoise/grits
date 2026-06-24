@@ -376,6 +376,12 @@ export class GimbalShell {
     return await _dispatchWrapped(execShell, name, root, args, historyIndex);
   }
 
+  async importLib(gritsPath) {
+    const r = this.resolvePath(gritsPath);
+    const url = this.serverUrl + '/grits/v1/content/' + r.volume + '/' + r.path;
+    return import(url);
+  }
+
   // ── Root result (void input, start of every eval) ─────────────
 
   _rootResult(initial, historyIndex, parentShell) {
