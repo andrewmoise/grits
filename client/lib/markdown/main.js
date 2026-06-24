@@ -1,4 +1,5 @@
-import { VOID, isVoid } from '../gimbal/gsh.js';
+import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
+import { WIDGET_ICONS } from '../style/icons.js';
 
 export const help = `\
 markdown — render Markdown content
@@ -6,17 +7,22 @@ markdown — render Markdown content
 Usage:
   markdown('path/to/file.md')   render a .md file from GritsFS
   <input> | markdown()          render piped text/Response as Markdown
+  markdown('path', { iconColor: 'teal-hi' })  override icon color
 
   Only string file paths or piped text input are accepted.`;
 
 export async function invoke(shell, previous, args) {
   const prev = await previous;
+  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
+  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
+  const defaults   = WIDGET_ICONS.markdown;
+
   let content = null;
   let title = 'markdown';
   let sourceDir = '';
 
-  if (args.length > 0 && typeof args[0] === 'string') {
-    const path = args[0];
+  if (positional.length > 0 && typeof positional[0] === 'string') {
+    const path = positional[0];
     const parts = path.split('/').filter(Boolean);
     title = parts.pop() || 'markdown';
 
@@ -53,7 +59,8 @@ export async function invoke(shell, previous, args) {
   const mod = await import('./gwm-widget.js');
   await window.gimbal.openWidget(mod, {
     name: title,
-    icon: 'markdown',
+    icon:      opts.icon      ?? defaults.icon,
+    iconColor: opts.iconColor ?? defaults.iconColor,
     zone: 'master',
     shell,
     content,

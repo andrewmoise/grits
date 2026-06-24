@@ -8,7 +8,7 @@
  * @implements gimbal-shell#widget
  *
  * decoration interface:
- *   icon         — 'editor'
+ *   icon         — 'edit'
  *   title        — filename (set after load)
  *   rightButtons — [save button]
  *   onCloseRequest — warns when dirty
@@ -163,7 +163,7 @@ export default function createWidget({ name, file = null, shell }) {
 
   // ── decoration declaration ────────────────────────────
   const decoration = {
-    icon: 'editor',
+    icon: 'edit',
     title: currentName,
     leftButtons: [saveBtn, saveAsBtn, newBtn],
 
