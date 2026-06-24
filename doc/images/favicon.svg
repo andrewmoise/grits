@@ -1,0 +1,7 @@
+<svg width="512" height="512" viewBox="0 0 512 512" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>Gimbal</title>
+  <desc>A blue right-pointing caret inside a green ring on a black disc.</desc>
+  <circle cx="256" cy="256" r="248" fill="#0a0c11" stroke="#ffffff" stroke-opacity="0.10" stroke-width="2"/>
+  <circle cx="256" cy="256" r="188" fill="none" stroke="#6fe0a6" stroke-width="30"/>
+  <polyline points="223,166 321,256 223,346" fill="none" stroke="#7cc0ff" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
