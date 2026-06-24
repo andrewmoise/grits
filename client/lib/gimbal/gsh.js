@@ -210,12 +210,12 @@ function _wrapResult(result, historyIndex) {
 // ─────────────────────────────────────────────────────────────────
 
 export class GimbalShell {
-  constructor({ fs, serverUrl, volume, cwd, evalContext = {} }) {
+  constructor({ fs, serverUrl, volume, cwd, gwm }) {
     this.fs              = fs;
     this.serverUrl       = serverUrl;
     this.volume          = volume;
     this.cwd             = cwd || '/';
-    this._evalContext    = evalContext;
+    this.gwm             = gwm ?? null;
     this._scriptScope    = Object.create(null);
     this.history         = [];
     this.__              = [];
@@ -233,30 +233,21 @@ export class GimbalShell {
 
   // ── fork ──────────────────────────────────────────────────────
   // Create a child execution shell inheriting location + caches.
-  // evalContext is shallow-cloned and rebound to the child shell.
   fork() {
-    const childEvalContext = { ...(this._evalContext || {}) };
-
     const child = new GimbalShell({
       fs: this.fs,
       serverUrl: this.serverUrl,
       volume: this.volume,
       cwd: this.cwd,
-      evalContext: childEvalContext,
+      gwm: this.gwm,
     });
 
-    // Share import cache for performance
     child._importCache = this._importCache;
-
-    // Rebind evalContext.shell to child
-    childEvalContext.shell = child;
 
     return child;
   }
 
-  // ── ui accessor — reads evalContext live so timing doesn't matter ─
-
-  get ui() { return this._evalContext.ui ?? null; }
+  get ui() { return null; }
 
   // ── Volume helpers ────────────────────────────────────────────
 

@@ -353,16 +353,13 @@ function _getClient() {
 let _shell = null;
 function _getShell() {
   if (!_shell) {
-    const evalContext = { fs: _getClient() };
     _shell = makeShell({
       fs:        _getClient(),
       serverUrl: window.location.origin,
       volume:    'client',
       cwd:       '/',
       libs:      [{ serverUrl: window.location.origin, volume: 'client', path: 'lib' }],
-      evalContext,
     });
-    evalContext.shell = _shell;
     // Expose singleton shell globally for console/debug use
     window.gsh = _shell;
   }
@@ -373,7 +370,7 @@ function _getShell() {
 // Matches the signature in gwm.html: openWidget(mod, opts).
 // `zone` is accepted and silently ignored (no tiling in overlay mode).
 async function openWidget(mod, opts = {}) {
-  const { name = 'widget', icon = 'gterm', zone, evalContext: callerCtx, ...rest } = opts;
+  const { name = 'widget', icon = 'gterm', zone, shell: passedShell, ...rest } = opts;
 
   _ensureDOM();
 
@@ -381,17 +378,12 @@ async function openWidget(mod, opts = {}) {
   const cur = _currentVisible();
   if (cur) cur.visible = false;
 
-  // Build evalContext, always including the singleton GritsClient
-  const evalContext = {
-    fs:    _getClient(),
-    shell: _getShell(),
-    ...callerCtx,
-  };
+  const shell = passedShell ?? _getShell();
 
   // Instantiate the widget
   const createWidget = mod.default ?? mod;
   const instance = await Promise.resolve(
-    createWidget({ name, evalContext, ...rest })
+    createWidget({ name, shell, ...rest })
   );
 
   // Register entry before wiring controls so setTitle/setDirty can look it up

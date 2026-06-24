@@ -20,10 +20,7 @@ export async function invoke(shell, previous, args) {
     name,
     icon: 'files',
     zone: 'master',
-    evalContext: {
-      fs: shell.fs,
-      shell,
-    },
+    shell,
     args,
   });
 

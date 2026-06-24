@@ -119,8 +119,8 @@ function findInTree(list, id) {
 
 // ── Widget ────────────────────────────────────────────────────────────────────
 
-export default function createWidget({ name, evalContext = {}, opts = {} }) {
-  const fs    = evalContext.fs;
+export default function createWidget({ name, shell, opts = {} }) {
+  const fs    = shell?.fs;
 
   let vol = null;
   if (!vol && fs) {

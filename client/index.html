@@ -306,7 +306,16 @@ _shell.serverUrl = _serverUrl || _origin;
 _shell.volume = _vol;
 _shell.cwd = _cwd;
 
-const evalContext = { fs: _gg, shell: _shell };
+const gwm = {
+  openWidget,
+  close:    closeWidget,
+  minimize: minimizeWidget,
+  restore:  restoreWidget,
+  promote:  promoteWidget,
+  demote:   demoteWidget,
+};
+
+_shell.gwm = gwm;
 
 const WIDGET_REGISTRY = {
   files: {
@@ -361,6 +370,7 @@ async function openWidget(mod, opts = {}) {
     name     = 'widget',
     icon     = 'editor',
     iconRect = null,
+    shell: passedShell,
     ...rest
   } = opts;
 
@@ -404,11 +414,9 @@ async function openWidget(mod, opts = {}) {
   try {
     const createWidget = mod.default ?? mod;
     
-    // Allow callers to override evalContext (e.g., when launched from a shell)
-    const ctx = {... rest.evalContext ?? evalContext};
-    ctx.shell = ctx.shell.fork();
+    const childShell = (passedShell ?? _shell).fork();
     
-    const instance     = await Promise.resolve(createWidget({ name, evalContext: ctx, ...rest }));
+    const instance     = await Promise.resolve(createWidget({ name, shell: childShell, ...rest }));
     const w            = widgets.get(id);
     if (!w) return;
 
@@ -1133,9 +1141,9 @@ buildStrip();
   } catch {}
   if (!ranInit) {
     const gtermMod = await import('./lib/gterm/gwm-widget.js');
-    await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', evalContext });
+    await openWidget(gtermMod, { name: 'gterm', icon: 'gterm', zone: 'master', shell: _shell });
     const filesMod = await import('./lib/files/gwm-widget.js');
-    await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', evalContext });
+    await openWidget(filesMod, { name: 'files', icon: 'files', zone: 'master', shell: _shell });
   }
 })();
 

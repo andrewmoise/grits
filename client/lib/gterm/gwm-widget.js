@@ -170,8 +170,17 @@ function ensureStyles() {
   `);
 }
 
-export default function createWidget({ name, evalContext = {}, runOnInit = null }) {
-  const shell = evalContext.shell;
+export default function createWidget({ name, shell, runOnInit = null }) {
+  const gwm = shell?.gwm;
+
+  const gshApi = {
+    get serverUrl()  { return shell.serverUrl; },
+    get volume()     { return shell.volume; },
+    get cwd()        { return shell.cwd; },
+    get fs()         { return shell.fs; },
+    resolvePath:     (p) => shell.resolvePath(p),
+    runCommand:      (name, args, opts) => shell.runCommand(name, args, opts),
+  };
 
   // ── root element ──────────────────────────────────────
   const el = document.createElement('div');
@@ -417,7 +426,7 @@ export default function createWidget({ name, evalContext = {}, runOnInit = null 
     inputLoc.textContent = '';
 
     try {
-      const value = await shell.eval(rec.src, {}, { doHistory: true });
+      const value = await shell.eval(rec.src, { gsh: gshApi, gwm }, { doHistory: true });
       rec.status = 'done';
 
       if (value instanceof Response) {

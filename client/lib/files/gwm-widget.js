@@ -130,15 +130,14 @@ function buildRow(node, depth, onSelect, onToggle, onOpenFile) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-export default function createWidget({ name, evalContext = {}, args = [] }) {
+export default function createWidget({ name, shell, args = [] }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gf-tree';
   el.style.cssText = 'overflow:auto;flex:1;min-height:0;height:100%;';
 
-  const fs     = evalContext.fs;
-  const shell  = evalContext.shell;
+  const fs     = shell?.fs;
   // These define the hard root for this widget instance
   let serverUrl = window.location.origin;
   let volume    = 'client';
@@ -266,8 +265,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   }
 
   function onOpenFile(node) {
-    const shell = evalContext.shell;
-    if (!shell) { console.warn('[files] no shell on evalContext, cannot open file'); return; }
+    if (!shell) { console.warn('[files] no shell, cannot open file'); return; }
 
     const rel = node.fullPath || '';
     const fullPath = basePath

@@ -66,7 +66,7 @@ function prettyFormat(val, depth = 0) {
   return lines.join('\n');
 }
 
-export default async function createWidget({ name, evalContext = {} }) {
+export default async function createWidget({ name, shell }) {
   // load CSS immediately, scripts deferred to mount()
   loadCSS(JQTERM_CSS);
 
@@ -106,7 +106,8 @@ export default async function createWidget({ name, evalContext = {} }) {
 
   // ── scope ─────────────────────────────────────────────
   const results = [];
-  const store = Object.assign({}, evalContext, {
+  const store = { fs: shell?.fs, shell, gwm: shell?.gwm };
+  Object.assign(store, {
     get $()  { return results; },
     get $$() { return results[results.length - 1]; },
   });

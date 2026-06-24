@@ -9,10 +9,7 @@ export async function invoke(shell, previous, args) {
     name: 'terminal',
     icon: 'terminal',
     zone: 'master',
-    evalContext: {
-      fs: shell.fs,
-      shell,
-    },
+    shell,
     args,
   });
 

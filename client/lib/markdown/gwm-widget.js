@@ -680,7 +680,7 @@ async function buildContent(src, sourceDir) {
   return frag;
 }
 
-export default async function createWidget({ name, evalContext = {}, content = '', sourceDir = '' }) {
+export default async function createWidget({ name, content = '', sourceDir = '' }) {
   ensureStyles();
 
   const el = document.createElement('div');
