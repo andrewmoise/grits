@@ -19,6 +19,8 @@ Note: This is all still a work in progress. It's a hobby project. It works on my
 
 ## Examples
 
+### General Interactions
+
 Here's what it looks like:
 
 ![Screenshot of normal environment](doc/images/intro-0.png)
@@ -35,7 +37,51 @@ But you can also run Unix-like commands and interact with the little filesystem:
 
 The files you're editing are in the server's storage. The system is backed on a Merkle tree, which makes it natural for the browser to maintain its own local version of the store while maintaining cache coherency. It also means it's easy to make copy-on-write custom versions of big things for your own use and modification.
 
-As an example of doing that, we make a copy of `gimbal.melanic.org` so we can customize this whole admin interface:
+### Modifying an app
+
+(TODO: This is a little more complex than it needs to be, maybe. Also this "simplified" example needs a little better screenshots.)
+
+So, if you poked around in the file browser, you might have noticed that opening a markdown file doesn't do line wrapping:
+
+![Screenshot lib/README.md](doc/images/custom-3.png)
+
+Not a problem. From your terminal, you can do:
+
+```
+// 1. Let's have a test account to make changes under (skip this if you are already logged in.)
+login({guest:1,g:1})
+
+// 2. Grab the Gimbal code so we can make custom versions
+cd()
+rm('lib',{r:1,f:1})
+cp('/sites/gimbal.melanic.org/live/lib','.',{r:1})
+
+// 3. Fire up our custom editor widget, to test
+me = await whoami().toJS()
+m = await import(`/grits/v1/content/primary/home/${me}/lib/codemirror/gwm-widget.js`)
+gwm.openWidget(m, {r: gsh.resolvePath('lib/README.md')})
+```
+
+In `lib/` is a README which gives some general guidance about the code you can modify here:
+
+![Screenshot lib/README.md](doc/images/custom-3.png)
+
+Look at that -- it's hard to read because the lines aren't wrapped. Not a problem. We open up our editor widget and make the one-line fix to add the line wrapping extension:
+
+![Screenshot showing enabling line wrapping](doc/images/editor-0.png)
+
+Save the document, reload the tab, and open the README again:
+
+![Screenshot showing line wrapping](doc/images/editor-1.png)
+
+Bingo bango. Setting up the customizable environment is *slightly* complex, but once it's set up, it's actually quicker to make changes like this example functionality change, than it would be to make a change on the backend and rebuild+restart+whatever, if you were the admin of a standard-operating web app.
+
+Hopefully this shows the general idea behind this type of environment.
+
+
+### Modifying the whole site
+
+We can also make a copy of `gimbal.melanic.org` so we can customize this whole admin interface:
 
 ![Screenshot showing making a per-user copy of the shell environment](doc/images/custom-0.png)
 
@@ -57,21 +103,7 @@ And, that's it. Our browser can load our customized app via the new vhost. (We l
 
 We're now running the same app we were before, accessing the same data (since we've given it permission to), except that it is customizable.
 
-In `lib/` is a README which gives some general guidance about the code you can modify here:
-
-![Screenshot lib/README.md](doc/images/custom-3.png)
-
-Look at that -- it's hard to read because the lines aren't wrapped. Not a problem. We open up our editor widget and make the one-line fix to add the line wrapping extension:
-
-![Screenshot showing enabling line wrapping](doc/images/editor-0.png)
-
-Save the document, reload the tab, and open the README again:
-
-![Screenshot showing line wrapping](doc/images/editor-1.png)
-
-Bingo bango. Setting up the customizable environment is *slightly* complex, but once it's set up, it's actually quicker to make changes like this example functionality change, than it would be to make a change on the backend and rebuild+restart+whatever, if you were the admin of a standard-operating web app.
-
-Hopefully this shows the general idea behind this type of environment.
+Now you can do away with editing things from within `/home/{username}/`, and just modify the environment directly, however you would like it to function.
 
 ## Structure
 
@@ -215,6 +247,10 @@ Currently, useful commands are:
 ## In Conclusion
 
 See? It's neat.
+
+You can see it in operation here: [https://gimbal.melanic.org/](https://gimbal.melanic.org/)
+
+You can talk to me about it on Matrix, at `#gimbal:matrix.org`
 
 (TODO: No more Discord link but we need a link to Matrix + the self hosted source)
 
