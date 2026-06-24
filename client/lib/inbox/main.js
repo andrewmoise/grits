@@ -5,10 +5,10 @@ export const help = `inbox — open inbox widget`;
 export async function invoke(shell, previous, args) {
   const mod = await import('./gwm-widget.js');
   await window.gimbal.openWidget(mod, {
-    name: 'inbox',
+    name: '',
     icon: 'inbox',
     zone: 'master',
-    evalContext: { fs: shell.fs, shell },
+    shell,
     args,
   });
   return VOID;

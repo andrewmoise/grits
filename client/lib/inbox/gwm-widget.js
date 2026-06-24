@@ -7,7 +7,7 @@
  * @implements gimbal-shell#widget
  */
 
-import { FONT_MONO, injectStyles } from '../style/style.js';
+import { injectStyles } from '../style/style.js';
 import { toast } from '../gimbal/dialog.js';
 import { ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
@@ -25,50 +25,57 @@ function ensureStyles() {
   injectStyles(STYLE_ID, `
     .gi-tree {
       padding: 0.375rem 0;
-      font-family: ${FONT_MONO};
-      font-size: var(--fs-base, 0.75rem);
-      line-height: 1.5;
+      font-family: var(--font-ui);
+      font-size: var(--fs-md);
+      line-height: 1.75;
       user-select: none;
       overflow-y: auto;
     }
 
-    .gi-row {
+    .gi-message {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 0.25rem;
       padding: 0.2rem 0.5rem;
       cursor: pointer;
       border-radius: 0.3rem;
       color: var(--text);
       transition: background 0.1s, color 0.1s;
-      white-space: nowrap;
     }
-    .gi-row:hover    { background: var(--bg-hover); color: var(--text-hi); }
+    .gi-message:hover  { background: var(--bg-hover); color: var(--text-hi); }
+    .gi-message.expanded .gi-preview-sep,
+    .gi-message.expanded .gi-preview { display: none; }
 
     .gi-caret {
       display: flex; align-items: center; justify-content: center;
       width: 1.2em; flex-shrink: 0; color: var(--text-dim);
+      padding-top: 0.1em;
     }
     .gi-caret.open svg { transform: rotate(90deg); }
 
-    .gi-from {
-      font-weight: 600;
-      color: var(--text-hi);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 20ch;
-      flex-shrink: 0;
-    }
-    .gi-sep {
-      color: var(--text-dim);
-      flex-shrink: 0;
-    }
-    .gi-subject {
+    .gi-content {
       flex: 1;
+      min-width: 0;
+    }
+
+    .gi-preview-line {
+      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .gi-preview-line .gi-from-label {
+      color: var(--a1);
+    }
+    .gi-preview-line .gi-from {
       color: var(--text);
     }
+    .gi-preview-line .gi-preview-sep {
+      color: var(--a1);
+    }
+    .gi-preview-line .gi-preview {
+      color: var(--text);
+    }
+
     .gi-trash {
       flex-shrink: 0;
       background: none;
@@ -81,26 +88,31 @@ function ensureStyles() {
       line-height: 1;
       opacity: 0.5;
       transition: opacity 0.1s;
+      margin-top: 0.1em;
     }
     .gi-trash:hover { opacity: 1; background: var(--bg-hover); }
 
-    .gi-body {
-      display: none;
-      padding: 0.4rem 0.5rem 0.4rem 2.5rem;
-      font-family: ${FONT_MONO};
-      font-size: var(--fs-sm, 0.70rem);
-      line-height: 1.6;
-      color: var(--text);
+    .gi-detail {
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.25s ease;
     }
-    .gi-body.open { display: block; }
+    .gi-detail.open {
+      max-height: 2000px;
+    }
 
     .gi-header-line {
-      color: var(--text-dim);
+      margin-top: 0.15rem;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .gi-header-line strong { color: var(--text-hi); }
+    .gi-header-line strong {
+      color: var(--a1);
+    }
+    .gi-hvalue {
+      color: var(--text-hi);
+    }
 
     .gi-body-text {
       margin-top: 0.4rem;
@@ -113,26 +125,26 @@ function ensureStyles() {
     .gi-error {
       padding: 0.2rem 0.5rem;
       color: var(--red, #e53935);
-      font-size: var(--fs-sm, 0.70rem);
+      font-size: var(--fs-md);
     }
 
     .gi-empty {
-      padding: 0.2rem 0.5rem;
+      padding: 0.5rem 0.5rem;
       color: var(--text-dim);
-      font-size: var(--fs-sm, 0.70rem);
+      font-size: var(--fs-md);
+      text-align: center;
     }
   `);
 }
 
-export default function createWidget({ name, evalContext = {}, args = [] }) {
+export default function createWidget({ name, shell, args = [] }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gi-tree';
   el.style.cssText = 'overflow:auto;flex:1;min-height:0;height:100%;';
 
-  const fs     = evalContext.fs;
-  const shell  = evalContext.shell;
+  const fs     = shell?.fs;
   const serverUrl = shell?.serverUrl || window.location.origin;
   const volume = shell?.volume || 'primary';
 
@@ -141,7 +153,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   let inboxDir = null;
   let refreshTimer = null;
 
-  const decoration = { title: 'inbox', leftButtons: [] };
+  const decoration = { title: '', leftButtons: [] };
 
   async function getUsername() {
     if (!fs) return null;
@@ -159,7 +171,6 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
         return;
       }
       inboxDir = `home/${username}/local/inbox`;
-      decoration.title = `inbox — ${username}`;
     }
 
     const vol = fs.volume(serverUrl, 'primary');
@@ -189,14 +200,12 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       const existing = messages.get(name);
       if (existing && existing.file.cid() === file.cid()) {
         newMessages.set(name, existing);
-        el.appendChild(existing.el.row);
-        if (existing.el.bodyEl) el.appendChild(existing.el.bodyEl);
+        el.appendChild(existing.el.message);
       } else {
         const entry = { name, file, expanded: false, content: null, el: {} };
         buildRow(entry);
         newMessages.set(name, entry);
-        el.appendChild(entry.el.row);
-        if (entry.el.bodyEl) el.appendChild(entry.el.bodyEl);
+        el.appendChild(entry.el.message);
       }
     }
     messages = newMessages;
@@ -207,42 +216,58 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
   }
 
   function buildRow(entry) {
-    const row = document.createElement('div');
-    row.className = 'gi-row';
+    const message = document.createElement('div');
+    message.className = 'gi-message';
 
     const caretEl = document.createElement('span');
     caretEl.className = 'gi-caret';
     caretEl.innerHTML = SVG_CARET;
-    row.appendChild(caretEl);
+    message.appendChild(caretEl);
+
+    const content = document.createElement('div');
+    content.className = 'gi-content';
+
+    const previewLine = document.createElement('div');
+    previewLine.className = 'gi-preview-line';
+
+    const fromLabelEl = document.createElement('span');
+    fromLabelEl.className = 'gi-from-label';
+    fromLabelEl.textContent = 'From:';
+    previewLine.appendChild(fromLabelEl);
 
     const fromEl = document.createElement('span');
     fromEl.className = 'gi-from';
     fromEl.textContent = '...';
-    row.appendChild(fromEl);
+    previewLine.appendChild(fromEl);
 
-    const sepEl = document.createElement('span');
-    sepEl.className = 'gi-sep';
-    sepEl.textContent = '—';
-    row.appendChild(sepEl);
+    const previewSepEl = document.createElement('span');
+    previewSepEl.className = 'gi-preview-sep';
+    previewSepEl.textContent = '';
+    previewLine.appendChild(previewSepEl);
 
-    const subjectEl = document.createElement('span');
-    subjectEl.className = 'gi-subject';
-    subjectEl.textContent = '...';
-    row.appendChild(subjectEl);
+    const previewEl = document.createElement('span');
+    previewEl.className = 'gi-preview';
+    previewEl.textContent = '';
+    previewLine.appendChild(previewEl);
+
+    content.appendChild(previewLine);
+
+    const detail = document.createElement('div');
+    detail.className = 'gi-detail';
+    content.appendChild(detail);
+
+    message.appendChild(content);
 
     const trashBtn = document.createElement('button');
     trashBtn.className = 'gi-trash';
     trashBtn.textContent = '✕';
     trashBtn.title = 'Delete message';
-    row.appendChild(trashBtn);
+    message.appendChild(trashBtn);
 
-    const bodyEl = document.createElement('div');
-    bodyEl.className = 'gi-body';
+    entry.el = { message, content, caretEl, fromLabelEl, fromEl, previewSepEl, previewEl, trashBtn, detail };
 
-    entry.el = { row, caretEl, fromEl, subjectEl, trashBtn, bodyEl };
-
-    row.addEventListener('click', (e) => {
-      if (e.target === trashBtn) return;
+    message.addEventListener('click', (e) => {
+      if (e.target === trashBtn || e.target.closest('.gi-trash')) return;
       toggle(entry);
     });
 
@@ -259,15 +284,26 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       const data = await entry.file.json();
       if (!data || typeof data !== 'object' || Array.isArray(data)) {
         entry.el.fromEl.textContent = '(invalid)';
-        entry.el.subjectEl.textContent = '(not a JSON message)';
+        entry.el.previewSepEl.textContent = '';
+        entry.el.previewEl.textContent = ' (not a JSON message)';
         return;
       }
       entry.el.fromEl.textContent = data.from || '(anonymous)';
-      entry.el.subjectEl.textContent = data.subject || '(no subject)';
+      const preview = data.subject
+        ? data.subject
+        : (data.body ? data.body.slice(0, 60).replace(/\n.*/, '').trim() : '');
+      if (preview) {
+        entry.el.previewSepEl.textContent = ' / ';
+        entry.el.previewEl.textContent = preview;
+      } else {
+        entry.el.previewSepEl.textContent = '';
+        entry.el.previewEl.textContent = '';
+      }
       entry.content = data;
     } catch (e) {
       entry.el.fromEl.textContent = '(error)';
-      entry.el.subjectEl.textContent = e.message;
+      entry.el.previewSepEl.textContent = '';
+      entry.el.previewEl.textContent = '';
     }
   }
 
@@ -276,25 +312,26 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
 
     if (entry.expanded) {
       entry.el.caretEl.classList.add('open');
-      entry.el.bodyEl.classList.add('open');
-      renderBody(entry);
+      entry.el.message.classList.add('expanded');
+      entry.el.detail.classList.add('open');
+      renderDetail(entry);
     } else {
       entry.el.caretEl.classList.remove('open');
-      entry.el.bodyEl.classList.remove('open');
+      entry.el.message.classList.remove('expanded');
+      entry.el.detail.classList.remove('open');
     }
   }
 
-  function renderBody(entry) {
+  function renderDetail(entry) {
     const data = entry.content;
     if (!data) {
-      entry.el.bodyEl.innerHTML = '<div class="gi-error">(could not load)</div>';
+      entry.el.detail.innerHTML = '<div class="gi-error">(could not load)</div>';
       return;
     }
 
     const parts = [];
-    parts.push(`<div class="gi-header-line"><strong>From:</strong> ${esc(data.from || '(anonymous)')}</div>`);
-    if (data.to) parts.push(`<div class="gi-header-line"><strong>To:</strong> ${esc(data.to)}</div>`);
-    if (data.subject) parts.push(`<div class="gi-header-line"><strong>Subject:</strong> ${esc(data.subject)}</div>`);
+    if (data.to) parts.push(`<div class="gi-header-line"><strong>To:</strong> <span class="gi-hvalue">${esc(data.to)}</span></div>`);
+    if (data.subject) parts.push(`<div class="gi-header-line"><strong>Subject:</strong> <span class="gi-hvalue">${esc(data.subject)}</span></div>`);
 
     const bodyHtml = data.bodyHtml;
     const bodyMarkdown = data.bodyMarkdown;
@@ -306,7 +343,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       parts.push(`<div class="gi-body-text">${esc(bodyText || bodyMarkdown || '')}</div>`);
     }
 
-    entry.el.bodyEl.innerHTML = parts.join('');
+    entry.el.detail.innerHTML = parts.join('');
   }
 
   async function trash(entry) {
@@ -321,8 +358,7 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
       toast(`Failed to delete: ${e.message}`);
       return;
     }
-    entry.el.row.remove();
-    if (entry.el.bodyEl) entry.el.bodyEl.remove();
+    entry.el.message.remove();
     messages.delete(entry.name);
   }
 
@@ -361,22 +397,19 @@ export default function createWidget({ name, evalContext = {}, args = [] }) {
 
         let insertBefore = null;
         for (const [sibName, sibEntry] of messages) {
-          if (sibName > name) { insertBefore = sibEntry.el.row; break; }
+          if (sibName > name) { insertBefore = sibEntry.el.message; break; }
         }
         if (insertBefore) {
-          el.insertBefore(entry.el.row, insertBefore);
-          if (entry.el.bodyEl) el.insertBefore(entry.el.bodyEl, insertBefore);
+          el.insertBefore(entry.el.message, insertBefore);
         } else {
-          el.appendChild(entry.el.row);
-          if (entry.el.bodyEl) el.appendChild(entry.el.bodyEl);
+          el.appendChild(entry.el.message);
         }
       }
 
       for (const name of currentNames) {
         if (!newNames.has(name)) {
           const entry = messages.get(name);
-          entry.el.row.remove();
-          if (entry.el.bodyEl) entry.el.bodyEl.remove();
+          entry.el.message.remove();
           messages.delete(name);
         }
       }
