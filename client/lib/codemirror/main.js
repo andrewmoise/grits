@@ -14,7 +14,7 @@ export async function invoke(shell, previous, args) {
   }
 
   const mod = await import('./gwm-widget.js');
-  await window.gimbal.openWidget(mod, { name: '', icon: 'editor', zone: 'master', shell, r });
+  await window.gimbal.openWidget(mod, { name: '', icon: 'editor', zone: 'master', shell, file: r });
 
   return VOID;
 }

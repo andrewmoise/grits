@@ -118,7 +118,11 @@ async function loadLang(path) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-export default function createWidget({ name, r: rPath = null, shell }) {
+export default function createWidget({ name, file = null, shell }) {
+  if (typeof file === 'string' && shell) {
+    file = shell.resolvePath(file);
+  }
+
   ensureStyles();
 
   const el = document.createElement('div');
@@ -126,9 +130,9 @@ export default function createWidget({ name, r: rPath = null, shell }) {
 
   let view      = null;
   let dirty     = false;
-  let currentPath = rPath?.path ?? null;
-  let currentName = rPath ? rPath.path.split('/').pop() : name;
-  let currentR    = rPath;
+  let currentPath = file?.path ?? null;
+  let currentName = file ? file.path.split('/').pop() : name;
+  let currentR    = file;
 
   const fs    = shell?.fs;
 
@@ -139,7 +143,7 @@ export default function createWidget({ name, r: rPath = null, shell }) {
   const saveBtn = {
     icon:    'save',
     label:   'save  (⌘S)',
-    enabled: !!rPath,
+    enabled: !!file,
     action() { save(); },
   };
 
