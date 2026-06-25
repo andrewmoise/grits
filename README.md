@@ -1,192 +1,196 @@
-# A framework for web-native development
+# Gimbal: A framework for web-native development
 
-This project is Gimbal, a little web framework which lets you interact with a web site or application much more directly and flexibly than you usually can. As an end-user here, you can:
+Gimbal is planned as a web framework that lets you interact with a web site or application much more directly than you usually can. As an end-user of an app that runs on Gimbal, you can:
 
-* Directly examine the site's underlying data(*) and code
-* Persistently edit the UI of the web site you're using, for you, without impacting other people's experience
-* Interact and script interactions with the site in ways not programmed in advance by the authors/operators
-
-(*) subject to user permissions
+* Directly examine the site's underlying data (subject to permissions) and code
+* Persistently edit the UI of the site you're using without affecting anyone else's experience
+* Interact and script interactions with the site in ways not programmed in advance by its authors
 
 As an admin, you can:
 
-* Easily test, deploy or roll back versions of the site
-* Do first-class development and devops things from your browser
+* Easily test, deploy, or roll back versions of the site
+* Do first-class development and devops from your browser
 
-Note: This is all still a work in progress. It's a hobby project. It works on my machine. **It might eat your data at any time.** The permissions might fail. The service worker doesn't update properly. **Don't use this in production.** Basically, some things work and it's fun for tinkering, but it's pretty far from a working version 1.
+Note: This is still a work in progress — a hobby project. It works on my machine. **It might eat your data at any time.** The permissions might fail. The service worker doesn't update properly. **Don't use this in production.** Some things work and it's fun for tinkering, but it's pretty far from a working v1.
 
+The overall system is two cooperating pieces:
 
+* **Gimbal** is the frontend — the Unix-like shell and window manager you've been
+  using. It's the Javascript in `client/`.
+* **Grits** is the backend — a read/writable Merkle tree with primitives for
+  sharing and replicating content. More or less, it's the filesystem, and Gimbal
+  is the desktop environment. It's the Go code in the root.
 
-## Examples
+## Gimbal Quickstart
 
-### General Interactions
+You don't need to run anything to try Gimbal. You can probably find a testbed instance to play with at [gimbal.melanic.org](https://gimbal.melanic.org/). You may be there now.
 
-Here's what it looks like:
-
-![Screenshot of normal environment](doc/images/intro-0.png)
-
-You can see a terminal, a files browser, and an editor. Pretty straightforward.
-
-Terminal commands are interpreted more or less as javascript syntax. You can do javascript things:
-
-![Screenshot showing basic JS commands](doc/images/intro-1.png)
-
-But you can also run Unix-like commands and interact with the little filesystem:
-
-![Screenshot showing Unix-like commands](doc/images/intro-2.png)
-
-The files you're editing are in the server's storage. The system is backed on a Merkle tree, which makes it natural for the browser to maintain its own local version of the store while maintaining cache coherency. It also means it's easy to make copy-on-write custom versions of big things for your own use and modification.
-
-### Modifying an app
-
-(TODO: This is a little more complex than it needs to be, maybe. Also this "simplified" example needs a little better screenshots.)
-
-So, if you poked around in the file browser, you might have noticed that opening a markdown file doesn't do line wrapping:
-
-![Screenshot lib/README.md](doc/images/custom-3.png)
-
-Not a problem. From your terminal, you can do:
+From the terminal widget (the `live $` prompt), you can try some basic operations:
 
 ```
-// 1. Let's have a test account to make changes under (skip this if you are already logged in.)
+pwd()
+ls()
+whoami()                // Should print nothing; you're not logged in
 login({guest:1,g:1})
-
-// 2. Grab the Gimbal code so we can make custom versions
+whoami()                // Now should print the throwaway login that was created for you
 cd()
-rm('lib',{r:1,f:1})
-cp('/sites/gimbal.melanic.org/live/lib','.',{r:1})
-
-// 3. Fire up our custom editor widget, to test
-me = await whoami().toJS()
-m = await import(`/grits/v1/content/primary/home/${me}/lib/codemirror/gwm-widget.js`)
-gwm.openWidget(m, {r: gsh.resolvePath('lib/README.md')})
+pwd()                   // Should print your home directory
+echo('hello').to('hello.txt')
+ls()                    // Should see hello.txt now created
 ```
 
-In `lib/` is a README which gives some general guidance about the code you can modify here:
+### Changing the code
 
-![Screenshot lib/README.md](doc/images/custom-3.png)
+As it happens, the Gimbal shell you're looking at is designed to support being modified in semi-straightforward fashion. Let's look at a real example -- the editor doesn't line wrap by default, which is sometimes inconvenient:
 
-Look at that -- it's hard to read because the lines aren't wrapped. Not a problem. We open up our editor widget and make the one-line fix to add the line wrapping extension:
+```
+edit('/sites/gimbal.melanic.org/live/src/README.md')
+```
 
-![Screenshot showing enabling line wrapping](doc/images/editor-0.png)
+[screenshot]
 
-Save the document, reload the tab, and open the README again:
+See how inconvenient that is? It's okay though. (Note - you must have a guest account for this to work; make sure you have done `login{guest:1,g:1})` from above. Be aware that guest accounts are ephemeral and regularly deleted.)
 
-![Screenshot showing line wrapping](doc/images/editor-1.png)
+```
+cd()
+rm('lib', {r:1, f:1})
+cp('/sites/gimbal.melanic.org/live/lib', '.', {r:1})
+edit('lib/codemirror/gwm-widget.js')
+```
 
-Bingo bango. Setting up the customizable environment is *slightly* complex, but once it's set up, it's actually quicker to make changes like this example functionality change, than it would be to make a change on the backend and rebuild+restart+whatever, if you were the admin of a standard-operating web app.
+[screenshot]
 
-Hopefully this shows the general idea behind this type of environment.
+So now we've copied the Gimbal client app to our home directory, and we're editing the editor code (or, the wrapper around Codemirror that provides a Gimbal editing widget).
 
+We find the place where we can add the extension that adds line wrapping:
 
-### Modifying the whole site
+[screenshot]
 
-We can also make a copy of `gimbal.melanic.org` so we can customize this whole admin interface:
+We activate the extension:
 
-![Screenshot showing making a per-user copy of the shell environment](doc/images/custom-0.png)
+[screenshot]
 
-The calls to `facl()` are necessary. Respectively, they are:
+Save the file (Ctrl-S or else the green save icon on the editor's titlebar) and then:
 
-1. Make `custom.melanic.org` editable by our user, from our normal shell
-2. Make our normal files editable by our user, from the custom shell
-3. Make `custom.melanic.org` editable by our user from the custom shell
+```
+cd()
+m = await gsh.importLib('lib/codemirror/gwm-widget.js')
+gwm.openWidget(m, { file: '/sites/gimbal.melanic.org/live/src/README.md' })
+```
 
-See the "permissions" section in [REFERENCE.md](REFERENCE.md) for an in-depth explanation of how and why origin access controls work and why this `facl()` is necessary.
+And, bingo bango! You should see an editor instance with line wrapping fixed:
 
-Having made the new customized shell environment, we make it live:
+[screenshot]
 
-![Screenshot showing deploying the new shell environment](doc/images/custom-1.png)
+You can also, if you want to, persist this change into a custom entry in the command strip:
 
-And, that's it. Our browser can load our customized app via the new vhost. (We load once to kick off the server fetching a new certificate for us, and then load again and see this:)
+```
+cd()
+home = await pwd().toText()
+mkdir('local/gimbal',{p:1})
+cd('local/gimbal')
+cp('/sites/gimbal.melanic.org/live/lib/gimbal/profile.jsonl','.')
+echo(`window.myEditWidget = await gsh.importLib('${home}/lib/codemirror/gwm-widget.js')`, {j:1}).append('profile.jsonl')
+echo(`window.myEdit = (file) => { gwm.openWidget(window.myEditWidget, { file, icon: 'edit', iconColor: 'purple' }) }`, {j:1}).append('profile.jsonl')
+```
 
-![Screenshot showing the custom environment loaded](doc/images/custom-2.png)
+And, if you reload the page, you should be then able to write `window.myEdit({path})` and that'll open {path} for you in the modified editor. Try it! Does it work?
 
-We're now running the same app we were before, accessing the same data (since we've given it permission to), except that it is customizable.
+[screenshot]
 
-Now you can do away with editing things from within `/home/{username}/`, and just modify the environment directly, however you would like it to function.
+It works on my machine. That modified editor should be persistent (at least for as long as your guest login lasts). And of course, that's not limited to just the editor -- you have a full copy of the Gimbal code in `{home}/lib/`, so you can modify anything in there. You could make a customized shell that runs from there, and it'll pick up all the code from its local `lib/` and all tools launched from it will carry the same modifications.
 
-## Structure
+### Cloning a Site
 
-The overall system is split into two cooperating pieces:
+But, maybe you want more. It's also a little bit convoluted to be having a local copy of all the code, and spawning widgets from it and inserting them into the existing stock Gimbal shell.
 
-* **Gimbal** is the frontend which provides a Unix-like shell and that "window manager" shown in the examples.
-* **Grits** is the backend, the server that provides a read-writable Merkle tree with useful primitives for sharing and replicating content. More or less, it is the filesystem, and Gimbal is the desktop environment.
+Well, if you're up for learning a little more about how it operates, you can see setting up a whole cloned site which you can then edit. It's actually simpler (in one way) than the custom widget approach; you just have to worry a little bit about permissions as well.
 
-`grits` is the server piece, the Go code. Gimbal is the stuff that lives in `client/`, the Javascript code, which gets copied into the Merkle tree store to bootstrap the in-browser application system.
+(TODO)
 
-Permissions are based on both origin and user. Permissions are additive; permissions granted at one directory will also apply to all of its subdirectories. This means you may not always be able to travel to the parent of a directory you are allowed to access.
+## Grits Quickstart
 
-Those are the basics. If you want to know more, it is in [REFERENCE.md](REFERENCE.md), but if just want to know how to run the thing:
+So again, Gimbal is the frontend (Javascript); Grits is the storage backend that makes all this function.
 
-## Quickstart
-
-Here's how to try. It only works on Linux right now.
+They currently come together in one git repo. If you would like to run the backend yourself to host a Gimbal instance, then this is what you do:
 
 ### Build
 
-First, set up prerequisites:
+This only works on Linux right now.
 
-* Install golang >= 1.25.0
+Set up prerequisites:
+
+* Install golang >= 1.25.11
 * `sudo apt install fuse3 certbot npm` or equivalent
 
-Install and build source:
+Install and build:
 
-* Clone the source and `cd` to the project dir
-* `make test` to do backend smoke tests
-* `make deps` to fetch JS modules
+**Note! `make deps` will install `govulncheck` on your system, in order to be able to do a security audit during `make audit`.**
+
+* `git clone https://gimbal.melanic.org/src/.git grits`
+* `cd grits`
+* `make test` to run backend smoke tests
+* `make deps` to fetch some JS and Go dependencies
 * `make` to build the server
+
+Also note -- the initial `git clone` is extremely slow because it's using bare HTTP on the self-host instead of speaking to a Go server. I still think this is the best solution (better than depending on Github, and better than coding git-specific things into our backend), but also, it's sure not ideal for it to be so slow.
 
 ### Configure
 
 ```
 cp sample-config.json config.json
-hx config.json # Or whatever editor
+hx config.json
 ```
 
-You will need to make changes to the config. 
-
-Change `%USER%` to your Unix username, and `%EMAIL%` to your email (email is only needed for certbot interactions -- the system will automatically grab HTTPS certificates for you, by default, and certbot wants your email in order to do that.)
+Change `%USER%` to your Unix username and `%EMAIL%` to your email (only needed
+for certbot — the system will grab HTTPS certificates automatically, and certbot
+wants your email for that).
 
 ### Run
-
-Assuming everything checks out, you're good to start the actual service (foreground-only for now, you can use `tmux` if you like):
 
 ```
 sudo bin/gritsd
 ```
 
-(It'll drop privileges to whatever user you configured for it, as soon as it's opened the ports it needs. If you want to try it as non-root, just configure it on a port above 1024 and run certbot by hand to get certificates if any, and then you can run without `sudo`.)
+It'll drop privileges to your configured user as soon as it's opened the ports
+it needs. If you want to try it as non-root, configure a port above 1024, run
+certbot by hand for certificates, and then run without `sudo`.
 
 ### Initial setup
 
-Once the server is running, the FUSE mount at `mnt/` gives you access to the file store. You'll need to add users and set up the initial filesystem skeleton.
+Once the server is running, the FUSE mount at `mnt/` gives you access to the
+file store.
 
-(Note - if you shut down the server while things in the FUSE mount are in use, it'll refuse to shut down so as to not leave behind a stale mount. Just close any open files, cd out of the FUSE mount, unmount the FUSE mount, and the server shutdown should automatically continue as normal and finish.)
+A note on shutdown: if you shut the server down while things in the FUSE mount
+are in use, it'll refuse to finish shutting down to avoid leaving a stale mount.
+Close any open files, cd out of the FUSE mount, unmount it manually, and the
+shutdown will continue.
 
-(Also note - the sample config already contains an automatic import of `client/` to the live directory for `gimbal.{your domain}.com`, meaning the vhost which provides the normal Gimbal shell. This means that any edits you make to `client/` on your backend source checkout will automatically get copied to the frontend's file store **(overwriting any local changes!)** on every server restart. This seems to be the easiest way to do the development for now. Any other vhosts created by users, including their own copies of /sites/gimbal.{your domain}.com, won't be impacted by this auto-import.)
+A note on the auto-import: the sample config automatically imports `client/` to
+the live directory for `gimbal.{your domain}.com` on every server restart. Any
+edits to `client/` in your backend checkout will overwrite local changes in the
+store. Other vhosts, including user-created copies, are not affected.
 
-You'll need to initially populate the client store. The frontend code in `client/` gets automatically imported to the appropriate vhost on every backend server start. However, we need to do a one-time import of `content/skel/` to set up some other areas of the filesystem:
+Populate the client store with the one-time skeleton import:
 
 ```
 cp -r content/skel/* content/skel/.grits mnt/
 ```
 
-And then, we need to create some users:
+Then create users:
 
 ```
 bin/grits adduser glenda
 bin/grits adduser {your username}
 ```
 
-Once that's done, create a DNS entry for `gimbal.{your domain}.com`. (It is also recommended, for a real deployment, to just make a wildcard entry for `*.{your domain}.com` -- a lot of the power of this framework comes from being able to cheaply add new vhosts.)
+Create a DNS entry for `gimbal.{your domain}.com`. For a real deployment, a
+wildcard `*.{your domain}.com` is recommended — a lot of the power here comes
+from being able to cheaply add new vhosts.
 
 ### Test
 
-Once you've done all that, you should be able to log in to see the Gimbal shell at:
-
-`https://gimbal.{your domain}.com/`
-
-If you see the graphical interface from the screenshots, you're in. You can run the self tests if you like:
+Log in at `https://gimbal.{your domain}.com/` and run the self-tests:
 
 ```
 login({g:1})
@@ -195,65 +199,74 @@ test()
 
 Frontend tests will take a while.
 
-### Web Serving
+### Web serving
 
-Assuming all the tests work, you can start populating your own content. `upload().to(filename)` and `unzip(filename)` may be useful. Bear in mind that it is trivial to maintain multiple copy-on-write versions of the site content:
+Once tests pass, you can start putting up content. `upload().to(filename)` and
+`unzip(filename)` are useful. The copy-on-write version workflow looks like this:
 
 ```
 cd('/sites/{hostname}')
-mkdir('dev/v1',{p:1})
+mkdir('dev/v1', {p:1})
 echo('version 1').to('dev/v1/index.html')
-ln('dev/v1','live',{ff:1})
+ln('dev/v1', 'live', {ff:1})
 ```
 
-(That `ff` option requests to forcibly overwrite whatever's in `live` with a copy of `dev/v1`, without the normal Unix semantics of creating a new file within `live/` if `live/` already exists.)
+(The `ff` option forcibly overwrites `live` with a copy of `dev/v1`, instead of
+the normal Unix behavior of creating a new file inside an existing `live/`
+directory.)
 
-If you want to work on a v2 of the site:
+To start a v2:
 
 ```
-ln('dev/v1','dev/v2',{ff:1})
+ln('dev/v1', 'dev/v2', {ff:1})
 ```
 
-And so on. You can also deploy `v2/` to a temporary vhost's `live/` to test your changes, using real auth and the same real data as the live site.
+You can deploy `dev/v2` to a temporary vhost's `live/` to test against real auth
+and real data before cutting it over.
 
 ### Permissions
 
-The permissions system is substantially different from a normal Unix system, because of the specific needs and structure of this environment.
+The permissions system differs from standard Unix in two important ways:
 
-* Permissions are additive-only; the root directory starts out denied to everyone, and grants of access increase as you go lower down the tree
-* Permissions are framed in terms of *both* the user who is trying to access something, *and* the vhost they are coming from when they attempt to access it.
+* Permissions are additive only. The root directory starts out denied to everyone;
+  grants of access increase as you go deeper into the tree.
+* Permissions are framed in terms of both the *user* attempting access and the
+  *vhost* they're coming from.
 
-In other words, permissions can be (and must be) granted in extremely surgical fashion to a specific leaf-ish directory for a specific purpose. Basically, we are explicit about the principle that if you're granting access, then both the code you've granted access to, and the human sitting at the keyboard "operating" the code, are recipients of the access. This lets us be a lot more intentional about authenticating the human to our apps and letting them all access a unified store, without a malicious app being able to access things it should not.
+This lets you be very surgical: you can grant a specific piece of code, running
+for a specific human, access to a specific directory — without a malicious app
+being able to reach things it shouldn't. See REFERENCE.md for the full explanation
+and for how to work with `facl()`.
 
-See REFERENCE.md for a lot more detailed explanation about how this works and how to interact with the permissions system.
+### Backend administration
 
-### Backend Administration
+Launch with `sudo bin/gritsd`. Making it a systemctl service is on the todo list.
 
-As mentioned, you launch the server just with `sudo bin/gritsd`. Making it runnable via systemctl is on the TODOs.
+Useful backend commands:
 
-Server configuration lives in `config.json`. See [REFERENCE.md](REFERENCE.md) for some detail about what's useful to configure within it.
+* `bin/grits ping` — test that the cmdline module is working
+* `bin/grits import local/path //volume/dest/path` — import files from your
+  Linux filesystem into the store
+* `bin/grits adduser username` — add a user (prompts for password)
+* `bin/grits deluser username` — delete a user
 
-When you're done, hit Ctrl-C on the backend and the server should shut down cleanly. If it hangs because it can't unmount the FUSE mount, just end the processes that are keeping the FUSE mount busy and then unmount it yourself, and the shutdown should continue from there.
+The intent is that most administration will eventually happen from inside the
+frontend — HTTP logs, user management, that sort of thing. Some bootstrapping
+will always require backend commands regardless.
 
-The intent is that mostly, once the functionality of the system is more fleshed out, administration of the system can proceed from inside the frontend (things like checking the HTTP logs, adding users, that sort of thing.) But even in the future when that is implemented more, some bootstrapping things will still be done via backend commands. The `cmdline` module is the backend interface for live server administration.
+---
 
-Currently, useful commands are:
+## Further reading
 
-* `bin/grits ping` to test that the `cmdline` module is functioning
-* `bin/grits import local/path //volume/dest/path` to import files from your Linux filesystem into Grits's file store
-* `bin/grits adduser username` to add a user (you will be prompted for the password)
-* `bin/grits deluser username` to delete a user
+* [REFERENCE.md](REFERENCE.md) — full technical reference for the permissions
+  system, configuration, and API
 
-## In Conclusion
+## In conclusion
 
 See? It's neat.
 
-You can see it in operation here: [https://gimbal.melanic.org/](https://gimbal.melanic.org/)
+Live instance: [https://gimbal.melanic.org/](https://gimbal.melanic.org/)
 
-You can talk to me about it on Matrix, at `#gimbal:matrix.org`
+Matrix: `#gimbal:matrix.org`
 
-(TODO: No more Discord link but we need a link to Matrix + the self hosted source)
-
-## Enjoy!
-
-Comments? Questions? Feedback? Let me know.
+Comments, questions, feedback? [Let me know.](mailto:moise@melanic.org)
