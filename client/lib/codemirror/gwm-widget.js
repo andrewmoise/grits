@@ -19,7 +19,7 @@
  *   controls.setDirty(bool)
  */
 
-import { FONT_MONO, injectStyles } from '../style/style.js';
+import { C, alpha, FONT_MONO, injectStyles } from '../style/style.js';
 import { EditorView, keymap, lineNumbers, highlightActiveLine,
          highlightActiveLineGutter, drawSelection, dropCursor } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
@@ -51,44 +51,6 @@ function ensureStyles() {
       flex: 1;
       overflow: hidden;
     }
-    .ge-cm .cm-editor {
-      height: 100%;
-      background: transparent;
-      color: var(--text-hi);
-    }
-    .ge-cm .cm-editor.cm-focused { outline: none; }
-    .ge-cm .cm-scroller {
-      font-family: ${FONT_MONO};
-      font-size: var(--fs-base);
-      line-height: 1.6;
-      overflow: auto;
-    }
-
-    .ge-cm .cm-gutters {
-      background: var(--bg-elevated);
-      border-right: 1px solid var(--border);
-      color: var(--text-dim);
-    }
-    .ge-cm .cm-activeLineGutter { background: var(--bg-hover); }
-    .ge-cm .cm-gutter.cm-lineNumbers .cm-gutterElement {
-      padding: 0 0.75rem 0 0.5rem;
-      font-size: var(--fs-sm);
-    }
-
-    .ge-cm .cm-line { padding: 0 0.75rem; }
-    .ge-cm .cm-activeLine { background: var(--bg-hover); }
-
-    .ge-cm .cm-selectionBackground { background: var(--a1-dim) !important; }
-    .ge-cm.cm-focused .cm-selectionBackground { background: rgba(77,158,247,0.2) !important; }
-    .ge-cm .cm-cursor { border-left-color: var(--a1); }
-
-    .ge-cm .cm-matchingBracket {
-      background: var(--a1-dim);
-      color: var(--text-hi) !important;
-    }
-
-    .ge-cm .cm-searchMatch { background: var(--a1-dim); }
-    .ge-cm .cm-searchMatch.cm-searchMatch-selected { background: rgba(77,158,247,0.35); }
 
     .ge-cm .cm-scroller::-webkit-scrollbar { width: 0.25rem; height: 0.25rem; }
     .ge-cm .cm-scroller::-webkit-scrollbar-track { background: transparent; }
@@ -316,7 +278,51 @@ export default function createWidget({ name, file = null, shell }) {
       EditorView.updateListener.of(update => {
         if (update.docChanged) markDirty(true);
       }),
-      EditorView.theme({ '&': { height: '100%' } }),
+      EditorView.theme({
+        '&': {
+          height: '100%',
+          background: 'transparent',
+          color: 'var(--text-hi)',
+        },
+        '&.cm-focused': { outline: 'none' },
+        '.cm-scroller': {
+          fontFamily: FONT_MONO,
+          fontSize: 'var(--fs-base)',
+          lineHeight: 1.6,
+          overflow: 'auto',
+        },
+        '.cm-gutters': {
+          background: 'var(--bg-elevated)',
+          borderRight: '1px solid var(--border)',
+          color: 'var(--text-dim)',
+        },
+        '.cm-activeLineGutter': { backgroundColor: 'var(--bg-hover)' },
+        '.cm-gutter.cm-lineNumbers .cm-gutterElement': {
+          padding: '0 0.75rem 0 0.5rem',
+          fontSize: 'var(--fs-sm)',
+        },
+        '.cm-line': { padding: '0 0.75rem' },
+        '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
+        '.cm-cursor': { borderLeftColor: 'var(--a1)' },
+        '.cm-matchingBracket': {
+          backgroundColor: 'var(--a1-dim)',
+          color: 'var(--text-hi)',
+        },
+        '.cm-searchMatch': { backgroundColor: 'var(--a1-dim)' },
+        '.cm-searchMatch.cm-searchMatch-selected': {
+          backgroundColor: alpha(C.blue, 0.35),
+        },
+        '.cm-selectionBackground': { backgroundColor: C.blueDim },
+        '&.cm-focused .cm-selectionBackground': {
+          backgroundColor: alpha(C.blue, 0.25),
+        },
+        '.cm-line::selection, .cm-line ::selection': {
+          backgroundColor: 'transparent',
+        },
+        '&.cm-focused .cm-line::selection, &.cm-focused .cm-line ::selection': {
+          backgroundColor: alpha(C.blue, 0.25),
+        },
+      }),
     ];
 
     if (lang) extensions.push(lang);
