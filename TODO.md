@@ -1,46 +1,27 @@
 # In Progress
 
-
-## Shell/Result design cleanup
-
-* Extract `GimbalWM` from `client/index.html` into `client/lib/gimbal/gwm.js` — expose as singleton `gwm` in eval scope
-* Expose `gsh` (GimbalShell) in eval scope; `gsh.glob()` returns JS array, `gsh.whatever()` returns JS objects
-* Add `js()` / `jsl()` terminal methods on Result — `.js()` returns `Promise<any>` (JSON decode), `.jsl()` returns `AsyncIterable` (JSONL line iterator)
-* Rename `.toJS()` → `.js()` on Result (drop `.toJS()`)
-* Add `json()` / `jsonl()` shell commands (start of pipeline, JSON-encode args)
-* Refactor the `with` proxy into a dedicated `Scope` class separating commands, builtins, user vars, and gsh methods
-* Port `glob()` from a bare eval identifier to just `gsh.glob()` (keep `glob` alias until proxy is cleaned up)
-* Add `xargs()` command for pipeline-to-argument-list pattern
-* Add `lib()` loader — convention `lib/<name>/lib.js`, inject Grits `fs`, support `gsh.lib('git')`
-* Vendor code: define convention (`client/vendor/<name>/` + `bootstrap.sh`), submodule or script
-* Git integration: vendor `isomorphic-git` as `client/vendor/isomorphic-git/`, wrap as `client/lib/git/lib.js` with Grits `fs` backend; `gsh.lib('git')` returns the adapted isomorphic-git API
+* __[n] reuse index — when you reuse a Result from history in a new chain, it should claim a new __ slot for the new result rather than overwriting the original.
+* Shell history arrow-key reliability — most recent command not always at end
+* Fix shell history in general
+* Fix the README examples
+* gterm command Ctrl-Z
 
 
 
-## Vendor dependency strategy
+# Near Future
 
-* Use `npm` as a pure dependency resolver (not a build tool)
-* `client/vendor/package.json` lists deps (`isomorphic-git`, `codemirror`, etc.), committed
-* `client/vendor/package-lock.json` pins transitive deps, committed (for `npm audit`, Dependabot, reproducible installs)
-* `client/vendor/node_modules/` — gitignored, populated by bootstrap
-* `client/vendor/bootstrap.sh` — runs `npm install --ignore-scripts --no-audit` in `client/vendor/`
-* Wrapper libs (`client/lib/<name>/lib.js`) `import()` directly from `../vendor/node_modules/<pkg>/` using native ESM
-* `gsh.vendor_lib('isomorphic-git')` returns the raw library; `gsh.lib('git')` returns the Grits-adapted wrapper on top
-* Verify isomorphic-git's ESM bundle uses relative (not bare) imports for its deps (`ignore`, `pako`) so browser native `import()` resolves correctly
-* Medium-term: support swapping vendor packages with git checkouts via `client/vendor/overrides.json` (map pkg name → git URL + ref). `bootstrap.sh` applies overrides after `npm install` by replacing `node_modules/<pkg>` with a shallow clone. Stable refs (tags/commits) skip re-clone if already checked out, preserving local dev edits.
-* Auto-generate import map in `index.html` at `make deps` time — scan `node_modules/` for bare specifiers, write `<script type="importmap">` block so it stays in sync without manual edits
-
-
-
-## Build tooling
-
-* Flesh out Makefile targets: `test`, `install`, `lint`, `fmt`; maybe `run` for dev-server shortcut
-* Decide whether `build` should depend on `vendor` or if they should be separate invocations
-* Set up CI (GitHub Actions?) to run `make build` on push
-
+* More tools: Diff, patch
+* Filesystem undo
+* Better git self-hosting
+* Mobile interface
+* Fix the scrolling weirdness (scroll partway down a markdown document in the master, then move an element of the stack to a new position, and the MD document jumps back to the top)
 
 
 # Backlog
+
+## Melanic specifically
+
+Remove indirection - just go import from locations without a `cp -r` in the Makefile
 
 
 
@@ -54,13 +35,9 @@ cwd FIXME — empty string from backend needs to be treated as root, currently p
 
 Ctrl-Enter statement mode — full JS with let/const/function declarations persisting via a scope object, shared with normal Enter mode.
 
-__[n] reuse index — when you reuse a Result from history in a new chain, it should claim a new __ slot for the new result rather than overwriting the original.
-
 test() currently changes directory as it's running
 
 Pass actual column width to _display() for correct pretty-print wrapping
-
-Shell history arrow-key reliability — most recent command not always at end
 
 Line the result __[n] up with the output, not the input
 
@@ -100,13 +77,9 @@ facl() supporting directory recursion up and down
 
 signup()
 
-cwd() shell command
-
 Import git tools libs
 
 Defaults / config system
-
-More tools: Diff, patch
 
 adduser() and deluser() from frontend
 
@@ -116,7 +89,7 @@ Make editor "Save as" and editing of scratch files more sensible
 
 Make rm() and rmdir() (at least) a lot more simple into a single multilink() (maybe after a quick check first)
 
-bg()
+bg() and Ctrl-Z
 
 Make test() in the foreground once bg() exists
 
@@ -182,11 +155,13 @@ Folder color to Orange
 
 Better monospace font
 
-Some sort of customizable command pallete similar to acme
+Some sort of customizable command palette similar to acme
 
 MOTD
 
 Make "safe mode"
+
+
 
 
 ## grits client
@@ -235,8 +210,6 @@ Transition a bunch of stuff to JSONL
 Great renaming of concepts
 
 Finish service worker
-
-Undo
 
 Prune for path access on multilink
 
@@ -294,8 +267,54 @@ Guest user auto-homedir-deletion
 
 Fix certbot browser badness when first accessing a new vhost, and browser visits http://{whatever}
 
+Check the updates to login cookies; seem like they're timing out even under active use
 
-## GUI destination
+Make redirect from http:// to https://
+
+
+
+## Random Notes and Sketches
+
+### Shell/Result design cleanup
+
+* Extract `GimbalWM` from `client/index.html` into `client/lib/gimbal/gwm.js` — expose as singleton `gwm` in eval scope
+* Expose `gsh` (GimbalShell) in eval scope; `gsh.glob()` returns JS array, `gsh.whatever()` returns JS objects
+* Add `js()` / `jsl()` terminal methods on Result — `.js()` returns `Promise<any>` (JSON decode), `.jsl()` returns `AsyncIterable` (JSONL line iterator)
+* Rename `.toJS()` → `.js()` on Result (drop `.toJS()`)
+* Add `json()` / `jsonl()` shell commands (start of pipeline, JSON-encode args)
+* Refactor the `with` proxy into a dedicated `Scope` class separating commands, builtins, user vars, and gsh methods
+* Port `glob()` from a bare eval identifier to just `gsh.glob()` (keep `glob` alias until proxy is cleaned up)
+* Add `xargs()` command for pipeline-to-argument-list pattern
+* Add `lib()` loader — convention `lib/<name>/lib.js`, inject Grits `fs`, support `gsh.lib('git')`
+* Vendor code: define convention (`client/vendor/<name>/` + `bootstrap.sh`), submodule or script
+* Git integration: vendor `isomorphic-git` as `client/vendor/isomorphic-git/`, wrap as `client/lib/git/lib.js` with Grits `fs` backend; `gsh.lib('git')` returns the adapted isomorphic-git API
+
+
+
+### Vendor dependency strategy
+
+* Use `npm` as a pure dependency resolver (not a build tool)
+* `client/vendor/package.json` lists deps (`isomorphic-git`, `codemirror`, etc.), committed
+* `client/vendor/package-lock.json` pins transitive deps, committed (for `npm audit`, Dependabot, reproducible installs)
+* `client/vendor/node_modules/` — gitignored, populated by bootstrap
+* `client/vendor/bootstrap.sh` — runs `npm install --ignore-scripts --no-audit` in `client/vendor/`
+* Wrapper libs (`client/lib/<name>/lib.js`) `import()` directly from `../vendor/node_modules/<pkg>/` using native ESM
+* `gsh.vendor_lib('isomorphic-git')` returns the raw library; `gsh.lib('git')` returns the Grits-adapted wrapper on top
+* Verify isomorphic-git's ESM bundle uses relative (not bare) imports for its deps (`ignore`, `pako`) so browser native `import()` resolves correctly
+* Medium-term: support swapping vendor packages with git checkouts via `client/vendor/overrides.json` (map pkg name → git URL + ref). `bootstrap.sh` applies overrides after `npm install` by replacing `node_modules/<pkg>` with a shallow clone. Stable refs (tags/commits) skip re-clone if already checked out, preserving local dev edits.
+* Auto-generate import map in `index.html` at `make deps` time — scan `node_modules/` for bare specifiers, write `<script type="importmap">` block so it stays in sync without manual edits
+
+
+
+### Build tooling
+
+* Flesh out Makefile targets: `test`, `install`, `lint`, `fmt`; maybe `run` for dev-server shortcut
+* Decide whether `build` should depend on `vendor` or if they should be separate invocations
+* Set up CI (GitHub Actions?) to run `make build` on push
+
+
+
+### GUI destination
 
 * We need an icons pack
 * Each widget has a list of actions: Each has an icon, a snippet of code which defines what happens when you click, and an optional "enabled" state function.
