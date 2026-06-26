@@ -9,12 +9,12 @@ export const tests = [
     },
   },
   {
-    label: 'echo response contains the input string',
+    label: 'echo response contains the input string with trailing newline',
     async fn(shell, scratch) {
       const value = await shell.eval("echo('hello world')");
       const text = await value.text();
-      if (text !== 'hello world')
-        throw new Error(`expected 'hello world', got '${text}'`);
+      if (text !== 'hello world\n')
+        throw new Error(`expected 'hello world\\n', got '${text}'`);
     },
   },
   {
@@ -41,10 +41,45 @@ export const tests = [
   {
     label: 'echo coerces non-string argument to string',
     async fn(shell, scratch) {
-      // echo uses String(text) so numbers should work
       const value = await shell.eval('echo(42).toText()');
-      if (value !== '42')
-        throw new Error(`expected '42', got '${value}'`);
+      if (value !== '42\n')
+        throw new Error(`expected '42\\n', got '${value}'`);
+    },
+  },
+  {
+    label: 'echo {n:1} suppresses trailing newline',
+    async fn(shell, scratch) {
+      const value = await shell.eval("echo('hello', {n:1})");
+      const text = await value.text();
+      if (text !== 'hello')
+        throw new Error(`expected 'hello', got '${text}'`);
+    },
+  },
+  {
+    label: 'echo {j:1} JSON-encodes the string with trailing newline',
+    async fn(shell, scratch) {
+      const value = await shell.eval("echo('hello world', {j:1})");
+      const text = await value.text();
+      if (text !== '"hello world"\n')
+        throw new Error(`expected '"hello world"\\n', got '${text}'`);
+    },
+  },
+  {
+    label: 'echo {j:1} escapes special characters',
+    async fn(shell, scratch) {
+      const value = await shell.eval("echo('line with \"quotes\"', {j:1})");
+      const text = await value.text();
+      if (text !== '"line with \\"quotes\\""\n')
+        throw new Error(`expected JSON-escaped string, got '${text}'`);
+    },
+  },
+  {
+    label: 'echo {j:1, n:1} JSON-encodes without trailing newline',
+    async fn(shell, scratch) {
+      const value = await shell.eval("echo('hello', {j:1, n:1})");
+      const text = await value.text();
+      if (text !== '"hello"')
+        throw new Error(`expected '"hello"', got '${text}'`);
     },
   },
 ];
