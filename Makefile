@@ -1,6 +1,9 @@
 .PHONY: all build audit deps fix test src
 
-all: build src audit
+all: build src
+	@if [ ! -f .audit-stamp ] || [ "$$(( $$(date +%s) - $$(date -r .audit-stamp +%s) ))" -ge 86400 ]; then \
+		$(MAKE) audit; \
+	fi
 
 build:
 	go build -o bin/certbot-helper cmd/certbot-helper/main.go
@@ -17,6 +20,7 @@ deps:
 audit:
 	~/go/bin/govulncheck ./internal/... ./cmd/...
 	cd client/lib && npm audit
+	touch .audit-stamp
 
 fix:
 	cd client/lib && npm audit fix
