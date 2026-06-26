@@ -144,14 +144,14 @@ gsh.read('/file.txt')
 gsh.mkdir('/home/you/newdir')
 ```
 
-For chaining operations on the same path, use `gsh.p()` to create a path reference:
+For chaining operations on the same path, use `gsh.path()` to create a path reference:
 
 ```
-gsh.p('/home/you').ls()                // list a directory
-gsh.p('/home/you/file.txt').w('hello') // write a file
-gsh.p('/src').cp(gsh.p('/dest'))       // copy between paths
-gsh.p('/src').mv(gsh.p('/dest'))       // move/rename
-gsh.p('/src').rm()                     // remove a file
+gsh.path('/home/you').ls()                // list a directory
+gsh.path('/home/you/file.txt').w('hello') // write a file
+gsh.path('/src').cp('/dest')                 // copy between paths
+gsh.path('/src').mv('/dest')                 // move/rename
+gsh.path('/src').rm()                     // remove a file
 ```
 
 ### How it works

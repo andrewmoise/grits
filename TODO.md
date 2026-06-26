@@ -4,6 +4,7 @@
 * Revisit moving files() and edit() and things out of the shell
 * Make sure we're being strict about arguments (e.g. don't accept an argument to ls())
 * Add glob()
+* markdown() -> md()
 
 * __[n] reuse index — when you reuse a Result from history in a new chain, it should claim a new __ slot for the new result rather than overwriting the original.
 * Shell history arrow-key reliability — most recent command not always at end

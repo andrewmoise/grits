@@ -10,24 +10,25 @@ unzip — extract a zip archive into the current directory
 Usage:
   path.unzip()                 extract zip into cwd
   path.unzip({f:1})            overwrite existing files
-  gsh.unzip('/path')           same`;
+  gsh.unzip(path)              same (path must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
   if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string');
-    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+    return args.find(a => a instanceof GimbalPath) || null;
   }
   return null;
+}
+
+function findOpts(args) {
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
 }
 
 export function invoke(prev, ...args) {
   const path = resolvePath(prev, args);
   if (!(path instanceof GimbalPath)) throw new Error('unzip: need a file path');
 
-  const opts = args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
+  const opts = findOpts(args);
   const shell = path._shell;
 
   return new GimbalResult(async () => {

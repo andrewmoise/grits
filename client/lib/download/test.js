@@ -2,14 +2,14 @@ export const tests = [
   {
     label: 'download result matches same file fetched from volume',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/file.txt').w('hello world')`);
+      await shell.eval(`gsh.path('${scratch}/file.txt').w('hello world')`);
       const url = `${shell.serverUrl}/grits/v1/content/primary${scratch}/file.txt`;
 
       const downloadResult = await shell.eval(`gsh.download('${url}')`);
       const fetchedResp = await fetch(url);
       const a = await downloadResult.text();
       const b = await fetchedResp.text();
-      const c = await shell.eval(`gsh.p('${scratch}/file.txt').read()`);
+      const c = await shell.eval(`gsh.path('${scratch}/file.txt').read()`);
 
       if (a !== b || a !== c)
         throw new Error('downloaded content does not match volume content');
@@ -20,7 +20,7 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval(`gsh.p('${scratch}/x').download('${shell.serverUrl}/grits/v1/content/primary/lib/grits/GritsClient.js')`);
+        await shell.eval(`gsh.path('${scratch}/x').download('${shell.serverUrl}/grits/v1/content/primary/lib/grits/GritsClient.js')`);
       } catch (e) {
         if (e.message.includes('must be called on gsh')) threw = true;
         else throw e;

@@ -34,8 +34,13 @@ async function _execute(target, shell, moduleName, args, proxy) {
   } else {
     prev = target;
   }
+
+  const resolvedArgs = await Promise.all(
+    args.map(async a => a instanceof GimbalResult ? await a : a)
+  );
+
   const mod = await shell._importTool(moduleName);
-  let result = mod.invoke(prev, ...args);
+  let result = mod.invoke(prev, ...resolvedArgs);
   while (result instanceof GimbalResult) {
     result = await result;
   }

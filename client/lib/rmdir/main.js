@@ -8,15 +8,12 @@ rmdir — remove an empty directory
 
 Usage:
   path.rmdir()          remove empty directory
-  gsh.rmdir('/path')    same`;
+  gsh.rmdir(path)       same (path must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
   if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string');
-    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+    return args.find(a => a instanceof GimbalPath) || null;
   }
   return null;
 }

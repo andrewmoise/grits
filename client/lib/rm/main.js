@@ -10,24 +10,25 @@ Usage:
   path.rm()                   remove file, fail if directory
   path.rm({r:1})              remove file or directory
   path.rm({f:1})              ignore if missing, fail on directory
-  gsh.rm('/path')             same`;
+  gsh.rm(path)                same (path must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
   if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string');
-    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+    return args.find(a => a instanceof GimbalPath) || null;
   }
   return null;
+}
+
+function findOpts(args) {
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
 }
 
 export function invoke(prev, ...args) {
   const path = resolvePath(prev, args);
   if (!(path instanceof GimbalPath)) throw new Error('rm: need a path');
 
-  const opts = args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
+  const opts = findOpts(args);
   const shell = path._shell;
 
   return new GimbalResult(async () => {

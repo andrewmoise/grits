@@ -41,6 +41,12 @@ export class GimbalShell {
     return child;
   }
 
+  path(p) {
+    const r = this.resolvePath(p);
+    return new GimbalPath('/' + r.path, this);
+  }
+  p(p) { return this.path(p); }
+
   get ui() { return null; }
 
   _currentVol() { return this._vol(null, null); }

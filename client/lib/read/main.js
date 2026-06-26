@@ -7,28 +7,21 @@ read — read a file's contents as a string
 
 Usage:
   path.read()               read file at path, return string
-  gsh.read('/path')         same`;
+  gsh.read(path)            same (path must be GimbalPath)`;
+
+function resolvePath(prev, args) {
+  if (prev instanceof GimbalPath) return prev;
+  if (prev instanceof GimbalShell) {
+    return args.find(a => a instanceof GimbalPath) || null;
+  }
+  return null;
+}
 
 export function invoke(prev, ...args) {
-  let path, shell;
-  if (prev instanceof GimbalPath) {
-    path = prev;
-    shell = path._shell;
-  } else if (prev instanceof GimbalShell) {
-    shell = prev;
-    path = args.find(a => a instanceof GimbalPath);
-    if (!path) {
-      const str = args.find(a => typeof a === 'string');
-      if (str) path = new GimbalPath('/' + shell.resolvePath(str).path, shell);
-    }
-  } else if (prev instanceof GimbalResult) {
-    return new GimbalResult(async () => {
-      const resolved = await prev;
-      return invoke(resolved, ...args);
-    });
-  }
+  const path = resolvePath(prev, args);
   if (!(path instanceof GimbalPath)) throw new Error('read: need a file path');
 
+  const shell = path._shell;
   return new GimbalResult(async () => {
     const vol = shell._vol();
     const file = await vol.lookup(path.abs());

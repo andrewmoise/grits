@@ -2,8 +2,8 @@ export const tests = [
   {
     label: 'rmdir removes an empty directory',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/emptydir').mkdir()`);
-      await shell.eval(`gsh.p('${scratch}/emptydir').rmdir()`);
+      await shell.eval(`gsh.path('${scratch}/emptydir').mkdir()`);
+      await shell.eval(`gsh.path('${scratch}/emptydir').rmdir()`);
       let threw = false;
       try {
         const r = shell.resolvePath(`${scratch}/emptydir`);
@@ -18,9 +18,9 @@ export const tests = [
   {
     label: 'rmdir removes a non-empty directory',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/fulldir').mkdir()`);
-      await shell.eval(`gsh.p('${scratch}/fulldir/file.txt').w('hi')`);
-      await shell.eval(`gsh.p('${scratch}/fulldir').rmdir()`);
+      await shell.eval(`gsh.path('${scratch}/fulldir').mkdir()`);
+      await shell.eval(`gsh.path('${scratch}/fulldir/file.txt').w('hi')`);
+      await shell.eval(`gsh.path('${scratch}/fulldir').rmdir()`);
       let threw = false;
       try {
         const r = shell.resolvePath(`${scratch}/fulldir`);
@@ -35,10 +35,10 @@ export const tests = [
   {
     label: 'rmdir fails on a file',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/file.txt').w('hi')`);
+      await shell.eval(`gsh.path('${scratch}/file.txt').w('hi')`);
       let threw = false;
       try {
-        await shell.eval(`gsh.p('${scratch}/file.txt').rmdir()`);
+        await shell.eval(`gsh.path('${scratch}/file.txt').rmdir()`);
       } catch (e) {
         if (e.message.includes('not a directory')) threw = true;
         else throw e;
@@ -51,8 +51,8 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval(`gsh.p('${scratch}/d').mkdir()`);
-        await shell.eval(`gsh.p('${scratch}/d').read().rmdir()`);
+        await shell.eval(`gsh.path('${scratch}/d').mkdir()`);
+        await shell.eval(`gsh.path('${scratch}/d').read().rmdir()`);
       } catch (e) {
         if (e.message.includes('need a path')) threw = true;
         else throw e;

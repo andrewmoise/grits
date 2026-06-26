@@ -69,15 +69,6 @@ export function invoke(prev, ...args) {
       paths.push(arg.abs());
       continue;
     }
-    if (arg instanceof GimbalResult) {
-      return new GimbalResult(async () => {
-        const resolved = await arg;
-        const idx = args.indexOf(arg);
-        const newArgs = [...args];
-        newArgs[idx] = resolved;
-        return invoke(prev, ...newArgs);
-      });
-    }
     if (typeof arg === 'string') { paths.push(arg); continue; }
     if (!isPlainObject(arg)) throw new Error('facl: arguments must be strings, GimbalPaths, or objects');
 

@@ -7,16 +7,12 @@ write — write content to a file path
 
 Usage:
   path.w(content)            write string content to path
-  gsh.write('/path', str)    same`;
+  gsh.write(path, content)   same (path must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
   if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string' && a.startsWith('/'));
-    if (str) return new GimbalPath(str, prev);
-    return null;
+    return args.find(a => a instanceof GimbalPath) || null;
   }
   return null;
 }
@@ -25,8 +21,7 @@ export function invoke(prev, ...args) {
   const path = resolvePath(prev, args);
   if (!(path instanceof GimbalPath)) throw new Error('write: need a destination path');
 
-  // content is the argument after the path
-  const nonPathArgs = args.filter(a => !(a instanceof GimbalPath));
+  const nonPathArgs = args.filter(a => !(a instanceof GimbalPath) && !(a instanceof GimbalResult));
   const content = nonPathArgs[0];
   if (content === undefined) throw new Error('write: no content provided');
 

@@ -48,9 +48,9 @@ gsh.codemirror('/sites/gimbal.melanic.org/live/src/README.md')
 See how inconvenient that is? It's okay though. (Note - you must have a guest account for this to work; make sure you have done `gsh.login({guest:1})` from above. Be aware that guest accounts are ephemeral and regularly deleted.)
 
 ```
-gsh.home().p('lib').rm({r:1, f:1})
-gsh.p('/sites/gimbal.melanic.org/live/lib').cp(gsh.home().p('lib'), {r:1})
-gsh.home().p('lib/codemirror/gwm-widget.js').codemirror()
+gsh.home().path('lib').rm({r:1, f:1})
+gsh.path('/sites/gimbal.melanic.org/live/lib').cp(gsh.home().path('lib'), {r:1})
+gsh.home().path('lib/codemirror/gwm-widget.js').codemirror()
 ```
 
 (TODO - screenshot)
@@ -79,9 +79,9 @@ And, bingo bango! You should see an editor instance with line wrapping fixed:
 You can also, if you want to, persist this change into a custom entry in the command strip:
 
 ```
-gsh.home().p('local/gimbal').mkdir({p:1})
-gsh.p('/sites/gimbal.melanic.org/live/lib/gimbal/profile.jsonl')  \
-  .cp(gsh.home().p('local/gimbal/profile.jsonl'))
+gsh.home().path('local/gimbal').mkdir({p:1})
+gsh.path('/sites/gimbal.melanic.org/live/lib/gimbal/profile.jsonl')  \
+  .cp(gsh.home().path('local/gimbal/profile.jsonl'))
 ```
 
 And, if you reload the page, you should be then able to write `window.myEdit({path})` and that'll open {path} for you in the modified editor. Try it! Does it work?
@@ -107,9 +107,9 @@ We make a copy of the `gimbal.melanic.org` site onto a new vhost. So, by design 
 So with that in mind, the first step is to make a clone of `gimbal.melanic.org` in our home directory:
 
 ```
-gsh.home().p(`gimbal.anon1895.melanic.org`).mkdir()
-gsh.p('/sites/gimbal.melanic.org/live')   \
-  .cp(gsh.home().p('gimbal.anon1895.melanic.org/live'), {r:1})
+gsh.home().path(`gimbal.anon1895.melanic.org`).mkdir()
+gsh.path('/sites/gimbal.melanic.org/live')   \
+  .cp('/home/anon1895/gimbal.anon1895.melanic.org/live', {r:1})
 ```
 
 (There's nothing special about the `anon1895.melanic.org` hostname space or whatever; we're just doing that to keep things organized. You could write literally anything there as the name of the new vhost, as long as it doesn't collide with an existing one. You cannot "claim," in other words, the whole namespace under your specific username, which would yes be a nice thing to be able to do.)
@@ -137,7 +137,7 @@ You can query for the world-readable permissions that we're depending on, for th
 
 ```
 gsh.facl('/sites/gimbal.melanic.org/live')
-gsh.facl(gsh.home().p('gimbal.anon1895.melanic.org/live'))
+gsh.facl(gsh.home().path('gimbal.anon1895.melanic.org/live'))
 ```
 
 #### Make it live
@@ -145,7 +145,7 @@ gsh.facl(gsh.home().p('gimbal.anon1895.melanic.org/live'))
 In any case, once you've set up permissions, you can make the thing live.
 
 ```
-gsh.home().p('gimbal.anon1895.melanic.org').cp(gsh.p('/sites/gimbal.anon1895.melanic.org'), {r:1})
+gsh.home().path('gimbal.anon1895.melanic.org').cp('/sites/gimbal.anon1895.melanic.org', {r:1})
 ```
 
 If that works, then load up:
@@ -259,12 +259,12 @@ Frontend tests will take a while.
 ### Web serving
 
 Once tests pass, you can start putting up content. `gsh.upload()` and
-`gsh.p('/path').unzip()` are useful. The copy-on-write version workflow looks like this:
+`gsh.path('/path').unzip()` are useful. The copy-on-write version workflow looks like this:
 
 ```
-gsh.p('/sites/{hostname}/dev/v1').mkdir({p:1})
-gsh.p('/sites/{hostname}/dev/v1/index.html').w('version 1')
-gsh.p('/sites/{hostname}/dev/v1').ln(gsh.p('/sites/{hostname}/live'), {ff:1})
+gsh.path('/sites/{hostname}/dev/v1').mkdir({p:1})
+gsh.path('/sites/{hostname}/dev/v1/index.html').w('version 1')
+gsh.path('/sites/{hostname}/dev/v1').ln('/sites/{hostname}/live', {ff:1})
 ```
 
 (The `ff` option forcibly overwrites `live` with a copy of `dev/v1`, instead of
@@ -274,7 +274,7 @@ directory.)
 To start a v2:
 
 ```
-gsh.p('/sites/{hostname}/dev/v1').ln(gsh.p('/sites/{hostname}/dev/v2'), {ff:1})
+gsh.path('/sites/{hostname}/dev/v1').ln('/sites/{hostname}/dev/v2', {ff:1})
 ```
 
 You can deploy `dev/v2` to a temporary vhost's `live/` to test against real auth

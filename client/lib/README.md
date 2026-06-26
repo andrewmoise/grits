@@ -11,7 +11,7 @@ gsh.login({guest:1})               // log in as guest
 gsh.whoami()                       // see who you are
 gsh.ls('/')                        // list root directory
 gsh.read('/path/to/file.txt')      // read a file
-gsh.p('/path/to/new.txt').w('hi')  // write a file
+gsh.path('/path/to/new.txt').w('hi')  // write a file
 gsh.home()                         // your home directory path
 gsh.home().ls()                    // list your home
 gsh.test()                         // run self-tests
@@ -27,12 +27,12 @@ gsh.rm('/home/you/oldfile.txt')
 gsh.read('/home/you/file.txt')
 ```
 
-Or use `gsh.p()` to create a path object for method chaining:
+Or use `gsh.path()` to create a path object for method chaining:
 
 ```
-gsh.p('/home/you').ls()            // list a directory
-gsh.p('/home/you/file.txt').w('x') // write to a file
-gsh.p('/src').cp(gsh.p('/dest'))   // copy between paths
+gsh.path('/home/you').ls()            // list a directory
+gsh.path('/home/you/file.txt').w('x') // write to a file
+gsh.path('/src').cp('/dest')             // copy between paths
 ```
 
 All commands in lib/*/main.js:

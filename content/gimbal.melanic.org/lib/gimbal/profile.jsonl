@@ -1,4 +1,3 @@
 "gsh.files()"
 "gsh.gterm()"
-"gsh.markdown('GREETINGS.md')"
-
+"gsh.p('/sites/gimbal.melanic.org/live/GREETINGS.md').markdown()"

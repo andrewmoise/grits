@@ -1,7 +1,7 @@
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
 import { GimbalShell } from '../gimbal/gsh.js';
-import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB, ASSERT_IS_TREE } from '../grits/GritsClient.js';
+import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
 export function resolveDestPaths(destR, srcName) {
   if (destR.trailingSlash) return [`${destR.path}/${srcName}`];
@@ -17,47 +17,39 @@ export const help = `\
 ln — link a file into the filesystem (copy-on-write)
 
 Usage:
-  src.ln(dest)              link into dest
-  src.ln(dest, {ff:1})      overwrite dest
-  gsh.ln('/src', '/dest')   same`;
+  path.ln(dest)              link to dest (GimbalPath or string)
+  path.ln(dest, {ff:1})      overwrite dest
+  gsh.ln(src, dest)          same (paths must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
   if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string');
-    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+    return args.find(a => a instanceof GimbalPath) || null;
   }
   return null;
 }
 
-function findDest(args) {
-  const path = args.find(a => a instanceof GimbalPath);
-  if (path) return path;
-  const result = args.find(a => a instanceof GimbalResult);
-  if (result) return result;
+function findDest(args, shell) {
+  const p = args.find(a => a instanceof GimbalPath);
+  if (p) return p;
+  const str = args.find(a => typeof a === 'string');
+  if (str && shell) {
+    const res = shell.resolvePath(str);
+    return new GimbalPath('/' + res.path, shell);
+  }
   return null;
 }
 
 function findOpts(args) {
-  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
 }
 
 export function invoke(prev, ...args) {
   const src = resolvePath(prev, args);
   if (!(src instanceof GimbalPath)) throw new Error('ln: need a source path');
 
-  const dest = findDest(args);
+  const dest = findDest(args, src._shell);
   if (!dest) throw new Error('ln: need a destination path');
-
-  if (dest instanceof GimbalResult) {
-    return new GimbalResult(async () => {
-      const resolved = await dest;
-      const remaining = args.filter(a => a !== dest);
-      return invoke(prev, resolved, ...remaining);
-    });
-  }
 
   const opts = findOpts(args);
   const shell = src._shell;
@@ -77,12 +69,10 @@ export function invoke(prev, ...args) {
         } else if (opts.i) {
           await destVol.multiLink([{ path, addr: srcFile.cid(), prevAddr: '', assert: ASSERT_PREV_MATCHES }]);
         } else {
-          // Default: try creating new, then overwrite blob
           try {
             await destVol.multiLink([{ path, addr: srcFile.cid(), prevAddr: '', assert: ASSERT_PREV_MATCHES }]);
           } catch (e) {
             if (!(e instanceof AssertionError)) throw e;
-            // Path exists — overwrite if it's a blob
             await destVol.multiLink([{ path, addr: srcFile.cid(), assert: ASSERT_IS_BLOB }]);
           }
         }

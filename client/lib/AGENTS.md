@@ -92,9 +92,9 @@ export const tests = [
   {
     label: 'cp copies a file',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/src.txt').w('hello')`);
-      await shell.eval(`gsh.p('${scratch}/src.txt').cp(gsh.p('${scratch}/dest.txt'))`);
-      const text = await shell.eval(`gsh.p('${scratch}/dest.txt').read()`);
+      await shell.eval(`gsh.path('${scratch}/src.txt').w('hello')`);
+      await shell.eval(`gsh.path('${scratch}/src.txt').cp(gsh.path('${scratch}/dest.txt'))`);
+      const text = await shell.eval(`gsh.path('${scratch}/dest.txt').read()`);
       if (text !== 'hello') throw new Error('copy failed');
     },
   },

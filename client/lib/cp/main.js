@@ -7,53 +7,45 @@ export const help = `\
 cp — copy a file to a new path
 
 Usage:
-  src.cp(dest)            copy into dest if dir, overwrite if file
-  src.cp(dest, {f:1})     overwrite even if dest is a directory
-  src.cp(dest, {i:1})     fail if dest exists at all
-  gsh.cp('/src', '/dest') same`;
+  path.cp(dest)            copy to dest (GimbalPath or string)
+  path.cp(dest, {f:1})     overwrite even if dest is a directory
+  path.cp(dest, {i:1})     fail if dest exists at all
+  gsh.cp(src, dest)        same (paths must be GimbalPath)`;
+
+function resolvePath(prev, args) {
+  if (prev instanceof GimbalPath) return prev;
+  if (prev instanceof GimbalShell) {
+    return args.find(a => a instanceof GimbalPath) || null;
+  }
+  return null;
+}
 
 function isPathNotFound(e) {
   const msg = e.message || '';
   return msg.includes('file does not exist') || msg.includes('is not a directory');
 }
 
-function resolvePath(prev, args) {
-  if (prev instanceof GimbalPath) return prev;
-  if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string');
-    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+function findDest(args, shell) {
+  const p = args.find(a => a instanceof GimbalPath);
+  if (p) return p;
+  const str = args.find(a => typeof a === 'string');
+  if (str && shell) {
+    const res = shell.resolvePath(str);
+    return new GimbalPath('/' + res.path, shell);
   }
   return null;
 }
 
-function findDest(args) {
-  const path = args.find(a => a instanceof GimbalPath);
-  if (path) return path;
-  const result = args.find(a => a instanceof GimbalResult);
-  if (result) return result;
-  return null;
-}
-
 function findOpts(args) {
-  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
 }
 
 export function invoke(prev, ...args) {
   const src = resolvePath(prev, args);
   if (!(src instanceof GimbalPath)) throw new Error('cp: need a source path');
 
-  const dest = findDest(args);
+  const dest = findDest(args, src._shell);
   if (!dest) throw new Error('cp: need a destination path');
-
-  if (dest instanceof GimbalResult) {
-    return new GimbalResult(async () => {
-      const resolved = await dest;
-      const remaining = args.filter(a => a !== dest);
-      return invoke(prev, resolved, ...remaining);
-    });
-  }
 
   const opts = findOpts(args);
   const shell = src._shell;

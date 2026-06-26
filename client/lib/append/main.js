@@ -8,15 +8,12 @@ append — append content to the end of a file
 
 Usage:
   path.append(content)        append string content to file at path
-  gsh.append('/path', str)    same`;
+  gsh.append(path, content)   same (path must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
   if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string' && a.startsWith('/'));
-    if (str) return new GimbalPath(str, prev);
+    return args.find(a => a instanceof GimbalPath) || null;
   }
   return null;
 }
@@ -25,7 +22,7 @@ export function invoke(prev, ...args) {
   const path = resolvePath(prev, args);
   if (!(path instanceof GimbalPath)) throw new Error('append: need a destination path');
 
-  const nonPathArgs = args.filter(a => !(a instanceof GimbalPath));
+  const nonPathArgs = args.filter(a => !(a instanceof GimbalPath) && !(a instanceof GimbalResult));
   const content = nonPathArgs[0];
   if (content === undefined) throw new Error('append: no content provided');
 

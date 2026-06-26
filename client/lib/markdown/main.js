@@ -8,31 +8,19 @@ markdown — render Markdown content
 
 Usage:
   path.markdown()              render file at path as Markdown
-  gsh.markdown('/path')        same`;
+  gsh.markdown(path)           same (path must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
   if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string');
-    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+    return args.find(a => a instanceof GimbalPath) || null;
   }
   return null;
 }
 
 export function invoke(prev, ...args) {
   const path = resolvePath(prev, args);
-  if (!(path instanceof GimbalPath)) {
-    // If prev was a GimbalResult that didn't resolve to a path, await it
-    if (prev instanceof GimbalResult) {
-      return new GimbalResult(async () => {
-        const resolved = await prev;
-        return invoke(resolved, ...args);
-      });
-    }
-    throw new Error('markdown: need a file path');
-  }
+  if (!(path instanceof GimbalPath)) throw new Error('markdown: need a file path');
 
   const shell = path._shell;
   return new GimbalResult(() => _render(shell, path));

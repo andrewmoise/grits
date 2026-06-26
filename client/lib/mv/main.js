@@ -7,46 +7,38 @@ export const help = `\
 mv — move (rename) a file system entry
 
 Usage:
-  path.mv(dest)            move to dest (GimbalPath)
-  gsh.mv('/src', dest)     same`;
+  path.mv(dest)            move to dest (GimbalPath or string)
+  gsh.mv(src, dest)        same (paths must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
   if (prev instanceof GimbalShell) {
-    const p = args.find(a => a instanceof GimbalPath);
-    if (p) return p;
-    const str = args.find(a => typeof a === 'string');
-    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+    return args.find(a => a instanceof GimbalPath) || null;
   }
   return null;
 }
 
-function findDest(args) {
-  const path = args.find(a => a instanceof GimbalPath);
-  if (path) return path;
-  const result = args.find(a => a instanceof GimbalResult);
-  if (result) return result;
+function findDest(args, shell) {
+  const p = args.find(a => a instanceof GimbalPath);
+  if (p) return p;
+  const str = args.find(a => typeof a === 'string');
+  if (str && shell) {
+    const res = shell.resolvePath(str);
+    return new GimbalPath('/' + res.path, shell);
+  }
   return null;
 }
 
 function findOpts(args) {
-  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
 }
 
 export function invoke(prev, ...args) {
   const src = resolvePath(prev, args);
   if (!(src instanceof GimbalPath)) throw new Error('mv: need a source path');
 
-  const dest = findDest(args);
+  const dest = findDest(args, src._shell);
   if (!dest) throw new Error('mv: need a destination path');
-
-  if (dest instanceof GimbalResult) {
-    return new GimbalResult(async () => {
-      const resolved = await dest;
-      const remaining = args.filter(a => a !== dest);
-      return invoke(prev, resolved, ...remaining);
-    });
-  }
 
   const opts = findOpts(args);
   const shell = src._shell;

@@ -2,7 +2,7 @@ export const tests = [
   {
     label: 'mkdir creates a directory',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/newdir').mkdir()`);
+      await shell.eval(`gsh.path('${scratch}/newdir').mkdir()`);
       const r = shell.resolvePath(`${scratch}/newdir`);
       const file = await shell._vol(r.serverUrl, r.volume).lookup(r.path);
       if (!file.isDir()) throw new Error('expected a directory');
@@ -11,10 +11,10 @@ export const tests = [
   {
     label: 'mkdir fails if path already exists',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/newdir').mkdir()`);
+      await shell.eval(`gsh.path('${scratch}/newdir').mkdir()`);
       let threw = false;
       try {
-        await shell.eval(`gsh.p('${scratch}/newdir').mkdir()`);
+        await shell.eval(`gsh.path('${scratch}/newdir').mkdir()`);
       } catch (e) {
         if (e.message.includes('already exists')) threw = true;
         else throw e;
@@ -25,8 +25,8 @@ export const tests = [
   {
     label: 'mkdir with {f:1} succeeds if already exists',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/newdir').mkdir()`);
-      await shell.eval(`gsh.p('${scratch}/newdir').mkdir({f:1})`);
+      await shell.eval(`gsh.path('${scratch}/newdir').mkdir()`);
+      await shell.eval(`gsh.path('${scratch}/newdir').mkdir({f:1})`);
       const r = shell.resolvePath(`${scratch}/newdir`);
       const file = await shell._vol(r.serverUrl, r.volume).lookup(r.path);
       if (!file.isDir()) throw new Error('expected a directory');
@@ -35,10 +35,10 @@ export const tests = [
   {
     label: 'mkdir does not accept pipeline input',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/afile.txt').w('x')`);
+      await shell.eval(`gsh.path('${scratch}/afile.txt').w('x')`);
       let threw = false;
       try {
-        await shell.eval(`gsh.p('${scratch}/afile.txt').read().mkdir({p:1})`);
+        await shell.eval(`gsh.path('${scratch}/afile.txt').read().mkdir({p:1})`);
       } catch (e) {
         if (e.message.includes('need a path')) threw = true;
         else throw e;
@@ -62,7 +62,7 @@ export const tests = [
   {
     label: 'mkdir {p:1} creates intermediate directories',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/a/b/c').mkdir({p:1})`);
+      await shell.eval(`gsh.path('${scratch}/a/b/c').mkdir({p:1})`);
       const r = shell.resolvePath(`${scratch}/a/b/c`);
       const file = await shell._vol(r.serverUrl, r.volume).lookup(r.path);
       if (!file.isDir()) throw new Error('expected a directory');
@@ -71,8 +71,8 @@ export const tests = [
   {
     label: 'mkdir {p:1} succeeds if directories already exist',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/a/b').mkdir({p:1})`);
-      await shell.eval(`gsh.p('${scratch}/a/b').mkdir({p:1})`);
+      await shell.eval(`gsh.path('${scratch}/a/b').mkdir({p:1})`);
+      await shell.eval(`gsh.path('${scratch}/a/b').mkdir({p:1})`);
       const r = shell.resolvePath(`${scratch}/a/b`);
       const file = await shell._vol(r.serverUrl, r.volume).lookup(r.path);
       if (!file.isDir()) throw new Error('expected a directory');
@@ -81,8 +81,8 @@ export const tests = [
   {
     label: 'mkdir {f:1,p:1} replaces file with directory',
     async fn(shell, scratch) {
-      await shell.eval(`gsh.p('${scratch}/a').w('hi')`);
-      await shell.eval(`gsh.p('${scratch}/a/b').mkdir({f:1,p:1})`);
+      await shell.eval(`gsh.path('${scratch}/a').w('hi')`);
+      await shell.eval(`gsh.path('${scratch}/a/b').mkdir({f:1,p:1})`);
       const rA = shell.resolvePath(`${scratch}/a`);
       const fileA = await shell._vol(rA.serverUrl, rA.volume).lookup(rA.path);
       if (!fileA.isDir()) throw new Error('expected a to be a directory');
