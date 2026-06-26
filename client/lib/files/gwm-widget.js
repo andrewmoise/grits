@@ -272,7 +272,7 @@ export default function createWidget({ name, shell, args = [] }) {
       ? (rel ? `${basePath}/${rel}` : basePath)
       : rel;
 
-    shell.runCommand('edit', [{ serverUrl, volume, path: fullPath }], { doHistory: false });
+    shell.runCommand('edit', ['//' + volume + '/' + fullPath], { doHistory: false });
   }
 
   function depthOf(node) {
