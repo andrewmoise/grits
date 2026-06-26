@@ -90,8 +90,7 @@ The frontend shell tool `facl()` is used to modify directory permissions. Run `h
 
 Note that the `origin` is such a critical piece of this security that it *must* be specified with any grant of permissions. There are several ways to specify an origin:
 
-* A **single word** (no dots) like `"gimbal"` is expanded to a subdomain of the core vhost domain. For example, `music` as an origin becomes `music.{your domain}.com`.
-* A **bare hostname with dots** (e.g. `"gimbal.{your domain}.com"`) gets `https://` prepended.
+* **Anything without a scheme** (no `http://` or `https://`) is expanded to a subdomain of the core vhost domain. For example, `music` becomes `music.{your domain}.com`, and `myapp.myuser` becomes `myapp.myuser.{your domain}.com`.
 * A **full URL** (`http://...` or `https://...`) is used as-is.
 * `"*"` grants access to *any* origin. You probably don't want this. It's wrong outside of specific use cases. You probably want either origin: `"gimbal"` for granting access to "the human," or else origin: the same vhost where you're putting the content you're modifying access to.
 

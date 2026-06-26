@@ -47,7 +47,7 @@ As it happens, the Gimbal shell you're looking at is designed to support being m
 edit('/sites/gimbal.melanic.org/live/src/README.md')
 ```
 
-[screenshot]
+(TODO - screenshot)
 
 See how inconvenient that is? It's okay though. (Note - you must have a guest account for this to work; make sure you have done `login{guest:1,g:1})` from above. Be aware that guest accounts are ephemeral and regularly deleted.)
 
@@ -58,17 +58,17 @@ cp('/sites/gimbal.melanic.org/live/lib', '.', {r:1})
 edit('lib/codemirror/gwm-widget.js')
 ```
 
-[screenshot]
+(TODO - screenshot)
 
 So now we've copied the Gimbal client app to our home directory, and we're editing the editor code (or, the wrapper around Codemirror that provides a Gimbal editing widget).
 
 We find the place where we can add the extension that adds line wrapping:
 
-[screenshot]
+(TODO - screenshot)
 
 We activate the extension:
 
-[screenshot]
+(TODO - screeenshot)
 
 Save the file (Ctrl-S or else the green save icon on the editor's titlebar) and then:
 
@@ -80,7 +80,7 @@ gwm.openWidget(m, { file: '/sites/gimbal.melanic.org/live/src/README.md' })
 
 And, bingo bango! You should see an editor instance with line wrapping fixed:
 
-[screenshot]
+(TODO - screenshot)
 
 You can also, if you want to, persist this change into a custom entry in the command strip:
 
@@ -96,17 +96,85 @@ echo(`window.myEdit = (file) => { gwm.openWidget(window.myEditWidget, { file, ic
 
 And, if you reload the page, you should be then able to write `window.myEdit({path})` and that'll open {path} for you in the modified editor. Try it! Does it work?
 
-[screenshot]
+(TODO - screenshot)
 
 It works on my machine. That modified editor should be persistent (at least for as long as your guest login lasts). And of course, that's not limited to just the editor -- you have a full copy of the Gimbal code in `{home}/lib/`, so you can modify anything in there. You could make a customized shell that runs from there, and it'll pick up all the code from its local `lib/` and all tools launched from it will carry the same modifications.
 
 ### Cloning a Site
 
-But, maybe you want more. It's also a little bit convoluted to be having a local copy of all the code, and spawning widgets from it and inserting them into the existing stock Gimbal shell.
+So that is simple to do (relatively speaking), but leaves your system in a half-and-half state wherein you'll be loading widgets from one cloned Gimbal install into an environment hosted by the ancestor of the clone. That is fine, but also, it'll be useful to have a whole system you can edit without having that chicanery involved. That's actually simpler; it involves some vhost and permissions stuff is the only reason we started with modifying one widget. Basically, you can at any time make a full clone of an app (in this case, the entire Gimbal operating environment) which you can then modify however you'd like.
 
-Well, if you're up for learning a little more about how it operates, you can see setting up a whole cloned site which you can then edit. It's actually simpler (in one way) than the custom widget approach; you just have to worry a little bit about permissions as well.
+If you're interested, this is how:
 
-(TODO)
+#### Make your local clone
+
+We make a copy of the `gimbal.melanic.org` site onto a new vhost. So, by design this is something that any member of the site can do. Like tumblr. We just need to make a new directory in /sites corresponding to that host. Read the permissions section in REFERENCE.md for more, but the quick version of what you need to understand about how the permissions for this go is:
+
+* Every grant of permissions is described in terms of *both* the user being granted access and the origin (i.e. the vhost that user is on, i.e. the code the user is running.) 
+* Permissions are additive as you go down the file tree from the root. You will not have any access to `/sites` *except* for the ability to create a directory in it under a name that doesn't already exist.
+* The directory in `/sites/` *must* be created with its permissions already in-place. Because everyone's permissions in `/sites/` are so restricted, you cannot make a directory there and start mucking around in it. You must make the directory, set up the permissions to grant yourself owner access, and then move it into place fully formed.
+
+So with that in mind, the first step is to make a clone of `gimbal.melanic.org` in our home directory:
+
+```
+cd()
+me = await whoami().toJS()
+mkdir(`gimbal.${me}.melanic.org`)
+cp('/sites/gimbal.melanic.org/live',`gimbal.${me}.melanic.org/`,{r:1})
+```
+
+(There's nothing special about the `anon1895.melanic.org` hostname space or whatever; we're just doing that to keep things organized. You could write literally anything there as the name of the new vhost, as long as it doesn't collide with an existing one. You cannot "claim," in other words, the whole namespace under your specific username, which would yes be a nice thing to be able to do.)
+
+#### Set up permissions
+
+Now the the directory is in your home directory, you need to grant access to yourself to it. We're going to grant access to the new site from both the normal `gimbal.melanic.org` origin, and also the Gimbal shell which will be running at `gimbal.anon1895.melanic.org`. We're planning to be able to use both, which means we want to be able to edit the new site when operating either, in other words.
+
+```
+facl(`./gimbal.${me}.melanic.org/`,{u:`${me}`,o:'https://gimbal.melanic.org/'},{p:'owner'})
+facl(`./gimbal.${me}.melanic.org/`,{u:`${me}`,o:`https://gimbal.${me}.melanic.org/`},{p:'owner'})
+```
+
+And, we want to grant access also to our home directory from the new customized shell we're making. Random apps do *not* have access to the home directory even if they have our auth token.
+
+```
+facl('.',{u:me,o:'https://gimbal.${me}.melanic.org/'},{p:'owner'})
+```
+
+It is worth looking over these `facl()` calls carefully if you want to understand how permissions here work. It's different from Unix. Also, note that `{o:'https://gimbal.melanic.org/'}` for the origin is usually shortened to just `{o:'gimbal'}`, but we spell them out in full here just for clarity.
+
+So at the end of that, we've got permissions set up so that we can edit the vhost as we need. Note that our new `gimbal.anon1895.melanic.org/live` directory, where the actual web root lives, already has world read permissions, because it inherited them when we cloned `gimbal.melanic.org`. Without that, serving our web site wouldn't work for anyone whose browser wasn't carrying our auth tokens.
+
+You can query for the world-readable permissions that we're depending on, for the world to be able to read both of these, if you type:
+
+```
+facl('/sites/gimbal.melanic.org/live')
+facl(`gimbal.${me}.melanic.org/live`)
+```
+
+#### Make it live
+
+In any case, once you've set up permissions, you can make the thing live.
+
+```
+cp(`gimbal.${me}.melanic.org`,'/sites/`,{r:1})
+```
+
+If that works, then load up:
+
+```
+https://gimbal.{your username from whoami()}.melanic.org/
+```
+
+... and you should see a whole Gimbal environment:
+
+(TODO: screenshot)
+
+This one is yours, though. Remember the change to editor line wrapping?
+
+And it isn't limited to the editor. From a full clone you can change anything,
+and what you end up with is a real, independent site that's yours — not a tweak
+layered on top of someone else's.
+
 
 ## Grits Quickstart
 

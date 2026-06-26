@@ -5,6 +5,7 @@
 * Fix shell history in general
 * Fix the README examples
 * gterm command Ctrl-Z
+* gterm command up and down for multi-line commands
 
 
 
@@ -15,14 +16,67 @@
 * Better git self-hosting
 * Mobile interface
 * Fix the scrolling weirdness (scroll partway down a markdown document in the master, then move an element of the stack to a new position, and the MD document jumps back to the top)
+* Remove indirection - just go import from locations without a `cp -r` in the Makefile
+* Guest user auto-homedir-deletion
+* Fix certbot browser badness when first accessing a new vhost, and browser visits http://{whatever}
+* Check the updates to login cookies; seem like they're timing out even under active use
+* Make redirect from http:// to https://
+* Make the shell not look like Unix
 
 
 # Backlog
 
 ## Melanic specifically
 
-Remove indirection - just go import from locations without a `cp -r` in the Makefile
 
+
+
+
+
+
+## shell tools
+
+facl() supporting directory recursion up and down
+
+signup()
+
+Import git tools libs
+
+Defaults / config system
+
+adduser() and deluser() from frontend
+
+~~Make skel() function~~
+
+Make editor "Save as" and editing of scratch files more sensible
+
+Make rm() and rmdir() (at least) a lot more simple into a single multilink() (maybe after a quick check first)
+
+bg() and Ctrl-Z
+
+Make test() in the foreground once bg() exists
+
+Some sort of toast for running commands in the background like bg()
+
+.null()
+
+time()
+
+js() and json() (replacing all the .toWhatever() methods that aren't quite exactly right)
+
+Make more secure login self test than test/test user
+
+Make test() print failures as red, or a red X or something is probably easier
+
+Let people reset their own passwords
+
+whoami() should return some better indication, if someone's login has expired
+
+Lots of tools need to realize when their arguments aren't strings and react accordingly (login() in particular doesn't do good if it gets two options bags)
+
+Make an indication when a response stream doesn't end with '\n'
+
+Make "const" work in the shell eval
 
 
 ## shell
@@ -69,47 +123,9 @@ Change "command not found" error to a little more explanatory if someone shuts t
 
 "access denied: undefined" message should be a little better
 
+Maybe make a bash style of shell
 
 
-## shell tools
-
-facl() supporting directory recursion up and down
-
-signup()
-
-Import git tools libs
-
-Defaults / config system
-
-adduser() and deluser() from frontend
-
-~~Make skel() function~~
-
-Make editor "Save as" and editing of scratch files more sensible
-
-Make rm() and rmdir() (at least) a lot more simple into a single multilink() (maybe after a quick check first)
-
-bg() and Ctrl-Z
-
-Make test() in the foreground once bg() exists
-
-Some sort of toast for running commands in the background like bg()
-
-.null()
-
-time()
-
-js() and json() (replacing all the .toWhatever() methods that aren't quite exactly right)
-
-Make more secure login self test than test/test user
-
-Make test() print failures as red, or a red X or something is probably easier
-
-Let people reset their own passwords
-
-whoami() should return some better indication, if someone's login has expired
-
-Lots of tools need to realize when their arguments aren't strings and react accordingly (login() in particular doesn't do good if it gets two options bags)
 
 ## gwm
 
@@ -201,7 +217,7 @@ Silent catches:
 Delay the lookup() slightly when trying the slow path, and don't attempt it if the fast path already succeeded
 
 
-## backend
+## Grits backend
 
 Be smart about sending small blobs directly with the answer, for stuff like lookup(), to save RTT
 
@@ -263,13 +279,6 @@ Docker, I guess
 
 Put passwords in the user's home directory, and back out the password strength checking
 
-Guest user auto-homedir-deletion
-
-Fix certbot browser badness when first accessing a new vhost, and browser visits http://{whatever}
-
-Check the updates to login cookies; seem like they're timing out even under active use
-
-Make redirect from http:// to https://
 
 
 
