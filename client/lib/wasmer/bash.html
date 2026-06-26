@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bash Terminal</title>
+    <link rel="stylesheet" href="/lib/node_modules/@xterm/xterm/css/xterm.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "@wasmer/sdk": "/lib/node_modules/@wasmer/sdk/dist/index.mjs",
+            "@xterm/xterm": "/lib/node_modules/@xterm/xterm/lib/xterm.mjs",
+            "@xterm/addon-fit": "/lib/node_modules/@xterm/addon-fit/lib/addon-fit.mjs"
+        }
+    }
+    </script>
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; }
+        #terminal { height: 100vh; width: 100vw; }
+    </style>
+</head>
+<body>
+    <div id="terminal"></div>
+    <script type="module" src="bash.js"></script>
+</body>
+</html>

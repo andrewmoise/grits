@@ -443,6 +443,9 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, POST")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
+		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		w.Header().Set("Cross-Origin-Embedder-Policy", "require-corp")
+
 		if strings.HasPrefix(r.URL.Path, "/grits/v1/blob/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {

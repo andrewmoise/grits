@@ -15,7 +15,10 @@
     "@codemirror/state": "^6",
     "@codemirror/view": "^6",
     "@lezer/highlight": "^1",
+    "@wasmer/sdk": "^0.10.0",
     "fflate": "^0.8",
-    "json-stringify-pretty-compact": "^4"
+    "json-stringify-pretty-compact": "^4",
+    "@xterm/xterm": "^6.0.0",
+    "@xterm/addon-fit": "^0.11.0"
   }
 }
