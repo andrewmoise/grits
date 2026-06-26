@@ -25,7 +25,8 @@ import (
 
 type AuthModuleConfig struct {
 	// CoreVhost is the root domain of this server deployment (e.g. "example.org").
-	// Single-word grant origins (no dots) get expanded to subdomains of this domain.
+	// Grant origins without an http:// or https:// scheme get expanded to
+	// subdomains of this domain (e.g. "myapp" → "https://myapp.example.org").
 	// The auth cookie's Domain attribute is derived from this automatically.
 	CoreVhost string `json:"coreVhost"`
 
@@ -726,10 +727,10 @@ func mergePerm(a, b Permission) Permission {
 //
 //	""       → grant is inert (never matches)
 //	"*"      → any origin (no constraint)
-//	"gimbal" → single-word: expanded to subdomain of coreVhost's domain
-//	           (e.g. "gimbal" + "example.org" → "https://gimbal.example.org")
-//	otherwise → must match principal.Origin exactly (bare hostnames
-//	            like "gimbal.example.com" are resolved to "https://...")
+//	anything without a scheme → expanded to subdomain of coreVhost's domain
+//	           (e.g. "gimbal" + "example.org" → "https://gimbal.example.org",
+//	            "myapp.myuser" + "example.org" → "https://myapp.myuser.example.org")
+//	http(s)://… → absolute URL, used as-is
 //
 // When multiple grants match, the most permissive permission wins.
 type Grant struct {
@@ -758,10 +759,10 @@ func parentPath(path string) string {
 //
 //	""              → inert (pass through)
 //	"*"             → any origin (pass through)
-//	"gimbal"        → single-word: expanded to subdomain of coreVhost's domain
-//	                 (e.g. "gimbal" + "example.org" → "https://gimbal.example.org")
 //	http(s)://…     → absolute URL, use as-is
-//	anything else   → bare hostname: prepend "https://"
+//	anything else   → expanded to subdomain of coreVhost's domain
+//	                 (e.g. "gimbal" + "example.org" → "https://gimbal.example.org",
+//	                  "myapp.myuser" + "example.org" → "https://myapp.myuser.example.org")
 //	origin with / or * (not exactly "*") → inert, logged as warning
 func (m *AuthModule) resolveOrigin(origin string) string {
 	if origin == "" || origin == "*" {
@@ -774,16 +775,13 @@ func (m *AuthModule) resolveOrigin(origin string) string {
 		log.Printf("auth: invalid origin %q — contains / or *; grant treated as inert", origin)
 		return ""
 	}
-	if !strings.Contains(origin, ".") {
-		// Single-word origin — expand to subdomain of coreVhost's domain.
-		coreHost := m.authHostname()
-		if coreHost == "" {
-			log.Printf("auth: invalid coreVhost %q; grant %q treated as inert", m.Config.CoreVhost, origin)
-			return ""
-		}
-		return "https://" + origin + "." + coreHost
+	// No scheme — expand to subdomain of coreVhost's domain.
+	coreHost := m.authHostname()
+	if coreHost == "" {
+		log.Printf("auth: invalid coreVhost %q; grant %q treated as inert", m.Config.CoreVhost, origin)
+		return ""
 	}
-	return "https://" + origin
+	return "https://" + origin + "." + coreHost
 }
 
 // authHostname parses coreVhost and returns just the hostname part,

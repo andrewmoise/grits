@@ -1014,7 +1014,7 @@ func TestResolveOrigin(t *testing.T) {
 		{"single-word with dotless coreVhost", "foo", "http://localhost:8080", "https://foo.localhost"},
 		{"absolute http passthrough", "http://example.com/path", "http://test.local", "http://example.com/path"},
 		{"absolute https passthrough", "https://app.example.com/foo", "http://test.local", "https://app.example.com/foo"},
-		{"bare hostname gets https", "gimbal.example.com", "http://test.local", "https://gimbal.example.com"},
+		{"bare hostname expands to subdomain of coreVhost", "gimbal.example.com", "http://test.local", "https://gimbal.example.com.test.local"},
 		{"slash becomes inert", "/", "http://test.local", ""},
 		{"slash with text becomes inert", "foo/bar", "http://test.local", ""},
 		{"asterisk in origin becomes inert", "foo*", "http://test.local", ""},
@@ -1597,15 +1597,16 @@ func TestResolvePermissionOriginConstraint(t *testing.T) {
 	}
 
 	// --- Bare hostname origin resolution ---
-	// Grants with bare hostnames should be resolved to https://hostname.
-	// setupPermTest uses coreVhost "http://test.local".
+	// Bare hostnames without a scheme are expanded to subdomains of coreVhost.
+	// setupPermTest uses coreVhost "http://test.local", so "allowed.example.com"
+	// resolves to "https://allowed.example.com.test.local".
 	volRel, authModRel := setupPermTest(t, "other",
 		AccessConfig{Allow: []Grant{
 			{All: bt, Origin: "allowed.example.com", Permission: PermRead},
 		}})
 
 	// Principal with matching resolved origin should get read
-	matchOrigin := &grits.Principal{Origin: "https://allowed.example.com"}
+	matchOrigin := &grits.Principal{Origin: "https://allowed.example.com.test.local"}
 	perm = authModRel.resolvePermissionAtRoot(volRel, nil, "other", matchOrigin)
 	if !CanRead(perm) {
 		t.Errorf("bare hostname: expected read for matching resolved origin, got %q", perm)
