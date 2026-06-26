@@ -1,22 +1,28 @@
-import { VOID, _isPlainObject } from '../gimbal/gsh.js';
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
+import { GimbalShell } from '../gimbal/gsh.js';
 import { WIDGET_ICONS } from '../style/icons.js';
 
-export const help = `gterm — open terminal widget`;
+export const help = `\
+gterm — open terminal widget
 
-export async function invoke(shell, previous, args) {
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
-  const defaults   = WIDGET_ICONS.gterm;
+Usage:
+  gsh.gterm()          open a terminal
+  gsh.gterm('cmd')     open terminal and run a command`;
 
-  const mod = await import('./gwm-widget.js');
-  await window.gimbal.openWidget(mod, {
-    name: 'terminal',
-    icon:      opts.icon      ?? defaults.icon,
-    iconColor: opts.iconColor ?? defaults.iconColor,
-    zone: 'master',
-    shell,
-    args: positional,
+export function invoke(prev, ...cmdArgs) {
+  if (!(prev instanceof GimbalShell)) throw new Error('gterm: must be called on gsh');
+
+  const shell = prev;
+  return new GimbalResult(async () => {
+    const mod = await import('./gwm-widget.js');
+    await window.gimbal.openWidget(mod, {
+      name: 'terminal',
+      icon: WIDGET_ICONS.gterm.icon,
+      iconColor: WIDGET_ICONS.gterm.iconColor,
+      zone: 'master',
+      shell,
+      args: cmdArgs,
+    });
   });
-
-  return VOID;
 }

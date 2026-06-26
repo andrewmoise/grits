@@ -1,25 +1,18 @@
-// lib/logout/main.js
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalShell } from '../gimbal/gsh.js';
+
 export const help = `\
 logout — log out the current user
 
 Usage:
-  logout()                         — log out all users (clears session + cookie)
-  logout('username')               — log out a specific user`;
+  gsh.logout()                         — log out all users (clears session + cookie)
+  gsh.logout('username')               — log out a specific user`;
 
-import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
+export function invoke(prev, username) {
+  if (!(prev instanceof GimbalShell)) throw new Error('logout: must be called on gsh');
 
-export async function invoke(shell, previous, args, cmd = 'logout') {
-  const prev = await previous;
-  if (!isVoid(prev))
-    throw new Error(`${cmd}: does not accept pipeline input`);
-
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
-
-  if (positional.length > 1)
-    throw new Error(`${cmd}: too many arguments`);
-
-  const username = positional[0] || undefined;
-  await shell.fs.logout(shell.serverUrl, username);
-  return VOID;
+  const shell = prev;
+  return new GimbalResult(async () => {
+    await shell.fs.logout(shell.serverUrl, username || undefined);
+  });
 }

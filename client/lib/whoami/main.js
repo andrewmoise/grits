@@ -1,14 +1,20 @@
-// lib/whoami/main.js
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalShell } from '../gimbal/gsh.js';
+
 export const help = `\
 whoami — show identity info from the server
 
 Usage:
-  whoami()                   — bare quoted username per line (JSONL)
-  whoami({v:1})              — verbose: ["username", status, "expiry"] per line
+  gsh.whoami()                   — bare quoted username per line (JSONL)
+  gsh.whoami({v:1})              — verbose: ["username", status, "expiry"] per line
 
 When not logged in, output is empty.`;
 
-import { VOID, isVoid, responseFromText, _isPlainObject } from '../gimbal/gsh.js';
+function isPlainObject(v) {
+  if (!v || typeof v !== 'object') return false;
+  const p = Object.getPrototypeOf(v);
+  return p === Object.prototype || p === null;
+}
 
 function formatExpiry(ts) {
   if (!ts) return 'never';
@@ -16,26 +22,21 @@ function formatExpiry(ts) {
   return new Date(ts * 1000).toLocaleString(locale, { timeZoneName: 'short' });
 }
 
-export async function invoke(shell, previous, args, cmd = 'whoami') {
-  const prev = await previous;
-  if (!isVoid(prev))
-    throw new Error(`${cmd}: does not accept pipeline input`);
+export function invoke(prev, opts = {}) {
+  if (!(prev instanceof GimbalShell)) throw new Error('whoami: must be called on gsh');
+  if (isPlainObject(opts)) opts = opts;
+  else opts = {};
 
-  if (args.length > 1)
-    throw new Error(`${cmd}: too many arguments`);
+  const shell = prev;
+  return new GimbalResult(async () => {
+    const identities = await shell.fs.whoami(shell.serverUrl);
+    if (!identities || identities.length === 0) return null;
 
-  const opts = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-
-  const identities = await shell.fs.whoami(shell.serverUrl);
-  if (!identities || identities.length === 0) {
-    return VOID;
-  }
-
-  const verbose = !!opts.v;
-  const lines = identities.map(id =>
-    verbose
-      ? JSON.stringify([id.username, id.status, formatExpiry(id.expiry)])
-      : JSON.stringify(id.username)
-  ).join('\n');
-  return responseFromText(lines);
+    const verbose = !!opts.v;
+    return identities.map(id =>
+      verbose
+        ? JSON.stringify([id.username, id.status, formatExpiry(id.expiry)])
+        : JSON.stringify(id.username)
+    ).join('\n');
+  });
 }

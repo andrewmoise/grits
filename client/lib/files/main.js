@@ -1,30 +1,39 @@
-import { VOID, _isPlainObject } from '../gimbal/gsh.js';
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
+import { GimbalShell } from '../gimbal/gsh.js';
 import { WIDGET_ICONS } from '../style/icons.js';
 
-export const help = `files [path] — open file browser widget`;
+export const help = `\
+files — open file browser widget
 
-export async function invoke(shell, previous, args) {
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
-  const defaults   = WIDGET_ICONS.files;
+Usage:
+  gsh.files(path)       open file browser at path
+  gsh.files()           open file browser in cwd`;
 
-  const path  = typeof positional[0] === 'string' ? positional[0] : null;
-  const name  = path ? path.split('/').filter(Boolean).pop() || '/' : 'files';
-
-  let r = null;
-  if (path) {
-    try { r = shell.resolvePath(path); } catch {}
+function resolvePath(prev, args) {
+  if (prev instanceof GimbalPath) return prev;
+  if (prev instanceof GimbalShell) {
+    const p = args.find(a => a instanceof GimbalPath);
+    if (p) return p;
+    const str = args.find(a => typeof a === 'string');
+    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
   }
+  return null;
+}
 
-  const mod = await import('./gwm-widget.js');
-  await window.gimbal.openWidget(mod, {
-    name,
-    icon:      opts.icon      ?? defaults.icon,
-    iconColor: opts.iconColor ?? defaults.iconColor,
-    zone: 'master',
-    shell,
-    args,
+export function invoke(prev, ...args) {
+  if (!(prev instanceof GimbalShell)) throw new Error('files: must be called on gsh');
+
+  const shell = prev;
+  return new GimbalResult(async () => {
+    const mod = await import('./gwm-widget.js');
+    await window.gimbal.openWidget(mod, {
+      name: 'files',
+      icon: WIDGET_ICONS.files.icon,
+      iconColor: WIDGET_ICONS.files.iconColor,
+      zone: 'master',
+      shell,
+      args,
+    });
   });
-
-  return VOID;
 }

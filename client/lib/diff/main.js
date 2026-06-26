@@ -1,91 +1,92 @@
-// lib/diff/main.js
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
+import { GimbalShell } from '../gimbal/gsh.js';
+
 export const help = `\
 diff — compare two filesystem paths
 
 Usage:
-  diff('path/a', 'path/b')                     top-level only
-  diff('path/a', 'path/b', {r:1})              recursive
+  pathA.diff(pathB)                top-level only
+  pathA.diff(pathB, {r:1})         recursive
+  gsh.diff('/a', '/b')            same
 
-Output is JSONL: each line is [path, cid_a, cid_b].
-null means the entry is absent on that side.`;
+Output is JSONL: each line is [path, cid_a, cid_b]. null means absent.`;
 
-import { isVoid, _isPlainObject, responseFromText } from '../gimbal/gsh.js';
+function resolvePath(prev, args) {
+  if (prev instanceof GimbalPath) return prev;
+  if (prev instanceof GimbalShell) {
+    const p = args.find(a => a instanceof GimbalPath);
+    if (p) return p;
+    const str = args.find(a => typeof a === 'string');
+    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+  }
+  return null;
+}
 
-export async function invoke(shell, previous, args) {
-  const prev = await previous;
-  if (!isVoid(prev)) throw new Error('diff: does not accept pipeline input');
+function findPathB(args) {
+  const path = args.find(a => a instanceof GimbalPath);
+  if (path) return path;
+  const result = args.find(a => a instanceof GimbalResult);
+  if (result) return result;
+  return null;
+}
 
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
+function findOpts(args) {
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
+}
 
-  if (positional.length !== 2 ||
-      typeof positional[0] !== 'string' ||
-      typeof positional[1] !== 'string')
-    throw new Error('diff: expected diff(pathA, pathB)');
+export function invoke(prev, ...args) {
+  const pathA = resolvePath(prev, args);
+  if (!(pathA instanceof GimbalPath)) throw new Error('diff: need two paths');
 
-  const [pathA, pathB] = positional;
+  const pathB = findPathB(args);
+  if (!pathB) throw new Error('diff: need two paths');
 
-  const rA   = shell.resolvePath(pathA);
-  const rB   = shell.resolvePath(pathB);
-  const volA = shell._vol(rA.serverUrl, rA.volume);
-  const volB = shell._vol(rB.serverUrl, rB.volume);
+  if (pathB instanceof GimbalResult) {
+    return new GimbalResult(async () => {
+      const resolved = await pathB;
+      const remaining = args.filter(a => a !== pathB);
+      return invoke(prev, resolved, ...remaining);
+    });
+  }
 
-  const fileA = await volA.lookup(rA.path);
-  const fileB = await volB.lookup(rB.path);
-
-  const lines = [];
-  await _diff(fileA, fileB, '.', opts, lines);
-  return responseFromText(lines.map(l => JSON.stringify(l)).join('\n'));
+  const opts = findOpts(args);
+  const shell = pathA._shell;
+  return new GimbalResult(async () => {
+    const rA = pathA._shell.resolvePath(pathA.abs());
+    const rB = pathB._shell.resolvePath(pathB.abs());
+    const volA = shell._vol(rA.serverUrl, rA.volume);
+    const volB = shell._vol(rB.serverUrl, rB.volume);
+    const fileA = await volA.lookup(rA.path);
+    const fileB = await volB.lookup(rB.path);
+    const lines = [];
+    await _diff(fileA, fileB, '.', opts, lines);
+    return lines.map(l => JSON.stringify(l)).join('\n');
+  });
 }
 
 async function _diff(left, right, relPath, opts, out) {
   const cidA = left.cid();
   const cidB = right.cid();
-
   if (cidA === cidB) return;
-
-  const bothDirsRecurse = opts.r && left.isDir() && right.isDir();
-  if (!bothDirsRecurse)
-    out.push([relPath, cidA, cidB]);
-
-  if (bothDirsRecurse) {
-    const [childrenA, childrenB] = await Promise.all([
-      left.children(),
-      right.children(),
-    ]);
-
-    const names = [...new Set([...childrenA.keys(), ...childrenB.keys()])].sort();
-
-    for (const name of names) {
-      const childA   = childrenA.get(name);
-      const childB   = childrenB.get(name);
-      const childPath = relPath === '.' ? name : `${relPath}/${name}`;
-
-      if (!childA) {
-        out.push([childPath, null, childB.cid()]);
-        if (childB.isDir()) await _missingAll(childB, childPath, 'right', out);
-        continue;
-      }
-      if (!childB) {
-        out.push([childPath, childA.cid(), null]);
-        if (childA.isDir()) await _missingAll(childA, childPath, 'left', out);
-        continue;
-      }
-
-      await _diff(childA, childB, childPath, opts, out);
+  const bothDirs = opts.r && left.isDir() && right.isDir();
+  if (!bothDirs) out.push([relPath, cidA, cidB]);
+  if (bothDirs) {
+    const [ca, cb] = await Promise.all([left.children(), right.children()]);
+    for (const name of [...new Set([...ca.keys(), ...cb.keys()])].sort()) {
+      const childA = ca.get(name), childB = cb.get(name);
+      const cp = relPath === '.' ? name : `${relPath}/${name}`;
+      if (!childA) { out.push([cp, null, childB.cid()]); if (childB.isDir()) await _miss(childB, cp, out); continue; }
+      if (!childB) { out.push([cp, childA.cid(), null]); if (childA.isDir()) await _miss(childA, cp, out); continue; }
+      await _diff(childA, childB, cp, opts, out);
     }
   }
 }
 
-async function _missingAll(file, relPath, side, out) {
-  const children = await file.children();
-  for (const [name, child] of children) {
-    const childPath = relPath === '.' ? name : `${relPath}/${name}`;
-    if (side === 'left') {
-      out.push([childPath, child.cid(), null]);
-    } else {
-      out.push([childPath, null, child.cid()]);
-    }
-    if (child.isDir()) await _missingAll(child, childPath, side, out);
+async function _miss(file, relPath, out) {
+  for (const [name, child] of await file.children()) {
+    const cp = `${relPath}/${name}`;
+    out.push([cp, child.cid(), null]);
+    if (child.isDir()) await _miss(child, cp, out);
   }
 }

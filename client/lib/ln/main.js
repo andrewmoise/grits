@@ -1,23 +1,10 @@
-// lib/ln/main.js
-export const help = `\
-ln — link a file into the filesystem
-
-Usage:
-  ln('src', 'dest')          link into dest if dir, overwrite if file
-  ln('src', 'dest/')         dest must be a directory, place inside it
-  ln('src', 'dest', {f:1})   overwrite even if dest is a directory
-  ln('src', 'dest', {i:1})   fail if dest exists at all
-
-ln() only moves pointers — it never uploads content.
-Use to() to write a bytestream to a path.`;
-
-import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
-import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
+import { GimbalShell } from '../gimbal/gsh.js';
+import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB, ASSERT_IS_TREE } from '../grits/GritsClient.js';
 
 export function resolveDestPaths(destR, srcName) {
-  if (destR.trailingSlash) {
-    return [`${destR.path}/${srcName}`];
-  }
+  if (destR.trailingSlash) return [`${destR.path}/${srcName}`];
   return [`${destR.path}/${srcName}`, destR.path];
 }
 
@@ -26,93 +13,86 @@ export function isPathNotFound(e) {
   return msg.includes('file does not exist') || msg.includes('is not a directory');
 }
 
-export async function invoke(shell, previous, args, cmd = 'ln') {
-  const prev = await previous;
-  if (!isVoid(prev))
-    throw new Error(`${cmd}: does not accept pipeline input`);
+export const help = `\
+ln — link a file into the filesystem (copy-on-write)
 
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
+Usage:
+  src.ln(dest)              link into dest
+  src.ln(dest, {ff:1})      overwrite dest
+  gsh.ln('/src', '/dest')   same`;
 
-  if (positional.length !== 2 ||
-      typeof positional[0] !== 'string' ||
-      typeof positional[1] !== 'string')
-    throw new Error(`${cmd}: expected ${cmd}(src, dest)`);
+function resolvePath(prev, args) {
+  if (prev instanceof GimbalPath) return prev;
+  if (prev instanceof GimbalShell) {
+    const p = args.find(a => a instanceof GimbalPath);
+    if (p) return p;
+    const str = args.find(a => typeof a === 'string');
+    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+  }
+  return null;
+}
 
-  const [srcArg, destArg] = positional;
-  const srcR  = shell.resolvePath(srcArg);
-  const destR = shell.resolvePath(destArg);
+function findDest(args) {
+  const path = args.find(a => a instanceof GimbalPath);
+  if (path) return path;
+  const result = args.find(a => a instanceof GimbalResult);
+  if (result) return result;
+  return null;
+}
 
-  const srcVol  = shell._vol(srcR.serverUrl, srcR.volume);
-  const destVol = shell._vol(destR.serverUrl, destR.volume);
+function findOpts(args) {
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
+}
 
-  const srcFile = await srcVol.lookup(srcR.path);
-  const srcName = srcR.path.split('/').at(-1);
-  const candidates = opts.ff
-    ? [destR.path]
-    : resolveDestPaths(destR, srcName);
+export function invoke(prev, ...args) {
+  const src = resolvePath(prev, args);
+  if (!(src instanceof GimbalPath)) throw new Error('ln: need a source path');
 
-  if (opts.f || opts.ff) {
-    let lastError;
+  const dest = findDest(args);
+  if (!dest) throw new Error('ln: need a destination path');
+
+  if (dest instanceof GimbalResult) {
+    return new GimbalResult(async () => {
+      const resolved = await dest;
+      const remaining = args.filter(a => a !== dest);
+      return invoke(prev, resolved, ...remaining);
+    });
+  }
+
+  const opts = findOpts(args);
+  const shell = src._shell;
+  return new GimbalResult(async () => {
+    const srcR = src._shell.resolvePath(src.abs());
+    const destR = dest._shell.resolvePath(dest.abs());
+    const srcVol = shell._vol(srcR.serverUrl, srcR.volume);
+    const destVol = shell._vol(destR.serverUrl, destR.volume);
+    const srcFile = await srcVol.lookup(srcR.path);
+    const srcName = srcR.path.split('/').at(-1);
+    const candidates = opts.ff ? [destR.path] : resolveDestPaths(destR, srcName);
+
     for (const path of candidates) {
       try {
-        await destVol.multiLink([{ path, addr: srcFile.cid() }]);
-        return VOID;
+        if (opts.f || opts.ff) {
+          await destVol.multiLink([{ path, addr: srcFile.cid() }]);
+        } else if (opts.i) {
+          await destVol.multiLink([{ path, addr: srcFile.cid(), prevAddr: '', assert: ASSERT_PREV_MATCHES }]);
+        } else {
+          // Default: try creating new, then overwrite blob
+          try {
+            await destVol.multiLink([{ path, addr: srcFile.cid(), prevAddr: '', assert: ASSERT_PREV_MATCHES }]);
+          } catch (e) {
+            if (!(e instanceof AssertionError)) throw e;
+            // Path exists — overwrite if it's a blob
+            await destVol.multiLink([{ path, addr: srcFile.cid(), assert: ASSERT_IS_BLOB }]);
+          }
+        }
+        return;
       } catch (e) {
-        if (e instanceof AssertionError) throw e;
-        if (isPathNotFound(e)) { lastError = e; continue; }
+        if (e instanceof AssertionError) throw new Error(`ln: destination exists`);
+        if (isPathNotFound(e)) continue;
         throw e;
       }
     }
-    if (destR.trailingSlash) throw new Error(`${cmd}: destination is not a directory: '${destArg}'`);
-    throw lastError || new Error(`${cmd}: cannot resolve destination: '${destArg}'`);
-  }
-
-  if (opts.i) {
-    let lastError;
-    for (const path of candidates) {
-      try {
-        await destVol.multiLink([{
-          path, addr: srcFile.cid(),
-          prevAddr: '', assert: ASSERT_PREV_MATCHES,
-        }]);
-        return VOID;
-      } catch (e) {
-        if (e instanceof AssertionError)
-          throw new Error(`${cmd}: destination already exists: '${destArg}'`);
-        if (isPathNotFound(e)) { lastError = e; continue; }
-        throw e;
-      }
-    }
-    if (destR.trailingSlash) throw new Error(`${cmd}: destination is not a directory: '${destArg}'`);
-    throw lastError || new Error(`${cmd}: cannot resolve destination: '${destArg}'`);
-  }
-
-  let lastError;
-  for (const path of candidates) {
-    try {
-      await destVol.multiLink([{
-        path, addr: srcFile.cid(), assert: ASSERT_IS_BLOB,
-      }]);
-      return VOID;
-    } catch (e) {
-      if (!(e instanceof AssertionError)) {
-        if (isPathNotFound(e)) { lastError = e; continue; }
-        throw e;
-      }
-    }
-    try {
-      await destVol.multiLink([{
-        path, addr: srcFile.cid(),
-        prevAddr: '', assert: ASSERT_PREV_MATCHES,
-      }]);
-      return VOID;
-    } catch (e) {
-      if (e instanceof AssertionError)
-        throw new Error(`${cmd}: destination is a directory: '${destArg}' — use {f:1} to overwrite`);
-      throw e;
-    }
-  }
-  if (destR.trailingSlash) throw new Error(`${cmd}: destination is not a directory: '${destArg}'`);
-  throw lastError || new Error(`${cmd}: cannot resolve destination: '${destArg}'`);
+    throw new Error(`ln: cannot resolve destination`);
+  });
 }

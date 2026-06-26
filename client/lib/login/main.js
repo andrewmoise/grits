@@ -1,45 +1,51 @@
-// lib/login/main.js
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalShell } from '../gimbal/gsh.js';
+import { promptPassword, promptCredentials } from '../gimbal/dialog.js';
+
 export const help = `\
 login — authenticate with a username and password
 
 Usage:
-  login()                                              — prompt for username and password
-  login('username')                                    — prompt for password
-  login('username', 'password')                        — direct
-  login('username', 'password', {g:1})                 — also set global cookie
-  login({guest:1})                                     — anonymous guest session
-  login({guest:1, g:1})                                — anonymous guest, global cookie`;
+  gsh.login()                                           — prompt for username and password
+  gsh.login('username')                                 — prompt for password
+  gsh.login('username', 'password')                     — direct
+  gsh.login('username', 'password', {g:1})              — also set global cookie
+  gsh.login({guest:1})                                  — anonymous guest session
+  gsh.login({guest:1, g:1})                             — anonymous guest, global cookie`;
 
-import { VOID, isVoid, responseFromText, _isPlainObject } from '../gimbal/gsh.js';
-import { promptPassword, promptCredentials } from '../gimbal/dialog.js';
+function isPlainObject(v) {
+  if (!v || typeof v !== 'object') return false;
+  const p = Object.getPrototypeOf(v);
+  return p === Object.prototype || p === null;
+}
 
-export async function invoke(shell, previous, args, cmd = 'login') {
-  const prev = await previous;
-  if (!isVoid(prev))
-    throw new Error(`${cmd}: does not accept pipeline input`);
+export function invoke(prev, ...args) {
+  if (!(prev instanceof GimbalShell)) throw new Error('login: must be called on gsh');
 
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
-  let [username, password] = positional;
+  const shell = prev;
+  const last = args[args.length - 1];
+  const opts = isPlainObject(last) ? args.pop() : {};
+  const [username, password] = args;
 
-  if (opts.guest) {
-    await shell.fs.login(shell.serverUrl, '', '', { guest: true, global: !!opts.g });
-    return VOID;
-  }
+  return new GimbalResult(async () => {
+    if (opts.guest) {
+      await shell.fs.login(shell.serverUrl, '', '', { guest: true, global: !!opts.g });
+      return;
+    }
 
-  if (positional.length === 0) {
-    const creds = await promptCredentials({ message: `Login to ${shell.serverUrl}` });
-    if (!creds) return VOID;
-    username = creds.username;
-    password = creds.password;
-  } else if (positional.length === 1) {
-    password = await promptPassword({ message: `Password for ${username}:` });
-    if (!password) return VOID;
-  }
+    let u = username, p = password;
 
-  if (!username || !password)
-    throw new Error(`${cmd}: username and password are required`);
+    if (u === undefined) {
+      const creds = await promptCredentials({ message: `Login to ${shell.serverUrl}` });
+      if (!creds) return;
+      u = creds.username;
+      p = creds.password;
+    } else if (p === undefined) {
+      p = await promptPassword({ message: `Password for ${u}:` });
+      if (!p) return;
+    }
 
-  await shell.fs.login(shell.serverUrl, username, password, { global: !!opts.g });
-  return VOID;
+    if (!u || !p) throw new Error('login: username and password are required');
+    await shell.fs.login(shell.serverUrl, u, p, { global: !!opts.g });
+  });
 }

@@ -1,11 +1,10 @@
-// lib/append/test.js
 export const tests = [
   {
     label: 'append adds content to the end of an existing file',
     async fn(shell, scratch) {
-      await shell.eval(`echo('hello ').to('${scratch}/append.txt')`);
-      await shell.eval(`echo('world').append('${scratch}/append.txt')`);
-      const text = await shell.eval(`cat('${scratch}/append.txt').toText()`);
+      await shell.eval(`gsh.p('${scratch}/append.txt').w('hello ')`);
+      await shell.eval(`gsh.p('${scratch}/append.txt').append('world')`);
+      const text = await shell.eval(`gsh.p('${scratch}/append.txt').read()`);
       if (text !== 'hello world')
         throw new Error(`expected 'hello world', got '${text}'`);
     },
@@ -13,45 +12,32 @@ export const tests = [
   {
     label: 'append creates file if it does not exist',
     async fn(shell, scratch) {
-      await shell.eval(`echo('new file').append('${scratch}/new.txt')`);
-      const text = await shell.eval(`cat('${scratch}/new.txt').toText()`);
+      await shell.eval(`gsh.p('${scratch}/new.txt').append('new file')`);
+      const text = await shell.eval(`gsh.p('${scratch}/new.txt').read()`);
       if (text !== 'new file')
         throw new Error(`expected 'new file', got '${text}'`);
     },
   },
   {
-    label: 'append requires pipeline input',
+    label: 'append requires content',
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval(`append('${scratch}/file.txt')`);
+        await shell.eval(`gsh.p('${scratch}/f.txt').append()`);
       } catch (e) {
-        if (e.message.includes('requires pipeline input')) threw = true;
+        if (e.message.includes('no content')) threw = true;
         else throw e;
       }
-      if (!threw) throw new Error('expected pipeline input error');
-    },
-  },
-  {
-    label: 'append requires exactly one path argument',
-    async fn(shell, scratch) {
-      let threw = false;
-      try {
-        await shell.eval("echo('hi').append()");
-      } catch (e) {
-        if (e.message.includes('exactly one')) threw = true;
-        else throw e;
-      }
-      if (!threw) throw new Error('expected path argument error');
+      if (!threw) throw new Error('expected content error');
     },
   },
   {
     label: 'append compounds across multiple calls',
     async fn(shell, scratch) {
-      await shell.eval(`echo('a').to('${scratch}/compound.txt')`);
-      await shell.eval(`echo('b').append('${scratch}/compound.txt')`);
-      await shell.eval(`echo('c').append('${scratch}/compound.txt')`);
-      const text = await shell.eval(`cat('${scratch}/compound.txt').toText()`);
+      await shell.eval(`gsh.p('${scratch}/compound.txt').w('a')`);
+      await shell.eval(`gsh.p('${scratch}/compound.txt').append('b')`);
+      await shell.eval(`gsh.p('${scratch}/compound.txt').append('c')`);
+      const text = await shell.eval(`gsh.p('${scratch}/compound.txt').read()`);
       if (text !== 'abc')
         throw new Error(`expected 'abc', got '${text}'`);
     },
@@ -59,10 +45,10 @@ export const tests = [
   {
     label: 'append errors on directory destination',
     async fn(shell, scratch) {
-      await shell.eval(`mkdir('${scratch}/append_dir')`);
+      await shell.eval(`gsh.p('${scratch}/append_dir').mkdir()`);
       let threw = false;
       try {
-        await shell.eval(`echo('data').append('${scratch}/append_dir')`);
+        await shell.eval(`gsh.p('${scratch}/append_dir').append('data')`);
       } catch (e) {
         if (e.message.includes('directory')) threw = true;
         else throw e;

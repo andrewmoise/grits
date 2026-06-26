@@ -25,18 +25,14 @@ The overall system is two cooperating pieces:
 
 You don't need to run anything to try Gimbal. You can probably find a testbed instance to play with at [gimbal.melanic.org](https://gimbal.melanic.org/). You may be there now.
 
-From the terminal widget (the `live $` prompt), you can try some basic operations:
+From the terminal widget (the `>` prompt), you can try some basic operations:
 
 ```
-pwd()
-ls()
-whoami()                // Should print nothing; you're not logged in
-login({guest:1,g:1})
-whoami()                // Now should print the throwaway login that was created for you
-cd()
-pwd()                   // Should print your home directory
-echo('hello').to('hello.txt')
-ls()                    // Should see hello.txt now created
+gsh.login({guest:1})          // Start a guest session
+gsh.whoami()                  // See your identity
+gsh.home()                    // Your home directory
+gsh.home().w('hello')         // Write a file
+gsh.home().ls()               // List files in your home
 ```
 
 ### Changing the code
@@ -44,18 +40,17 @@ ls()                    // Should see hello.txt now created
 As it happens, the Gimbal shell you're looking at is designed to support being modified in semi-straightforward fashion. Let's look at a real example -- the editor doesn't line wrap by default, which is sometimes inconvenient:
 
 ```
-edit('/sites/gimbal.melanic.org/live/src/README.md')
+gsh.codemirror('/sites/gimbal.melanic.org/live/src/README.md')
 ```
 
 (TODO - screenshot)
 
-See how inconvenient that is? It's okay though. (Note - you must have a guest account for this to work; make sure you have done `login{guest:1,g:1})` from above. Be aware that guest accounts are ephemeral and regularly deleted.)
+See how inconvenient that is? It's okay though. (Note - you must have a guest account for this to work; make sure you have done `gsh.login({guest:1})` from above. Be aware that guest accounts are ephemeral and regularly deleted.)
 
 ```
-cd()
-rm('lib', {r:1, f:1})
-cp('/sites/gimbal.melanic.org/live/lib', '.', {r:1})
-edit('lib/codemirror/gwm-widget.js')
+gsh.home().p('lib').rm({r:1, f:1})
+gsh.p('/sites/gimbal.melanic.org/live/lib').cp(gsh.home().p('lib'), {r:1})
+gsh.home().p('lib/codemirror/gwm-widget.js').codemirror()
 ```
 
 (TODO - screenshot)
@@ -73,9 +68,8 @@ We activate the extension:
 Save the file (Ctrl-S or else the green save icon on the editor's titlebar) and then:
 
 ```
-cd()
-m = await gsh.importLib('lib/codemirror/gwm-widget.js')
-gwm.openWidget(m, { file: '/sites/gimbal.melanic.org/live/src/README.md' })
+m = await gsh.importLib('/sites/gimbal.melanic.org/live/lib/codemirror/gwm-widget.js')
+gwm.openWidget(m, { file: gsh.resolvePath('/sites/gimbal.melanic.org/live/src/README.md') })
 ```
 
 And, bingo bango! You should see an editor instance with line wrapping fixed:
@@ -85,13 +79,9 @@ And, bingo bango! You should see an editor instance with line wrapping fixed:
 You can also, if you want to, persist this change into a custom entry in the command strip:
 
 ```
-cd()
-home = await pwd().toText()
-mkdir('local/gimbal',{p:1})
-cd('local/gimbal')
-cp('/sites/gimbal.melanic.org/live/lib/gimbal/profile.jsonl','.')
-echo(`window.myEditWidget = await gsh.importLib('${home}/lib/codemirror/gwm-widget.js')`, {j:1}).append('profile.jsonl')
-echo(`window.myEdit = (file) => { gwm.openWidget(window.myEditWidget, { file, icon: 'edit', iconColor: 'purple' }) }`, {j:1}).append('profile.jsonl')
+gsh.home().p('local/gimbal').mkdir({p:1})
+gsh.p('/sites/gimbal.melanic.org/live/lib/gimbal/profile.jsonl')  \
+  .cp(gsh.home().p('local/gimbal/profile.jsonl'))
 ```
 
 And, if you reload the page, you should be then able to write `window.myEdit({path})` and that'll open {path} for you in the modified editor. Try it! Does it work?
@@ -117,10 +107,9 @@ We make a copy of the `gimbal.melanic.org` site onto a new vhost. So, by design 
 So with that in mind, the first step is to make a clone of `gimbal.melanic.org` in our home directory:
 
 ```
-cd()
-me = await whoami().toJS()
-mkdir(`gimbal.${me}.melanic.org`)
-cp('/sites/gimbal.melanic.org/live',`gimbal.${me}.melanic.org/`,{r:1})
+gsh.home().p(`gimbal.anon1895.melanic.org`).mkdir()
+gsh.p('/sites/gimbal.melanic.org/live')   \
+  .cp(gsh.home().p('gimbal.anon1895.melanic.org/live'), {r:1})
 ```
 
 (There's nothing special about the `anon1895.melanic.org` hostname space or whatever; we're just doing that to keep things organized. You could write literally anything there as the name of the new vhost, as long as it doesn't collide with an existing one. You cannot "claim," in other words, the whole namespace under your specific username, which would yes be a nice thing to be able to do.)
@@ -130,14 +119,14 @@ cp('/sites/gimbal.melanic.org/live',`gimbal.${me}.melanic.org/`,{r:1})
 Now the the directory is in your home directory, you need to grant access to yourself to it. We're going to grant access to the new site from both the normal `gimbal.melanic.org` origin, and also the Gimbal shell which will be running at `gimbal.anon1895.melanic.org`. We're planning to be able to use both, which means we want to be able to edit the new site when operating either, in other words.
 
 ```
-facl(`./gimbal.${me}.melanic.org/`,{u:`${me}`,o:'https://gimbal.melanic.org/'},{p:'owner'})
-facl(`./gimbal.${me}.melanic.org/`,{u:`${me}`,o:`https://gimbal.${me}.melanic.org/`},{p:'owner'})
+gsh.facl(gsh.home().abs(), {u:'anon1895', o:'https://gimbal.melanic.org/'}, {p:'owner'})
+gsh.facl(gsh.home().abs(), {u:'anon1895', o:'https://gimbal.anon1895.melanic.org/'}, {p:'owner'})
 ```
 
 And, we want to grant access also to our home directory from the new customized shell we're making. Random apps do *not* have access to the home directory even if they have our auth token.
 
 ```
-facl('.',{u:me,o:'https://gimbal.${me}.melanic.org/'},{p:'owner'})
+gsh.facl(gsh.home(), {u:'anon1895', o:'https://gimbal.anon1895.melanic.org/'}, {p:'owner'})
 ```
 
 It is worth looking over these `facl()` calls carefully if you want to understand how permissions here work. It's different from Unix. Also, note that `{o:'https://gimbal.melanic.org/'}` for the origin is usually shortened to just `{o:'gimbal'}`, but we spell them out in full here just for clarity.
@@ -147,8 +136,8 @@ So at the end of that, we've got permissions set up so that we can edit the vhos
 You can query for the world-readable permissions that we're depending on, for the world to be able to read both of these, if you type:
 
 ```
-facl('/sites/gimbal.melanic.org/live')
-facl(`gimbal.${me}.melanic.org/live`)
+gsh.facl('/sites/gimbal.melanic.org/live')
+gsh.facl(gsh.home().p('gimbal.anon1895.melanic.org/live'))
 ```
 
 #### Make it live
@@ -156,7 +145,7 @@ facl(`gimbal.${me}.melanic.org/live`)
 In any case, once you've set up permissions, you can make the thing live.
 
 ```
-cp(`gimbal.${me}.melanic.org`,'/sites/`,{r:1})
+gsh.home().p('gimbal.anon1895.melanic.org').cp(gsh.p('/sites/gimbal.anon1895.melanic.org'), {r:1})
 ```
 
 If that works, then load up:
@@ -261,22 +250,21 @@ from being able to cheaply add new vhosts.
 Log in at `https://gimbal.{your domain}.com/` and run the self-tests:
 
 ```
-login({g:1})
-test()
+gsh.login({g:1})
+gsh.test()
 ```
 
 Frontend tests will take a while.
 
 ### Web serving
 
-Once tests pass, you can start putting up content. `upload().to(filename)` and
-`unzip(filename)` are useful. The copy-on-write version workflow looks like this:
+Once tests pass, you can start putting up content. `gsh.upload()` and
+`gsh.p('/path').unzip()` are useful. The copy-on-write version workflow looks like this:
 
 ```
-cd('/sites/{hostname}')
-mkdir('dev/v1', {p:1})
-echo('version 1').to('dev/v1/index.html')
-ln('dev/v1', 'live', {ff:1})
+gsh.p('/sites/{hostname}/dev/v1').mkdir({p:1})
+gsh.p('/sites/{hostname}/dev/v1/index.html').w('version 1')
+gsh.p('/sites/{hostname}/dev/v1').ln(gsh.p('/sites/{hostname}/live'), {ff:1})
 ```
 
 (The `ff` option forcibly overwrites `live` with a copy of `dev/v1`, instead of
@@ -286,7 +274,7 @@ directory.)
 To start a v2:
 
 ```
-ln('dev/v1', 'dev/v2', {ff:1})
+gsh.p('/sites/{hostname}/dev/v1').ln(gsh.p('/sites/{hostname}/dev/v2'), {ff:1})
 ```
 
 You can deploy `dev/v2` to a temporary vhost's `live/` to test against real auth

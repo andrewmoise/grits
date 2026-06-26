@@ -1,30 +1,31 @@
-import { isVoid } from '../gimbal/gsh.js';
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalShell } from '../gimbal/gsh.js';
 
 export const help = `\
 help — show help for a command
 
 Usage:
-  help()                       show welcome message
-  help('command')              show help text for a command`;
+  gsh.help()                       show welcome message
+  gsh.help('command')              show help text for a command`;
 
-export async function invoke(shell, previous, args) {
-  const prev = await previous;
-  if (!isVoid(prev))
-    throw new Error('help: does not accept pipeline input');
+export function invoke(prev, cmdName) {
+  if (!(prev instanceof GimbalShell)) throw new Error('help: must be called on gsh');
 
-  const [cmdName] = args;
-
+  const shell = prev;
   if (cmdName !== undefined) {
-    if (typeof cmdName !== 'string')
-      throw new Error('help: expected a command name (string), got ' + typeof cmdName);
-
-    const mod = await shell._importTool(cmdName);
-    return mod.help ?? `${cmdName}: no help text available`;
+    if (typeof cmdName !== 'string') throw new Error('help: expected a command name');
+    return new GimbalResult(async () => {
+      const mod = await shell._importTool(cmdName);
+      return mod.help ?? `${cmdName}: no help text available`;
+    });
   }
 
   return `Welcome to Gimbal shell!
 
-You have most basic Unix commands. cd('lib') will change directory, ls() and mkdir() and things will work. You can chain commands together; ls().to('a-file.json') will save output. Use edit(), gterm(), or files() to launch new windows.
+You can use gsh.p('/path') to create path references, then chain methods:
+  gsh.p('/home').ls()                        list directory
+  gsh.p('/file.txt').read()                  read a file
+  gsh.p('/file.txt').w('hello')              write to a file
 
-Have a good time.`;
+Use gsh.help('command') for help on a specific command.`;
 }

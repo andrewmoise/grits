@@ -1,89 +1,63 @@
-// lib/mkdir/main.js
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
+import { GimbalShell } from '../gimbal/gsh.js';
+import { AssertionError, ASSERT_PREV_MATCHES } from '../grits/GritsClient.js';
+
 export const help = `\
 mkdir — create a directory
 
 Usage:
-  mkdir('path')          create, fail if already exists
-  mkdir('path', {f:1})   create or silently succeed if already a directory
-  mkdir('path', {p:1})   create intermediate directories as needed`;
+  path.mkdir()                create, fail if exists
+  path.mkdir({p:1})           create parent directories as needed
+  path.mkdir({f:1})           silently succeed if already a directory
+  gsh.mkdir('/path')          same`;
 
-import { isVoid, VOID, _isPlainObject } from '../gimbal/gsh.js';
-import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
+function resolvePath(prev, args) {
+  if (prev instanceof GimbalPath) return prev;
+  if (prev instanceof GimbalShell) {
+    const p = args.find(a => a instanceof GimbalPath);
+    if (p) return p;
+    const str = args.find(a => typeof a === 'string');
+    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+  }
+  return null;
+}
 
-export async function invoke(shell, previous, args) {
-  const prev = await previous;
-  if (!isVoid(prev)) throw new Error('mkdir: does not accept pipeline input');
+export function invoke(prev, ...args) {
+  const path = resolvePath(prev, args);
+  if (!(path instanceof GimbalPath)) throw new Error('mkdir: need a path');
 
-  const opts       = _isPlainObject(args[args.length-1]) ? args[args.length-1] : {};
-  const positional = opts === args[args.length-1] ? args.slice(0,-1) : [...args];
+  const opts = args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
+  const shell = path._shell;
 
-  if (positional.length !== 1 || typeof positional[0] !== 'string')
-    throw new Error('mkdir: expected mkdir(path)');
+  return new GimbalResult(async () => {
+    const r = shell.resolvePath(path.abs());
+    const vol = shell._vol(r.serverUrl, r.volume);
 
-  const r    = shell.resolvePath(positional[0]);
-  const vol  = shell._vol(r.serverUrl, r.volume);
-  // -p: create path components iteratively
-  if (opts.p) {
-    const parts = r.path.split('/').filter(Boolean);
-    let cur = '';
-
-    for (const part of parts) {
-      cur += '/' + part;
-
-      const metaCID = await vol.mkdir({});
-
-      try {
-        // Try: create new directory where nothing exists
-        await vol.multiLink([{
-          path:     cur,
-          addr:     metaCID,
-          prevAddr: '',
-          assert:   ASSERT_PREV_MATCHES,
-        }]);
-        continue;
-      } catch (e) {
-        if (!(e instanceof AssertionError)) throw e;
-      }
-
-      if (opts.f) {
-        try {
-          // If a file exists, overwrite it with a directory
-          await vol.multiLink([{
-            path:   cur,
-            addr:   metaCID,
-            assert: ASSERT_IS_BLOB,
-          }]);
-          continue;
-        } catch (e) {
-          if (!(e instanceof AssertionError)) throw e;
+    if (opts.p) {
+      const parts = r.path.split('/').filter(Boolean);
+      let cur = '';
+      for (const part of parts) {
+        cur += '/' + part;
+        const metaCID = await vol.mkdir({});
+        try { await vol.multiLink([{ path: cur, addr: metaCID, prevAddr: '', assert: ASSERT_PREV_MATCHES }]); continue; }
+        catch (e) { if (!(e instanceof AssertionError)) throw e; }
+        if (opts.f) {
+          try { await vol.multiLink([{ path: cur, addr: metaCID, assert: 2 }]); continue; }
+          catch (e) { if (!(e instanceof AssertionError)) throw e; }
         }
+        const existing = await vol.lookup(cur).catch(() => null);
+        if (existing && !existing.isDir()) throw new Error(`mkdir: not a directory: '${cur}'`);
       }
-
-      // Otherwise it exists; ensure it's a directory
-      const existing = await vol.lookup(cur).catch(() => null);
-      if (existing && !existing.isDir()) {
-        throw new Error(`mkdir: not a directory: '${cur}'`);
-      }
-      // existing directory is fine; continue
+      return;
     }
 
-    return VOID;
-  }
-
-  const metaCID = await vol.mkdir({});
-
-  try {
-    await vol.multiLink([{
-      path:     r.path,
-      addr:     metaCID,
-      prevAddr: opts.f ? undefined : '',
-      assert:   opts.f ? 0 : ASSERT_PREV_MATCHES,
-    }]);
-  } catch(e) {
-    if (e instanceof AssertionError)
-      throw new Error(`mkdir: already exists: '${positional[0]}'`);
-    throw e;
-  }
-
-  return VOID;
+    const metaCID = await vol.mkdir({});
+    try {
+      await vol.multiLink([{ path: r.path, addr: metaCID, prevAddr: opts.f ? undefined : '', assert: opts.f ? 0 : ASSERT_PREV_MATCHES }]);
+    } catch (e) {
+      if (e instanceof AssertionError) throw new Error(`mkdir: already exists`);
+      throw e;
+    }
+  });
 }

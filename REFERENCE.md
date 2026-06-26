@@ -41,11 +41,11 @@ Placing shared data for an app into `/var/{app name}`, with appropriate permissi
 
 There are no symbolic links.
 
-You can use `glob({pattern})` to get a list of files matching the pattern. It's not a "shell command"; it's just a normal async function, so you will do things like `rm(... await glob('*.txt'))`.
+You can use `gsh.glob({pattern})` to get a list of files matching the pattern. It's not a "shell command"; it's just a normal async function, so you will do things like `gsh.rm(... await gsh.glob('*.txt'))`.
 
 ## Permissions
 
-Anonymous access to the system is permitted, although you won't be able to write much. Generally speaking, you will want to log yourself in "globally" via an auth cookie. Use `login(username, password, {g:1})`. You can also log in only for the current session (current tab), which may be useful for superuser access; for example via `login('glenda', password)`.
+Anonymous access to the system is permitted, although you won't be able to write much. Generally speaking, you will want to log yourself in "globally" via an auth cookie. Use `gsh.login(username, password, {g:1})`. You can also log in only for the current session (current tab), which may be useful for superuser access; for example via `gsh.login('glenda', password)`.
 
 The permissions system which maps users to what they can do within the file store is designed to be simple, and adapted to our specific needs:
 
@@ -100,11 +100,11 @@ Also note: All of this restriction based on origin is to defend the user, and th
 
 ## Authentication
 
-Auth has two layers: global (persistent cookie) and per-session (tab-local). By default, `login('user', 'pass')` logs in just the current tab. Pass `{g:1}` (e.g. `login('glenda', 'pass', {g:1})`) to also set a persistent cookie so new tabs pick up the login automatically.
+Auth has two layers: global (persistent cookie) and per-session (tab-local). By default, `gsh.login('user', 'pass')` logs in just the current tab. Pass `{g:1}` (e.g. `gsh.login('glenda', 'pass', {g:1})`) to also set a persistent cookie so new tabs pick up the login automatically.
 
 The server checks the tab's session header first, then falls back to the global cookie. This means you can have a global identity (cookie) while a specific tab runs as a different user (session header).
 
-We imitate Plan 9 by defining `glenda` as the superuser account. She has no particular privileges, aside from `owner` permission on the entire filesystem. For privileged filesystem operations on the frontend, do `login('glenda')`, then `logout()` when done, and optionally `login(normal_user, {g:1})` after to restore your global identity. It's a little clunky but it works. You can also open a separate tab for your `glenda` login and just do a non-global login from that tab, and close it when you're done.
+We imitate Plan 9 by defining `glenda` as the superuser account. She has no particular privileges, aside from `owner` permission on the entire filesystem. For privileged filesystem operations on the frontend, do `gsh.login('glenda')`, then `gsh.logout()` when done, and optionally `gsh.login(normal_user, {g:1})` after to restore your global identity. It's a little clunky but it works. You can also open a separate tab for your `glenda` login and just do a non-global login from that tab, and close it when you're done.
 
 Operations done within the backend (for example, actions taken on a FUSE mount of a volume) take place with "backend" permissions, which is an auth-bypassing level higher than `glenda`'s.
 
@@ -114,37 +114,52 @@ At present, you can only be authenticated as one user at a time, although a sess
 
 ## Command Shell
 
-The shell the system presents is basically just a Javascript console with a couple extra features.
+The shell the system presents is basically just a Javascript console with a few added features.
 
-You can type javascript commands:
+You can type javascript:
 
 ```
-$ 1+1
+> 1+1
 2
 ```
 
-You can also type Gimbal-specific shell commands, and pipe them together, like Unix:
+You can also call Gimbal shell commands as methods on `gsh`:
 
 ```
-$ cd('/sites/{hostname}')
-$ upload().to('test.zip')
-$ unzip('test.zip')
-$ ls()
-["bootstrap-5.3.8-dist","test.zip"]
-$ cd('bootstrap-5.3.8-dist')
-$ ls()
-["css","js"]
-$ cd('..')
-$ mv('bootstrap-5.3.8-dist', 'live/')
+> gsh.login({guest:1})
+> gsh.whoami()
+> gsh.ls('/sites')
+[p(gimbal.melanic.org)]
+> gsh.read('/sites/gimbal.melanic.org/live/index.html')
+<!DOCTYPE html>...
 ```
 
-Look at `/sites/gimbal.{your domain}.com/live/lib` for the list of available commands; most of those directories have a `main.js` file within them, which means they implement a command. Feel free to look around and use `help('{command name}')` to explore the small set that's been implemented.
+### Paths
 
-### Pipes
+Most commands accept paths as strings:
 
-`from('hello.txt').grep('some text').to('filtered.txt')` is analogous to `grep 'some text' < hello.txt > filtered.txt` in a Unix shell.
+```
+gsh.ls('/home')
+gsh.read('/file.txt')
+gsh.mkdir('/home/you/newdir')
+```
 
-The way this is implemented is a little complex. Generally speaking, shell commands return a `Result`, which can have functions called on it which then go via the same proxy as the shell uses to find individual commands. When called on a `Result`, commands will chain together with each one's input reading the output of the previous command (the one that created that `Result` where the later one was executed.)
+For chaining operations on the same path, use `gsh.p()` to create a path reference:
+
+```
+gsh.p('/home/you').ls()                // list a directory
+gsh.p('/home/you/file.txt').w('hello') // write a file
+gsh.p('/src').cp(gsh.p('/dest'))       // copy between paths
+gsh.p('/src').mv(gsh.p('/dest'))       // move/rename
+gsh.p('/src').rm()                     // remove a file
+```
+
+### How it works
+
+Commands are modules in `lib/<name>/main.js`. Each exports `invoke(prev, ...args)`.
+Calling `gsh.xyz()` or `path.xyz()` dispatches to `lib/xyz/main.js`.
+Commands return plain values (strings, arrays, objects, GimbalPath).
+The terminal auto-awaits `GimbalResult` values and displays the result.
 
 ## Web Hosting
 

@@ -2,47 +2,41 @@
 
 This is where all the frontend code lives.
 
-A few different concerns are flattened together into subdirectories of this single `lib/` directory, which may or may not be a good idea.
+## Shell
 
-## Client-side Gimbal app
+The terminal uses the `>` prompt. All commands are methods on `gsh`. Examples:
 
-`gimbal/` contains a "window manager" or full-featured graphical frontend. In a normal installation, you can open https://gimbal.{your domain}.com/ to interact with it.
+```
+gsh.login({guest:1})               // log in as guest
+gsh.whoami()                       // see who you are
+gsh.ls('/')                        // list root directory
+gsh.read('/path/to/file.txt')      // read a file
+gsh.p('/path/to/new.txt').w('hi')  // write a file
+gsh.home()                         // your home directory path
+gsh.home().ls()                    // list your home
+gsh.test()                         // run self-tests
+gsh.help('ls')                     // help for a command
+```
 
-Conceptually, `gsh` is the command shell, and `gwm` is the window manager. Gimbal is the whole frontend package.
+For filesystem operations, you can pass paths as plain strings to most commands:
 
-## Libraries
+```
+gsh.ls('/home')
+gsh.mkdir('/home/you/newdir')
+gsh.rm('/home/you/oldfile.txt')
+gsh.read('/home/you/file.txt')
+```
 
-There are some main libraries here, that are generally imported directly and used from JS.
+Or use `gsh.p()` to create a path object for method chaining:
 
-* `gimbal/` also has libraries for the window manager frontend, and contains the command shell in `gsh.js`.
-* `grits/` has client-side Grits code which provides filesystem operations for content from the server.
-* `style/` defines colors and styles for all UI elements.
-* `node_modules/` has npm-managed dependencies (CodeMirror, json-stringify-pretty-compact, isomorphic-git). Populated via `make deps`.
+```
+gsh.p('/home/you').ls()            // list a directory
+gsh.p('/home/you/file.txt').w('x') // write to a file
+gsh.p('/src').cp(gsh.p('/dest'))   // copy between paths
+```
 
-## Shell commands
-
-Any directory with a `main.js` in it will define a shell command which will then be runnable from the shell.
-
-Many are familiar from Unix: `cat`, `cd`, `cp,` and so on.
-
-Some are custom:
-
-* `from(filename)` and `to(filename)` provide functionality equivalent to `<` and `>`.
-* `upload()` prompts for an upload from your browser, allowing you to place it in the filesystem. Use `upload().to(filename)`. Note that if you cancel the upload, this command will hang forever; this is a browser limitation. Just close the terminal window.
-* Likewise `download(url)` fetches a file from a URL. It is almost useless in practice because of CORS restrictions.
-* `help()` prints some pretty brief help text.
-* `test()` runs a self test on a bunch of shell commands.
-
-`login()`, `logout()`, and `whoami()` are useful for authenticated access.
-
-## Widgets
-
-Widgets are windows within the window environment. You can launch these either from the launcher icons in gwm, or by typing their shell commands:
-
-* `codemirror(filename)` launches a codemirror editor.
-* `edit(filename)` just launches Codemirror, but you could override it if you wanted a different editor by default.
-* `files(path)` is a file browser. You can give it an argument to open a specific directory.
-* `gterm()` is a terminal.
-* `iframe(url)` launches a widget which displays a web page. Like `download()`, CORS makes it almost entirely useless in practice except for testing your own cooperating applications.
-
-## Enjoy!
+All commands in lib/*/main.js:
+  Filesystem: ls, cp, mv, rm, mkdir, rmdir, ln, diff, read, write, append, unzip, path
+  Auth/Info: login, logout, whoami, help, test, home
+  Utilities: upload, download, message
+  Widgets: gterm, edit, codemirror, files, iframe, markdown, inbox

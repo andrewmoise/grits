@@ -1,97 +1,96 @@
-// lib/mv/main.js
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
+import { GimbalShell } from '../gimbal/gsh.js';
+import { AssertionError, ASSERT_PREV_MATCHES } from '../grits/GritsClient.js';
+
 export const help = `\
-mv — move (rename) a file
+mv — move (rename) a file system entry
 
 Usage:
-  mv('src', 'dest')          move, fail if dest exists
-  mv('src', 'dest', {f:1})   overwrite dest`;
+  path.mv(dest)            move to dest (GimbalPath)
+  gsh.mv('/src', dest)     same`;
 
-import { isVoid, VOID, _isPlainObject } from '../gimbal/gsh.js';
-import { AssertionError, ASSERT_PREV_MATCHES } from '../grits/GritsClient.js';
-import { resolveDestPaths, isPathNotFound } from '../ln/main.js';
+function resolvePath(prev, args) {
+  if (prev instanceof GimbalPath) return prev;
+  if (prev instanceof GimbalShell) {
+    const p = args.find(a => a instanceof GimbalPath);
+    if (p) return p;
+    const str = args.find(a => typeof a === 'string');
+    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
+  }
+  return null;
+}
 
-export async function invoke(shell, previous, args) {
-  const prev = await previous;
-  if (!isVoid(prev)) throw new Error('mv: does not accept pipeline input');
+function findDest(args) {
+  const path = args.find(a => a instanceof GimbalPath);
+  if (path) return path;
+  const result = args.find(a => a instanceof GimbalResult);
+  if (result) return result;
+  return null;
+}
 
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
+function findOpts(args) {
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
+}
 
-  if (positional.length !== 2 ||
-      typeof positional[0] !== 'string' ||
-      typeof positional[1] !== 'string')
-    throw new Error('mv: expected mv(src, dest)');
+export function invoke(prev, ...args) {
+  const src = resolvePath(prev, args);
+  if (!(src instanceof GimbalPath)) throw new Error('mv: need a source path');
 
-  const srcR  = shell.resolvePath(positional[0]);
-  const destR = shell.resolvePath(positional[1]);
+  const dest = findDest(args);
+  if (!dest) throw new Error('mv: need a destination path');
 
-  const srcVol  = shell._vol(srcR.serverUrl, srcR.volume);
-  const destVol = shell._vol(destR.serverUrl, destR.volume);
-
-  const srcFile = await srcVol.lookup(srcR.path);
-  const srcName = srcR.path.split('/').at(-1);
-
-  const candidates = opts.ff
-    ? [destR.path]
-    : resolveDestPaths(destR, srcName);
-
-  const isCrossVolume = srcR.serverUrl !== destR.serverUrl || srcR.volume !== destR.volume;
-
-  if (isCrossVolume) {
-    let destPath;
-    let lastError;
-    for (const path of candidates) {
-      try {
-        await destVol.multiLink([{
-          path, addr: srcFile.cid(),
-          prevAddr: (opts.f || opts.ff) ? undefined : '',
-          assert:   (opts.f || opts.ff) ? 0 : ASSERT_PREV_MATCHES,
-        }]);
-        destPath = path;
-        break;
-      } catch (e) {
-        if (e instanceof AssertionError)
-          throw new Error(`mv: destination already exists — use {f:1} to overwrite`);
-        if (isPathNotFound(e)) { lastError = e; continue; }
-        throw e;
-      }
-    }
-    if (!destPath) {
-      if (destR.trailingSlash) throw new Error(`mv: destination is not a directory: '${positional[1]}'`);
-      throw lastError || new Error('mv: cannot resolve destination');
-    }
-    try {
-      await srcVol.multiLink([{
-        path: srcR.path, addr: '',
-        prevAddr: srcFile.cid(), assert: ASSERT_PREV_MATCHES,
-      }]);
-    } catch (_) {}
-  } else {
-    let lastError;
-    for (const destPath of candidates) {
-      try {
-        await srcVol.multiLink([
-          {
-            path: destPath, addr: srcFile.cid(),
-            prevAddr: (opts.f || opts.ff) ? undefined : '',
-            assert:   (opts.f || opts.ff) ? 0 : ASSERT_PREV_MATCHES,
-          },
-          {
-            path: srcR.path, addr: '',
-            prevAddr: srcFile.cid(), assert: ASSERT_PREV_MATCHES,
-          },
-        ]);
-        return VOID;
-      } catch (e) {
-        if (e instanceof AssertionError)
-          throw new Error(`mv: destination already exists or source changed — use {f:1} to overwrite`);
-        if (isPathNotFound(e)) { lastError = e; continue; }
-        throw e;
-      }
-    }
-    if (destR.trailingSlash) throw new Error(`mv: destination is not a directory: '${positional[1]}'`);
-    throw lastError || new Error('mv: cannot resolve destination');
+  if (dest instanceof GimbalResult) {
+    return new GimbalResult(async () => {
+      const resolved = await dest;
+      const remaining = args.filter(a => a !== dest);
+      return invoke(prev, resolved, ...remaining);
+    });
   }
 
-  return VOID;
+  const opts = findOpts(args);
+  const shell = src._shell;
+  return new GimbalResult(async () => {
+    const srcR = src._shell.resolvePath(src.abs());
+    const destR = dest._shell.resolvePath(dest.abs());
+    const srcVol = shell._vol(srcR.serverUrl, srcR.volume);
+    const destVol = shell._vol(destR.serverUrl, destR.volume);
+
+    const srcFile = await srcVol.lookup(srcR.path);
+    const srcName = srcR.path.split('/').at(-1);
+    const candidates = opts.ff ? [destR.path] : [destR.path + '/' + srcName, destR.path];
+    const isCross = srcR.serverUrl !== destR.serverUrl || srcR.volume !== destR.volume;
+
+    if (isCross) {
+      const bytes = new Uint8Array(await (await srcFile.get()).arrayBuffer());
+      const contentCID = await destVol.put(bytes);
+      const metaCID = await destVol.mkfile(contentCID, bytes.byteLength);
+      for (const path of candidates) {
+        try {
+          await destVol.multiLink([{ path, addr: metaCID, prevAddr: opts.i ? '' : undefined, assert: opts.i ? ASSERT_PREV_MATCHES : 0 }]);
+        } catch (e) {
+          if (e instanceof AssertionError) throw new Error(`mv: destination exists`);
+          continue;
+        }
+        await srcVol.multiLink([{ path: srcR.path, addr: '' }]);
+        return;
+      }
+      throw new Error(`mv: cannot resolve destination`);
+    }
+
+    for (const path of candidates) {
+      try {
+        const prevAddr = opts.i ? '' : undefined;
+        const assert = opts.i ? ASSERT_PREV_MATCHES : (opts.f || opts.ff ? 0 : ASSERT_PREV_MATCHES);
+        await srcVol.multiLink([
+          { path, addr: srcFile.cid(), prevAddr, assert },
+          { path: srcR.path, addr: '', prevAddr: srcFile.cid(), assert: ASSERT_PREV_MATCHES },
+        ]);
+        return;
+      } catch (e) {
+        if (e instanceof AssertionError) throw new Error(`mv: destination exists`);
+      }
+    }
+    throw new Error(`mv: cannot resolve destination`);
+  });
 }

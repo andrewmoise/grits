@@ -1,21 +1,26 @@
-import { VOID, _isPlainObject } from '../gimbal/gsh.js';
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalShell } from '../gimbal/gsh.js';
 import { WIDGET_ICONS } from '../style/icons.js';
 
-export const help = `inbox — open inbox widget`;
+export const help = `\
+inbox — open inbox widget
 
-export async function invoke(shell, previous, args) {
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
-  const defaults   = WIDGET_ICONS.inbox;
+Usage:
+  gsh.inbox()          open inbox`;
 
-  const mod = await import('./gwm-widget.js');
-  await window.gimbal.openWidget(mod, {
-    name: '',
-    icon:      opts.icon      ?? defaults.icon,
-    iconColor: opts.iconColor ?? defaults.iconColor,
-    zone: 'master',
-    shell,
-    args: positional,
+export function invoke(prev, ...args) {
+  if (!(prev instanceof GimbalShell)) throw new Error('inbox: must be called on gsh');
+
+  const shell = prev;
+  return new GimbalResult(async () => {
+    const mod = await import('./gwm-widget.js');
+    await window.gimbal.openWidget(mod, {
+      name: '',
+      icon: WIDGET_ICONS.inbox.icon,
+      iconColor: WIDGET_ICONS.inbox.iconColor,
+      zone: 'master',
+      shell,
+      args,
+    });
   });
-  return VOID;
 }

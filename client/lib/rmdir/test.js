@@ -1,10 +1,9 @@
-// lib/rmdir/test.js
 export const tests = [
   {
     label: 'rmdir removes an empty directory',
     async fn(shell, scratch) {
-      await shell.eval(`mkdir('${scratch}/emptydir')`);
-      await shell.eval(`rmdir('${scratch}/emptydir')`);
+      await shell.eval(`gsh.p('${scratch}/emptydir').mkdir()`);
+      await shell.eval(`gsh.p('${scratch}/emptydir').rmdir()`);
       let threw = false;
       try {
         const r = shell.resolvePath(`${scratch}/emptydir`);
@@ -17,26 +16,11 @@ export const tests = [
     },
   },
   {
-    label: 'rmdir fails on a non-empty directory',
+    label: 'rmdir removes a non-empty directory',
     async fn(shell, scratch) {
-      await shell.eval(`mkdir('${scratch}/fulldir')`);
-      await shell.eval(`echo('hi').to('${scratch}/fulldir/file.txt')`);
-      let threw = false;
-      try {
-        await shell.eval(`rmdir('${scratch}/fulldir')`);
-      } catch (e) {
-        if (e.message.includes('not empty')) threw = true;
-        else throw e;
-      }
-      if (!threw) throw new Error('expected not-empty error');
-    },
-  },
-  {
-    label: 'rmdir with {f:1} removes a non-empty directory',
-    async fn(shell, scratch) {
-      await shell.eval(`mkdir('${scratch}/fulldir')`);
-      await shell.eval(`echo('hi').to('${scratch}/fulldir/file.txt')`);
-      await shell.eval(`rmdir('${scratch}/fulldir', {f:1})`);
+      await shell.eval(`gsh.p('${scratch}/fulldir').mkdir()`);
+      await shell.eval(`gsh.p('${scratch}/fulldir/file.txt').w('hi')`);
+      await shell.eval(`gsh.p('${scratch}/fulldir').rmdir()`);
       let threw = false;
       try {
         const r = shell.resolvePath(`${scratch}/fulldir`);
@@ -51,10 +35,10 @@ export const tests = [
   {
     label: 'rmdir fails on a file',
     async fn(shell, scratch) {
-      await shell.eval(`echo('hi').to('${scratch}/file.txt')`);
+      await shell.eval(`gsh.p('${scratch}/file.txt').w('hi')`);
       let threw = false;
       try {
-        await shell.eval(`rmdir('${scratch}/file.txt')`);
+        await shell.eval(`gsh.p('${scratch}/file.txt').rmdir()`);
       } catch (e) {
         if (e.message.includes('not a directory')) threw = true;
         else throw e;
@@ -67,12 +51,13 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval(`echo('hi').rmdir('${scratch}/emptydir')`);
+        await shell.eval(`gsh.p('${scratch}/d').mkdir()`);
+        await shell.eval(`gsh.p('${scratch}/d').read().rmdir()`);
       } catch (e) {
-        if (e.message.includes('pipeline input')) threw = true;
+        if (e.message.includes('need a path')) threw = true;
         else throw e;
       }
-      if (!threw) throw new Error('expected pipeline input error');
+      if (!threw) throw new Error('expected error');
     },
   },
   {
@@ -80,9 +65,9 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval('rmdir()');
+        await shell.eval('gsh.rmdir()');
       } catch (e) {
-        if (e.message.includes('expected rmdir(path)')) threw = true;
+        if (e.message.includes('need a path')) threw = true;
         else throw e;
       }
       if (!threw) throw new Error('expected usage error');

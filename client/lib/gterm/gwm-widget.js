@@ -1,8 +1,8 @@
 /*
  * @cell terminal-widget
- * @version 1.1
+ * @version 2.0
  * @about
- *   Gimbal shell terminal widget. Classic inline-prompt layout.
+ *   Gimbal shell terminal widget. Simplified prompt: ">".
  *
  * decoration interface:
  *   icon    — 'gterm'
@@ -10,18 +10,10 @@
  *   (no rightButtons, no onCloseRequest — terminal is always safely closeable)
  */
 
-import { GritsFile } from '../grits/GritsClient.js';
-import { VOID, isVoid, makeShell, _isPlainObject } from '../gimbal/gsh.js';
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
 import stringify from '/lib/node_modules/json-stringify-pretty-compact/index.js';
 import { FONT_MONO, injectStyles } from '../style/style.js';
-
-// ── cwd display label ─────────────────────────────────────
-function cwdLabel(shell) {
-  const cwd = shell.cwd ?? '/';
-  if (cwd === '/' || cwd === '') return shell.volume ? `//${shell.volume}/` : '/';
-  const parts = cwd.replace(/\/+$/, '').split('/');
-  return parts[parts.length - 1];
-}
 
 // ── SVG icons ─────────────────────────────────────────────
 const SVG_SPINNER = `<svg class="gt-icon gt-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2">
@@ -79,8 +71,7 @@ function ensureStyles() {
     .gt-cmd-line {
       display: flex; align-items: baseline; gap: 0.375rem;
     }
-    .gt-loc  { color: var(--a1); flex-shrink: 0; white-space: nowrap; }
-    .gt-sep  { color: var(--text-dim); flex-shrink: 0; }
+    .gt-prompt { color: var(--a1); user-select: none; flex-shrink: 0; margin-right: 0.25rem; }
     .gt-src  { color: var(--text-hi); flex: 1; white-space: pre-wrap; }
     .gt-cmd-line.is-queued .gt-src { color: var(--text-dim); }
 
@@ -99,6 +90,7 @@ function ensureStyles() {
       from { transform: rotate(0deg); }
       to   { transform: rotate(360deg); }
     }
+    .gt-status { user-select: none; }
     .gt-status.is-queued { color: var(--text-dim); }
     .gt-status.is-error  { color: var(--red); }
     .gt-status.is-ref {
@@ -134,16 +126,8 @@ function ensureStyles() {
       padding: 0.25rem 0.75rem 0.375rem;
       flex-shrink: 0;
     }
-    .gt-input-loc {
-      color: var(--a1);
-      white-space: nowrap;
-      flex-shrink: 0;
-      line-height: 1.6;
-      font-family: ${FONT_MONO};
-      font-size: var(--fs-base, 0.75rem);
-    }
     .gt-input-sep {
-      color: var(--text-dim);
+      color: var(--a1);
       flex-shrink: 0;
       line-height: 1.6;
       font-family: ${FONT_MONO};
@@ -237,12 +221,9 @@ export default function createWidget({ name, shell, runOnInit = null }) {
   const inputLine = document.createElement('div');
   inputLine.className = 'gt-input-line';
 
-  const inputLoc = document.createElement('span');
-  inputLoc.className = 'gt-input-loc';
-
   const inputSep = document.createElement('span');
   inputSep.className = 'gt-input-sep';
-  inputSep.textContent = '$';
+  inputSep.textContent = '>';
 
   const textarea = document.createElement('textarea');
   textarea.className = 'gt-textarea';
@@ -250,7 +231,6 @@ export default function createWidget({ name, shell, runOnInit = null }) {
   textarea.autocomplete = 'off';
   textarea.spellcheck = false;
 
-  inputLine.appendChild(inputLoc);
   inputLine.appendChild(inputSep);
   inputLine.appendChild(textarea);
   el.appendChild(inputLine);
@@ -282,14 +262,6 @@ export default function createWidget({ name, shell, runOnInit = null }) {
     scrollBtn.style.display = pinToBottom ? 'none' : 'flex';
   }, { passive: true });
 
-  // ── cwd sync ──────────────────────────────────────────
-  // Keeps the input prompt in sync with the current working
-  // directory after each command completes.
-  function syncCwd() {
-    const label = cwdLabel(shell);
-    inputLoc.textContent = label;
-  }
-
   // ── DOM builders ──────────────────────────────────────
   function buildEntryDOM(rec) {
     const entry = document.createElement('div');
@@ -297,6 +269,10 @@ export default function createWidget({ name, shell, runOnInit = null }) {
 
     const cmdLine = document.createElement('div');
     cmdLine.className = 'gt-cmd-line is-queued';
+
+    const promptEl = document.createElement('span');
+    promptEl.className = 'gt-prompt';
+    promptEl.textContent = '>';
 
     const srcEl = document.createElement('span');
     srcEl.className = 'gt-src';
@@ -306,6 +282,7 @@ export default function createWidget({ name, shell, runOnInit = null }) {
     statusEl.className = 'gt-status is-queued';
     statusEl.innerHTML = SVG_HOURGLASS;
 
+    cmdLine.appendChild(promptEl);
     cmdLine.appendChild(srcEl);
     cmdLine.appendChild(statusEl);
     entry.appendChild(cmdLine);
@@ -313,24 +290,12 @@ export default function createWidget({ name, shell, runOnInit = null }) {
     output.insertBefore(entry, scrollAnchor);
     maybeScrollToBottom();
 
-    rec.dom = { entry, cmdLine, srcEl, statusEl, locEl: null, spinnerTimer: null };
+    rec.dom = { entry, cmdLine, srcEl, statusEl, spinnerTimer: null };
   }
 
   function applyRunning(rec) {
     const { cmdLine, srcEl, statusEl } = rec.dom;
     cmdLine.classList.remove('is-queued');
-
-    const locEl = document.createElement('span');
-    locEl.className = 'gt-loc';
-    locEl.textContent = cwdLabel(shell);
-    rec.dom.locEl = locEl;
-
-    const sep = document.createElement('span');
-    sep.className = 'gt-sep';
-    sep.textContent = '$';
-
-    cmdLine.insertBefore(sep, srcEl);
-    cmdLine.insertBefore(locEl, sep);
 
     statusEl.className = 'gt-status';
     statusEl.innerHTML = '';
@@ -406,29 +371,33 @@ export default function createWidget({ name, shell, runOnInit = null }) {
     if (!shellReady) return;
     if (running) return;
     const rec = history.find(r => r.status === 'queued');
-    if (!rec) {
-      syncCwd();
-      return;
-    }
+    if (!rec) return;
 
     running = true;
     rec.status = 'running';
     applyRunning(rec);
-    inputLoc.textContent = '';
 
     try {
-      const value = await shell.eval(rec.src, {}, { doHistory: true });
+      let value = await shell.eval(rec.src, {}, { doHistory: true });
       rec.status = 'done';
+
+      // Auto-await GimbalResults and store the resolved value for _/__
+      if (value instanceof GimbalResult) {
+        value = await value;
+        if (shell.__.length > 0) {
+          shell.__[shell.__.length - 1] = value;
+        }
+      }
 
       if (value instanceof Response) {
         rec.refIndex = shell.__.length - 1;
         rec.display = { bodyStream: value.clone().body };
-      } else if (!isVoid(value)) {
+      } else if (value != null) {
         const display = await _display(value, 80);
-        rec.display  = display;
+        rec.display = display;
         rec.refIndex = shell.__.length - 1;
       } else {
-        rec.display  = { text: null, isResponse: false };
+        rec.display = { text: null, isResponse: false };
         rec.refIndex = null;
       }
     } catch (e) {
@@ -439,21 +408,22 @@ export default function createWidget({ name, shell, runOnInit = null }) {
     }
 
     applyDone(rec);
-    syncCwd();
     running = false;
     runNext();
   }
 
   async function _display(value, cols = 80) {
-    if (isVoid(value))
-      return { text: null, isResponse: false };
-    if (value instanceof GritsFile)
-      return { text: `GritsFile(${value.cid()})`, isResponse: false };
+    if (value instanceof GimbalPath)
+      return { text: `p(${value.abs()})`, isResponse: false };
+    if (value instanceof Response)
+      return { text: `Response(${value.status})`, isResponse: false };
     if (typeof value === 'string')
       return { text: value, isResponse: false };
     if (value instanceof Uint8Array || value instanceof ArrayBuffer)
       return { text: `[${value.byteLength ?? value.length} bytes]`, isResponse: false };
-    if (_isPlainObject(value) || Array.isArray(value))
+    if (value instanceof GimbalResult)
+      return { text: value.toString(), isResponse: false };
+    if (typeof value === 'object')
       return { text: stringify(value, cols), isResponse: false };
     return { text: String(value), isResponse: false };
   }
@@ -510,7 +480,6 @@ export default function createWidget({ name, shell, runOnInit = null }) {
       Array.from(output.children).forEach(child => {
         if (child !== spacer && child !== scrollAnchor) child.remove();
       });
-      syncCwd();
       pinToBottom = true;
       separator.classList.remove('visible');
     }
@@ -524,17 +493,13 @@ export default function createWidget({ name, shell, runOnInit = null }) {
   const decoration = {
     icon: 'gterm',
     title: '',
-    // No rightButtons, no onCloseRequest — terminal is always closeable
   };
 
   // ── init ──────────────────────────────────────────────
-  // No cache warming in relative mode; initialize immediately
   shellReady = true;
-  syncCwd();
   if (runOnInit) enqueue(runOnInit);
   runNext();
 
-  // Defer initial focus until the widget is mounted and layout is stable
   let didInitialFocus = false;
   const focusOnce = () => {
     if (didInitialFocus) return;

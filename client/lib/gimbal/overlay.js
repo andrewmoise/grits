@@ -350,7 +350,6 @@ function _getShell() {
       serverUrl: window.location.origin,
       volume:    'client',
       cwd:       '/',
-      libs:      [{ serverUrl: window.location.origin, volume: 'client', path: 'lib' }],
     });
     // Expose singleton shell globally for console/debug use
     window.gsh = _shell;

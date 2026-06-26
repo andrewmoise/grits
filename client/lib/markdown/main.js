@@ -1,71 +1,67 @@
-import { VOID, isVoid, _isPlainObject } from '../gimbal/gsh.js';
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
+import { GimbalShell } from '../gimbal/gsh.js';
 import { WIDGET_ICONS } from '../style/icons.js';
 
 export const help = `\
 markdown — render Markdown content
 
 Usage:
-  markdown('path/to/file.md')   render a .md file from GritsFS
-  <input> | markdown()          render piped text/Response as Markdown
-  markdown('path', { iconColor: 'teal-hi' })  override icon color
+  path.markdown()              render file at path as Markdown
+  gsh.markdown('/path')        same`;
 
-  Only string file paths or piped text input are accepted.`;
-
-export async function invoke(shell, previous, args) {
-  const prev = await previous;
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
-  const defaults   = WIDGET_ICONS.markdown;
-
-  let content = null;
-  let title = 'markdown';
-  let sourceDir = '';
-
-  if (positional.length > 0 && typeof positional[0] === 'string') {
-    const path = positional[0];
-    const parts = path.split('/').filter(Boolean);
-    title = parts.pop() || 'markdown';
-
-    if (!isVoid(prev)) {
-      console.warn('markdown: ignoring piped input when file path given');
-    }
-
-    const { serverUrl, volume, path: relPath } = shell.resolvePath(path);
-    const file = await shell._vol(serverUrl, volume).lookup(relPath);
-    const resp = await file.get();
-    content = await resp.text();
-
-    const dirParts = relPath.split('/').filter(Boolean);
-    dirParts.pop();
-    const encPath = dirParts.map(encodeURIComponent).join('/');
-    sourceDir = encPath
-      ? `${serverUrl}/grits/v1/content/${volume}/${encPath}`
-      : `${serverUrl}/grits/v1/content/${volume}`;
-
-  } else if (!isVoid(prev)) {
-    if (prev instanceof Response) {
-      content = await prev.text();
-    } else if (typeof prev === 'string' || prev instanceof String) {
-      content = String(prev);
-    } else {
-      const t = prev?.constructor?.name ?? typeof prev;
-      throw new Error(`markdown: piped input must be text, got ${t}`);
-    }
-
-  } else {
-    throw new Error(`markdown: a file path or piped input is required`);
+function resolvePath(prev, args) {
+  if (prev instanceof GimbalPath) return prev;
+  if (prev instanceof GimbalShell) {
+    const p = args.find(a => a instanceof GimbalPath);
+    if (p) return p;
+    const str = args.find(a => typeof a === 'string');
+    if (str) return new GimbalPath('/' + prev.resolvePath(str).path, prev);
   }
+  return null;
+}
+
+export function invoke(prev, ...args) {
+  const path = resolvePath(prev, args);
+  if (!(path instanceof GimbalPath)) {
+    // If prev was a GimbalResult that didn't resolve to a path, await it
+    if (prev instanceof GimbalResult) {
+      return new GimbalResult(async () => {
+        const resolved = await prev;
+        return invoke(resolved, ...args);
+      });
+    }
+    throw new Error('markdown: need a file path');
+  }
+
+  const shell = path._shell;
+  return new GimbalResult(() => _render(shell, path));
+}
+
+async function _render(shell, path) {
+  const parts = path.abs().split('/').filter(Boolean);
+  const title = parts.pop() || 'markdown';
+
+  const r = shell.resolvePath(path.abs());
+  const file = await shell._vol(r.serverUrl, r.volume).lookup(r.path);
+  const resp = await file.get();
+  const content = await resp.text();
+
+  const dirParts = r.path.split('/').filter(Boolean);
+  dirParts.pop();
+  const encPath = dirParts.map(encodeURIComponent).join('/');
+  const sourceDir = encPath
+    ? `${r.serverUrl}/grits/v1/content/${r.volume}/${encPath}`
+    : `${r.serverUrl}/grits/v1/content/${r.volume}`;
 
   const mod = await import('./gwm-widget.js');
   await window.gimbal.openWidget(mod, {
     name: title,
-    icon:      opts.icon      ?? defaults.icon,
-    iconColor: opts.iconColor ?? defaults.iconColor,
+    icon: WIDGET_ICONS.markdown.icon,
+    iconColor: WIDGET_ICONS.markdown.iconColor,
     zone: 'master',
     shell,
     content,
     sourceDir,
   });
-
-  return VOID;
 }

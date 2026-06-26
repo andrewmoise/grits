@@ -1,15 +1,14 @@
-// lib/logout/test.js
 export const tests = [
   {
     label: 'logout after session-only login revokes access',
     async fn(shell, scratch) {
-      await shell.eval(`logout()`);
-      await shell.eval(`login()`);
+      await shell.eval('gsh.logout()');
+      await shell.eval('gsh.login()');
       const username = shell.fs._username;
       if (!username) throw new Error('no username after login');
       const vol = shell._vol(shell.serverUrl, 'primary');
       await vol.lookup('home/' + username);
-      await shell.eval(`logout()`);
+      await shell.eval('gsh.logout()');
       try {
         await vol.lookup('home/' + username);
         throw new Error('expected access_denied after logout');
@@ -23,14 +22,13 @@ export const tests = [
   {
     label: 'logout after global login revokes cookie access',
     async fn(shell, scratch) {
-      await shell.eval(`logout()`);
-      await shell.eval(`login({g:1})`);
+      await shell.eval('gsh.logout()');
+      await shell.eval('gsh.login({g:1})');
       const username = shell.fs._username;
       if (!username) throw new Error('no username after login');
       const vol = shell._vol(shell.serverUrl, 'primary');
       await vol.lookup('home/' + username);
-      await shell.eval(`logout()`);
-      // Simulate fresh tab — no session header
+      await shell.eval('gsh.logout()');
       shell.fs._authToken = null;
       delete shell.fs.extraHeaders['X-Grits-Auth-Token'];
       try {
@@ -46,11 +44,11 @@ export const tests = [
   {
     label: 'logout clears session token',
     async fn(shell, scratch) {
-      await shell.eval(`logout()`);
-      await shell.eval(`login()`);
-      await shell.eval(`logout()`);
-      const text = await shell.eval(`whoami().toText()`);
-      if (text !== '') throw new Error(`expected empty after logout, got: ${JSON.stringify(text)}`);
+      await shell.eval('gsh.logout()');
+      await shell.eval('gsh.login()');
+      await shell.eval('gsh.logout()');
+      const text = await shell.eval('gsh.whoami()');
+      if (text !== null) throw new Error(`expected null after logout, got: ${JSON.stringify(text)}`);
     },
   },
 ];

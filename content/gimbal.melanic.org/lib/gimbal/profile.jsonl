@@ -1,3 +1,4 @@
-"files()"
-"gterm()"
-"markdown('GREETINGS.md')"
+"gsh.files()"
+"gsh.gterm()"
+"gsh.markdown('GREETINGS.md')"
+

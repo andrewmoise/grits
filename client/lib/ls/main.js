@@ -1,62 +1,27 @@
-// lib/ls/main.js
+import { GimbalResult } from '../gimbal/result.js';
+import { GimbalPath } from '../gimbal/path.js';
+import { GimbalShell } from '../gimbal/gsh.js';
+import { resolvePathArg } from '../gimbal/path-util.js';
+
 export const help = `\
 ls — list directory contents
 
 Usage:
-  ls()                list current directory
-  ls('some/path')     list a path
-  <dir>.ls()          list a GritsFile directory passed as input
+  path.ls()                list the directory at path
+  gsh.ls(path)             same
 
-Options:
-  {l:true}     long listing — { name: metadata } map`;
+Returns an array of GimbalPath objects for child entries.`;
 
-import { isVoid, _isPlainObject, responseFromJSON } from '../gimbal/gsh.js';
-import { GritsFile } from '../grits/GritsClient.js';
+export function invoke(prev, ...args) {
+  const p = resolvePathArg(prev, args);
+  if (!p) throw new Error('ls: need a directory path');
 
-export async function invoke(shell, previous, args) {
-  const opts       = _isPlainObject(args[args.length - 1]) ? args[args.length - 1] : {};
-  const positional = opts === args[args.length - 1] ? args.slice(0, -1) : [...args];
-  const [pathArg]  = positional;
-
-  const prev = await previous;
-
-  let file;
-  if (!isVoid(prev)) {
-    // Pipeline mode — no path arg allowed
-    if (pathArg !== undefined)
-      throw new Error('ls: cannot combine pipeline input with path argument');
-    if (!(prev instanceof GritsFile))
-      throw new Error('ls: pipeline input must be a GritsFile');
-    file = prev;
-  } else {
-    // Argument mode — optional path, falls back to cwd
-    if (pathArg !== undefined) {
-      if (typeof pathArg !== 'string')
-        throw new Error('ls: path argument must be a string');
-      const { serverUrl, volume, path } = shell.resolvePath(pathArg);
-      file = await shell._vol(serverUrl, volume).lookup(path);
-    } else {
-      // No path arg — use current location directly.
-      const { serverUrl, volume, path } = shell.resolvePath('.');
-      file = await shell._vol(serverUrl, volume).lookup(path);
-    }
-  }
-
-  if (!file.isDir())
-    throw new Error('ls: not a directory');
-
-  const dirMap = await file.json();
-
-  if (opts.l || opts.long) {
-    const vol     = shell._currentVol();
-    const entries = {};
-    await Promise.all(
-      Object.entries(dirMap).map(async ([name, metaCID]) => {
-        entries[name] = await vol.meta(metaCID);
-      })
-    );
-    return responseFromJSON(entries);
-  }
-
-  return responseFromJSON(Object.keys(dirMap).sort());
+  const shell = p._shell;
+  return new GimbalResult(async () => {
+    const vol = shell._vol();
+    const file = await vol.lookup(p.abs());
+    if (!file.isDir()) throw new Error('ls: not a directory');
+    const children = await file.children();
+    return [...children.keys()].sort().map(name => new GimbalPath(p.abs().replace(/\/?$/, '/') + name, shell));
+  });
 }

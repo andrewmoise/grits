@@ -1,22 +1,15 @@
-// lib/download/test.js
 export const tests = [
   {
     label: 'download result matches same file fetched from volume',
     async fn(shell, scratch) {
-      // Create a scratch file and verify consistency across HTTP and volume
-      await shell.eval(`echo('hello world').to('${scratch}/file.txt')`);
-
-      console.log("-- Test");
-
+      await shell.eval(`gsh.p('${scratch}/file.txt').w('hello world')`);
       const url = `${shell.serverUrl}/grits/v1/content/primary${scratch}/file.txt`;
 
-      const downloadedResp = await shell.eval(`download('${url}')`);
+      const downloadResult = await shell.eval(`gsh.download('${url}')`);
       const fetchedResp = await fetch(url);
-      const volumeResp = await shell.eval(`cat('${scratch}/file.txt')`);
-
-      const a = await downloadedResp.text();
+      const a = await downloadResult.text();
       const b = await fetchedResp.text();
-      const c = await volumeResp.text();
+      const c = await shell.eval(`gsh.p('${scratch}/file.txt').read()`);
 
       if (a !== b || a !== c)
         throw new Error('downloaded content does not match volume content');
@@ -27,9 +20,9 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval(`echo('hi').download('${shell.serverUrl}/grits/v1/content/primary/lib/grits/GritsClient.js')`);
+        await shell.eval(`gsh.p('${scratch}/x').download('${shell.serverUrl}/grits/v1/content/primary/lib/grits/GritsClient.js')`);
       } catch (e) {
-        if (e.message.includes('pipeline input')) threw = true;
+        if (e.message.includes('must be called on gsh')) threw = true;
         else throw e;
       }
       if (!threw) throw new Error('expected pipeline input error');
@@ -40,7 +33,7 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval('download()');
+        await shell.eval('gsh.download()');
       } catch (e) {
         if (e.message.includes('URL string required')) threw = true;
         else throw e;
@@ -53,7 +46,7 @@ export const tests = [
     async fn(shell, scratch) {
       let threw = false;
       try {
-        await shell.eval('download(42)');
+        await shell.eval('gsh.download(42)');
       } catch (e) {
         if (e.message.includes('URL string required')) threw = true;
         else throw e;
