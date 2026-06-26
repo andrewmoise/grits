@@ -399,6 +399,18 @@ export class GimbalShell {
     if (doHistory) __.push(undefined);
 
     const shell = this;
+
+    const gshAPI = {
+      get serverUrl()  { return shell.serverUrl; },
+      get volume()     { return shell.volume; },
+      get cwd()        { return shell.cwd; },
+      get fs()         { return shell.fs; },
+      resolvePath:     (p) => shell.resolvePath(p),
+      runCommand:      (name, args, opts) => shell.runCommand(name, args, opts),
+      importLib:       (p) => shell.importLib(p),
+    };
+    const defaultVars = { gsh: gshAPI, gwm: shell.gwm };
+
     const withTarget = new Proxy(Object.create(null), {
       has(_, key) {
         if (typeof key === 'symbol') return false;
@@ -407,6 +419,7 @@ export class GimbalShell {
         if (key === 'glob')          return true;
         if (key in globalThis)       return false;
         if (key in extraVars)        return true;
+        if (key in defaultVars)      return true;
         if (key in shell._scriptScope) return true;
         // Allow any identifier; resolution happens at call time via import
         return true;
@@ -417,6 +430,7 @@ export class GimbalShell {
         if (key === '_')  return underscore;
         if (key === 'glob') return (pattern) => glob(shell, pattern);
         if (key in extraVars)          return extraVars[key];
+        if (key in defaultVars)        return defaultVars[key];
         if (key in shell._scriptScope) return shell._scriptScope[key];
 
         // We are running a real command, apparently. We need to fork a new shell context for it.
