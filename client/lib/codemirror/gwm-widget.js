@@ -17,9 +17,17 @@
  *   controls.setTitle(str)
  *   controls.setTitlebarColor(css)
  *   controls.setDirty(bool)
+ *
+ * theming:
+ *   Editor chrome is themed off CSS custom properties so it tracks the host
+ *   app. Selection colors honor optional overrides and otherwise derive live
+ *   from the --a1 accent via color-mix:
+ *     --cm-selection          unfocused selection background
+ *     --cm-selection-focused  focused selection background
+ *     --cm-selection-search   selected search match background
  */
 
-import { C, alpha, FONT_MONO, injectStyles } from '../style/style.js';
+import { FONT_MONO, injectStyles } from '../style/style.js';
 import { EditorView, keymap, lineNumbers, highlightActiveLine,
          highlightActiveLineGutter, drawSelection, dropCursor } from '@codemirror/view';
 import { EditorState } from '@codemirror/state';
@@ -51,12 +59,67 @@ function ensureStyles() {
       flex: 1;
       overflow: hidden;
     }
-
-    .ge-cm .cm-scroller::-webkit-scrollbar { width: 0.25rem; height: 0.25rem; }
-    .ge-cm .cm-scroller::-webkit-scrollbar-track { background: transparent; }
-    .ge-cm .cm-scroller::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 0.125rem; }
   `);
 }
+
+// ── Editor theme ─────────────────────────────────────────
+// Static — references only module-level imports and CSS vars, so it's built
+// once at module load instead of per-mount. EditorView.theme() auto-scopes to
+// this widget's instances, so nothing here leaks to other CodeMirror editors.
+// Flip { dark: true } if the host app is a light theme.
+const appTheme = EditorView.theme({
+  '&': {
+    height: '100%',
+    background: 'transparent',
+    color: 'var(--text-hi)',
+  },
+  '&.cm-focused': { outline: 'none' },
+  '.cm-scroller': {
+    fontFamily: FONT_MONO,
+    fontSize: 'var(--fs-base)',
+    lineHeight: 1.6,
+    overflow: 'auto',
+  },
+  '.cm-scroller::-webkit-scrollbar': { width: '0.25rem', height: '0.25rem' },
+  '.cm-scroller::-webkit-scrollbar-track': { background: 'transparent' },
+  '.cm-scroller::-webkit-scrollbar-thumb': {
+    background: 'var(--border-hi)',
+    borderRadius: '0.125rem',
+  },
+  '.cm-gutters': {
+    background: 'var(--bg-elevated)',
+    borderRight: '1px solid var(--border)',
+    color: 'var(--text-dim)',
+  },
+  '.cm-activeLineGutter': { backgroundColor: 'var(--bg-hover)' },
+  '.cm-gutter.cm-lineNumbers .cm-gutterElement': {
+    padding: '0 0.75rem 0 0.5rem',
+    fontSize: 'var(--fs-sm)',
+  },
+  '.cm-line': { padding: '0 0.75rem' },
+  '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
+  '.cm-cursor': { borderLeftColor: 'var(--a1)' },
+  '.cm-matchingBracket': {
+    backgroundColor: 'var(--a1-dim)',
+    color: 'var(--text-hi)',
+  },
+  '.cm-searchMatch': { backgroundColor: 'var(--a1-dim)' },
+  '.cm-searchMatch.cm-searchMatch-selected': {
+    backgroundColor: 'var(--cm-selection-search, color-mix(in srgb, var(--a1) 35%, transparent))',
+  },
+  '.cm-selectionBackground': {
+    backgroundColor: 'var(--cm-selection, color-mix(in srgb, var(--a1) 18%, transparent))',
+  },
+  '&.cm-focused .cm-selectionBackground': {
+    backgroundColor: 'var(--cm-selection-focused, color-mix(in srgb, var(--a1) 25%, transparent))',
+  },
+  '.cm-line::selection, .cm-line ::selection': {
+    backgroundColor: 'transparent',
+  },
+  '&.cm-focused .cm-line::selection, &.cm-focused .cm-line ::selection': {
+    backgroundColor: 'var(--cm-selection-focused, color-mix(in srgb, var(--a1) 25%, transparent))',
+  },
+}, { dark: true });
 
 // ── Language pack loader ─────────────────────────────────
 async function loadLang(path) {
@@ -278,51 +341,7 @@ export default function createWidget({ name, file = null, shell }) {
       EditorView.updateListener.of(update => {
         if (update.docChanged) markDirty(true);
       }),
-      EditorView.theme({
-        '&': {
-          height: '100%',
-          background: 'transparent',
-          color: 'var(--text-hi)',
-        },
-        '&.cm-focused': { outline: 'none' },
-        '.cm-scroller': {
-          fontFamily: FONT_MONO,
-          fontSize: 'var(--fs-base)',
-          lineHeight: 1.6,
-          overflow: 'auto',
-        },
-        '.cm-gutters': {
-          background: 'var(--bg-elevated)',
-          borderRight: '1px solid var(--border)',
-          color: 'var(--text-dim)',
-        },
-        '.cm-activeLineGutter': { backgroundColor: 'var(--bg-hover)' },
-        '.cm-gutter.cm-lineNumbers .cm-gutterElement': {
-          padding: '0 0.75rem 0 0.5rem',
-          fontSize: 'var(--fs-sm)',
-        },
-        '.cm-line': { padding: '0 0.75rem' },
-        '.cm-activeLine': { backgroundColor: 'var(--bg-hover)' },
-        '.cm-cursor': { borderLeftColor: 'var(--a1)' },
-        '.cm-matchingBracket': {
-          backgroundColor: 'var(--a1-dim)',
-          color: 'var(--text-hi)',
-        },
-        '.cm-searchMatch': { backgroundColor: 'var(--a1-dim)' },
-        '.cm-searchMatch.cm-searchMatch-selected': {
-          backgroundColor: alpha(C.blue, 0.35),
-        },
-        '.cm-selectionBackground': { backgroundColor: C.blueDim },
-        '&.cm-focused .cm-selectionBackground': {
-          backgroundColor: alpha(C.blue, 0.25),
-        },
-        '.cm-line::selection, .cm-line ::selection': {
-          backgroundColor: 'transparent',
-        },
-        '&.cm-focused .cm-line::selection, &.cm-focused .cm-line ::selection': {
-          backgroundColor: alpha(C.blue, 0.25),
-        },
-      }),
+      appTheme,
     ];
 
     if (lang) extensions.push(lang);
