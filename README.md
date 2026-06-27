@@ -1,96 +1,89 @@
-# Gimbal: A framework for web-native development
+# A framework for web-native development
 
-Gimbal is planned as a web framework that lets you interact with a web site or application much more directly than you usually can. As an end-user of an app that runs on Gimbal, you can:
+This is a little framework for development of self-hosted and/or community driven web applications.
 
-* Directly examine the site's underlying data (subject to permissions) and code
-* Persistently edit the UI of the site you're using without affecting anyone else's experience
-* Interact and script interactions with the site in ways not programmed in advance by its authors
+It's still a work in progress. **This code is not production ready or close to it.** Some things work in useful form, but also it's still heavily in flux. This is mostly just a demo of the intended direction of the system, for people to mess with and give feedback.
 
-As an admin, you can:
+Some of the things it is designed to make easy are:
 
-* Easily test, deploy, or roll back versions of the site
-* Do first-class development and devops from your browser
+* For users to examine or delete their data on a web app, without needing to go strictly through the web app's interface
+* For users to modify their instance of a web app they're using if the existing functioning doesn't suit their wants (or clone/fork it completely)
+* For admins to run a lightweight backend which can host many arbitrary apps without needing support from the backend side specific to each app
+* For admins and their friends to semi-easily add capacity (storage or networking load) to the server (*)
 
-Note: This is still a work in progress — a hobby project. It works on my machine. **It might eat your data at any time.** The permissions might fail. The service worker doesn't update properly. **Don't use this in production.** Some things work and it's fun for tinkering, but it's pretty far from a working v1.
+The system that accomplishes that is split into two cooperating pieces.
 
-The overall system is two cooperating pieces:
+* **Grits** is the backend. It's a read/writable Merkle tree with primitives for sharing and replicating content in a distributed environment. More or less, it's the filesystem, with a web server that exposes that filesystem subject to file permissions.
+* **Gimbal** is one frontend web app atop Grits. It's a demo of the system, also an allegedly useful system for doing administration and development for other apps which exist on the system.
 
-* **Gimbal** is the frontend — the Unix-like shell and window manager you've been
-  using. It's the Javascript in `client/`.
-* **Grits** is the backend — a read/writable Merkle tree with primitives for
-  sharing and replicating content. More or less, it's the filesystem, and Gimbal
-  is the desktop environment. It's the Go code in the root.
+If you are interested in how to set up your own instance of the backend, see INSTALL.md; if you are interested in a detailed reference of how this all works, see REFERENCE.md. What will follow is quick demonstrations of what the system can do right now.
 
-## Gimbal Quickstart
+## Quickstart
 
-You don't need to run anything to try Gimbal. You can probably find a testbed instance to play with at [gimbal.melanic.org](https://gimbal.melanic.org/). You may be there now.
+Specifically the examples we'll show are:
 
-From the terminal widget (the `>` prompt), you can try some basic operations:
+1. How as an end-user to modify the code of the app you're interacting with
+2. How as an end-user to search through data the app is storing
+3. How as an end-user to clone an app into a new vhost that you're fully in charge of
 
-```
-gsh.login({guest:1})          // Start a guest session
-gsh.whoami()                  // See your identity
-gsh.home()                    // Your home directory
-gsh.home().w('hello')         // Write a file
-gsh.home().ls()               // List files in your home
-```
+Gimbal is the frontend, a vaguely Unix-like desktop environment in the browser. It's easy to try; go to [gimbal.melanic.org](https://gimbal.melanic.org/). You may be there now.
 
-### Changing the code
-
-As it happens, the Gimbal shell you're looking at is designed to support being modified in semi-straightforward fashion. Let's look at a real example -- the editor doesn't line wrap by default, which is sometimes inconvenient:
+From the terminal widget (the `>` prompt), you can try basic operations. The terminal makes a `GimbalClient` instance available as `gimbal`, and that object serves as the root of your interactions with the system. Mostly, you'll be grabbing paths within a vaguely Unix-like filesystem structure, and doing actions on those paths:
 
 ```
-gsh.codemirror('/sites/gimbal.melanic.org/live/src/README.md')
+gimbal.login({guest:1,g:1})                    // Start a guest session
+gimbal.whoami()                                // See who you are
+home = await gimbal.home()
+home.path('hello.txt').write('hello')
+home.path('hello.txt').read()
+home.ls()
+```
+
+You can learn more about how this works in REFERENCE.md, but hopefully it's pretty apparent the basic gist of what's happening.
+
+### 1. Changing Application Code
+
+So as mentioned, you don't have to be an administrator of the site to change the application code. We'll show a real example.
+
+Gimbal's editor has an inconvenient feature: It doesn't do line wrapping. I haven't fixed that, even though it's straightforward, so it can serve as an example of how end-users can change the code they're experiencing in arbitrary ways.
+
+Observe. So up above, we defined a variable `home` for our home directory; now we're going to get another one we'll need a lot, `site`, for the webroot of the current vhost. (You could also access this at `gimbal.p('/sites/gimbal.melanic.org/live')`, but `gimbal.site()` is simpler.)
+
+This will launch a browser of the files within the webroot, rearranging the windows of the little desktop environment as a result. Run this (and then open up `src/README.md` to see the line-wrapping problem we're trying to fix, and then find your way back to these instructions to see how to fix it):
+
+```
+site = await gimbal.site()
+site.launch('files')
+```
+
+See? Should look like this, without line wrapping:
+
+(TODO - screenshot)
+
+Not hard to fix, though.
+
+```
+site.p('lib').ln(await home.p('my_editor'))
+home.p('my_editor/codemirror/gwm-widget.js').launch('edit')
+```
+
+We are using codemirror for editing, and as it happens it's a one-line fix to the adapter code to add line wrapping:
+
+(TODO - screenshot)
+
+Make the edit, hit Ctrl-S, and then use the modified editor:
+
+```
+site.p('src/README.md').launch(await home.p('my_editor/codemirror/gwm-widget.js'))
 ```
 
 (TODO - screenshot)
 
-See how inconvenient that is? It's okay though. (Note - you must have a guest account for this to work; make sure you have done `gsh.login({guest:1})` from above. Be aware that guest accounts are ephemeral and regularly deleted.)
+See? Fixed now. You just changed the site code. But only for you -- the other users are still running the stock Gimbal source (as are you, for now, unless you opt specifically to run this custom widget code -- but see the next section for how to change that.)
 
-```
-gsh.home().path('lib').rm({r:1, f:1})
-gsh.path('/sites/gimbal.melanic.org/live/lib').cp(gsh.home().path('lib'), {r:1})
-gsh.home().path('lib/codemirror/gwm-widget.js').codemirror()
-```
+The option to use this customized editor will persist across sessions for as long as you're using the guest login.
 
-(TODO - screenshot)
-
-So now we've copied the Gimbal client app to our home directory, and we're editing the editor code (or, the wrapper around Codemirror that provides a Gimbal editing widget).
-
-We find the place where we can add the extension that adds line wrapping:
-
-(TODO - screenshot)
-
-We activate the extension:
-
-(TODO - screeenshot)
-
-Save the file (Ctrl-S or else the green save icon on the editor's titlebar) and then:
-
-```
-m = await gsh.importLib('/sites/gimbal.melanic.org/live/lib/codemirror/gwm-widget.js')
-gwm.openWidget(m, { file: gsh.resolvePath('/sites/gimbal.melanic.org/live/src/README.md') })
-```
-
-And, bingo bango! You should see an editor instance with line wrapping fixed:
-
-(TODO - screenshot)
-
-You can also, if you want to, persist this change into a custom entry in the command strip:
-
-```
-gsh.home().path('local/gimbal').mkdir({p:1})
-gsh.path('/sites/gimbal.melanic.org/live/lib/gimbal/profile.jsonl')  \
-  .cp(gsh.home().path('local/gimbal/profile.jsonl'))
-```
-
-And, if you reload the page, you should be then able to write `window.myEdit({path})` and that'll open {path} for you in the modified editor. Try it! Does it work?
-
-(TODO - screenshot)
-
-It works on my machine. That modified editor should be persistent (at least for as long as your guest login lasts). And of course, that's not limited to just the editor -- you have a full copy of the Gimbal code in `{home}/lib/`, so you can modify anything in there. You could make a customized shell that runs from there, and it'll pick up all the code from its local `lib/` and all tools launched from it will carry the same modifications.
-
-### Cloning a Site
+### 2. Cloning a Site
 
 So that is simple to do (relatively speaking), but leaves your system in a half-and-half state wherein you'll be loading widgets from one cloned Gimbal install into an environment hosted by the ancestor of the clone. That is fine, but also, it'll be useful to have a whole system you can edit without having that chicanery involved. That's actually simpler; it involves some vhost and permissions stuff is the only reason we started with modifying one widget. Basically, you can at any time make a full clone of an app (in this case, the entire Gimbal operating environment) which you can then modify however you'd like.
 

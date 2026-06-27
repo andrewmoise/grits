@@ -1,3 +1,2 @@
-"gimbal.site().launch('files')"
 "gimbal.launch('gterm')"
-"gimbal.site().p('GREETINGS.md').launch('markdown')"
+"gimbal.site().p('src/README.md').launch('markdown')"
