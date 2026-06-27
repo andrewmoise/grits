@@ -11,23 +11,25 @@ Usage:
   path.rm({f:1})              ignore if missing, fail on directory
   gimbal.rm(path)                same (path must be GimbalPath)`;
 
-function resolvePath(prev, args) {
-  if (prev instanceof GimbalPath) return prev;
-  return null;
-}
-
-function findOpts(args) {
-  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
-}
-
 export function invoke(gimbal, prev, ...args) {
-  const path = resolvePath(prev, args);
-  if (!(path instanceof GimbalPath)) throw new Error('rm: need a path');
+  if (!(prev instanceof GimbalPath)) throw new Error('rm: need a path');
 
-  const opts = findOpts(args);
+  let target = prev;
+  let opts = {};
+
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (i === 0 && typeof a === 'string') {
+      target = prev.p(a);
+    } else if (i === args.length - 1 && typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) {
+      opts = a;
+    } else {
+      throw new Error('rm: unexpected argument');
+    }
+  }
 
   return new GimbalResult(async () => {
-    const r = gimbal.resolvePath(path._path);
+    const r = gimbal.resolvePath(target._path);
     const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
     const p = r.path;
 

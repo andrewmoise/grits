@@ -9,16 +9,25 @@ Usage:
   path.rmdir()          remove empty directory
   gimbal.rmdir(path)       same (path must be GimbalPath)`;
 
-function resolvePath(prev, args) {
-  if (prev instanceof GimbalPath) return prev;
-  return null;
-}
-
 export function invoke(gimbal, prev, ...args) {
-  const path = resolvePath(prev, args);
-  if (!(path instanceof GimbalPath)) throw new Error('rmdir: need a path');
+  if (!(prev instanceof GimbalPath)) throw new Error('rmdir: need a path');
+
+  let target = prev;
+  let opts = {};
+
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (i === 0 && typeof a === 'string') {
+      target = prev.p(a);
+    } else if (i === args.length - 1 && typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) {
+      opts = a;
+    } else {
+      throw new Error('rmdir: unexpected argument');
+    }
+  }
+
   return new GimbalResult(async () => {
-    const r = gimbal.resolvePath(path._path);
+    const r = gimbal.resolvePath(target._path);
     const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
     try { await vol.multiLink([{ path: r.path, addr: '', assert: ASSERT_IS_TREE }]); }
     catch (e) {

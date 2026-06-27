@@ -1,4 +1,5 @@
 import { GimbalClient } from '../gimbal/client.js';
+import { GimbalPath } from '../gimbal/path.js';
 import { GimbalResult } from '../gimbal/result.js';
 
 export const help = `\
@@ -25,8 +26,11 @@ function pickFile(accept) {
   });
 }
 
-export function invoke(gimbal, prev, opts = {}) {
+export function invoke(gimbal, prev, opts) {
   if (!(prev instanceof GimbalClient)) throw new Error('upload: must be called on gimbal');
+  if (opts !== undefined && (typeof opts !== 'object' || opts instanceof GimbalPath || Array.isArray(opts)))
+    throw new Error('upload: options must be a plain object');
+  opts = opts || {};
   return new GimbalResult(async () => {
     const file = await pickFile(opts.accept);
     return new Response(file, {

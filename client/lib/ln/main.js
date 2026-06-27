@@ -1,83 +1,60 @@
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
-import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
-
-export function resolveDestPaths(destR, srcName) {
-  if (destR.trailingSlash) return [`${destR.path}/${srcName}`];
-  return [`${destR.path}/${srcName}`, destR.path];
-}
-
-export function isPathNotFound(e) {
-  const msg = e.message || '';
-  return msg.includes('file does not exist') || msg.includes('is not a directory');
-}
+import { AssertionError } from '../grits/GritsClient.js';
 
 export const help = `\
 ln — link a file into the filesystem (copy-on-write)
 
 Usage:
   path.ln(dest)              link to dest (GimbalPath or string)
-  path.ln(dest, {ff:1})      overwrite dest
-  gimbal.ln(src, dest)          same (paths must be GimbalPath)`;
-
-function resolvePath(prev, args) {
-  if (prev instanceof GimbalPath) return prev;
-  return null;
-}
-
-function findDest(args, gimbal) {
-  const p = args.find(a => a instanceof GimbalPath);
-  if (p) return p;
-  const str = args.find(a => typeof a === 'string');
-  if (str && gimbal) {
-    const res = gimbal.resolvePath(str);
-    return gimbal.p('/' + res.path);
-  }
-  return null;
-}
-
-function findOpts(args) {
-  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
-}
+  path.ln(dest, {i:1})       fail if dest exists
+  gimbal.ln(src, dest)       same (paths must be GimbalPath)`;
 
 export function invoke(gimbal, prev, ...args) {
-  const src = resolvePath(prev, args);
-  if (!(src instanceof GimbalPath)) throw new Error('ln: need a source path');
+  if (!(prev instanceof GimbalPath)) throw new Error('ln: need a source path');
 
-  const dest = findDest(args, gimbal);
+  let dest = null;
+  let opts = {};
+
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (i === 0 && a instanceof GimbalPath) {
+      dest = a;
+    } else if (i === 0 && typeof a === 'string') {
+      dest = prev.p(a);
+    } else if (i === args.length - 1 && typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) {
+      opts = a;
+    } else {
+      throw new Error('ln: unexpected argument');
+    }
+  }
+
   if (!dest) throw new Error('ln: need a destination path');
 
-  const opts = findOpts(args);
   return new GimbalResult(async () => {
-    const srcR = gimbal.resolvePath(src.abs());
+    const srcR = gimbal.resolvePath(prev.abs());
     const destR = gimbal.resolvePath(dest.abs());
     const srcVol = gimbal.grits.volume(gimbal._serverUrl, srcR.volumeName);
     const destVol = gimbal.grits.volume(gimbal._serverUrl, destR.volumeName);
     const srcFile = await srcVol.lookup(srcR.path);
     const srcName = srcR.path.split('/').at(-1);
-    const candidates = opts.ff ? [destR.path] : resolveDestPaths(destR, srcName);
+    const candidates = opts.ff ? [destR.path] : [destR.path + '/' + srcName, destR.path];
 
-    for (const path of candidates) {
+    for (let i = 0; i < candidates.length; i++) {
+      const path = candidates[i];
+      if (opts.i) {
+        try { await destVol.lookup(path); throw new Error('ln: destination exists'); }
+        catch (e) { if (e.message === 'ln: destination exists') throw e; }
+      }
       try {
-        if (opts.f || opts.ff) {
-          await destVol.multiLink([{ path, addr: srcFile.cid() }]);
-        } else if (opts.i) {
-          await destVol.multiLink([{ path, addr: srcFile.cid(), prevAddr: '', assert: ASSERT_PREV_MATCHES }]);
-        } else {
-          try {
-            await destVol.multiLink([{ path, addr: srcFile.cid(), prevAddr: '', assert: ASSERT_PREV_MATCHES }]);
-          } catch (e) {
-            if (!(e instanceof AssertionError)) throw e;
-            await destVol.multiLink([{ path, addr: srcFile.cid(), assert: ASSERT_IS_BLOB }]);
-          }
-        }
+        await destVol.multiLink([{ path, addr: srcFile.cid(), assert: 0 }]);
         return;
       } catch (e) {
-        if (e instanceof AssertionError) throw new Error(`ln: destination exists`);
-        if (isPathNotFound(e)) continue;
+        if (i < candidates.length - 1) continue;
+        if (e instanceof AssertionError) throw new Error('ln: destination exists');
         throw e;
       }
     }
-    throw new Error(`ln: cannot resolve destination`);
+    throw new Error('ln: cannot resolve destination');
   });
 }

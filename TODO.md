@@ -1,7 +1,6 @@
 # In Progress
 
 * Make test() streaming because of returning a Response
-* Make sure we're being strict about arguments (e.g. don't accept an argument to ls(), don't accept multiple options bags for login())
 * Add glob()
 * markdown() -> md()
 * All stuff that returns JSON strings should start returning bare strings (e.g. whoami())
@@ -10,11 +9,12 @@
 * __[n] reuse index — when you reuse a Result from history in a new chain, it should claim a new __ slot for the new result rather than overwriting the original.
 * Shell history arrow-key reliability — most recent command not always at end
 * Fix shell history in general
-* Fix the README examples
+* Adjust the README examples and overall presentation
 * gterm command Ctrl-Z
 * gterm command up and down for multi-line commands
 * Move facl() to allow(), deny(), and access()
-
+* Make prompt decorations not copy, in gterm
+* Fix markdown titlebar
 
 # Near Future
 

@@ -20,6 +20,11 @@ function isPlainObject(v) {
 export function invoke(gimbal, prev, ...args) {
   if (!(prev instanceof GimbalClient)) throw new Error('test: must be called on gimbal');
 
+  for (const a of args) {
+    if (typeof a !== 'string' && !isPlainObject(a))
+      throw new Error('test: arguments must be test names (strings) or an options object');
+  }
+
   const opts = isPlainObject(args[args.length - 1]) ? args.pop() : {};
   const namesFromArgs = args.filter(a => typeof a === 'string');
   const only = namesFromArgs.length > 0 ? new Set(namesFromArgs) : null;

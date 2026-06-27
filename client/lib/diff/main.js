@@ -1,5 +1,6 @@
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
+import { GimbalClient } from '../gimbal/client.js';
 
 export const help = `\
 diff — compare two filesystem paths
@@ -7,38 +8,49 @@ diff — compare two filesystem paths
 Usage:
   pathA.diff(pathB)                top-level only (pathB: GimbalPath or string)
   pathA.diff(pathB, {r:1})         recursive
-  gimbal.diff(pathA, pathB)          same (paths must be GimbalPath)
+  gimbal.diff(pathA, pathB)        same (paths must be GimbalPath)
 
 Output is JSONL: each line is [path, cid_a, cid_b]. null means absent.`;
 
-function resolvePath(prev, args) {
-  if (prev instanceof GimbalPath) return prev;
-  return null;
-}
-
-function findPathB(args, gimbal) {
-  const p = args.find(a => a instanceof GimbalPath);
-  if (p) return p;
-  const str = args.find(a => typeof a === 'string');
-  if (str && gimbal) {
-    const res = gimbal.resolvePath(str);
-    return gimbal.p('/' + res.path);
-  }
-  return null;
-}
-
-function findOpts(args) {
-  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
-}
-
 export function invoke(gimbal, prev, ...args) {
-  const pathA = resolvePath(prev, args);
-  if (!(pathA instanceof GimbalPath)) throw new Error('diff: need two paths');
+  let pathA, pathB, opts = {};
 
-  const pathB = findPathB(args, gimbal);
-  if (!pathB) throw new Error('diff: need two paths');
+  if (prev instanceof GimbalClient) {
+    let argIdx = 0;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (argIdx === 0 && (a instanceof GimbalPath || typeof a === 'string')) {
+        pathA = a instanceof GimbalPath ? a : gimbal.p(a);
+        argIdx++;
+      } else if (argIdx === 1 && (a instanceof GimbalPath || typeof a === 'string')) {
+        pathB = a instanceof GimbalPath ? a : gimbal.p(a);
+        argIdx++;
+      } else if (i === args.length - 1 && typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) {
+        opts = a;
+      } else {
+        throw new Error('diff: unexpected argument');
+      }
+    }
+  } else if (prev instanceof GimbalPath) {
+    pathA = prev;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (i === 0 && a instanceof GimbalPath) {
+        pathB = a;
+      } else if (i === 0 && typeof a === 'string') {
+        pathB = prev.p(a);
+      } else if (i === args.length - 1 && typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) {
+        opts = a;
+      } else {
+        throw new Error('diff: unexpected argument');
+      }
+    }
+  } else {
+    throw new Error('diff: need a path');
+  }
 
-  const opts = findOpts(args);
+  if (!pathA || !pathB) throw new Error('diff: need two paths');
+
   return new GimbalResult(async () => {
     const rA = gimbal.resolvePath(pathA.abs());
     const rB = gimbal.resolvePath(pathB.abs());

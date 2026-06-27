@@ -18,15 +18,12 @@ function findDest(args, gimbal) {
   const p = args.find(a => a instanceof GimbalPath);
   if (p) return p;
   const str = args.find(a => typeof a === 'string');
-  if (str && gimbal) {
-    const res = gimbal.resolvePath(str);
-    return gimbal.p('/' + res.path);
-  }
+  if (str && gimbal) return gimbal.p(str);
   return null;
 }
 
 function findOpts(args) {
-  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
+  return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
 }
 
 export function invoke(gimbal, prev, ...args) {
