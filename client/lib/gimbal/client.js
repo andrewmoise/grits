@@ -10,10 +10,11 @@ class Volume {
   get name() { return this._name; }
   get _gritsVolume() { return this._gimbal.grits.volume(this._gimbal._serverUrl, this._name); }
 
-  p(path) {
-    const abs = path.startsWith('/') ? path : '/' + path;
+  path(p) {
+    const abs = p.startsWith('/') ? p : '/' + p;
     return new GimbalPath(abs, this._gimbal);
   }
+  p(p) { return this.path(p); }
 }
 
 export class GimbalClient {
@@ -36,9 +37,10 @@ export class GimbalClient {
     return v;
   }
 
-  p(pathStr) {
-    return this.volume().p(pathStr);
+  path(pathStr) {
+    return this.volume().path(pathStr);
   }
+  p(pathStr) { return this.path(pathStr); }
 
   resolvePath(str) {
     if (str.startsWith('//')) {

@@ -19,7 +19,7 @@ export class GimbalPath {
     return parts.length ? parts[parts.length - 1] : '/';
   }
 
-  p(relative) {
+  path(relative) {
     const baseParts = this._path.split('/').filter(Boolean);
     const relParts = String(relative).split('/').filter(Boolean);
     for (const part of relParts) {
@@ -29,4 +29,5 @@ export class GimbalPath {
     }
     return new GimbalPath('/' + baseParts.join('/'), window.gimbal);
   }
+  p(relative) { return this.path(relative); }
 }

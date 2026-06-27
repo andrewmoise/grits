@@ -27,31 +27,48 @@ Dispatch proxy contract: unknown method calls on any of these three types are ro
 | `gimbal` | `GimbalClient` | Always the GimbalClient (dispatch proxy) |
 | `prev` | `GimbalClient` | Called as `gimbal.command(...)` — global commands |
 | `prev` | `GimbalPath` | Called as `path.command(...)` — filesystem commands |
-| `prev` | any other value | **Rejected** — throw immediately (`'cmd: must be called on gimbal'` or `'cmd: need a path'`) |
-| `args` | mixed | Positional arguments; last may be an options bag object |
+| `prev` | any other value | **Rejected** — throw immediately |
+| `args` | string, GimbalPath, plain object | See per-command rules below |
 
-### Strict argument validation
+### Universal argument rules
 
-Every command module MUST validate `prev` and `args` and throw clear errors:
+Every command follows the same strict positional pattern:
 
-**Global commands** (login, logout, whoami, home, help, test, download, upload, message, facl):
-```js
-if (!('grits' in (prev || {}))) throw new Error('cmd: must be called on gimbal');
+```
+args[0]     — optional relative path (string) — resolved via prev.p(str)
+args[last]  — optional options bag (plain object)
+everything else — ERROR
 ```
 
-**Filesystem commands** (read, write, ls, mkdir, rm, rmdir, append, unzip):
+**Rules:**
+- `args[0]` must be a string (resolved relative to `prev` via `prev.p(str)`) or (for `diff`) a GimbalPath
+- The options bag must be a plain object, and must be the last arg
+- Any arg that doesn't match the expected type for its position → **ERROR**
+
+### Per-command argument contract
+
+| Command | prev | args[0] | args[1] | args[last] | Notes |
+|---------|------|---------|---------|------------|-------|
+| login, logout, whoami, home, help, test, download, upload, message, facl | GimbalClient | Per-command | — | Optional opts | Global commands |
+| **mkdir**, **rm**, **rmdir** | GimbalPath | Optional string (rel path) | — | Optional opts | Operates on `prev/rel` |
+| **read** | GimbalPath | Optional string (rel path) | — | — | Reads `prev/rel` |
+| **ls** | GimbalPath | **ERROR** | — | — | Only lists `prev` |
+| **write**, **append** | GimbalPath | Optional string (rel path) | Required content | Optional opts | Content = string/Response/Uint8Array/ArrayBuffer |
+| **ln** | GimbalPath | Required string or GimbalPath (dest) | — | Optional opts | Links `prev` → `prev.p(dest)` or `dest` |
+| **diff** | GimbalPath or GimbalClient | Required string or GimbalPath | — | Optional opts | If GimbalClient, two strings/GimbalPaths in args. Strings resolve via `prev.p()` (GimbalPath) or `gimbal.p()` (GimbalClient). |
+
+**No cp** — use `ln` instead (copy-on-write link).
+
+### Path resolution
+
+When `args[0]` is a string, it's resolved **relative to `prev`**:
 ```js
-if (!(prev instanceof GimbalPath)) throw new Error('cmd: need a path');
+// home.p('subdir') — creates new GimbalPath
+// home.mkdir('subdir') — resolves 'subdir' relative to home
+const target = prev.p(str);
 ```
 
-**Two-path commands** (cp, mv, ln, diff):
-```js
-if (!(prev instanceof GimbalPath)) throw new Error('cmd: need a source path');
-const dest = args.find(a => a instanceof GimbalPath) || (gimbal.p(strArg));
-if (!dest) throw new Error('cmd: need a destination path');
-```
-
-Commands must NEVER scavenge `args` for a path when `prev` is not a valid type. If `prev` is the wrong type, throw immediately — do not fall through to arguments.
+For absolute paths, pass a GimbalPath instead: `home.mkdir(gimbal.p('/absolute/path'))`.
 
 ### Return values
 

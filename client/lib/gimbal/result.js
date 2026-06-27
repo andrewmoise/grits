@@ -1,3 +1,5 @@
+import { createDispatchProxy } from './dispatch.js';
+
 export class GimbalResult {
   constructor(executor) {
     this._executor = executor;
@@ -5,8 +7,17 @@ export class GimbalResult {
     this._value = undefined;
     this._settled = false;
     this._error = null;
-  
+    return createDispatchProxy(this, typeof window !== 'undefined' ? window.gimbal : null);
   }
+
+  path(relative) {
+    return new GimbalResult(async () => {
+      const resolved = await this;
+      if (typeof resolved?.path === 'function') return resolved.path(relative);
+      throw new Error('cannot resolve path: result is not a path');
+    });
+  }
+  p(relative) { return this.path(relative); }
 
   _resolve() {
     if (!this._promise) {

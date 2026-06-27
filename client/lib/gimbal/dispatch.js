@@ -14,15 +14,14 @@ export function createDispatchProxy(target, gimbal) {
       const moduleName = SHORTCUTS[key] || key;
 
       return (...args) => {
-        return wrapResult(() => _execute(target, gimbal, moduleName, args, receiver), gimbal);
+        return wrapResult(() => _execute(target, gimbal, moduleName, args, receiver));
       };
     },
   });
 }
 
-export function wrapResult(executor, gimbal) {
-  const result = new GimbalResult(executor);
-  return createDispatchProxy(result, gimbal);
+export function wrapResult(executor) {
+  return new GimbalResult(executor);
 }
 
 async function _execute(target, gimbal, moduleName, args, proxy) {
