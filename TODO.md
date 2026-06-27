@@ -1,7 +1,6 @@
 # In Progress
 
 * Make test() streaming because of returning a Response
-* Revisit moving files() and edit() and things out of the shell
 * Make sure we're being strict about arguments (e.g. don't accept an argument to ls(), don't accept multiple options bags for login())
 * Add glob()
 * markdown() -> md()
@@ -14,7 +13,7 @@
 * Fix the README examples
 * gterm command Ctrl-Z
 * gterm command up and down for multi-line commands
-
+* Move facl() to allow(), deny(), and access()
 
 
 # Near Future
@@ -29,7 +28,8 @@
 * Fix certbot browser badness when first accessing a new vhost, and browser visits http://{whatever}
 * Check the updates to login cookies; seem like they're timing out even under active use
 * Make redirect from http:// to https://
-* Make the shell not look like Unix
+* Make "const" work in the shell eval
+* Make "//" work in the shell eval
 
 
 # Backlog
@@ -84,7 +84,6 @@ Lots of tools need to realize when their arguments aren't strings and react acco
 
 Make an indication when a response stream doesn't end with '\n'
 
-Make "const" work in the shell eval
 
 
 ## shell

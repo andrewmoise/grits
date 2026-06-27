@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 
 export const help = `\
@@ -8,6 +9,7 @@ Usage:
   gimbal.help('command')              show help text for a command`;
 
 export function invoke(gimbal, prev, cmdName) {
+  if (!(prev instanceof GimbalClient)) throw new Error('help: must be called on gimbal');
   if (cmdName !== undefined) {
     if (typeof cmdName !== 'string') throw new Error('help: expected a command name');
     return new GimbalResult(async () => {

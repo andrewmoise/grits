@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 
 export const help = `\
@@ -17,6 +18,7 @@ function isPlainObject(v) {
 }
 
 export function invoke(gimbal, prev, ...args) {
+  if (!(prev instanceof GimbalClient)) throw new Error('test: must be called on gimbal');
 
   const opts = isPlainObject(args[args.length - 1]) ? args.pop() : {};
   const namesFromArgs = args.filter(a => typeof a === 'string');

@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 
 export const help = `\
@@ -25,6 +26,7 @@ function pickFile(accept) {
 }
 
 export function invoke(gimbal, prev, opts = {}) {
+  if (!(prev instanceof GimbalClient)) throw new Error('upload: must be called on gimbal');
   return new GimbalResult(async () => {
     const file = await pickFile(opts.accept);
     return new Response(file, {

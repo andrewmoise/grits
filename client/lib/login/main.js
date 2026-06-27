@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 import { promptPassword, promptCredentials } from '../gimbal/dialog.js';
 
@@ -19,6 +20,7 @@ function isPlainObject(v) {
 }
 
 export function invoke(gimbal, prev, ...args) {
+  if (!(prev instanceof GimbalClient)) throw new Error('login: must be called on gimbal');
   const last = args[args.length - 1];
   const opts = isPlainObject(last) ? args.pop() : {};
   const [username, password] = args;

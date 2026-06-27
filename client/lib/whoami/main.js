@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 
 export const help = `\
@@ -22,6 +23,7 @@ function formatExpiry(ts) {
 }
 
 export function invoke(gimbal, prev, opts = {}) {
+  if (!(prev instanceof GimbalClient)) throw new Error('whoami: must be called on gimbal');
   return new GimbalResult(async () => {
     const identities = await gimbal.grits.whoami(gimbal._serverUrl);
     if (!identities || identities.length === 0) return null;

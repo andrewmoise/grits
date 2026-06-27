@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 
 export const help = `\
@@ -10,6 +11,7 @@ Usage:
 Output is a Response. Pipe to .w() to save to a file.`;
 
 export function invoke(gimbal, prev, url, init) {
+  if (!(prev instanceof GimbalClient)) throw new Error('download: must be called on gimbal');
   if (!url || typeof url !== 'string') throw new Error('download: URL string required');
 
   return new GimbalResult(async () => {

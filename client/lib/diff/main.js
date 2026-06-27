@@ -13,7 +13,7 @@ Output is JSONL: each line is [path, cid_a, cid_b]. null means absent.`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
-  return args.find(a => a instanceof GimbalPath) || null;
+  return null;
 }
 
 function findPathB(args, gimbal) {

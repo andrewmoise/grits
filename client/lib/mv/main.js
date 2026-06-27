@@ -11,7 +11,7 @@ Usage:
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
-  return args.find(a => a instanceof GimbalPath) || null;
+  return null;
 }
 
 function findDest(args, gimbal) {

@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 
 export const help = `\
@@ -9,6 +10,7 @@ Usage:
 Convenience shortcut for gimbal.p('/home/{username}').`;
 
 export function invoke(gimbal, prev) {
+  if (!(prev instanceof GimbalClient)) throw new Error('home: must be called on gimbal');
   return new GimbalResult(async () => {
     const identities = await gimbal.grits.whoami(gimbal._serverUrl);
     const username = identities?.[0]?.username;

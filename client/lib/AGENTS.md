@@ -16,19 +16,42 @@ Three types share a **dispatch proxy** mechanism (`gimbal/dispatch.js`):
 - **GimbalPath** — a wrapper around a path string. Paths are absolute (`/home/foo`) or volume-prefixed (`//client/lib/bar`). Dispatchable so `path.read()`, `path.ls()` work. Not thenable.
 - **GimbalResult** — a lazy async value. Created by the dispatch mechanism to wrap command invocations. Thenable — awaiting it runs the command pipeline.
 
-Dispatch proxy contract: unknown method calls on any of these three types are routed to `lib/<name>/main.js`, which exports `invoke(prev, ...args)`.
+Dispatch proxy contract: unknown method calls on any of these three types are routed to `lib/<name>/main.js`, which exports `invoke(gimbal, prev, ...args)`.
 
 ## Command module contract
 
-### `invoke(prev, ...args)`
+### `invoke(gimbal, prev, ...args)`
 
 | Parameter | Type | Meaning |
 |-----------|------|---------|
-| `prev` | `GimbalClient` | Called as `gimbal.command(...)` — use positional args |
-| `prev` | `GimbalPath` | Called as `path.command(...)` — work on this path |
-| `prev` | `GimbalResult` | Previous pipeline stage — await then retry |
-| `prev` | other value | Direct value from pipeline |
-| `args` | mixed | Positional arguments from user call |
+| `gimbal` | `GimbalClient` | Always the GimbalClient (dispatch proxy) |
+| `prev` | `GimbalClient` | Called as `gimbal.command(...)` — global commands |
+| `prev` | `GimbalPath` | Called as `path.command(...)` — filesystem commands |
+| `prev` | any other value | **Rejected** — throw immediately (`'cmd: must be called on gimbal'` or `'cmd: need a path'`) |
+| `args` | mixed | Positional arguments; last may be an options bag object |
+
+### Strict argument validation
+
+Every command module MUST validate `prev` and `args` and throw clear errors:
+
+**Global commands** (login, logout, whoami, home, help, test, download, upload, message, facl):
+```js
+if (!('grits' in (prev || {}))) throw new Error('cmd: must be called on gimbal');
+```
+
+**Filesystem commands** (read, write, ls, mkdir, rm, rmdir, append, unzip):
+```js
+if (!(prev instanceof GimbalPath)) throw new Error('cmd: need a path');
+```
+
+**Two-path commands** (cp, mv, ln, diff):
+```js
+if (!(prev instanceof GimbalPath)) throw new Error('cmd: need a source path');
+const dest = args.find(a => a instanceof GimbalPath) || (gimbal.p(strArg));
+if (!dest) throw new Error('cmd: need a destination path');
+```
+
+Commands must NEVER scavenge `args` for a path when `prev` is not a valid type. If `prev` is the wrong type, throw immediately — do not fall through to arguments.
 
 ### Return values
 

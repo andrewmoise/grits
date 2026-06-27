@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
 
@@ -55,6 +56,7 @@ function grantMatchesPermission(grant, permSpec) {
 }
 
 export function invoke(gimbal, prev, ...args) {
+  if (!(prev instanceof GimbalClient)) throw new Error('facl: must be called on gimbal');
 
   const paths = [];
   const principals = [];

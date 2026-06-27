@@ -1,3 +1,4 @@
+import { GimbalClient } from '../gimbal/client.js';
 import { GimbalResult } from '../gimbal/result.js';
 import { WIDGET_ICONS } from '../style/icons.js';
 import { sendMessage } from './send.js';
@@ -19,6 +20,7 @@ function isPlainObject(v) {
 }
 
 export function invoke(gimbal, prev, ...args) {
+  if (!(prev instanceof GimbalClient)) throw new Error('message: must be called on gimbal');
 
   const rawOpts = isPlainObject(args[args.length - 1]) ? args.pop() : {};
   const positional = args;
