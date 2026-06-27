@@ -1,6 +1,5 @@
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
 export const help = `\
@@ -10,14 +9,11 @@ Usage:
   path.cp(dest)            copy to dest (GimbalPath or string)
   path.cp(dest, {f:1})     overwrite even if dest is a directory
   path.cp(dest, {i:1})     fail if dest exists at all
-  gsh.cp(src, dest)        same (paths must be GimbalPath)`;
+  gimbal.cp(src, dest)        same (paths must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
-  if (prev instanceof GimbalShell) {
-    return args.find(a => a instanceof GimbalPath) || null;
-  }
-  return null;
+  return args.find(a => a instanceof GimbalPath) || null;
 }
 
 function isPathNotFound(e) {
@@ -25,13 +21,13 @@ function isPathNotFound(e) {
   return msg.includes('file does not exist') || msg.includes('is not a directory');
 }
 
-function findDest(args, shell) {
+function findDest(args, gimbal) {
   const p = args.find(a => a instanceof GimbalPath);
   if (p) return p;
   const str = args.find(a => typeof a === 'string');
-  if (str && shell) {
-    const res = shell.resolvePath(str);
-    return new GimbalPath('/' + res.path, shell);
+  if (str && gimbal) {
+    const res = gimbal.resolvePath(str);
+    return gimbal.p('/' + res.path);
   }
   return null;
 }
@@ -40,20 +36,19 @@ function findOpts(args) {
   return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
 }
 
-export function invoke(prev, ...args) {
+export function invoke(gimbal, prev, ...args) {
   const src = resolvePath(prev, args);
   if (!(src instanceof GimbalPath)) throw new Error('cp: need a source path');
 
-  const dest = findDest(args, src._shell);
+  const dest = findDest(args, gimbal);
   if (!dest) throw new Error('cp: need a destination path');
 
   const opts = findOpts(args);
-  const shell = src._shell;
   return new GimbalResult(async () => {
-    const srcR = src._shell.resolvePath(src.abs());
-    const destR = dest._shell.resolvePath(dest.abs());
-    const srcVol = shell._vol(srcR.serverUrl, srcR.volume);
-    const destVol = shell._vol(destR.serverUrl, destR.volume);
+    const srcR = gimbal.resolvePath(src.abs());
+    const destR = gimbal.resolvePath(dest.abs());
+    const srcVol = gimbal.grits.volume(gimbal._serverUrl, srcR.volumeName);
+    const destVol = gimbal.grits.volume(gimbal._serverUrl, destR.volumeName);
 
     const srcFile = await srcVol.lookup(srcR.path);
     const bytes = new Uint8Array(await (await srcFile.get()).arrayBuffer());

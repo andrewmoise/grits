@@ -2,13 +2,18 @@ This is a file designed for AI coding tools, to give the lay of the land of the 
 
 `client/lib/` is the browser-side frontend — the Gimbal shell environment. It contains ~30 subdirectories, each typically holding one "command" or "widget" implemented as an ES module.
 
+## DO NOT
+
+- **Do NOT start `gritsd`** — the production server is always running on the host. Starting a second instance will break things. Frontend changes are verified in a browser with the existing server.
+- **Do NOT modify `config.json`** in the project root — the server depends on it.
+
 ## How it works
 
-The shell (`gimbal/gsh.js`) evaluates user input via `new Function('gsh', 'gwm', '_', '__', src)` — no `with`, no bare-identifier magic. `gsh` (the GimbalShell) and `gwm` (window manager) are the only globals in scope. All commands are called as methods on `gsh` or on a `GimbalPath` object.
+The entry point is `window.gimbal` — a `GimbalClient` (`gimbal/client.js`). It wraps a `GritsClient` for low-level filesystem access. All interactions are method calls on `GimbalClient` (for global commands) or `GimbalPath` (for filesystem ops).
 
-Three core types share a **dispatch proxy** mechanism (`gimbal/dispatch.js`):
-- **GimbalShell** (`gsh`) — the shell object. Methods that aren't built-in (`fork`, `eval`, `resolvePath`, ...) are dispatched to `lib/<name>/main.js`. `gsh.p('/path')` or `gsh.test()`.
-- **GimbalPath** — a wrapper around an absolute path string. Dispatchable so `path.ls()`, `path.read()`, etc. work. Not thenable.
+Three types share a **dispatch proxy** mechanism (`gimbal/dispatch.js`):
+- **GimbalClient** (`gimbal`) — the central client. Methods that aren't built-in (`volume`, `p`, `eval`, ...) are dispatched to `lib/<name>/main.js`. `gimbal.login()` or `gimbal.help()`.
+- **GimbalPath** — a wrapper around a path string. Paths are absolute (`/home/foo`) or volume-prefixed (`//client/lib/bar`). Dispatchable so `path.read()`, `path.ls()` work. Not thenable.
 - **GimbalResult** — a lazy async value. Created by the dispatch mechanism to wrap command invocations. Thenable — awaiting it runs the command pipeline.
 
 Dispatch proxy contract: unknown method calls on any of these three types are routed to `lib/<name>/main.js`, which exports `invoke(prev, ...args)`.
@@ -19,7 +24,7 @@ Dispatch proxy contract: unknown method calls on any of these three types are ro
 
 | Parameter | Type | Meaning |
 |-----------|------|---------|
-| `prev` | `GimbalShell` | Called as `gsh.command(...)` — use positional args |
+| `prev` | `GimbalClient` | Called as `gimbal.command(...)` — use positional args |
 | `prev` | `GimbalPath` | Called as `path.command(...)` — work on this path |
 | `prev` | `GimbalResult` | Previous pipeline stage — await then retry |
 | `prev` | other value | Direct value from pipeline |
@@ -31,36 +36,15 @@ Dispatch proxy contract: unknown method calls on any of these three types are ro
 - **GimbalResult** — for async work. The dispatch mechanism flattens nested GimbalResults automatically.
 - Commands should NOT return `Response` objects except `upload`, `download`, and `test` (which stream progressive output).
 
-### Path arguments
-
-Commands should accept paths in any of these forms:
-1. A `GimbalPath` object — canonical form
-2. An absolute string starting with `/` — converted to `GimbalPath('/path', shell)`
-3. A relative string — resolved via `shell.resolvePath()` and converted
-
-Use the shared helper from `gimbal/path-util.js`:
-
-```js
-import { resolvePathArg } from '../gimbal/path-util.js';
-
-export function invoke(prev, ...args) {
-  const p = resolvePathArg(prev, args);
-  if (!p) throw new Error('cmd: need a path');
-  // p is a GimbalPath
-}
-```
-
-For two-path commands (`cp`, `mv`, `ln`, `diff`), use `resolvePathArg` for the first path (from `prev`/`args[0]`) and find the second in the remaining args.
-
 ### Help string
 
-Each module exports a `help` string shown by `gsh.help('cmd')`.
+Each module exports a `help` string shown by `gimbal.help('cmd')`.
 
 ## Core libraries
 
 | Directory | Files | Purpose |
 |-----------|-------|---------|
-| `gimbal/` | `gsh.js`, `dispatch.js`, `result.js`, `path.js`, `path-util.js`, `glob.js`, `overlay.js` | Shell environment — GimbalShell, GimbalResult, GimbalPath, dispatch proxy, path resolution, glob |
+| `gimbal/` | `client.js`, `dispatch.js`, `result.js`, `path.js`, `volume.js`, `glob.js`, `overlay.js` | Core client — GimbalClient, GimbalResult, GimbalPath, Volume, dispatch proxy, glob |
 | `grits/` | `GritsClient.js`, `MirrorManager.js`, `HashVerifier.js`, `PerformanceTracker.js` | Client-side filesystem |
 | `style/` | `style.js`, `style.css` | Design tokens — colors, spacing, typography |
 | `serviceworker/` | `grits-serviceworker.js`, `test.html` | Service worker for offline/PWA |
@@ -71,7 +55,7 @@ Each module exports a `help` string shown by `gsh.help('cmd')`.
 
 `ls`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `diff`, `read`, `write`, `append`, `unzip`, `path`
 
-### Non-filesystem (require GimbalShell as prev)
+### Non-filesystem (require GimbalClient as prev)
 
 `login`, `logout`, `whoami`, `help`, `test`, `home`, `upload`, `download`, `message`
 
@@ -91,10 +75,10 @@ Each test file exports a `tests` array of `{ label, fn }` objects:
 export const tests = [
   {
     label: 'cp copies a file',
-    async fn(shell, scratch) {
-      await shell.eval(`gsh.path('${scratch}/src.txt').w('hello')`);
-      await shell.eval(`gsh.path('${scratch}/src.txt').cp(gsh.path('${scratch}/dest.txt'))`);
-      const text = await shell.eval(`gsh.path('${scratch}/dest.txt').read()`);
+    async fn(gimbal, scratch) {
+      await gimbal.eval(`gimbal.p('${scratch}/src.txt').w('hello')`);
+      await gimbal.eval(`gimbal.p('${scratch}/src.txt').cp(gimbal.p('${scratch}/dest.txt'))`);
+      const text = await gimbal.eval(`gimbal.p('${scratch}/dest.txt').read()`);
       if (text !== 'hello') throw new Error('copy failed');
     },
   },
@@ -106,7 +90,7 @@ export const tests = [
 1. **Discovery** — `test()` scans `lib/*/` for directories containing a `test.js` file
 2. **Filtering** — run a subset with `test('cp', 'echo')`
 3. **Isolation** — each test gets a unique scratch directory at `//primary/tmp/gimbal-test/<random>` (auto-created with `mkdir -p`)
-4. **Test signature** — `fn(shell, scratch)` where `shell` gives access to `shell.eval()`, `shell.resolvePath()`, and `shell._vol()`, and `scratch` is the scratch path string
+4. **Test signature** — `fn(gimbal, scratch)` where `gimbal` gives access to `gimbal.eval()`, `gimbal.resolvePath()`, and `gimbal.grits.volume()`, and `scratch` is the scratch path string
 5. **Assertions** — throw on failure: `throw new Error('expected ...')`
 6. **Output** — streamed as plain text with ✓/✗ marks and a summary
 
@@ -114,12 +98,12 @@ export const tests = [
 
 | What | How |
 |---|---|---|
-| Run a command | `await shell.eval(\`gsh.p('${scratch}/path').cmd()\`)` |
-| Read file content | `await shell.eval(\`gsh.p('${scratch}/f').read()\`)` |
-| Write file | `await shell.eval(\`gsh.p('${scratch}/f').w('data')\`)` |
-| Check file exists | `shell._vol(r.serverUrl, r.volume).lookup(r.path)` |
+| Run a command | `await gimbal.eval(\`gimbal.p('${scratch}/path').cmd()\`)` |
+| Read file content | `await gimbal.eval(\`gimbal.p('${scratch}/f').read()\`)` |
+| Write file | `await gimbal.eval(\`gimbal.p('${scratch}/f').w('data')\`)` |
+| Check file exists | `gimbal.grits.volume(gimbal._serverUrl, r.volumeName).lookup(r.path)` |
 | Check file is gone | Catch `"not found"` from `lookup()` |
-| Expect an error | Catch the error from `shell.eval()` and check `e.message` |
+| Expect an error | Catch the error from `gimbal.eval()` and check `e.message` |
 
 ### Options
 

@@ -1,15 +1,14 @@
 import { GimbalResult } from '../gimbal/result.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 
 export const help = `\
 test — run all test.js suites found in /lib
 
 Usage:
-  gsh.test()                           — skip login/logout/whoami (prompting tests)
-  gsh.test({a:1})                      — run ALL suites including login/logout/whoami
-  gsh.test('login')                    — run only the login suite
-  gsh.test({v:1})                      — show full stack traces on failure
-  gsh.test({ff:1})                     — fail fast (immediately on first failure)`;
+  gimbal.test()                           — skip login/logout/whoami (prompting tests)
+  gimbal.test({a:1})                      — run ALL suites including login/logout/whoami
+  gimbal.test('login')                    — run only the login suite
+  gimbal.test({v:1})                      — show full stack traces on failure
+  gimbal.test({ff:1})                     — fail fast (immediately on first failure)`;
 
 function isPlainObject(v) {
   if (!v || typeof v !== 'object') return false;
@@ -17,9 +16,7 @@ function isPlainObject(v) {
   return p === Object.prototype || p === null;
 }
 
-export function invoke(prev, ...args) {
-  if (!(prev instanceof GimbalShell)) throw new Error('test: must be called on gsh');
-  const shell = prev;
+export function invoke(gimbal, prev, ...args) {
 
   const opts = isPlainObject(args[args.length - 1]) ? args.pop() : {};
   const namesFromArgs = args.filter(a => typeof a === 'string');
@@ -35,8 +32,8 @@ export function invoke(prev, ...args) {
     const push = (line) => controller.enqueue(enc.encode(line + '\n'));
 
     try {
-      const here = shell.fs.fromModule(import.meta.url);
-      const vol = shell.fs.volume(here.serverUrl, here.volume);
+      const here = gimbal.grits.fromModule(import.meta.url);
+      const vol = gimbal.grits.volume(here.serverUrl, here.volume);
       const parts = here.path.split('/');
 
       if (parts.length < 3 || parts[parts.length - 2] !== 'test') {
@@ -93,11 +90,11 @@ export function invoke(prev, ...args) {
         for (const { label, fn } of mod.tests) {
           const randSuffix = Math.random().toString(36).slice(2, 10);
           const scratchPath = `gimbal-test/${randSuffix}`;
-          await shell.eval(`gsh.p('/tmp/${scratchPath}').mkdir({p:1})`);
+          await gimbal.eval(`gimbal.p('/tmp/${scratchPath}').mkdir({p:1})`);
           const scratch = '/tmp/' + scratchPath;
 
           try {
-            await fn(shell, scratch);
+            await fn(gimbal, scratch);
             push(`  ✓ ${label}`);
             passed++;
           } catch (e) {

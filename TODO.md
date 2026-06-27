@@ -2,9 +2,11 @@
 
 * Make test() streaming because of returning a Response
 * Revisit moving files() and edit() and things out of the shell
-* Make sure we're being strict about arguments (e.g. don't accept an argument to ls())
+* Make sure we're being strict about arguments (e.g. don't accept an argument to ls(), don't accept multiple options bags for login())
 * Add glob()
 * markdown() -> md()
+* All stuff that returns JSON strings should start returning bare strings (e.g. whoami())
+* Remove client/lib/path
 
 * __[n] reuse index — when you reuse a Result from history in a new chain, it should claim a new __ slot for the new result rather than overwriting the original.
 * Shell history arrow-key reliability — most recent command not always at end

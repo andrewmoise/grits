@@ -1,5 +1,4 @@
 import { GimbalResult } from '../gimbal/result.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 import { WIDGET_ICONS } from '../style/icons.js';
 import { sendMessage } from './send.js';
 
@@ -7,9 +6,9 @@ export const help = `\
 message — send a message to a user's inbox
 
 Usage:
-  gsh.message('to', 'subject', 'body')
-  gsh.message('to', 'body')
-  gsh.message()
+  gimbal.message('to', 'subject', 'body')
+  gimbal.message('to', 'body')
+  gimbal.message()
 
 With to and body provided, sends directly. Otherwise opens a compose widget.`;
 
@@ -19,9 +18,7 @@ function isPlainObject(v) {
   return p === Object.prototype || p === null;
 }
 
-export function invoke(prev, ...args) {
-  if (!(prev instanceof GimbalShell)) throw new Error('message: must be called on gsh');
-  const shell = prev;
+export function invoke(gimbal, prev, ...args) {
 
   const rawOpts = isPlainObject(args[args.length - 1]) ? args.pop() : {};
   const positional = args;
@@ -39,7 +36,7 @@ export function invoke(prev, ...args) {
         icon: icon ?? defaults.icon,
         iconColor: iconColor ?? defaults.iconColor,
         zone: 'master',
-        shell,
+        gimbal,
         args: [{ to: positional[0] || '', subject: positional[1] || '' }],
       });
     });
@@ -47,9 +44,9 @@ export function invoke(prev, ...args) {
 
   return new GimbalResult(async () => {
     const subject = positional.length > 2 ? positional[1] : '';
-    const identities = await shell.fs.whoami(shell.serverUrl);
+    const identities = await gimbal.grits.whoami(gimbal._serverUrl);
     const from = identities?.[0]?.username || '(anonymous)';
-    const vol = shell._vol(shell.serverUrl, 'primary');
+    const vol = gimbal.grits.volume(gimbal._serverUrl, 'primary');
     await sendMessage(vol, to, from, subject, body, messageOpts);
   });
 }

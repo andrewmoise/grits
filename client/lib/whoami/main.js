@@ -1,12 +1,11 @@
 import { GimbalResult } from '../gimbal/result.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 
 export const help = `\
 whoami — show identity info from the server
 
 Usage:
-  gsh.whoami()                   — bare quoted username per line (JSONL)
-  gsh.whoami({v:1})              — verbose: ["username", status, "expiry"] per line
+  gimbal.whoami()                   — bare quoted username per line (JSONL)
+  gimbal.whoami({v:1})              — verbose: ["username", status, "expiry"] per line
 
 When not logged in, output is empty.`;
 
@@ -22,14 +21,9 @@ function formatExpiry(ts) {
   return new Date(ts * 1000).toLocaleString(locale, { timeZoneName: 'short' });
 }
 
-export function invoke(prev, opts = {}) {
-  if (!(prev instanceof GimbalShell)) throw new Error('whoami: must be called on gsh');
-  if (isPlainObject(opts)) opts = opts;
-  else opts = {};
-
-  const shell = prev;
+export function invoke(gimbal, prev, opts = {}) {
   return new GimbalResult(async () => {
-    const identities = await shell.fs.whoami(shell.serverUrl);
+    const identities = await gimbal.grits.whoami(gimbal._serverUrl);
     if (!identities || identities.length === 0) return null;
 
     const verbose = !!opts.v;

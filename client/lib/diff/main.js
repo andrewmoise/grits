@@ -1,6 +1,5 @@
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 
 export const help = `\
 diff — compare two filesystem paths
@@ -8,25 +7,22 @@ diff — compare two filesystem paths
 Usage:
   pathA.diff(pathB)                top-level only (pathB: GimbalPath or string)
   pathA.diff(pathB, {r:1})         recursive
-  gsh.diff(pathA, pathB)          same (paths must be GimbalPath)
+  gimbal.diff(pathA, pathB)          same (paths must be GimbalPath)
 
 Output is JSONL: each line is [path, cid_a, cid_b]. null means absent.`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
-  if (prev instanceof GimbalShell) {
-    return args.find(a => a instanceof GimbalPath) || null;
-  }
-  return null;
+  return args.find(a => a instanceof GimbalPath) || null;
 }
 
-function findPathB(args, shell) {
+function findPathB(args, gimbal) {
   const p = args.find(a => a instanceof GimbalPath);
   if (p) return p;
   const str = args.find(a => typeof a === 'string');
-  if (str && shell) {
-    const res = shell.resolvePath(str);
-    return new GimbalPath('/' + res.path, shell);
+  if (str && gimbal) {
+    const res = gimbal.resolvePath(str);
+    return gimbal.p('/' + res.path);
   }
   return null;
 }
@@ -35,20 +31,19 @@ function findOpts(args) {
   return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath)) || {};
 }
 
-export function invoke(prev, ...args) {
+export function invoke(gimbal, prev, ...args) {
   const pathA = resolvePath(prev, args);
   if (!(pathA instanceof GimbalPath)) throw new Error('diff: need two paths');
 
-  const pathB = findPathB(args, pathA._shell);
+  const pathB = findPathB(args, gimbal);
   if (!pathB) throw new Error('diff: need two paths');
 
   const opts = findOpts(args);
-  const shell = pathA._shell;
   return new GimbalResult(async () => {
-    const rA = pathA._shell.resolvePath(pathA.abs());
-    const rB = pathB._shell.resolvePath(pathB.abs());
-    const volA = shell._vol(rA.serverUrl, rA.volume);
-    const volB = shell._vol(rB.serverUrl, rB.volume);
+    const rA = gimbal.resolvePath(pathA.abs());
+    const rB = gimbal.resolvePath(pathB.abs());
+    const volA = gimbal.grits.volume(gimbal._serverUrl, rA.volumeName);
+    const volB = gimbal.grits.volume(gimbal._serverUrl, rB.volumeName);
     const fileA = await volA.lookup(rA.path);
     const fileB = await volB.lookup(rB.path);
     const lines = [];

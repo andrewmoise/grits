@@ -121,14 +121,13 @@ function ensureStyles() {
   `);
 }
 
-export default function createWidget({ name, shell, args = [] }) {
+export default function createWidget({ name, gimbal, args = [] }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gc-wrap';
 
-  const fs = shell?.fs;
-  const serverUrl = shell?.serverUrl || window.location.origin;
+  const serverUrl = gimbal?._serverUrl || window.location.origin;
 
   const prefill = (args && args[0]) || {};
 
@@ -193,7 +192,7 @@ export default function createWidget({ name, shell, args = [] }) {
 
   (async () => {
     try {
-      const identities = await fs.whoami(serverUrl);
+      const identities = await gimbal.grits.whoami(serverUrl);
       from = identities?.[0]?.username || '(anonymous)';
     } catch {
       from = '(anonymous)';
@@ -233,7 +232,7 @@ export default function createWidget({ name, shell, args = [] }) {
     const body = bodyInput.value;
 
     try {
-      const vol = fs.volume(serverUrl, 'primary');
+      const vol = gimbal.grits.volume(serverUrl, 'primary');
       await sendMessage(vol, to, from, subject, body);
       toast(`Message sent to ${to}`);
       toInput.value = '';

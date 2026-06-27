@@ -1,6 +1,5 @@
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 import { Unzip, AsyncUnzipInflate } from '/lib/node_modules/fflate/esm/browser.js';
 
@@ -10,13 +9,10 @@ unzip — extract a zip archive into the current directory
 Usage:
   path.unzip()                 extract zip into cwd
   path.unzip({f:1})            overwrite existing files
-  gsh.unzip(path)              same (path must be GimbalPath)`;
+  gimbal.unzip(path)              same (path must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
-  if (prev instanceof GimbalShell) {
-    return args.find(a => a instanceof GimbalPath) || null;
-  }
   return null;
 }
 
@@ -24,20 +20,19 @@ function findOpts(args) {
   return args.find(a => typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) || {};
 }
 
-export function invoke(prev, ...args) {
+export function invoke(gimbal, prev, ...args) {
   const path = resolvePath(prev, args);
   if (!(path instanceof GimbalPath)) throw new Error('unzip: need a file path');
 
   const opts = findOpts(args);
-  const shell = path._shell;
 
   return new GimbalResult(async () => {
-    const r = shell.resolvePath(path.abs());
-    const vol = shell._vol(r.serverUrl, r.volume);
+    const r = gimbal.resolvePath(path._path);
+    const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
     const file = await vol.lookup(r.path);
     if (!file.isFile()) throw new Error('unzip: not a file');
 
-    const cwdPath = shell.resolvePath('.').path;
+    const cwdPath = gimbal.resolvePath('.').path;
     let chain = Promise.resolve();
 
     const unzip = new Unzip((fileEntry) => {

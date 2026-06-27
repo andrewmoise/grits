@@ -119,12 +119,12 @@ function findInTree(list, id) {
 
 // ── Widget ────────────────────────────────────────────────────────────────────
 
-export default function createWidget({ name, shell, opts = {} }) {
-  const fs    = shell?.fs;
+export default function createWidget({ name, gimbal, opts = {} }) {
+  const grits = gimbal?.grits;
 
   let vol = null;
-  if (!vol && fs) {
-    try { vol = fs.volume(window.location.origin, 'sys'); } catch (_) {}
+  if (!vol && grits) {
+    try { vol = grits.volume(window.location.origin, 'sys'); } catch (_) {}
   }
 
   // ── Styles ───────────────────────────────────────────────────────────────────

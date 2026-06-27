@@ -281,47 +281,27 @@
 <script type="module">
 
 import GritsClient                             from './lib/grits/GritsClient.js';
-import { makeShell }                           from './lib/gimbal/gsh.js';
+import { initGimbal }                          from './lib/gimbal/client.js';
 import { injectTheme, EASE_SINE, EASE_IN, DUR } from './lib/style/style.js';
 import { ICONS, getIconSvg, WIDGET_ICONS }       from './lib/style/icons.js';
 
 injectTheme();
 
-const _gg     = new GritsClient();
+const _gg   = new GritsClient();
 
-// Derive runtime location from module URL.
-// Maps https://{server}/{path} to //primary/sites/{server}/live/{path} in Grits space.
 const _origin = window.location.origin;
+const { serverUrl: _serverUrl, path: _modulePath } = _gg.fromModule(import.meta.url);
+const _siteBase = (_modulePath || '').replace(/\/+$/, '');
 
-const { serverUrl: _serverUrl, volume: _vol, path: _path } = _gg.fromModule(import.meta.url);
-
-// Strip filename from path to get cwd.
-// If the path already ends with / it's a directory — use as-is.
-const _cwd = (_path && !_path.endsWith('/'))
-  ? _path.split('/').slice(0, -1).join('/')
-  : _path || '';
-
-// Initialize shell with correct runtime context
-const _shell = makeShell({ fs: _gg });
-_shell.serverUrl = _serverUrl || _origin;
-_shell.volume = _vol;
-_shell.cwd = _cwd;
-
-const gwm = {
-  openWidget,
-  close:    closeWidget,
-  minimize: minimizeWidget,
-  restore:  restoreWidget,
-  promote:  promoteWidget,
-  demote:   demoteWidget,
-};
-
-_shell.gwm = gwm;
+const gimbal = initGimbal(_gg);
+gimbal.openWidget = openWidget;
+gimbal._serverUrl = _serverUrl || _origin;
+window.gimbal = gimbal;
 
 async function loadJsonlFile(path) {
   try {
-    const { serverUrl, volume, path: relPath } = _shell.resolvePath(path);
-    const f = await _gg.volume(serverUrl, volume).lookup(relPath);
+    const { volumeName, path: relPath } = gimbal.resolvePath(path);
+    const f = await _gg.volume(gimbal._serverUrl, volumeName).lookup(relPath);
     if (f.isFile()) return (await f.text()).split('\n')
       .map(l => l.trim()).filter(Boolean)
       .map(l => JSON.parse(l));
@@ -349,7 +329,7 @@ async function openWidget(mod, opts = {}) {
     icon      = 'edit',
     iconColor = null,
     iconRect  = null,
-    shell: passedShell,
+    gimbal: passedGimbal,
     ...rest
   } = opts;
 
@@ -393,9 +373,7 @@ async function openWidget(mod, opts = {}) {
   try {
     const createWidget = mod.default ?? mod;
     
-    const childShell = (passedShell ?? _shell).fork();
-    
-    const instance     = await Promise.resolve(createWidget({ name, iconColor, shell: childShell, ...rest }));
+    const instance     = await Promise.resolve(createWidget({ name, iconColor, gimbal: passedGimbal ?? gimbal, ...rest }));
     const w            = widgets.get(id);
     if (!w) return;
 
@@ -452,7 +430,6 @@ async function openWidget(mod, opts = {}) {
 }
 
 // ── Public API ────────────────────────────────────────────
-window.gimbal = { openWidget };
 
 
 const mkEl = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
@@ -1080,7 +1057,7 @@ function buildStrip(entries) {
     const b = mkEl('div', 'strip-launcher');
     b.innerHTML = getIconSvg(entry.icon, entry.iconColor)
                 + `<span class="tip">${entry.cmd}</span>`;
-    b.addEventListener('click', () => _shell.eval(entry.cmd));
+    b.addEventListener('click', () => gimbal.eval(entry.cmd));
     stripTop.appendChild(b);
   });
 }
@@ -1103,7 +1080,7 @@ document.addEventListener('keydown', e => {
         `//primary/home/${username}/local/gimbal/${name}`);
       if (entries) return entries;
     }
-    return loadJsonlFile(`lib/gimbal/${name}`);
+    return loadJsonlFile(`//primary/${_siteBase}/lib/gimbal/${name}`);
   }
 
   const stripEntries = await loadFile('launcher.jsonl');
@@ -1112,7 +1089,7 @@ document.addEventListener('keydown', e => {
   const profileEntries = await loadFile('profile.jsonl');
   if (profileEntries) {
     for (const entry of profileEntries) {
-      if (typeof entry === 'string') await _shell.eval(entry);
+      if (typeof entry === 'string') await gimbal.eval(entry);
     }
   }
 })();

@@ -1,14 +1,14 @@
 export const tests = [
   {
     label: 'logout after session-only login revokes access',
-    async fn(shell, scratch) {
-      await shell.eval('gsh.logout()');
-      await shell.eval('gsh.login()');
-      const username = shell.fs._username;
+    async fn(gimbal, scratch) {
+      await gimbal.eval('gimbal.logout()');
+      await gimbal.eval('gimbal.login()');
+      const username = gimbal.grits._username;
       if (!username) throw new Error('no username after login');
-      const vol = shell._vol(shell.serverUrl, 'primary');
+      const vol = gimbal.grits.volume(gimbal._serverUrl, 'primary');
       await vol.lookup('home/' + username);
-      await shell.eval('gsh.logout()');
+      await gimbal.eval('gimbal.logout()');
       try {
         await vol.lookup('home/' + username);
         throw new Error('expected access_denied after logout');
@@ -21,16 +21,16 @@ export const tests = [
   },
   {
     label: 'logout after global login revokes cookie access',
-    async fn(shell, scratch) {
-      await shell.eval('gsh.logout()');
-      await shell.eval('gsh.login({g:1})');
-      const username = shell.fs._username;
+    async fn(gimbal, scratch) {
+      await gimbal.eval('gimbal.logout()');
+      await gimbal.eval('gimbal.login({g:1})');
+      const username = gimbal.grits._username;
       if (!username) throw new Error('no username after login');
-      const vol = shell._vol(shell.serverUrl, 'primary');
+      const vol = gimbal.grits.volume(gimbal._serverUrl, 'primary');
       await vol.lookup('home/' + username);
-      await shell.eval('gsh.logout()');
-      shell.fs._authToken = null;
-      delete shell.fs.extraHeaders['X-Grits-Auth-Token'];
+      await gimbal.eval('gimbal.logout()');
+      gimbal.grits._authToken = null;
+      delete gimbal.grits.extraHeaders['X-Grits-Auth-Token'];
       try {
         await vol.lookup('home/' + username);
         throw new Error('expected access_denied after logout of global session');
@@ -43,11 +43,11 @@ export const tests = [
   },
   {
     label: 'logout clears session token',
-    async fn(shell, scratch) {
-      await shell.eval('gsh.logout()');
-      await shell.eval('gsh.login()');
-      await shell.eval('gsh.logout()');
-      const text = await shell.eval('gsh.whoami()');
+    async fn(gimbal, scratch) {
+      await gimbal.eval('gimbal.logout()');
+      await gimbal.eval('gimbal.login()');
+      await gimbal.eval('gimbal.logout()');
+      const text = await gimbal.eval('gimbal.whoami()');
       if (text !== null) throw new Error(`expected null after logout, got: ${JSON.stringify(text)}`);
     },
   },

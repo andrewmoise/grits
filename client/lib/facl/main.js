@@ -1,14 +1,13 @@
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 
 export const help = `\
 facl — display or modify file ACL grants
 
 Usage:
-  gsh.facl({u:'moise', o:'gimbal'}, {p:'owner'})  add/modify on current dir
-  gsh.facl(path, {u:'moise'}, {x:1})               remove on path
-  gsh.facl(path)                                   list grants on path
+  gimbal.facl({u:'moise', o:'gimbal'}, {p:'owner'})  add/modify on current dir
+  gimbal.facl(path, {u:'moise'}, {x:1})               remove on path
+  gimbal.facl(path)                                   list grants on path
 
 Auth/wildcard:
   {auth:true}, {all:true}, {o:"*"} for any origin
@@ -55,9 +54,7 @@ function grantMatchesPermission(grant, permSpec) {
   return true;
 }
 
-export function invoke(prev, ...args) {
-  if (!(prev instanceof GimbalShell)) throw new Error('facl: must be called on gsh');
-  const shell = prev;
+export function invoke(gimbal, prev, ...args) {
 
   const paths = [];
   const principals = [];
@@ -100,8 +97,8 @@ export function invoke(prev, ...args) {
   return new GimbalResult(async () => {
     if (principals.length === 0 && !remove && permission === null) {
       if (paths.length > 1) return;
-      const r = shell.resolvePath(paths[0]);
-      const vol = shell._vol(r.serverUrl, r.volume);
+      const r = gimbal.resolvePath(paths[0]);
+      const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
       const jsonPath = r.path ? r.path + '/.grits/access.json' : '.grits/access.json';
       try {
         const file = await vol.lookup(jsonPath);
@@ -118,8 +115,8 @@ export function invoke(prev, ...args) {
       throw new Error('facl: origin is required. Use {o:"*"} for any origin.');
 
     for (const targetPath of paths) {
-      const r = shell.resolvePath(targetPath);
-      const vol = shell._vol(r.serverUrl, r.volume);
+      const r = gimbal.resolvePath(targetPath);
+      const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
       const jsonPath = r.path ? r.path + '/.grits/access.json' : '.grits/access.json';
 
       if (r.path.includes('/.grits') || r.path.startsWith('.grits'))

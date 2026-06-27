@@ -1,12 +1,11 @@
 import { GimbalResult } from '../gimbal/result.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 
 export const help = `\
 upload — open a file picker and bring the selected file into the pipeline
 
 Usage:
-  gsh.upload()
-  gsh.upload({ accept: 'image/*' })
+  gimbal.upload()
+  gimbal.upload({ accept: 'image/*' })
   upload().to(path)     — pipe to .w() instead .w()
 
 Output is a Response wrapping the selected file's contents.`;
@@ -25,9 +24,7 @@ function pickFile(accept) {
   });
 }
 
-export function invoke(prev, opts = {}) {
-  if (!(prev instanceof GimbalShell)) throw new Error('upload: must be called on gsh');
-
+export function invoke(gimbal, prev, opts = {}) {
   return new GimbalResult(async () => {
     const file = await pickFile(opts.accept);
     return new Response(file, {

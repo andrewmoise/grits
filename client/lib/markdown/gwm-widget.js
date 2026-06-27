@@ -680,11 +680,29 @@ async function buildContent(src, sourceDir) {
   return frag;
 }
 
-export default async function createWidget({ name, content = '', sourceDir = '' }) {
+export default async function createWidget({ name, content = '', sourceDir = '', gimbal, path: gimbalPath }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gm-wrap';
+
+  if (!content && gimbalPath && gimbal) {
+    console.log('[markdown] gimbalPath.abs():', gimbalPath.abs());
+    const r = gimbal.resolvePath(gimbalPath.abs());
+    console.log('[markdown] resolvePath result:', r);
+    const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
+    console.log('[markdown] volume:', r.volumeName, 'path:', r.path, 'serverUrl:', gimbal._serverUrl);
+    const gritsFile = await vol.lookup(r.path);
+    const resp = await gritsFile.get();
+    content = await resp.text();
+    const dirParts = r.path.split('/').filter(Boolean);
+    dirParts.pop();
+    const encPath = dirParts.map(encodeURIComponent).join('/');
+    sourceDir = encPath
+      ? `${gimbal._serverUrl}/grits/v1/content/${r.volumeName}/${encPath}`
+      : `${gimbal._serverUrl}/grits/v1/content/${r.volumeName}`;
+    if (!name) name = gimbalPath.toString();
+  }
 
   if (content) {
     const body = document.createElement('div');

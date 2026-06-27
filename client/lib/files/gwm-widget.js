@@ -130,17 +130,16 @@ function buildRow(node, depth, onSelect, onToggle, onOpenFile) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-export default function createWidget({ name, shell, args = [] }) {
+export default function createWidget({ name, gimbal, path: gimbalPath, args = [] }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gf-tree';
   el.style.cssText = 'overflow:auto;flex:1;min-height:0;height:100%;';
 
-  const fs     = shell?.fs;
   // These define the hard root for this widget instance
-  let serverUrl = window.location.origin;
-  let volume    = 'client';
+  let serverUrl = gimbal?._serverUrl || window.location.origin;
+  let volume    = 'primary';
   let basePath  = '';
   let selected = null;
   let controls = null;
@@ -148,37 +147,29 @@ export default function createWidget({ name, shell, args = [] }) {
   let domBusy = 0;
   let refreshTimer = null;
 
-  // ── Parse args → path ───────────────────────────────────────
-  // Parse args → (serverUrl, volume, basePath)
-  // Default: cwd if launched from shell, otherwise current client root
-  if (shell) {
-    serverUrl = shell.serverUrl;
-    volume    = shell.volume;
-    basePath  = (shell.cwd || '').replace(/^\/+|\/+$/g, '');
-  }
-
-  if (args && args.length === 1) {
+  if (gimbalPath && gimbal) {
+    const r = gimbal.resolvePath(gimbalPath.abs());
+    volume   = r.volumeName;
+    basePath = r.path.replace(/^\//, '');
+  } else if (args && args.length === 1) {
     const a = args[0];
     let p = null;
     if (typeof a === 'string') p = a;
     else if (a && typeof a === 'object' && typeof a.path === 'string') p = a.path;
 
-    if (p != null && shell) {
+    if (p != null && gimbal) {
       try {
-        const r = shell.resolvePath(p);
-        serverUrl = r.serverUrl;
-        volume    = r.volume;
-        basePath  = r.path; // already normalized by resolvePath — no leading or trailing slash
+        const r = gimbal.resolvePath(p);
+        volume   = r.volumeName;
+        basePath = r.path.replace(/^\//, '');
       } catch (e) {
-        console.warn('[files] failed to resolve path, using cwd');
+        console.warn('[files] failed to resolve path, using defaults');
       }
     }
   }
 
-  function makeTitle(path) {
-    let t = path ? `//${volume}/${path}/` : `//${volume}/`;
-    if (t.startsWith('//primary')) t = t.slice(9);
-    return t;
+  function makeTitle(p) {
+    return p ? `/${p}/` : '/';
   }
 
   const atRoot = !basePath || !basePath.includes('/');
@@ -192,7 +183,7 @@ export default function createWidget({ name, shell, args = [] }) {
 
   const decoration = { title: makeTitle(basePath), leftButtons: [parentBtn] };
 
-  const vol = fs.volume(serverUrl, volume);
+  const vol = gimbal.grits.volume(gimbal._serverUrl, volume);
 
   async function toggle(node) {
     if (!node.file.isDir()) return;
@@ -265,14 +256,14 @@ export default function createWidget({ name, shell, args = [] }) {
   }
 
   function onOpenFile(node) {
-    if (!shell) { console.warn('[files] no shell, cannot open file'); return; }
+    if (!gimbal) { console.warn('[files] no gimbal, cannot open file'); return; }
 
     const rel = node.fullPath || '';
     const fullPath = basePath
       ? (rel ? `${basePath}/${rel}` : basePath)
       : rel;
 
-    shell.runCommand('edit', ['//' + volume + '/' + fullPath], { doHistory: false });
+    gimbal.p('//' + volume + '/' + fullPath).launch('edit');
   }
 
   function depthOf(node) {

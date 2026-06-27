@@ -137,16 +137,15 @@ function ensureStyles() {
   `);
 }
 
-export default function createWidget({ name, shell, args = [] }) {
+export default function createWidget({ name, gimbal, args = [] }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gi-tree';
   el.style.cssText = 'overflow:auto;flex:1;min-height:0;height:100%;';
 
-  const fs     = shell?.fs;
-  const serverUrl = shell?.serverUrl || window.location.origin;
-  const volume = shell?.volume || 'primary';
+  const serverUrl = gimbal?._serverUrl || window.location.origin;
+  const volume = 'primary';
 
   let messages = new Map();
   let username = null;
@@ -156,8 +155,7 @@ export default function createWidget({ name, shell, args = [] }) {
   const decoration = { title: '', leftButtons: [] };
 
   async function getUsername() {
-    if (!fs) return null;
-    const identities = await fs.whoami(serverUrl);
+    const identities = await gimbal.grits.whoami(serverUrl);
     return identities?.[0]?.username || null;
   }
 
@@ -173,7 +171,7 @@ export default function createWidget({ name, shell, args = [] }) {
       inboxDir = `home/${username}/local/inbox`;
     }
 
-    const vol = fs.volume(serverUrl, 'primary');
+    const vol = gimbal.grits.volume(serverUrl, 'primary');
 
     let rootFile;
     try {
@@ -348,7 +346,7 @@ export default function createWidget({ name, shell, args = [] }) {
 
   async function trash(entry) {
     try {
-      const vol = fs.volume(serverUrl, 'primary');
+      const vol = gimbal.grits.volume(serverUrl, 'primary');
       await vol.multiLink([{
         path: `${inboxDir}/${entry.name}`,
         addr: '',
@@ -377,7 +375,7 @@ export default function createWidget({ name, shell, args = [] }) {
 
   async function refreshTick() {
     if (!inboxDir || !username) return;
-    const vol = fs.volume(serverUrl, 'primary');
+    const vol = gimbal.grits.volume(serverUrl, 'primary');
     try {
       const rootFile = await vol.lookup(inboxDir);
       const childFiles = await rootFile.children();

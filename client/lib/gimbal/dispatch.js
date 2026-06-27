@@ -1,10 +1,10 @@
 import { GimbalResult } from './result.js';
 
-export const SHORTCUTS = { r: 'read', w: 'write', p: 'path' };
+export const SHORTCUTS = { r: 'read', w: 'write' };
 
 const NON_DISPATCH = new Set(['then', 'catch', 'finally']);
 
-export function createDispatchProxy(target, shell) {
+export function createDispatchProxy(target, gimbal) {
   return new Proxy(target, {
     get(target, key, receiver) {
       if (typeof key === 'symbol') return Reflect.get(target, key, receiver);
@@ -14,18 +14,18 @@ export function createDispatchProxy(target, shell) {
       const moduleName = SHORTCUTS[key] || key;
 
       return (...args) => {
-        return wrapResult(() => _execute(target, shell, moduleName, args, receiver), shell);
+        return wrapResult(() => _execute(target, gimbal, moduleName, args, receiver), gimbal);
       };
     },
   });
 }
 
-export function wrapResult(executor, shell) {
+export function wrapResult(executor, gimbal) {
   const result = new GimbalResult(executor);
-  return createDispatchProxy(result, shell);
+  return createDispatchProxy(result, gimbal);
 }
 
-async function _execute(target, shell, moduleName, args, proxy) {
+async function _execute(target, gimbal, moduleName, args, proxy) {
   let prev;
   if (target instanceof GimbalResult) {
     prev = await target;
@@ -39,8 +39,8 @@ async function _execute(target, shell, moduleName, args, proxy) {
     args.map(async a => a instanceof GimbalResult ? await a : a)
   );
 
-  const mod = await shell._importTool(moduleName);
-  let result = mod.invoke(prev, ...resolvedArgs);
+  const mod = await gimbal._importTool(moduleName);
+  let result = mod.invoke(gimbal, prev, ...resolvedArgs);
   while (result instanceof GimbalResult) {
     result = await result;
   }

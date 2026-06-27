@@ -143,11 +143,7 @@ async function loadLang(path) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-export default function createWidget({ name, file = null, shell }) {
-  if (typeof file === 'string' && shell) {
-    file = shell.resolvePath(file);
-  }
-
+export default function createWidget({ name, path: gimbalPath = null, gimbal }) {
   ensureStyles();
 
   const el = document.createElement('div');
@@ -155,11 +151,9 @@ export default function createWidget({ name, file = null, shell }) {
 
   let view      = null;
   let dirty     = false;
-  let currentPath = file?.path ?? null;
-  let currentName = file ? file.path.split('/').pop() : name;
-  let currentR    = file;
-
-  const fs    = shell?.fs;
+  let currentPath = gimbalPath?.abs() ?? null;
+  let currentName = gimbalPath?.toString() ?? name;
+  let currentR    = gimbalPath;
 
   // controls is injected by the shell after mount
   let controls = null;
@@ -168,7 +162,7 @@ export default function createWidget({ name, file = null, shell }) {
   const saveBtn = {
     icon:    'save',
     label:   'save  (⌘S)',
-    enabled: !!file,
+    enabled: !!gimbalPath,
     action() { save(); },
   };
 
@@ -219,17 +213,22 @@ export default function createWidget({ name, file = null, shell }) {
     controls?.setDirty(isDirty);
   }
 
-  function volFor(rr) {
-    if (!rr || !fs) throw new Error('codemirror: no resolved path or fs');
-    return fs.volume(rr.serverUrl, rr.volume);
+  function _resolve(rr) {
+    if (!rr || !gimbal) throw new Error('codemirror: no file path or client');
+    return gimbal.resolvePath(rr.abs());
   }
 
   // ── load ──────────────────────────────────────────────
   async function load() {
     if (!currentR) { mountCM(''); return; }
     try {
-      const file = await volFor(currentR).lookup(currentR.path);
-      const text = await file.text();
+      console.log('[codemirror] gimbalPath.abs():', currentR.abs());
+      const r = _resolve(currentR);
+      console.log('[codemirror] resolvePath result:', r);
+      console.log('[codemirror] volume:', r.volumeName, 'path:', r.path, 'serverUrl:', gimbal._serverUrl);
+      const v = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
+      const gritsFile = await v.lookup(r.path);
+      const text = await gritsFile.text();
       mountCM(text);
     } catch (e) {
       const errEl = document.createElement('div');
@@ -243,12 +242,13 @@ export default function createWidget({ name, file = null, shell }) {
   async function save() {
     if (!currentR || !view) return;
     try {
-      const v      = volFor(currentR);
-      const text   = view.state.doc.toString();
-      const bytes  = new TextEncoder().encode(text);
+      const r    = _resolve(currentR);
+      const v    = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
+      const text = view.state.doc.toString();
+      const bytes = new TextEncoder().encode(text);
       const contentCID = await v.put(bytes);
       const metaCID    = await v.mkfile(contentCID, bytes.byteLength);
-      await v.link(metaCID, currentR.path);
+      await v.link(metaCID, r.path);
       markDirty(false);
     } catch (e) {
       toast(`Save failed: ${e.message}`);
@@ -278,34 +278,21 @@ export default function createWidget({ name, file = null, shell }) {
   async function saveAs() {
     if (!view) return;
 
-    const defaultName = currentR
-      ? (currentR.volume === 'primary' ? `/${currentR.path}` : `//${currentR.volume}/${currentR.path}`)
-      : shell
-        ? (shell.volume === 'primary' ? `/${shell.cwd || ''}` : `//${shell.volume}/${shell.cwd || ''}`)
-        : '(untitled)';
+    const defaultName = currentR ? currentR.abs() : '(untitled)';
     const answer = await promptInput({ message: 'Save as…', defaultValue: defaultName });
     if (!answer) return;
 
-    let resolved;
-    if (shell) {
-      resolved = shell.resolvePath(answer);
-    } else if (currentR) {
-      // Fall back to current volume if no shell
-      resolved = { ...currentR, path: answer };
-    } else {
-      toast('Cannot save: no shell context to resolve path');
-      return;
-    }
-
     try {
-      const v      = volFor(resolved);
-      const text   = view.state.doc.toString();
-      const bytes  = new TextEncoder().encode(text);
+      const newR  = gimbal.p(answer);
+      const r     = _resolve(newR);
+      const v     = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
+      const text  = view.state.doc.toString();
+      const bytes = new TextEncoder().encode(text);
       const contentCID = await v.put(bytes);
       const metaCID    = await v.mkfile(contentCID, bytes.byteLength);
-      await v.link(metaCID, resolved.path);
+      await v.link(metaCID, r.path);
 
-      currentR    = resolved;
+      currentR    = newR;
       currentPath = answer;
       currentName = answer.split('/').pop();
       controls?.setTitle(currentName);

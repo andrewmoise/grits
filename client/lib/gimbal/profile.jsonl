@@ -1,3 +1,3 @@
-"gsh.gterm()"
-"gsh.files()"
-"gsh.edit()"
+"gimbal.launch('gterm')"
+"gimbal.site().launch('files')"
+"gimbal.launch('edit')"

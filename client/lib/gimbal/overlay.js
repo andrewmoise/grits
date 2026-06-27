@@ -13,16 +13,16 @@
  *
  *   await import('https://yourserver.com/grits/v1/content/client/lib/gimbal/overlay.js');
  *   // window.gwm is now available:
- *   await gwm.eval('gterm()');
- *   await gwm.eval('edit("lib/foo/main.js")');
+ *   await gwm.eval('gimbal.volume().p("lib/foo/main.js").read()');
+ *   await gwm.eval('gimbal.gterm()');
  *   gwm.hide();
  *   gwm.show();
  *   gwm.toggle();
  */
 
-import GritsClient     from '../grits/GritsClient.js';
-import { makeShell }   from '../gimbal/gsh.js';
-import { injectTheme } from '../style/style.js';
+import GritsClient                      from '../grits/GritsClient.js';
+import { initGimbal, getGimbal }        from './client.js';
+import { injectTheme }                  from '../style/style.js';
 import { ICONS, getIconSvg } from '../style/icons.js';
 
 // Inject design-system CSS vars onto whatever host page we land on.
@@ -340,28 +340,22 @@ function _getClient() {
   return _gritsClient;
 }
 
-// ── Shell singleton ───────────────────────────────────────────────────────────
-// Shared across all eval() calls; widgets get their own shells internally.
-let _shell = null;
-function _getShell() {
-  if (!_shell) {
-    _shell = makeShell({
-      fs:        _getClient(),
-      serverUrl: window.location.origin,
-      volume:    'client',
-      cwd:       '/',
-    });
-    // Expose singleton shell globally for console/debug use
-    window.gsh = _shell;
+// ── Gimbal singleton ─────────────────────────────────────────────────────────
+// Shared across all eval() calls; widgets get their own gimbal internally.
+let _gimbal = null;
+function _getGimbal() {
+  if (!_gimbal) {
+    _gimbal = initGimbal(new GritsClient());
+    _gimbal._serverUrl = window.location.origin;
   }
-  return _shell;
+  return _gimbal;
 }
 
 // ── openWidget — the interface tools call via window.gimbal ───────────────────
 // Matches the signature in gwm.html: openWidget(mod, opts).
 // `zone` is accepted and silently ignored (no tiling in overlay mode).
 async function openWidget(mod, opts = {}) {
-  const { name = 'widget', icon = 'gterm', zone, shell: passedShell, ...rest } = opts;
+  const { name = 'widget', icon = 'gterm', zone, gimbal: passedGimbal, ...rest } = opts;
 
   _ensureDOM();
 
@@ -369,12 +363,12 @@ async function openWidget(mod, opts = {}) {
   const cur = _currentVisible();
   if (cur) cur.visible = false;
 
-  const shell = passedShell ?? _getShell();
+  const gimbal = passedGimbal ?? _getGimbal();
 
   // Instantiate the widget
   const createWidget = mod.default ?? mod;
   const instance = await Promise.resolve(
-    createWidget({ name, shell, ...rest })
+    createWidget({ name, gimbal, ...rest })
   );
 
   // Register entry before wiring controls so setTitle/setDirty can look it up
@@ -406,9 +400,9 @@ function _destroyCurrent() {
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/** Run a shell command through the overlay's shell, e.g. eval('gterm()'). */
+/** Run a shell command through the overlay's gimbal, e.g. eval('gimbal.gterm()'). */
 export async function eval_(src) {
-  return _getShell().eval(src, {}, { doHistory: true });
+  return _getGimbal().eval(src);
 }
 
 /** Hide the overlay without destroying widget state. */
@@ -435,15 +429,17 @@ export function toggle() {
 }
 
 // ── Install window.gimbal (same interface tools expect from gwm.html) ─────────
-window.gimbal = { openWidget };
+const _g = _getGimbal();
+_g.openWidget = openWidget;
+window.gimbal = _g;
 
 // ── Install window.gwm (convenience handle for console use) ──────────────────
 window.gwm = {
-  /**
-   * Open a widget by running a shell command.
-   * e.g.  await gwm.eval('gterm()')
-   *       await gwm.eval('edit("lib/foo/main.js")')
-   */
+    /**
+     * Open a widget by running a shell command.
+     * e.g.  await gwm.eval('gimbal.gterm()')
+     *       await gwm.eval('gimbal.edit("lib/foo/main.js")')
+     */
   eval: eval_,
   show,
   hide,
@@ -452,5 +448,5 @@ window.gwm = {
   get instances() { return _instances; },
 };
 
-// Eagerly initialize shell so window.gsh is immediately available
-_getShell();
+// Eagerly initialize gimbal so it is immediately available
+_getGimbal();

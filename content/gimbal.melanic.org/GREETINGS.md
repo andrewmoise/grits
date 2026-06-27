@@ -19,28 +19,28 @@ That being said, you can try some simple interactions in the terminal window ove
 At the `>` prompt, try:
 
 ```
-gsh.login({guest:1})                // Start a guest session
-gsh.whoami()                        // See who you are
-gsh.home()                          // Your home directory path
-gsh.home().w('hello')               // Create a file in your home
-gsh.home().ls()                     // List files in your home
-gsh.ls('/')                         // List the root directory
+gimbal.login({guest:1})                // Start a guest session
+gimbal.whoami()                        // See who you are
+gimbal.home()                          // Your home directory path
+gimbal.home().w('hello')               // Create a file in your home
+gimbal.home().ls()                     // List files in your home
+gimbal.p('/').ls()                     // List the root directory
 ```
 
-You can also try `gsh.gterm()`, `gsh.files()`, or `gsh.edit('/path')` to open new windows.
+You can also try `gimbal.gterm()`, `gimbal.files()`, or `gimbal.edit('/path')` to open new windows.
 
 ## How to Learn More
 
 Read the full README:
 
 ```
-gsh.read('/sites/gimbal.melanic.org/live/src/README.md')
+gimbal.p('/sites/gimbal.melanic.org/live/src/README.md').read()
 ```
 
 Or the reference document:
 
 ```
-gsh.read('/sites/gimbal.melanic.org/live/src/REFERENCE.md')
+gimbal.p('/sites/gimbal.melanic.org/live/src/REFERENCE.md').read()
 ```
 
 There's also a Matrix room at `#gimbal:matrix.org`. Cheers and have fun.

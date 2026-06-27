@@ -1,13 +1,13 @@
 export const tests = [
   {
     label: 'rmdir removes an empty directory',
-    async fn(shell, scratch) {
-      await shell.eval(`gsh.path('${scratch}/emptydir').mkdir()`);
-      await shell.eval(`gsh.path('${scratch}/emptydir').rmdir()`);
+    async fn(gimbal, scratch) {
+      await gimbal.eval(`gimbal.p('${scratch}/emptydir').mkdir()`);
+      await gimbal.eval(`gimbal.p('${scratch}/emptydir').rmdir()`);
       let threw = false;
       try {
-        const r = shell.resolvePath(`${scratch}/emptydir`);
-        await shell._vol(r.serverUrl, r.volume).lookup(r.path);
+        const r = gimbal.resolvePath(`${scratch}/emptydir`);
+        await gimbal.grits.volume(gimbal._serverUrl, r.volumeName).lookup(r.path);
       } catch (e) {
         if (e.message.includes('not found')) threw = true;
         else throw e;
@@ -17,14 +17,14 @@ export const tests = [
   },
   {
     label: 'rmdir removes a non-empty directory',
-    async fn(shell, scratch) {
-      await shell.eval(`gsh.path('${scratch}/fulldir').mkdir()`);
-      await shell.eval(`gsh.path('${scratch}/fulldir/file.txt').w('hi')`);
-      await shell.eval(`gsh.path('${scratch}/fulldir').rmdir()`);
+    async fn(gimbal, scratch) {
+      await gimbal.eval(`gimbal.p('${scratch}/fulldir').mkdir()`);
+      await gimbal.eval(`gimbal.p('${scratch}/fulldir/file.txt').w('hi')`);
+      await gimbal.eval(`gimbal.p('${scratch}/fulldir').rmdir()`);
       let threw = false;
       try {
-        const r = shell.resolvePath(`${scratch}/fulldir`);
-        await shell._vol(r.serverUrl, r.volume).lookup(r.path);
+        const r = gimbal.resolvePath(`${scratch}/fulldir`);
+        await gimbal.grits.volume(gimbal._serverUrl, r.volumeName).lookup(r.path);
       } catch (e) {
         if (e.message.includes('not found')) threw = true;
         else throw e;
@@ -34,11 +34,11 @@ export const tests = [
   },
   {
     label: 'rmdir fails on a file',
-    async fn(shell, scratch) {
-      await shell.eval(`gsh.path('${scratch}/file.txt').w('hi')`);
+    async fn(gimbal, scratch) {
+      await gimbal.eval(`gimbal.p('${scratch}/file.txt').w('hi')`);
       let threw = false;
       try {
-        await shell.eval(`gsh.path('${scratch}/file.txt').rmdir()`);
+        await gimbal.eval(`gimbal.p('${scratch}/file.txt').rmdir()`);
       } catch (e) {
         if (e.message.includes('not a directory')) threw = true;
         else throw e;
@@ -48,11 +48,11 @@ export const tests = [
   },
   {
     label: 'rmdir does not accept pipeline input',
-    async fn(shell, scratch) {
+    async fn(gimbal, scratch) {
       let threw = false;
       try {
-        await shell.eval(`gsh.path('${scratch}/d').mkdir()`);
-        await shell.eval(`gsh.path('${scratch}/d').read().rmdir()`);
+        await gimbal.eval(`gimbal.p('${scratch}/d').mkdir()`);
+        await gimbal.eval(`gimbal.p('${scratch}/d').read().rmdir()`);
       } catch (e) {
         if (e.message.includes('need a path')) threw = true;
         else throw e;
@@ -62,10 +62,10 @@ export const tests = [
   },
   {
     label: 'rmdir requires a path argument',
-    async fn(shell, scratch) {
+    async fn(gimbal, scratch) {
       let threw = false;
       try {
-        await shell.eval('gsh.rmdir()');
+        await gimbal.eval('gimbal.rmdir()');
       } catch (e) {
         if (e.message.includes('need a path')) threw = true;
         else throw e;

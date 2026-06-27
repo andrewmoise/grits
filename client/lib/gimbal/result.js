@@ -5,7 +5,7 @@ export class GimbalResult {
     this._value = undefined;
     this._settled = false;
     this._error = null;
-    this._shell = null;
+  
   }
 
   _resolve() {

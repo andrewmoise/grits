@@ -1,6 +1,5 @@
 import { GimbalResult } from '../gimbal/result.js';
 import { GimbalPath } from '../gimbal/path.js';
-import { GimbalShell } from '../gimbal/gsh.js';
 import { AssertionError, ASSERT_PREV_MATCHES, ASSERT_IS_BLOB } from '../grits/GritsClient.js';
 
 export const help = `\
@@ -8,28 +7,23 @@ append — append content to the end of a file
 
 Usage:
   path.append(content)        append string content to file at path
-  gsh.append(path, content)   same (path must be GimbalPath)`;
+  gimbal.append(path, content)   same (path must be GimbalPath)`;
 
 function resolvePath(prev, args) {
   if (prev instanceof GimbalPath) return prev;
-  if (prev instanceof GimbalShell) {
-    return args.find(a => a instanceof GimbalPath) || null;
-  }
   return null;
 }
 
-export function invoke(prev, ...args) {
+export function invoke(gimbal, prev, ...args) {
   const path = resolvePath(prev, args);
   if (!(path instanceof GimbalPath)) throw new Error('append: need a destination path');
 
   const nonPathArgs = args.filter(a => !(a instanceof GimbalPath) && !(a instanceof GimbalResult));
   const content = nonPathArgs[0];
   if (content === undefined) throw new Error('append: no content provided');
-
-  const shell = path._shell;
   return new GimbalResult(async () => {
-    const r = shell.resolvePath(path.abs());
-    const vol = shell._vol(r.serverUrl, r.volume);
+    const r = gimbal.resolvePath(path._path);
+    const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
 
     let existingBytes = new Uint8Array(0);
     try {

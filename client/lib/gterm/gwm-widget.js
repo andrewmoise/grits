@@ -154,8 +154,7 @@ function ensureStyles() {
   `);
 }
 
-export default function createWidget({ name, shell, runOnInit = null }) {
-  const gwm = shell?.gwm;
+export default function createWidget({ name, gimbal, runOnInit = null }) {
 
   // ── root element ──────────────────────────────────────
   const el = document.createElement('div');
@@ -165,6 +164,7 @@ export default function createWidget({ name, shell, runOnInit = null }) {
 
   // ── history — single source of truth ──────────────────
   const history = [];
+  const _refResults = [];
   let running    = false;
   let shellReady = false;
   let pinToBottom = true;
@@ -378,24 +378,22 @@ export default function createWidget({ name, shell, runOnInit = null }) {
     applyRunning(rec);
 
     try {
-      let value = await shell.eval(rec.src, {}, { doHistory: true });
+      let value = await gimbal.eval(rec.src);
       rec.status = 'done';
 
-      // Auto-await GimbalResults and store the resolved value for _/__
       if (value instanceof GimbalResult) {
         value = await value;
-        if (shell.__.length > 0) {
-          shell.__[shell.__.length - 1] = value;
-        }
       }
 
+      _refResults.push(value);
+
       if (value instanceof Response) {
-        rec.refIndex = shell.__.length - 1;
+        rec.refIndex = _refResults.length - 1;
         rec.display = { bodyStream: value.clone().body };
       } else if (value != null) {
         const display = await _display(value, 80);
         rec.display = display;
-        rec.refIndex = shell.__.length - 1;
+        rec.refIndex = _refResults.length - 1;
       } else {
         rec.display = { text: null, isResponse: false };
         rec.refIndex = null;
@@ -456,7 +454,7 @@ export default function createWidget({ name, shell, runOnInit = null }) {
       return;
     }
 
-    const h = shell.history;
+    const h = history;
     if (e.key === 'ArrowUp') {
       const beforeCursor = textarea.value.slice(0, textarea.selectionStart);
       if (beforeCursor.includes('\n')) return;
