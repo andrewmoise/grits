@@ -6,8 +6,8 @@ export const help = `\
 whoami — show identity info from the server
 
 Usage:
-  gimbal.whoami()                   — bare quoted username per line (JSONL)
-  gimbal.whoami({v:1})              — verbose: ["username", status, "expiry"] per line
+  gimbal.whoami()                   — username per line
+  gimbal.whoami({v:1})              — verbose: username  status  expiry
 
 When not logged in, output is empty.`;
 
@@ -35,8 +35,8 @@ export function invoke(gimbal, prev, opts) {
     const verbose = !!opts.v;
     return identities.map(id =>
       verbose
-        ? JSON.stringify([id.username, id.status, formatExpiry(id.expiry)])
-        : JSON.stringify(id.username)
+        ? `${id.username}  ${id.status}  ${formatExpiry(id.expiry)}`
+        : id.username
     ).join('\n');
   });
 }

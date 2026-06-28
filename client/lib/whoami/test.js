@@ -18,8 +18,7 @@ export const tests = [
       if (typeof text !== 'string') throw new Error('expected string, got null');
       const lines = text.trim().split('\n');
       if (lines.length === 0) throw new Error('whoami returned no lines');
-      const entry = JSON.parse(lines[0]);
-      if (entry !== username) throw new Error(`expected ${username}, got ${entry}`);
+      if (lines[0] !== username) throw new Error(`expected ${username}, got ${lines[0]}`);
     },
   },
   {
@@ -35,8 +34,7 @@ export const tests = [
       if (typeof text !== 'string') throw new Error('expected string, got null');
       const lines = text.trim().split('\n');
       if (lines.length === 0) throw new Error('whoami returned no lines');
-      const entry = JSON.parse(lines[0]);
-      if (entry !== username) throw new Error(`expected ${username}, got ${entry}`);
+      if (lines[0] !== username) throw new Error(`expected ${username}, got ${lines[0]}`);
     },
   },
 ];

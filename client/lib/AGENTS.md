@@ -27,7 +27,8 @@ Dispatch proxy contract: unknown method calls on any of these three types are ro
 | `gimbal` | `GimbalClient` | Always the GimbalClient (dispatch proxy) |
 | `prev` | `GimbalClient` | Called as `gimbal.command(...)` — global commands |
 | `prev` | `GimbalPath` | Called as `path.command(...)` — filesystem commands |
-| `prev` | any other value | **Rejected** — throw immediately |
+| `prev` | `Response` | Called as `response.command(...)` — content pipeline commands |
+| `prev` | any other value | Accepted by `json`, `js`; rejected by most others with a clear error |
 | `args` | string, GimbalPath, plain object | See per-command rules below |
 
 ### Universal argument rules
@@ -51,11 +52,14 @@ everything else — ERROR
 |---------|------|---------|---------|------------|-------|
 | login, logout, whoami, home, help, test, download, upload, message, facl | GimbalClient | Per-command | — | Optional opts | Global commands |
 | **mkdir**, **rm**, **rmdir** | GimbalPath | Optional string (rel path) | — | Optional opts | Operates on `prev/rel` |
-| **read** | GimbalPath | Optional string (rel path) | — | — | Reads `prev/rel` |
+| **read** | GimbalPath or **Response** | Optional string (rel path) | — | — | GimbalPath: reads file. Response: reads body. Both return string. |
 | **ls** | GimbalPath | **ERROR** | — | — | Only lists `prev` |
 | **write**, **append** | GimbalPath | Optional string (rel path) | Required content | Optional opts | Content = string/Response/Uint8Array/ArrayBuffer |
 | **ln** | GimbalPath | Required string or GimbalPath (dest) | — | Optional opts | Links `prev` → `prev.p(dest)` or `dest` |
 | **diff** | GimbalPath or GimbalClient | Required string or GimbalPath | — | Optional opts | If GimbalClient, two strings/GimbalPaths in args. Strings resolve via `prev.p()` (GimbalPath) or `gimbal.p()` (GimbalClient). |
+| **to** | **Response** | Required GimbalPath (dest) | — | Optional opts | Writes Response body to dest |
+| **json** | any | — | — | — | Returns `JSON.stringify(prev)` |
+| **js** | string | — | — | — | Returns `JSON.parse(prev)` |
 
 **No cp** — use `ln` instead (copy-on-write link).
 
@@ -72,9 +76,11 @@ For absolute paths, pass a GimbalPath instead: `home.mkdir(gimbal.p('/absolute/p
 
 ### Return values
 
-- **Plain value** (string, array, object, null) — returned as-is, wrapped in dispatch proxy for chaining.
-- **GimbalResult** — for async work. The dispatch mechanism flattens nested GimbalResults automatically.
-- Commands should NOT return `Response` objects except `upload`, `download`, and `test` (which stream progressive output).
+- **String** — displayed as text in the terminal. Not dispatchable (end of chain).
+- **Response** — streamed to the terminal. Dispatchable: `response.read()`, `response.to(path)`.
+- **GimbalPath** — displayed as `p(/path)` in the terminal. Dispatchable for further chaining.
+- **Array / object / null** — JSON-pretty-printed in the terminal. Not dispatchable (end of chain).
+- **GimbalResult** — wraps async work. The dispatch mechanism flattens nested GimbalResults. Terminal auto-awaits on execution.
 
 ### Help string
 
@@ -97,7 +103,11 @@ Each module exports a `help` string shown by `gimbal.help('cmd')`.
 
 ### Non-filesystem (require GimbalClient as prev)
 
-`login`, `logout`, `whoami`, `help`, `test`, `home`, `upload`, `download`, `message`
+`login`, `logout`, `whoami` (returns bare string), `help`, `test` (streams Response), `home`, `upload` (returns Response), `download` (returns Response), `message`, `echo` (passes value through for chaining)
+
+### Pipeline operations (chain between Response/String/object)
+
+`to`, `json`, `js`
 
 ### UI / Widget launchers
 

@@ -6,10 +6,16 @@ read — read a file's contents as a string
 
 Usage:
   path.read()               read file at path, return string
+  response.read()           read Response body, return string
   gimbal.read(path)            same (path must be GimbalPath)`;
 
 export function invoke(gimbal, prev, ...args) {
-  if (!(prev instanceof GimbalPath)) throw new Error('read: need a file path');
+  if (prev instanceof Response) {
+    return new GimbalResult(() => prev.text());
+  }
+
+  if (!(prev instanceof GimbalPath))
+    throw new Error(`read: expected a file path (GimbalPath) or Response, got ${prev?.constructor?.name ?? typeof prev}`);
 
   let target = prev;
   let opts = {};

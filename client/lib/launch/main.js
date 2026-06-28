@@ -22,5 +22,5 @@ export async function invoke(gimbal, prev, widgetName, ...args) {
       path = gimbal.p(args[0]);
   }
 
-  await window.gimbal.openWidget(mod, { name, gimbal, path, zone: 'master' });
+  await window.gimbal.openWidget(mod, { name, gimbal, path, payload: prev, zone: 'master' });
 }

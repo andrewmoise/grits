@@ -7,6 +7,8 @@
  * @implements gimbal-shell#widget
  */
 
+import { GimbalPath } from '../gimbal/path.js';
+
 const STYLE_ID = 'gimbal-markdown-styles';
 const MD_ICON = {
   svg: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 4H14.5V13H18L12 20L6 13H9.5Z" fill="currentColor" stroke="none"/></svg>`,
@@ -680,11 +682,28 @@ async function buildContent(src, sourceDir) {
   return frag;
 }
 
-export default async function createWidget({ name, content = '', sourceDir = '', gimbal, path: gimbalPath }) {
+export default async function createWidget({ name, content = '', sourceDir = '', gimbal, path: gimbalPath, payload = null }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gm-wrap';
+
+  if (!content && payload instanceof Response) {
+    content = await payload.text();
+  } else if (!content && payload instanceof GimbalPath && gimbal) {
+    const r = gimbal.resolvePath(payload.abs());
+    const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
+    const gritsFile = await vol.lookup(r.path);
+    const resp = await gritsFile.get();
+    content = await resp.text();
+    const dirParts = r.path.split('/').filter(Boolean);
+    dirParts.pop();
+    const encPath = dirParts.map(encodeURIComponent).join('/');
+    sourceDir = encPath
+      ? `${gimbal._serverUrl}/grits/v1/content/${r.volumeName}/${encPath}`
+      : `${gimbal._serverUrl}/grits/v1/content/${r.volumeName}`;
+    if (!name) name = payload.toString();
+  }
 
   if (!content && gimbalPath && gimbal) {
     console.log('[markdown] gimbalPath.abs():', gimbalPath.abs());

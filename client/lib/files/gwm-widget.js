@@ -130,12 +130,17 @@ function buildRow(node, depth, onSelect, onToggle, onOpenFile) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-export default function createWidget({ name, gimbal, path: gimbalPath, args = [] }) {
+import { GimbalPath } from '../gimbal/path.js';
+
+export default function createWidget({ name, gimbal, path: gimbalPath, payload = null, args = [] }) {
   ensureStyles();
 
   const el = document.createElement('div');
   el.className = 'gf-tree';
   el.style.cssText = 'overflow:auto;flex:1;min-height:0;height:100%;';
+
+  if (payload != null && !(payload instanceof GimbalPath))
+    throw new Error(`files: expected a directory path (GimbalPath), got ${payload?.constructor?.name ?? typeof payload}`);
 
   // These define the hard root for this widget instance
   let serverUrl = gimbal?._serverUrl || window.location.origin;

@@ -27,6 +27,7 @@
  *     --cm-selection-search   selected search match background
  */
 
+import { GimbalPath } from '../gimbal/path.js';
 import { FONT_MONO, injectStyles } from '../style/style.js';
 import { EditorView, keymap, lineNumbers, highlightActiveLine,
          highlightActiveLineGutter, drawSelection, dropCursor } from '@codemirror/view';
@@ -143,7 +144,7 @@ async function loadLang(path) {
 }
 
 // ── Widget factory ────────────────────────────────────────
-export default function createWidget({ name, path: gimbalPath = null, gimbal }) {
+export default function createWidget({ name, path: gimbalPath = null, payload = null, gimbal }) {
   ensureStyles();
 
   const el = document.createElement('div');
@@ -220,6 +221,21 @@ export default function createWidget({ name, path: gimbalPath = null, gimbal }) 
 
   // ── load ──────────────────────────────────────────────
   async function load() {
+    if (payload instanceof Response) {
+      try {
+        const text = await payload.text();
+        mountCM(text);
+      } catch (e) {
+        const errEl = document.createElement('div');
+        errEl.className = 'ge-error';
+        errEl.textContent = `Error reading payload: ${e.message}`;
+        el.appendChild(errEl);
+      }
+      return;
+    }
+    if (payload != null && !(payload instanceof GimbalPath) && !(payload instanceof Response))
+      console.warn(`[codemirror] unexpected payload type: ${payload?.constructor?.name ?? typeof payload}`);
+
     if (!currentR) { mountCM(''); return; }
     try {
       console.log('[codemirror] gimbalPath.abs():', currentR.abs());

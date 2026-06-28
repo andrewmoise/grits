@@ -1,18 +1,21 @@
 # In Progress
 
+* Fix scroll up cursor positioning behavior
+* Make __ results history work again
+* Delay the lookup() slightly when trying the slow path, and don't attempt it if the fast path already succeeded
 * Make test() streaming because of returning a Response
 * markdown() -> md()
-* All stuff that returns JSON strings should start returning bare strings (e.g. whoami())
-
-* __[n] reuse index — when you reuse a Result from history in a new chain, it should claim a new __ slot for the new result rather than overwriting the original.
-* gterm command Ctrl-Z
 * Move facl() to allow(), deny(), and access()
-* Fix markdown titlebar
 * Fix markdown link click behavior
 * Fix examples with inbox etc
+* Check the updates to login cookies; seem like they're timing out even under active use
+
 
 # Near Future
 
+* Rename client/ to gimbal/
+* Fix markdown titlebar
+* gterm command Ctrl-Z
 * More tools: Diff, patch
 * Filesystem undo
 * Better git self-hosting
@@ -21,11 +24,12 @@
 * Remove indirection - just go import from locations without a `cp -r` in the Makefile
 * Guest user auto-homedir-deletion
 * Fix certbot browser badness when first accessing a new vhost, and browser visits http://{whatever}
-* Check the updates to login cookies; seem like they're timing out even under active use
 * Make redirect from http:// to https://
 * Make "const" work in the shell eval
 * Make "//" work in the shell eval
 * Import git tools libs
+* Check remote volume functioning
+* Check FUSE functioning (esp when writes happen outside FUSE)
 
 
 # Backlog
@@ -219,7 +223,6 @@ Silent catches:
 8. gimbal/glob.js:26,41,98 — Three catch(e){return;} / catch(e){return[];} sites. Glob silently skipping inaccessible directories is arguably correct shell-like behavior, but no log means bugs are invisible.
 9. gimbal/gsh.js:350 — catch(e){throw new Error("command not found")}. If a command module has a syntax error or import failure, the user gets a misleading "command not found" instead of the actual error.
 
-Delay the lookup() slightly when trying the slow path, and don't attempt it if the fast path already succeeded
 
 
 ## Grits backend
