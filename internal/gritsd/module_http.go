@@ -90,7 +90,7 @@ type HTTPModule struct {
 
 	// Dynamic TLS certificate management.
 	// certCache holds the most recently loaded cert per hostname.
-	certMu    sync.RWMutex
+	certMu sync.RWMutex
 
 	certCache map[string]*tls.Certificate // hostname → cert
 	// renewalStopFns holds a cancel func per hostname renewal goroutine.
@@ -158,8 +158,8 @@ func NewHTTPModule(server *Server, config *HTTPModuleConfig) (*HTTPModule, error
 		refHolder:      NewReferenceHolder(45 * time.Second),
 		certCache:      make(map[string]*tls.Certificate),
 		renewalStopFns: make(map[string]context.CancelFunc),
-		acquiring:     make(map[string]bool),
-		stopCh:        make(chan struct{}),
+		acquiring:      make(map[string]bool),
+		stopCh:         make(chan struct{}),
 	}
 
 	if config.EnableTls {
@@ -443,8 +443,9 @@ func (srv *HTTPModule) requestMiddleware(next http.HandlerFunc) http.HandlerFunc
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS, POST")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
-		w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
-		w.Header().Set("Cross-Origin-Embedder-Policy", "require-corp")
+		// Useful for testing wasmer, but wasmer doesn't work yet, and it breaks Google Fonts:
+		// w.Header().Set("Cross-Origin-Opener-Policy", "same-origin")
+		// w.Header().Set("Cross-Origin-Embedder-Policy", "require-corp")
 
 		if strings.HasPrefix(r.URL.Path, "/grits/v1/blob/") {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
