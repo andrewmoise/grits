@@ -472,7 +472,8 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
       }
 
       textarea.value = historyClone[historyClone.length - 1 - historyIdx].src;
-      textarea.setSelectionRange(0, 0);
+      const eol = textarea.value.indexOf('\n');
+      textarea.setSelectionRange(eol >= 0 ? eol : textarea.value.length, eol >= 0 ? eol : textarea.value.length);
       resizeTextarea();
     }
     if (e.key === 'ArrowDown') {

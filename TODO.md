@@ -1,6 +1,5 @@
 # In Progress
 
-* Fix scroll up cursor positioning behavior
 * Make __ results history work again
 * Delay the lookup() slightly when trying the slow path, and don't attempt it if the fast path already succeeded
 * Make test() streaming because of returning a Response
@@ -30,7 +29,7 @@
 * Import git tools libs
 * Check remote volume functioning
 * Check FUSE functioning (esp when writes happen outside FUSE)
-
+* RSS feed reader
 
 # Backlog
 
