@@ -32,6 +32,7 @@ export const WIDGET_ICONS = {
   gterm:    { icon: 'gterm',   iconColor: 'blue' },
   edit:   { icon: 'edit',  iconColor: 'teal-hi' },
   inbox:    { icon: 'inbox',   iconColor: null },
+  mail:     { icon: 'message', iconColor: null },
   message:  { icon: 'message', iconColor: null },
   markdown: { icon: 'markdown', iconColor: null },
   iframe:   { icon: 'iframe',   iconColor: null },

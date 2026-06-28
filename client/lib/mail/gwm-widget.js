@@ -57,7 +57,7 @@ function ensureStyles() {
       flex: 1;
     }
     .gc-input:focus {
-      border-color: var(--a2);
+      border-color: var(--a1);
     }
     .gc-input.invalid {
       border-color: var(--red, #e53935);
@@ -103,7 +103,7 @@ function ensureStyles() {
       border: none;
       border-radius: 0.3rem;
       cursor: pointer;
-      background: var(--a2);
+      background: var(--a1);
       color: #fff;
       transition: opacity 0.1s;
     }
@@ -235,11 +235,8 @@ export default function createWidget({ name, gimbal, args = [] }) {
       const vol = gimbal.grits.volume(serverUrl, 'primary');
       await sendMessage(vol, to, from, subject, body);
       toast(`Message sent to ${to}`);
-      toInput.value = '';
-      subjectInput.value = '';
-      bodyInput.value = '';
-      hintEl.textContent = '';
-      toInput.focus();
+      gimbal.closeWidget(el);
+      return;
     } catch (e) {
       hintEl.textContent = `Couldn't deliver to ${to}: their inbox may not exist`;
       toInput.focus();

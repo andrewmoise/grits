@@ -4,12 +4,12 @@ import { WIDGET_ICONS } from '../style/icons.js';
 import { sendMessage } from './send.js';
 
 export const help = `\
-message — send a message to a user's inbox
+mail — send a mail to a user's inbox
 
 Usage:
-  gimbal.message('to', 'subject', 'body')
-  gimbal.message('to', 'body')
-  gimbal.message()
+  gimbal.mail('to', 'subject', 'body')
+  gimbal.mail('to', 'body')
+  gimbal.mail()
 
 With to and body provided, sends directly. Otherwise opens a compose widget.`;
 
@@ -20,12 +20,12 @@ function isPlainObject(v) {
 }
 
 export function invoke(gimbal, prev, ...args) {
-  if (!(prev instanceof GimbalClient)) throw new Error('message: must be called on gimbal');
+  if (!(prev instanceof GimbalClient)) throw new Error('mail: must be called on gimbal');
 
   const rawOpts = isPlainObject(args[args.length - 1]) ? args.pop() : {};
   const positional = args;
-  const defaults = WIDGET_ICONS.message;
-  const { icon, iconColor, ...messageOpts } = rawOpts;
+  const defaults = WIDGET_ICONS.mail;
+  const { icon, iconColor, ...mailOpts } = rawOpts;
 
   const to = positional[0];
   const body = positional.length >= 2 ? positional[positional.length - 1] : undefined;
@@ -49,6 +49,6 @@ export function invoke(gimbal, prev, ...args) {
     const identities = await gimbal.grits.whoami(gimbal._serverUrl);
     const from = identities?.[0]?.username || '(anonymous)';
     const vol = gimbal.grits.volume(gimbal._serverUrl, 'primary');
-    await sendMessage(vol, to, from, subject, body, messageOpts);
+    await sendMessage(vol, to, from, subject, body, mailOpts);
   });
 }
