@@ -441,6 +441,7 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
 
   // ── keyboard handling ─────────────────────────────────
   let historyIdx = -1;
+  let historyClone = null;
 
   textarea.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -450,27 +451,53 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
       textarea.value = '';
       resizeTextarea();
       historyIdx = -1;
+      historyClone = null;
       enqueue(src);
       return;
     }
 
-    const h = history;
     if (e.key === 'ArrowUp') {
       const beforeCursor = textarea.value.slice(0, textarea.selectionStart);
       if (beforeCursor.includes('\n')) return;
-      if (!h.length) return;
+      if (!history.length) return;
       e.preventDefault();
-      historyIdx = Math.min(historyIdx + 1, h.length - 1);
-      textarea.value = h[h.length - 1 - historyIdx];
+
+      if (historyIdx === -1) {
+        historyClone = history.map(r => ({ src: r.src }));
+        historyClone.push({ src: textarea.value });
+        historyIdx = 1;
+      } else {
+        historyClone[historyClone.length - 1 - historyIdx].src = textarea.value;
+        historyIdx = Math.min(historyIdx + 1, historyClone.length - 1);
+      }
+
+      textarea.value = historyClone[historyClone.length - 1 - historyIdx].src;
       resizeTextarea();
     }
     if (e.key === 'ArrowDown') {
       const afterCursor = textarea.value.slice(textarea.selectionEnd);
       if (afterCursor.includes('\n')) return;
       e.preventDefault();
-      if (historyIdx <= 0) { historyIdx = -1; textarea.value = ''; resizeTextarea(); return; }
+
+      if (historyIdx === -1) {
+        if (!history.length) return;
+        historyClone = history.map(r => ({ src: r.src }));
+        historyClone.push({ src: textarea.value });
+        return;
+      }
+
+      historyClone[historyClone.length - 1 - historyIdx].src = textarea.value;
       historyIdx--;
-      textarea.value = h[h.length - 1 - historyIdx];
+
+      if (historyIdx < 0) {
+        historyClone = null;
+        historyIdx = -1;
+        textarea.value = '';
+        resizeTextarea();
+        return;
+      }
+
+      textarea.value = historyClone[historyClone.length - 1 - historyIdx].src;
       resizeTextarea();
     }
     if (e.key === 'l' && e.ctrlKey) {
