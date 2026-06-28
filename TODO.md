@@ -1,20 +1,15 @@
 # In Progress
 
 * Make test() streaming because of returning a Response
-* Add glob()
 * markdown() -> md()
 * All stuff that returns JSON strings should start returning bare strings (e.g. whoami())
-* Remove client/lib/path
 
 * __[n] reuse index — when you reuse a Result from history in a new chain, it should claim a new __ slot for the new result rather than overwriting the original.
-* Shell history arrow-key reliability — most recent command not always at end
-* Fix shell history in general
-* Adjust the README examples and overall presentation
 * gterm command Ctrl-Z
-* gterm command up and down for multi-line commands
 * Move facl() to allow(), deny(), and access()
-* Make prompt decorations not copy, in gterm
 * Fix markdown titlebar
+* Fix markdown link click behavior
+* Fix examples with inbox etc
 
 # Near Future
 
@@ -30,6 +25,7 @@
 * Make redirect from http:// to https://
 * Make "const" work in the shell eval
 * Make "//" work in the shell eval
+* Import git tools libs
 
 
 # Backlog
@@ -47,8 +43,6 @@
 facl() supporting directory recursion up and down
 
 signup()
-
-Import git tools libs
 
 Defaults / config system
 
@@ -83,6 +77,8 @@ whoami() should return some better indication, if someone's login has expired
 Lots of tools need to realize when their arguments aren't strings and react accordingly (login() in particular doesn't do good if it gets two options bags)
 
 Make an indication when a response stream doesn't end with '\n'
+
+.write() should overwrite unless {i:1} is specified, I guess
 
 
 
@@ -183,6 +179,8 @@ Some sort of customizable command palette similar to acme
 MOTD
 
 Make "safe mode"
+
+Rename gwm-widget.js to something more accurate now
 
 
 

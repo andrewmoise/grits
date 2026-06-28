@@ -472,6 +472,7 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
       }
 
       textarea.value = historyClone[historyClone.length - 1 - historyIdx].src;
+      textarea.setSelectionRange(0, 0);
       resizeTextarea();
     }
     if (e.key === 'ArrowDown') {
@@ -487,17 +488,12 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
       }
 
       historyClone[historyClone.length - 1 - historyIdx].src = textarea.value;
+
+      if (historyIdx === 0) return;
+
       historyIdx--;
-
-      if (historyIdx < 0) {
-        historyClone = null;
-        historyIdx = -1;
-        textarea.value = '';
-        resizeTextarea();
-        return;
-      }
-
       textarea.value = historyClone[historyClone.length - 1 - historyIdx].src;
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       resizeTextarea();
     }
     if (e.key === 'l' && e.ctrlKey) {
