@@ -165,6 +165,17 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
   // ── history — single source of truth ──────────────────
   const history = [];
   const _refResults = [];
+
+  function _resultLetter(refIndex) {
+    return '_' + String.fromCharCode(97 + (refIndex % 26));
+  }
+  function _buildExtraVars() {
+    const vars = {};
+    for (let i = 0; i < _refResults.length && i < 26; i++)
+      vars['_' + String.fromCharCode(97 + (i % 26))] = _refResults[i];
+    return vars;
+  }
+
   let running    = false;
   let shellReady = false;
   let pinToBottom = true;
@@ -314,7 +325,7 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
     } else if (rec.refIndex !== null) {
       statusEl.className = 'gt-status is-ref';
       statusEl.innerHTML = '';
-      statusEl.textContent = `__[${rec.refIndex}]`;
+      statusEl.textContent = _resultLetter(rec.refIndex);
     } else {
       statusEl.className = 'gt-status';
       statusEl.innerHTML = '';
@@ -378,7 +389,7 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
     applyRunning(rec);
 
     try {
-      let value = await gimbal.eval(rec.src);
+      let value = await gimbal.eval(rec.src, _buildExtraVars());
       rec.status = 'done';
 
       if (value instanceof GimbalResult) {

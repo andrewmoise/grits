@@ -1,6 +1,5 @@
 # In Progress
 
-* Make __ results history work again
 * Delay the lookup() slightly when trying the slow path, and don't attempt it if the fast path already succeeded
 * Make test() streaming because of returning a Response
 * markdown() -> md()
