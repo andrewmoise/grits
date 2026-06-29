@@ -991,34 +991,47 @@ class GritsVolume {
     // ── Normal path ───────────────────────────────────────────
     const abort = new AbortController();
 
-    const slowPromise = this._slowLookup(n).catch(err => {
-      abort.abort();
-      if (err instanceof AccessDeniedError) {
-        // Drop any mini-root we were tracking for this path —
-        // we're not allowed to see it.
-        this._miniRoots.delete(err.path);
-      }
-      throw err; // rethrow so lookup() sees it
-    });
-
     const miniRoot = this._findMiniRoot(n);
     if (!miniRoot) {
       DEBUG && console.debug(`[GritsClient] _lookup_internal → no miniRoot for "${n}", relying on slowLookup`);
-      return slowPromise;
+      return this._slowLookup(n).catch(err => {
+        abort.abort();
+        if (err instanceof AccessDeniedError) {
+          this._miniRoots.delete(err.path);
+        }
+        throw err;
+      });
     }
     DEBUG && console.debug(`[GritsClient] _lookup_internal → miniRoot found for "${n}": rootPath="${miniRoot.rootPath}" addr=${miniRoot.entry.addr}, racing fast vs slow`);
 
+    let fastResolved = false;
+
     const fastPromise = this._fastWalk(n, miniRoot, abort.signal).then(result => {
-      // If the fast walk returned a partial result, let the slow lookup win instead.
       if (result?.partial) {
         DEBUG && console.debug(`[GritsClient] _lookup_internal → fastWalk partial result for "${n}", deferring to slowLookup`);
-        return new Promise(() => {}); // stay pending so slowPromise wins the race
+        return new Promise(() => {});
       }
+      fastResolved = true;
       DEBUG && console.debug(`[GritsClient] _lookup_internal → fastWalk won race for "${n}"`);
       return result;
     }).catch(() => {
       DEBUG && console.debug(`[GritsClient] _lookup_internal → fastWalk rejected for "${n}"`);
       return new Promise(() => {});
+    });
+
+    const slowPromise = (async () => {
+      await new Promise(r => setTimeout(r, 30));
+      if (fastResolved) {
+        DEBUG && console.debug(`[GritsClient] _lookup_internal → slowPath skipped, fast already won for "${n}"`);
+        return new Promise(() => {});
+      }
+      return this._slowLookup(n);
+    })().catch(err => {
+      abort.abort();
+      if (err instanceof AccessDeniedError) {
+        this._miniRoots.delete(err.path);
+      }
+      throw err;
     });
 
     const raceStart = performance.now();

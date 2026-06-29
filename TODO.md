@@ -1,6 +1,5 @@
 # In Progress
 
-* Delay the lookup() slightly when trying the slow path, and don't attempt it if the fast path already succeeded
 * Make test() streaming because of returning a Response
 * markdown() -> md()
 * Move facl() to allow(), deny(), and access()
