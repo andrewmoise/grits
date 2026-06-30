@@ -295,6 +295,7 @@ const _siteBase = (_modulePath || '').replace(/\/+$/, '');
 
 const gimbal = initGimbal(_gg);
 gimbal.openWidget = openWidget;
+gimbal.closeWidget = closeWidget;
 gimbal._serverUrl = _serverUrl || _origin;
 window.gimbal = gimbal;
 
@@ -598,7 +599,7 @@ function updateWidgetButtons(wrap, w, zone) {
     right.appendChild(mkBtn('promote', 'make master', '',
       () => promoteWidget(w.id)));
   }
-  right.appendChild(mkBtn('close', 'close', 'close', () => closeWidget(w.id)));
+  right.appendChild(mkBtn('close', 'close', 'close', () => closeWidget(w.cellEl)));
 }
 
 function updateWidgetBody(wrap, w) {
@@ -797,8 +798,13 @@ function animateOut(id) {
 }
 
 // ── Close with optional onCloseRequest hook ───────────────
-async function closeWidget(id) {
-  const w = widgets.get(id); if (!w) return;
+async function closeWidget(self) {
+  let foundId = null;
+  let w = null;
+  for (const [id, ww] of widgets) {
+    if (ww.cellEl === self) { foundId = id; w = ww; break; }
+  }
+  if (!w) return;
 
   const onCloseRequest = w.cellInstance?.decoration?.onCloseRequest;
   if (onCloseRequest) {
@@ -806,10 +812,10 @@ async function closeWidget(id) {
     if (!allowed) return;
   }
 
-  animateOut(id);
+  animateOut(foundId);
   w.cellInstance?.destroy();
   const wasMaster = w.zone === 'master';
-  widgets.delete(id);
+  widgets.delete(foundId);
   if (wasMaster) electNewMaster();
   normalizeStackOrder();
   render(true);
