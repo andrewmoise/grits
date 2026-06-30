@@ -1,23 +1,24 @@
 # In Progress
 
-* Move facl() to allow(), deny(), and access()
 * Add gimbal.root()
 * Fix markdown link click behavior
+* Fix and finish ./README examples
 * Fix the client/lib/README.md examples
+* Let editor open files
+
+
 * Little RSS feed demo app
 * Make test() streaming because of returning a Response
 * markdown() -> md()
-* Fix and finish README examples
 * Check the updates to login cookies; seem like they're timing out even under active use
 * Pin window to master slot in gwm
 * Make more complete auth-timeout-force-re-login system (an endpoint to verify user-initiated action, and a way to configure auth timeouts per user)
 * Let people reset their own passwords
-* gimbal.root()
-
 
 
 # Near Future
 
+* Change access.json to JSONL
 * Rename client/ to gimbal/
 * Fix markdown titlebar
 * gterm command Ctrl-Z for undo text editing
@@ -42,7 +43,7 @@
 
 ## shell tools
 
-facl() supporting directory recursion up and down
+allow()/deny()/access() supporting directory recursion up and down
 
 signup()
 
@@ -260,8 +261,6 @@ Auth improvements
 Some kind of better window, in the frontend, into HTTP traffic and requests (log / dashboard) if nowhere else
 
 Clean up places where "primary" as the volume name is hard coded: `rootVolume` → `mainVolume` (module_auth.go), `rootVolume()` → `mainVolume()` (module_serviceworker.go), `rootVolume` variable name (cmd/testbed/main.go)
-
-Change access.json to JSONL syntax
 
 Check a little more thoroughly that multiple auth tokens at once work well
 

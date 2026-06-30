@@ -86,7 +86,7 @@ The full set of access types is:
 
 The way that permissions at one level apply to subdirectories below that level falls out as a natural consequence of being able to make reads or writes to the Merkle tree at that exact specific level. Mostly, they simply carry down recursively, but `write` turns into `owner` at lower levels, and `insert` does not itself allow any modification at lower levels. This means you must be careful to fully set up the directory you're adding to an `insert`-only directory, and then `mv()` it into place with permissions already set up such that you'll be able to modify it going forward -- otherwise it will become immutable to you when it's moved out of your home directory, or wherever else you are editing it, and into a place you don't have broader permissions to. See the `custom.melanic.org` vhost setup example from the README example screenshots for an example of how to do this.
 
-The frontend shell tool `facl()` is used to modify directory permissions. Run `help('facl')` to see more about how to use it and how grants of permission look.
+Use `path.allow()`, `path.deny()`, and `path.access()` to manage directory permissions. Run `help('allow')` for details on the grant spec, `help('deny')` for removing grants, and `help('access')` for listing them.
 
 Note that the `origin` is such a critical piece of this security that it *must* be specified with any grant of permissions. There are several ways to specify an origin:
 
