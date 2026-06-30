@@ -14,11 +14,11 @@ function resolvePath(prev, args) {
   return null;
 }
 
-function findDest(args, gimbal) {
+function findDest(prev, args) {
   const p = args.find(a => a instanceof GimbalPath);
   if (p) return p;
   const str = args.find(a => typeof a === 'string');
-  if (str && gimbal) return gimbal.p(str);
+  if (str && prev instanceof GimbalPath) return prev.relPath(str);
   return null;
 }
 
@@ -30,7 +30,7 @@ export function invoke(gimbal, prev, ...args) {
   const src = resolvePath(prev, args);
   if (!(src instanceof GimbalPath)) throw new Error('mv: need a source path');
 
-  const dest = findDest(args, gimbal);
+  const dest = findDest(prev, args);
   if (!dest) throw new Error('mv: need a destination path');
 
   const opts = findOpts(args);

@@ -21,7 +21,7 @@ export function invoke(gimbal, prev, ...args) {
     if (i === 0 && a instanceof GimbalPath) {
       dest = a;
     } else if (i === 0 && typeof a === 'string') {
-      dest = prev.p(a);
+      dest = prev.relPath(a);
     } else if (i === args.length - 1 && typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) {
       opts = a;
     } else {
