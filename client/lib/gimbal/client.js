@@ -81,6 +81,10 @@ export class GimbalClient {
     return this.p(`/sites/${hostname}/live`);
   }
 
+  root() {
+    return this.p('/');
+  }
+
   eval(src, extraVars = {}) {
     const fnArgs = ['gimbal', ...Object.keys(extraVars)];
     const fnValues = [window.gimbal, ...Object.values(extraVars)];

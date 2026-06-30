@@ -1,6 +1,5 @@
 # In Progress
 
-* Add gimbal.root()
 * Fix markdown link click behavior
 * Fix and finish ./README examples
 * Fix the client/lib/README.md examples
