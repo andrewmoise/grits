@@ -1,18 +1,26 @@
 # In Progress
 
+* Move facl() to allow(), deny(), and access()
+* Add gimbal.root()
+* Fix markdown link click behavior
+* Fix the client/lib/README.md examples
+* Little RSS feed demo app
 * Make test() streaming because of returning a Response
 * markdown() -> md()
-* Move facl() to allow(), deny(), and access()
-* Fix markdown link click behavior
-* Fix examples with inbox etc
+* Fix and finish README examples
 * Check the updates to login cookies; seem like they're timing out even under active use
+* Pin window to master slot in gwm
+* Make more complete auth-timeout-force-re-login system (an endpoint to verify user-initiated action, and a way to configure auth timeouts per user)
+* Let people reset their own passwords
+* gimbal.root()
+
 
 
 # Near Future
 
 * Rename client/ to gimbal/
 * Fix markdown titlebar
-* gterm command Ctrl-Z
+* gterm command Ctrl-Z for undo text editing
 * More tools: Diff, patch
 * Filesystem undo
 * Better git self-hosting
@@ -27,15 +35,8 @@
 * Import git tools libs
 * Check remote volume functioning
 * Check FUSE functioning (esp when writes happen outside FUSE)
-* RSS feed reader
 
 # Backlog
-
-## Melanic specifically
-
-
-
-
 
 
 
@@ -70,8 +71,6 @@ js() and json() (replacing all the .toWhatever() methods that aren't quite exact
 Make more secure login self test than test/test user
 
 Make test() print failures as red, or a red X or something is probably easier
-
-Let people reset their own passwords
 
 whoami() should return some better indication, if someone's login has expired
 
@@ -183,7 +182,7 @@ Make "safe mode"
 
 Rename gwm-widget.js to something more accurate now
 
-
+Nice icons (clarity)
 
 
 ## grits client
@@ -238,8 +237,6 @@ Make multilink (esp with assertions) atomic, with OCC probably
 
 Change LookupResponse to just include metadata inline
 
-Make more complete auth-timeout-force-re-login system (an endpoint to verify user-initiated action, and a way to configure auth timeouts per user)
-
 Make mkdir('one/two') return a sensible error, not a 500
 
 Change 404 returns during normal operations, so we don't spam the console
@@ -284,7 +281,7 @@ Docker, I guess
 
 Put passwords in the user's home directory, and back out the password strength checking
 
-
+Allow users to designate an origin as having access to everything
 
 
 ## Random Notes and Sketches
