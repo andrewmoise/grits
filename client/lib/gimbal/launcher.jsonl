@@ -1,3 +1,3 @@
-{"cmd":"gimbal.launch('files')","icon":"files","iconColor":"orange"}
+{"cmd":"gimbal.site().launch('files')","icon":"files","iconColor":"orange"}
 {"cmd":"gimbal.launch('gterm')","icon":"gterm","iconColor":"blue"}
 {"cmd":"gimbal.launch('edit')","icon":"edit","iconColor":"teal-hi"}
