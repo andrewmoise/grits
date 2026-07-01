@@ -45,9 +45,9 @@ You can use `gimbal.glob({pattern})` to get a list of files matching the pattern
 
 ## Permissions
 
-Anonymous access to the system is permitted, although you won't be able to write much. Generally speaking, you will want to log yourself in "globally" via an auth cookie. Use `gimbal.login(username, password, {g:1})`. You can also log in only for the current session (current tab), which may be useful for superuser access; for example via `gimbal.login('glenda', password)`.
+Note: **Permissions are enforced only at the namespace level — blobs are stored in plaintext and served to anyone who has the CID**. Don't store anything secret in this. In particular, content with few possible values can have its CID guessed, so this can bite even where you didn't think you were storing a secret — a PIN or password check can leak this way. (Real confidentiality is a someday-feature via client-side crypto, not CID secrecy.) The system does not have known or obvious ways to violate its read security, but also does not attempt to provide strong read-secrecy guarantees for genuinely sensitive data.
 
-The permissions system which maps users to what they can do within the file store is designed to be simple, and adapted to our specific needs:
+That being said, the overall scope of the system is:
 
 * The filesystem enforces permissions at the directory level. Files have no permissions setup distinct from those for directory they're in.
 * The default is no access. Permission must be explicitly granted.
@@ -84,9 +84,9 @@ The full set of access types is:
 * `read+write`: You may read or write any data in this directory *except* that you may not modify the `.grits` directory in it. (You may modify `.grits` directories in subdirectories). This can be used for example to give someone read/write access to a directory without letting them lock you out of it by removing your own permissions to it.
 * `owner`: You can read or write anything in this directory, and control permissions by modifying files in `.grits` (including the access control file).
 
-The way that permissions at one level apply to subdirectories below that level falls out as a natural consequence of being able to make reads or writes to the Merkle tree at that exact specific level. Mostly, they simply carry down recursively, but `write` turns into `owner` at lower levels, and `insert` does not itself allow any modification at lower levels. This means you must be careful to fully set up the directory you're adding to an `insert`-only directory, and then `mv()` it into place with permissions already set up such that you'll be able to modify it going forward -- otherwise it will become immutable to you when it's moved out of your home directory, or wherever else you are editing it, and into a place you don't have broader permissions to. See the `custom.melanic.org` vhost setup example from the README example screenshots for an example of how to do this.
+The way that permissions at one level apply to subdirectories below that level falls out as a natural consequence of being able to make reads or writes to the Merkle tree at that exact specific level. Mostly, they simply carry down recursively, but `write` turns into `owner` at lower levels, and `insert` does not itself allow any modification at lower levels. This means you must be careful to fully set up the directory you're adding to an `insert`-only directory, and then `mv()` it into place with permissions already set up such that you'll be able to modify it going forward -- otherwise it will become immutable to you when it's moved out of your home directory, or wherever else you are editing it, and into a place you don't have broader permissions to. See the cloned vhost setup example from [DEMO.md](DEMO.md) for an example of how to do this.
 
-Use `path.allow()`, `path.deny()`, and `path.access()` to manage directory permissions. Run `help('allow')` for details on the grant spec, `help('deny')` for removing grants, and `help('access')` for listing them.
+Use `path.allow()`, `path.deny()`, and `path.access()` to manage directory permissions. Run `gimbal.help('allow')` for details on the grant spec and likewise for `'deny'` and `'access'`.
 
 Note that the `origin` is such a critical piece of this security that it *must* be specified with any grant of permissions. There are several ways to specify an origin:
 
@@ -94,9 +94,7 @@ Note that the `origin` is such a critical piece of this security that it *must* 
 * A **full URL** (`http://...` or `https://...`) is used as-is.
 * `"*"` grants access to *any* origin. You probably don't want this. It's wrong outside of specific use cases. You probably want either origin: `"gimbal"` for granting access to "the human," or else origin: the same vhost where you're putting the content you're modifying access to.
 
-Note: **Permissions are enforced only at the namespace level — blobs are stored in plaintext and served to anyone who has the CID**. Don't store anything secret in this. In particular, content with few possible values can have its CID guessed, so this can bite even where you didn't think you were storing a secret — a PIN or password check can leak this way. (Real confidentiality is a someday-feature via client-side crypto, not CID secrecy.)
-
-Also note: All of this restriction based on origin is to defend the user, and their **honestly functioning** browser, against a maliciously coded vhost. Do not construct a security measure by assuming that an origin means the browser is running exactly the code you provided. We are defending honest browsers against malicious vhosts, not the other way around -- you can't grant broad access from a particular origin, and then assume that users from that origin will be using the security measures you wrote into the client code for that origin. Things don't work that way.
+Note: All of this restriction based on origin is to defend the user, and their **honestly functioning** browser, against a maliciously coded vhost. Do not construct a security measure by assuming that an origin means the browser is running exactly the code you provided. We are defending honest browsers against malicious vhosts, not the other way around -- you can't grant broad access from a particular origin, and then assume that users from that origin will be using the security measures you wrote into the client code for that origin. Things don't work that way.
 
 ## Authentication
 
@@ -123,43 +121,95 @@ You can type javascript:
 2
 ```
 
-You can also call Gimbal shell commands as methods on `gsh`:
+Generally speaking, you want to access everything through a root object, `gimbal`. This is also available, outside of our command shell, as `window.gimbal`.
 
 ```
-> gimbal.login({guest:1})
-> gimbal.whoami()
-> gimbal.ls('/sites')
-[p(gimbal.melanic.org)]
-> gimbal.read('/sites/gimbal.melanic.org/live/index.html')
-<!DOCTYPE html>...
+gimbal.login({guest:1})
+gimbal.whoami()
 ```
+
+These commands are dynamically dispatched, and can be chained together:
+
+```
+gimbal.upload().to('/home/moise/hello.txt')
+gimbal.p('/home/moise/hello.txt').read()
+```
+
+Pretty much all of these operations are asynchronous. To prevent the syntax from being tortured, we let you chain results together as in the common JS idiom, with the "result" of each feeding in as input to the next, and the command shell will automatically `await` for them all and then return the ultimate result.
+
+That "`self`" variable that's getting passed down will generally either be a `GimbalPath`:
+
+```
+gimbal.home().p('foo').mkdir()
+gimbal.home().p('foo/bar.txt').write('Hello again')
+gimbal.home().p('foo/bar.txt').read()
+```
+
+Or a `Response`:
+
+```
+gimbal.upload().to('/home/moise/hello.txt')
+gimbal.p('/home/moise/hello.txt').read().to('/home/moise/another.txt')
+```
+
+These commands are dynamically dispatched (although not every one applies to any possibility for `self` -- `login()` must be called on the central `gimbal` object, for example, and `mkdir()` can only be called on a `GimbalPath`.)
+
 
 ### Paths
 
-Most commands accept paths as strings:
+Mostly, the commands you'll be typing will operate on paths (`GimbalPath`):'
+
 
 ```
-gimbal.ls('/home')
-gimbal.read('/file.txt')
-gimbal.mkdir('/home/you/newdir')
+gimbal.site().ls()
+gimbal.home().p('hello.txt').write('Hello, world')
+gimbal.home().p('hello.txt').read()
 ```
 
-For chaining operations on the same path, use `gimbal.path()` to create a path reference:
+`.p()` is an alias for `.path()`; that is the operation to access a path relative to some other path. `gimbal.home().p('foo').p('bar/baz.txt')` is conceptually equivalent to `$HOME/foo/bar/baz.txt`.
+
+When it is sensible, you can also give a string argument to to some commands, in which case it'll be taken as relative to the path you called the command on. These are equivalent:
 
 ```
-gimbal.path('/home/you').ls()                      /* list a directory */
-gimbal.path('/home/you/file.txt').write('hello')   /* write a file */
-gimbal.path('/src').cp('/dest')                    /* copy-on-write link between paths */
-gimbal.path('/src').mv('/dest')                    /* move/rename */
-gimbal.path('/src').rm()                           /* remove a file */
+gimbal.home().mkdir('src')
+gimbal.home().p('src').mkdir()
 ```
 
-### How it works
+And, commands which take a source and a destination work likewise. For example:
 
-Commands are modules in `lib/<name>/main.js`. Each exports `invoke(prev, ...args)`.
-Calling `gimbal.xyz()` or `path.xyz()` dispatches to `lib/xyz/main.js`.
-Commands return plain values (strings, arrays, objects, GimbalPath).
-The terminal auto-awaits `GimbalResult` values and displays the result.
+```
+gimbal.home().mkdir('backup')
+gimbal.home().p('src').cp('backup/src')
+```
+
+... will make a backup copy of `$HOME/src/` in `$HOME/backup/src/`.
+
+Directories of note are:
+
+* `gimbal.home()`, your home directory
+* `gimbal.site()`, the webroot of the current vhost
+* `gimbal.root()`, the root of the entire directory (which, because of permissions, you will be unlikely to be able to read).
+
+### Copy-on-write
+
+Note that `.cp()` is very different from the Unix command `cp`. It does a copy-on-write Grits link, which means it is a cheap operation even on very large directories, and naturally works on both files and directories.
+
+Similarly, `.rm()` and `.rmdir()` can cheaply throw away even large directories -- you can use directories within this system a little bit like git tags, to store a snapshot or fork a copy of a large directory, as opposed to expensive operations which must move data around proportional to the size of what you're working with.
+
+### Async
+
+As mentioned, the shell will `await` automatically for the results of what you type before returning, to avoid forcing you to type an `await` with every single command. However, if *you* are making use of some intermediate results, you must await within the command:
+
+```
+home = await gimbal.home()
+home.p('src').cp(await home.p('backup/src'))
+```
+
+### Dispatch
+
+Commands are implemented as modules in `lib/<name>/main.js`. Each exports `invoke(prev, ...args)`. Calling `gimbal.xyz()` or `path.xyz()` dispatches to `lib/xyz/main.js`. Commands return plain values (strings, arrays, objects, GimbalPath). The terminal auto-awaits `GimbalResult` values and displays the result.
+
+You can look over `/lib/` within a Gimbal install to get a sense of what commands are available.
 
 ## Web Hosting
 
@@ -235,11 +285,7 @@ Reading (serving the read-only bits of the site) should already be faster than a
 
 ## Code Layout
 
-### `client/lib`: Frontend
-
-Each tool goes in its own directory here. `main.js` in a tool directory means it is runnable as a shell command. `gwm-widget.js` in a tool directory means it can be opened as a widget in the graphical shell.
-
-There is also a `client/lib/node_modules` directory, which is populated by `make deps`.
+Generally speaking, the client code in `client/lib` is meant to be easy to hack on, and it's expected that average users will be going in and making customization if they are capable. The Go code that runs the backend is meant to be just a general support layer, not needing lots of custom changes, but if you are curious about the organization of the backend code, these are the main things to understand:
 
 ### `internal/grits`: Core: Blob storage, configuration, the namespace, and so on. 
 
@@ -267,3 +313,9 @@ You can check out the source in `internal/gritsd/module_{whatever}.go` to see th
 ### `var/`
 
 `var/` is the area for writable data used by the server in operation. It should be fine (and would be recommended) to have the entire `grits/` directory outside of `var/` owned by a different user, and read-only from the POV of the server process.
+
+### `client/lib`: Frontend
+
+This is automatically imported to the Grits store on every server startup. Each tool goes in its own directory here. `main.js` in a tool directory means it is runnable as a shell command. `gwm-widget.js` in a tool directory means it can be opened as a widget in the graphical shell.
+
+There is also a `client/lib/node_modules` directory, which is populated by `make deps`.

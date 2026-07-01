@@ -8,7 +8,7 @@ This only works on Linux right now.
 
 **Prerequisites:**
 
-* Go >= 1.25.11
+* Install Go >= 1.25.11
 * `sudo apt install fuse3 certbot npm` (or equivalent)
 
 **Note:** `make deps` will install `govulncheck` in order to run `make audit`.
@@ -76,23 +76,9 @@ Frontend tests will take a while, and they'll be silent until they complete (TOD
 
 ## Web Serving
 
-Once tests pass, you can start putting up content. `gimbal.upload()` and `gimbal.home().p(whatever).unzip()` may be useful. The copy-on-write deployment workflow looks like this:
+`gimbal.site()` reflects the webroot of the current vhost, but you may also create new vhosts. Anything created in `gimbal.root().p('sites').p(hostname).p('live')` will be served under `https://{hostname}` if the DNS resolved to our server. Note that the intended functioning of the system is that this is cheap and permitted for regular end-users, but you may change permissions on `gimbal.root().p('sites')` if you want to disallow this or restrict it to only certain users.
 
-```
-gimbal.path('/sites/{hostname}/dev/v1').mkdir({p:1})
-gimbal.path('/sites/{hostname}/dev/v1/index.html').write('version 1')
-gimbal.path('/sites/{hostname}/dev/v1').cp(gimbal.path('/sites/{hostname}/live'), {ff:1})
-```
-
-(`ff` forcibly overwrites `live` with a copy of `dev/v1`, instead of the normal behavior of creating a new entry inside an existing directory.)
-
-To start a v2:
-
-```
-gimbal.path('/sites/{hostname}/dev/v1').cp(gimbal.path('/sites/{hostname}/dev/v2'), {ff:1})
-```
-
-You can deploy `dev/v2` to a temporary vhost to test against real auth and real data before cutting it over to `live`.
+Generally speaking, the intent is that `/sites/{hostname}` is meant for administrative files and only available to people involved in administering that vhost, with `/sites/{hostname}/live` as the only world-readable part of the directory.
 
 ## Backend Administration
 

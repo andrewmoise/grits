@@ -12,6 +12,8 @@
 * Pin window to master slot in gwm
 * Make more complete auth-timeout-force-re-login system (an endpoint to verify user-initiated action, and a way to configure auth timeouts per user)
 * Let people reset their own passwords
+* Fix tooltips on main icons
+* Fix tooltips / full path things on titlebars
 
 
 # Near Future
@@ -38,6 +40,7 @@
 * Check FUSE functioning (esp when writes happen outside FUSE)
 * Some version of diff() + incorporating new changes
 * ls() should return relative paths by default
+* Clipboard copy for code sections in markdown
 
 # Backlog
 
