@@ -186,7 +186,7 @@ export default function createWidget({ name, gimbal, path: gimbalPath, payload =
     action() { goToParent(); },
   };
 
-  const decoration = { title: makeTitle(basePath), leftButtons: [parentBtn] };
+  const decoration = { icon: 'files', iconColor: 'orange', title: makeTitle(basePath), leftButtons: [parentBtn] };
 
   const vol = gimbal.grits.volume(gimbal._serverUrl, volume);
 

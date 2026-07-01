@@ -184,6 +184,7 @@ export default function createWidget({ name, path: gimbalPath = null, payload = 
   // ── decoration declaration ────────────────────────────
   const decoration = {
     icon: 'edit',
+    iconColor: 'teal-hi',
     title: currentName,
     leftButtons: [saveBtn, saveAsBtn, newBtn],
 

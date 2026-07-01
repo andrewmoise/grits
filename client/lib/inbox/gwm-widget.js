@@ -205,7 +205,7 @@ export default function createWidget({ name, gimbal, args = [] }) {
   let selectedKey = null;
   let detailVisible = false;
 
-  const decoration = { title: '', leftButtons: [] };
+  const decoration = { icon: 'inbox', iconColor: 'a1', title: '', leftButtons: [] };
 
   // ── Build DOM structure ──────────────────────────────
 

@@ -134,7 +134,7 @@ export default function createWidget({ name, gimbal, args = [] }) {
   let from = '';
   let sending = false;
 
-  const decoration = { title: '' };
+  const decoration = { icon: 'message', iconColor: 'a1', title: '' };
 
   // ── Build form ───────────────────────────────────────────────
 

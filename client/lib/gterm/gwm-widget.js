@@ -525,6 +525,7 @@ export default function createWidget({ name, gimbal, runOnInit = null }) {
   // ── decoration declaration ────────────────────────────
   const decoration = {
     icon: 'gterm',
+    iconColor: 'blue',
     title: '',
   };
 

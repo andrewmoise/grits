@@ -534,7 +534,7 @@ function syncDecoration(wrap, w) {
   // Keyed on icon + color + actionability + button count so incidental re-renders
   // don't thrash listeners.
   const effectiveIcon  = dec.icon      ?? w.icon;
-  const effectiveColor = dec.iconColor ?? w.iconColor ?? null;
+  const effectiveColor = w.iconColor ?? dec.iconColor ?? null;
   const leftSig = `${effectiveIcon}|${effectiveColor}|${dec.iconAction ? '1' : '0'}|${(dec.leftButtons ?? []).length}`;
 
   if (wrap._leftSig !== leftSig) {

@@ -2,7 +2,17 @@ import { GimbalPath } from '../gimbal/path.js';
 
 export const help = 'launch a widget';
 
+function isPlainObject(v) {
+  if (!v || typeof v !== 'object') return false;
+  const p = Object.getPrototypeOf(v);
+  return p === Object.prototype || p === null;
+}
+
 export async function invoke(gimbal, prev, widgetName, ...args) {
+  const rawOpts = args.length > 0 && isPlainObject(args[args.length - 1]) ? args.pop() : {};
+  const { iconColor, ...restOpts } = rawOpts;
+  if (Object.keys(restOpts).length) throw new Error(`launch: unknown option "${Object.keys(restOpts)[0]}"`);
+
   let path = null;
   if (prev instanceof GimbalPath) {
     path = prev;
@@ -22,5 +32,5 @@ export async function invoke(gimbal, prev, widgetName, ...args) {
       path = gimbal.p(args[0]);
   }
 
-  await window.gimbal.openWidget(mod, { name, gimbal, path, payload: prev, zone: 'master' });
+  await window.gimbal.openWidget(mod, { name, gimbal, path, payload: prev, zone: 'master', iconColor });
 }
