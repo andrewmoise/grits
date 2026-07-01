@@ -38,6 +38,7 @@
 * ls() should return relative paths by default
 * Clipboard copy for code sections in markdown
 * Make gimbal.help() print a full list of all the commands
+* Make purple titlebar icons in the examples
 
 # Backlog
 

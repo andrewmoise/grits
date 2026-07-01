@@ -387,7 +387,7 @@ async function openWidget(mod, opts = {}) {
     // Override name/icon/iconColor if the widget declares them
     if (dec.title     !== undefined) w.name      = dec.title;
     if (dec.icon      !== undefined) w.icon      = dec.icon;
-    if (dec.iconColor !== undefined) w.iconColor = dec.iconColor;
+    if (dec.iconColor !== undefined && w.iconColor == null) w.iconColor = dec.iconColor;
 
     // ── Build and inject the controls object ──────────────
     // The widget mutates its own decoration object then calls controls.update()
