@@ -2,16 +2,16 @@
 
 Gimbal (the frontend) and Grits (the backend) currently ship together in one git repo.
 
-## Build
+Note that the backend only works on Linux right now.
 
-This only works on Linux right now.
-
-**Prerequisites:**
+## Prerequisites
 
 * Install Go >= 1.25.11
 * `sudo apt install fuse3 certbot npm` (or equivalent)
 
-**Note:** `make deps` will install `govulncheck` in order to run `make audit`.
+**Note:** `make deps` will install `govulncheck` semi-globally in order to run `make audit`.
+
+## Build
 
 ```
 git clone https://gimbal.melanic.org/src/.git grits
@@ -21,7 +21,7 @@ make deps      # fetch JS and Go dependencies
 make           # build the server
 ```
 
-Note that the initial `git clone` is slow — it's using bare HTTP against the self-hosted store rather than a git-specific protocol. This is intentional (no git-specific code in the backend, no Github dependency), but it's not ideal in practice.
+Note that the initial `git clone` is slow — it's using bare HTTP against the self-hosted store rather than a git-specific protocol. This is intentional (because it lets us have no git-specific code in the backend and yet no github.com dependency), but it's not ideal in practice. There's a TODO to make clones run at reasonable speed.
 
 ## Configure
 
@@ -40,13 +40,15 @@ sudo bin/gritsd
 
 The server drops privileges to your configured user as soon as it's opened the ports it needs. To run without `sudo`, configure a port above 1024, run certbot manually, and omit `sudo`.
 
+Run it from `tmux` or something. Making `gritsd` a systemctl service is on the to-do list still.
+
 ## Initial Setup
 
 Once the server is running, the FUSE mount at `mnt/` gives you direct access to the file store.
 
 **Shutdown note:** If the server is shut down while something in the FUSE mount is open, it'll wait rather than leave a stale mount. Close any open files, `cd` out of the mount, unmount manually, and the shutdown will complete.
 
-**Auto-import note:** The sample config automatically imports `client/` into the live directory for `gimbal.{your domain}.com` on every restart. Edits to `client/` in your checkout will overwrite local changes in the store. Other vhosts — including user-created clones — are not affected.
+**Auto-import note:** The sample config automatically imports `client/` into the live directory for `gimbal.{your domain}.com` on every restart. Edits to `client/` in your checkout will overwrite local changes in the store. Other vhosts — including user-created clones — are not affected, which also means they're not updated with new versions of Gimbal code once they've been cloned.
 
 Populate the store with the one-time skeleton import:
 
@@ -76,13 +78,15 @@ Frontend tests will take a while, and they'll be silent until they complete (TOD
 
 ## Web Serving
 
-`gimbal.site()` reflects the webroot of the current vhost, but you may also create new vhosts. Anything created in `gimbal.root().p('sites').p(hostname).p('live')` will be served under `https://{hostname}` if the DNS resolved to our server. Note that the intended functioning of the system is that this is cheap and permitted for regular end-users, but you may change permissions on `gimbal.root().p('sites')` if you want to disallow this or restrict it to only certain users.
+`gimbal.site()` reflects the webroot of the current vhost, but you may also create new vhosts. Anything created in `gimbal.root().p('sites').p(hostname).p('live')` will be served under `https://{hostname}` if the DNS resolves to our server.
 
 Generally speaking, the intent is that `/sites/{hostname}` is meant for administrative files and only available to people involved in administering that vhost, with `/sites/{hostname}/live` as the only world-readable part of the directory.
 
+Note that the intended functioning of the system is that this is cheap and permitted for regular end-users, but you may change permissions on `gimbal.root().p('sites')` if you want to disallow creation of arbitrary vhosts, or restrict it to only certain users.
+
 ## Backend Administration
 
-The intent is that most administration will eventually happen from inside Gimbal — HTTP logs, user management, and so on. But you will need to do some things from the backend. Assuming that the `cmdline` module is running, you can from the project directory do things like this:
+The intent is that as the system fleshes out, most administration will eventually happen from inside Gimbal (HTTP logs, user management, and so on.) But you will need to do some things from the backend. Assuming that the `cmdline` module is running, you can from the project directory do things like this:
 
 ```bash
 bin/grits ping                              # test that the cmdline module is working
@@ -91,4 +95,3 @@ bin/grits adduser username                  # add a user (prompts for password)
 bin/grits deluser username                  # delete a user
 ```
 
-Making `gritsd` a systemctl service is on the to-do list.

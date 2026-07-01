@@ -28,9 +28,9 @@ home.ls()
 
 Most of what you're doing is defining path objects within a vaguely Unix-like filesystem and calling methods on them, to do file I/O.
 
-Of course, the point of these objects and commands is not just playing with files in your home directory for its own sake -- it is that all the code for the interface you're looking at, and other Gimbal apps, exists in this same space, and the user can poke around in *that* and make changes which will then become live on their live site.
+Of course, the point of these objects and commands is not just playing with files in your home directory for its own sake -- it is that all the code for the interface you're looking at, and other Gimbal apps, exists in this same file space, and that you can poke around in *that* and make changes which will then become live for you on the live site.
 
-Let's get into it:
+Let's get into one example of how:
 
 ## 2. Modifying Application Code
 
@@ -38,9 +38,9 @@ So Gimbal's editor doesn't do line wrapping:
 
 ![Screenshot showing busted line wrapping](doc/images/custom-0.png)
 
-That's not convenient, but one of the strengths of Gimbal is that you can fix it for yourself as a regular user. To do this, open up the file browser (the folder icon on your left), open up "src", and double-click "DEMO.md" and you'll see all that un-line-wrapped glory. Then, find your way back here, and I'll show you how to fix it.
+That's not convenient, but again one of the strengths of Gimbal is that you can fix it for yourself as a regular user. To do this, open up the file browser (the folder icon on your left), open up "src", and double-click "DEMO.md" and you'll see all that un-line-wrapped glory. Then, find your way back here, and I'll show you how to fix it.
 
-The first part of fixing is to make a little clone of the Gimbal code (out of `lib` from the main site webroot in `gimbal.site()`) in your own file space:
+The first part of fixing is to make a little clone of the Gimbal code (out of `lib/` from the main site webroot in `gimbal.site()`) in your own file space:
 
 ```
 gimbal.site().p('lib').cp(await gimbal.home().p('lib'))
@@ -70,13 +70,13 @@ Did it work? It worked for me:
 
 (Note that if you change the source *again*, you must reload this tab for the changes to take effect. We don't try to monkey with Javascript's `import()` semantics, so once something's importe, it's imported, and you'll have to reload the tab to re-import it.)
 
-Changing or examining the code of a running web app really doesn't take long once you're familiar with the framework. We can't modify the "core" functionality of the site, because we're obviously not allowed to modify actual code in `/lib` on `gimbal.melanic.org` (although, see the next section!), but we can run custom widgets from `home()/lib` which we define, which lets us fix bugs in the widgets and then use the fixed versions instead.
+Changing or examining the code of a running web app really doesn't take long once you're familiar with the framework. We can't modify the "core" functionality of the site, because we're obviously not allowed to modify actual code in `/lib/` on `gimbal.melanic.org` (although, see the next section!), but we can run custom widgets from `home()/lib/` which we define, which lets us fix bugs in the widgets and then use the fixed versions instead.
 
 If you're up for a little more in-depth example, you're welcome to proceed to the next section, where we will deploy a modified clone of the whole gimbal.melanic.org, which lets us fix things anywhere without needing custom launch commands to run the editor or anything like that.
 
 ## 3. Cloning and Modifying a Site
 
-The widget-patching approach above is useful for small changes, but if you want a fully independent copy of the app as a whole that you can modify freely, you can clone not just `/lib` but the entire vhost. So, in this example, we'll do exactly that, and call it `gimbal.{YOUR USERNAME}.melanic.org`.
+The widget-patching approach above is useful for small changes, but if you want a fully independent copy of the app as a whole that you can modify freely, you can clone not just `/lib/` but the entire vhost. So, in this example, we'll do exactly that, and call it `gimbal.{YOUR USERNAME}.melanic.org`.
 
 ### Make a local clone
 
@@ -92,27 +92,14 @@ vhost.mkdir()
 site.cp(await vhost.p('live'))
 ```
 
-(Note a subtle point -- a path doesn't have to exist for us to operate on it. We create the object for `$HOME/gimbal.{me}.melanic.org` before we `mkdir()` it. Paths exist independent and separate from files, and they also don't move along with the files when the files move.)
-
 ### Set up permissions
 
-So, allowing random vhosts to be defined, which then operate within the same space of data as all the other vhosts, obviously carries some scary implications about what those new apps might do to everyone's data.
-
-Our solution to this is to define access control in terms of *both* the user and the origin involved. Your auth token is good across all vhosts, and they all access a single file space, but they don't all have the same access. No code has *any* access until it's explicitly granted. You can read about the details in [REFERENCE.md](REFERENCE.md), but the short implication is that we'll need to explicitly make a grant of access for this new vhost to our data before it can accomplish anything.
-
-First, in order for your new shell to be useful, you'll need to access your normal files from it. (Most apps, you will *not* want to do this; some random music player on `music.melanic.org` needs to be safe to make use of without giving it access to your whole home directory.)
+See [REFERENCE.md](REFERENCE.md) for a detailed discussion of permissions, because they work very differently here than they do on Unix. But the quickstart version of getting things working for a new vhost that'll be a functional clone of `gimbal.melanic.org` is:
 
 ```
-home.allow({u:me, o:`gimbal.${me}`, p:'owner'})
-```
-
-That options bag means "user: me", "origin: the new vhost I'm about to make", "permission: all permissions."
-
-Next, in order to access and edit the new vhost you're making, once it's in place in `/sites` and has become a live vhost, you need to grant access to it to yourself. For right now it's temporarily under an umbrella of `/home/{you}` but that will stop being true and the grant for your home directory will stop working, unless before it leaves `home()`, we do this:
-
-```
-vhost.allow({u:me, o:'gimbal', p:'owner'})
-vhost.allow({u:me, o:`gimbal.${me}`, p:'owner'})
+home.allow({u:me, o:`gimbal.${me}`, p:'owner'})  /* Allow ourselves, via new shell, access to all homedir files */
+vhost.allow({u:me, o:'gimbal', p:'owner'})       /* Allow ourselves, via old shell, access to administer the new vhost */
+vhost.allow({u:me, o:`gimbal.${me}`, p:'owner'}) /* Allow ourselves, via new shell, access to administer the new vhost */
 ```
 
 ### Make it live
@@ -148,15 +135,15 @@ Remake the editor fix, Ctrl-S, and reload the tab.
 
 ![Fixed editor in new vhost](doc/images/vhost-1.png)
 
-Now your editor's fixed forever. And, you can wander around in `src/` changing other stuff. If you brick the thing, you can restore from `/sites/gimbal.melanic.org/live` to get back to a working state. And so on.
+Now your editor's fixed forever. And, you can wander around in `gimbal.site().p('lib')` changing other stuff. If you brick the thing, you can restore from `/sites/gimbal.melanic.org/live` to get back to a working state. And so on.
 
 ## Congratulations!
 
 You made it. Neat stuff, right? I think it's neat. If you've made it this far through the demo, feel free to [drop me a line](mailto:moise@melanic.org) with any thoughts or feedback.
 
-There's also a Matrix room: `#gimbal:matrix.org`, and further reading if you like:
+There's also a Matrix room: `#gimbal:matrix.org`, and some further reading if you like:
 
-* [INSTALL.md](INSTALL.md) — how to run your own backend
-* [REFERENCE.md](REFERENCE.md) — full technical reference: permissions, API, filesystem layout, storage format
+* [REFERENCE.md](REFERENCE.md) — Full technical reference: permissions, API, filesystem layout, storage format
+* [INSTALL.md](INSTALL.md) — How to run your own backend
 
 Cheers, hope you have enjoyed.

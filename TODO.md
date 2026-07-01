@@ -1,14 +1,10 @@
 # In Progress
 
-* Fix and finish ./README examples
-* Fix the client/lib/README.md examples
 * Let editor open files
-
-
 * Little RSS feed demo app
 * Make test() streaming because of returning a Response
 * markdown() -> md()
-* Check the updates to login cookies; seem like they're timing out even under active use
+* Check the updates to login cookies; seem like they're timing out even when in active use
 * Pin window to master slot in gwm
 * Make more complete auth-timeout-force-re-login system (an endpoint to verify user-initiated action, and a way to configure auth timeouts per user)
 * Let people reset their own passwords
@@ -41,6 +37,7 @@
 * Some version of diff() + incorporating new changes
 * ls() should return relative paths by default
 * Clipboard copy for code sections in markdown
+* Make gimbal.help() print a full list of all the commands
 
 # Backlog
 

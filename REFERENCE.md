@@ -45,15 +45,15 @@ You can use `gimbal.glob({pattern})` to get a list of files matching the pattern
 
 ## Permissions
 
-Note: **Permissions are enforced only at the namespace level — blobs are stored in plaintext and served to anyone who has the CID**. Don't store anything secret in this. In particular, content with few possible values can have its CID guessed, so this can bite even where you didn't think you were storing a secret — a PIN or password check can leak this way. (Real confidentiality is a someday-feature via client-side crypto, not CID secrecy.) The system does not have known or obvious ways to violate its read security, but also does not attempt to provide strong read-secrecy guarantees for genuinely sensitive data.
+Note: **Permissions are enforced only at the namespace level — blobs are stored in plaintext and served to anyone who has the CID**. Don't store anything secret in this. In particular, content with few possible values can have its CID guessed, so this can bite even where you didn't think you were storing a secret — a PIN or password check can leak this way. (Real confidentiality is a someday-feature via client-side crypto, not CID secrecy.) The system does not have known or obvious ways to violate either its read or write security, but also does not attempt to provide strong read-secrecy guarantees for genuinely sensitive data.
 
-That being said, the overall scope of the system is:
+That being said, the overall nature of the system is:
 
-* The filesystem enforces permissions at the directory level. Files have no permissions setup distinct from those for directory they're in.
-* The default is no access. Permission must be explicitly granted.
-* Somewhat as a consequence of the Merkle tree structure, **grants of access also apply recursively to directories below the directory where they were granted**. There is no way to revoke a permission on a subdirectory, if a parent directory has it. This is fine, if permissions are granted according to those principles, but it will be surprising and some common practices from Unix security will not work at all here.
+* The filesystem enforces permissions at the directory level. Files have no permissions setup except that for the directory they're in.
+* The default is no access. Permission must always be explicitly granted from somewhere.
+* Somewhat as a consequence of the Merkle tree structure, **grants of access also apply recursively to directories below the directory where they are granted**. There is no way to revoke a permission on a subdirectory, if a parent directory has it. This is fine, if permissions are granted according to those principles, but it will be surprising and some common practices from Unix security will not work at all here.
 
-Grants of access are also, crucially, specified according to both the user, and the origin (the vhost which the user is on). The standard "global" login will log you in as a particular user across all subdomains -- once you're logged in, you are logged in across all apps. But, in general, a random app holding a user's token will still have access to nothing at all except what its origin (i.e. its app) has been specifically granted access to. So it is safe to visit some random subdomain while you are logged in as yourself and let it have your auth token.
+Grants of access are also, crucially, specified according to both the user and the origin (the vhost which the user is on). The standard "global" login will log you in as a particular user across all subdomains -- once you're logged in, you are logged in across all apps. But, in general, a random app holding a user's token will still have access to nothing at all except what its origin (i.e. its app) has been specifically granted access to. So it is safe to visit some random subdomain while you are logged in as yourself and let it have your auth token.
 
 In order for that to be safe, of course, the permissions must be set up right. Generally speaking, there should only be two broad grants of access on the system:
 
@@ -64,7 +64,7 @@ Any other grants of access should be very specific leaf-type access grants for p
 
 * `/home/moise/local/music-player/` could be read/writable by `moise` via the `music` origin.
 
-That construction means that, running the Gimbal shell, `moise` can examine the music player's application data and make changes to it. The music player can operate on its own data however it will need to. However, even though it carries a token for `moise`'s user, the music player cannot read or write anything from `moise`'s files outside its permitted area, nor can any other code that doesn't originate from `https://gimbal.{your domain}.com`.
+That construction means that, running the Gimbal shell, `moise` can examine the music player's application data and make changes to it. The music player can operate on its own data however it will need to. However, even though it carries a token for `moise`'s user, the music player cannot read or write anything from `moise`'s files outside `local/music-player/`, nor can any other code that doesn't originate from `https://gimbal.{your domain}.com`.
 
 Now say that `moise` wants to set up his own custom Gimbal shell on a different vhost, `https://gimbal.moise.{your domain}.com`. He adds a grant of access on `/home/moise` to his own user when accessed from that new origin. Both vhosts can now access the same data. No other origin can access `/home/moise` unless specifically allowed.
 
@@ -92,9 +92,9 @@ Note that the `origin` is such a critical piece of this security that it *must* 
 
 * **Anything without a scheme** (no `http://` or `https://`) is expanded to a subdomain of the core vhost domain. For example, `music` becomes `music.{your domain}.com`, and `myapp.myuser` becomes `myapp.myuser.{your domain}.com`.
 * A **full URL** (`http://...` or `https://...`) is used as-is.
-* `"*"` grants access to *any* origin. You probably don't want this. It's wrong outside of specific use cases. You probably want either origin: `"gimbal"` for granting access to "the human," or else origin: the same vhost where you're putting the content you're modifying access to.
+* `"*"` grants access to *any* origin. You probably don't want this. It's wrong outside of a couple of specific use cases. You probably want either `"gimbal"` (for granting universal access to "the human,") or else the same vhost where you're putting the content you're modifying access to (for granting access to an app's files specific to that app).
 
-Note: All of this restriction based on origin is to defend the user, and their **honestly functioning** browser, against a maliciously coded vhost. Do not construct a security measure by assuming that an origin means the browser is running exactly the code you provided. We are defending honest browsers against malicious vhosts, not the other way around -- you can't grant broad access from a particular origin, and then assume that users from that origin will be using the security measures you wrote into the client code for that origin. Things don't work that way.
+Also note: All of this restriction based on origin is to defend the user, and their **honestly functioning** browser, against a maliciously coded vhost. Do not construct a security measure by assuming that an origin means the browser is running exactly the code you provided. We are defending honest browsers against malicious vhosts, not the other way around -- you can't grant broad access from a particular origin, and then assume that users from that origin will be using the security measures you wrote into the client code for that origin. Things don't work that way.
 
 ## Authentication
 
@@ -183,6 +183,8 @@ gimbal.home().p('src').cp('backup/src')
 ```
 
 ... will make a backup copy of `$HOME/src/` in `$HOME/backup/src/`.
+
+Note a subtle point -- a path doesn't have to exist for us to operate on it. We create the object for `$HOME/src/` in one of the above examples before that directory exists in the file store. Paths exist independent and separate from files, and they also don't move along with the files when the files move.
 
 Directories of note are:
 
