@@ -1,6 +1,6 @@
-What follows is a quick walkthrough of what the system can do right now.
+# Demo
 
-## Examples / Demo
+What follows is a quick walkthrough of what the system can do right now.
 
 Gimbal is easy to try without installing anything. Go to [gimbal.melanic.org](https://gimbal.melanic.org/). You may be there already.
 
@@ -9,124 +9,161 @@ Specifically the examples we'll show are:
 1. How as an end-user to modify the code of the app you're interacting with
 2. How as an end-user to clone an app into a new vhost that you're fully in charge of
 
-(TODO - Examples don't always work)
-
-First, open up Gimbal if you're not already there, and from the terminal widget (the `>` prompt), start a guest session and try some basic operations:
+First, open up Gimbal if you're not already there. To see the basics of filesystem operations, you can try some simple commands at the terminal prompt (the blue `>`):
 
 ```
 gimbal.login({guest:1, g:1})   /* start a guest session (persists across tabs) */
 gimbal.whoami()                /* check who you are                            */
 
 home = await gimbal.home()
-home.path('hello.txt').write('hello')
-home.path('hello.txt').read()
+home.p('hello.txt').write('hello')
+home.p('hello.txt').read()
+home.ls()
+home.p('hello.txt').cp(await home.p('again.txt'))
 home.ls()
 ```
 
-Most of what you're doing is grabbing paths within a vaguely Unix-like filesystem and calling methods on them. See [REFERENCE.md](REFERENCE.md) for more about how the whole command system works, although hopefully the basic gist is pretty apparent.
+Most of what you're doing is defining path objects within a vaguely Unix-like filesystem and calling methods on them. See [REFERENCE.md](REFERENCE.md) for more about how the whole command system works, although hopefully the basic gist is clear.
+
+* `.p()` means `.path()` (which also works if you want that)
+* `home.p('foo').p('bar/baz.txt')` gives you conceptually `$HOME/foo/bar/baz.txt`
+* You can type `gimbal.root()`, `gimbal.home()`, and `gimbal.site()` to look at some of the basic paths involved, to get some orientation about where things are in the centralized file space.
+
+Note the use of `await` in places. Basically every function is async here, since it's all potentially doing network things to talk with the central Grits filesystem stored on the server. We hide some of the messiness of that by using this chain-of-promises syntax, and by having the JS terminal automatically `await` if you type a command that's a promise (which Gimbal-related things generally will be). But! If you are using the result of an expression, within your command, you must `await` explicitly, so our evaluator doesn't have to become too tortured and can just deal with raw Javascript. You can see that `await` in a couple of places above.
 
 Anyway, real examples:
 
-(TODO - check examples and make sure they actually work + polish away bad edges)
+## 1. Modifying Application Code
 
-### 1. Modifying Application Code
-
-You don't have to be an administrator to change the application code. Here's a real example.
+You don't have to be an administrator to write custom application code. Here's a real example.
 
 Gimbal's editor doesn't do line wrapping:
 
-(TODO - screenshot)
+![Screenshot showing busted line wrapping](doc/images/custom-0.png)
 
 That's not convenient. I haven't fixed that in the main codebase, because it makes a good example of how end-users can patch the app code they're running.
 
-First, get a reference to the site's webroot. Then, you can browse the files of the webroot, and double-click `src/README.md` which will show the nature of the line wrapping problem. Check it out, and then if you are comfortable finding your way back to this document, we will illustrate how to fix the code so that line-wrapping in the editor will work properly.
+You can try this yourself. Open up the file browser (the folder icon on your left), open up "src", and double-click "DEMO.md" and you'll see all that un-line-wrapped glory. Then, find your way back here, and I'll show fixing it.
+
+The first part of fixing the editor is to make a little clone of the Gimbal code in your own file space:
 
 ```
-site = await gimbal.site()
-site.launch('files')           /* open a file browser of the webroot  */
-                               /* find and double-click src/README.md */
+gimbal.site().p('lib').cp(await gimbal.home().p('lib'))
 ```
 
-The fix is super simple -- it is one line. In order to be able to make the fix, you must make a clone of the Gimbal app code in your home directory, since you obviously aren't allowed to change the main site's editor's code. First, open up the code to the relevant part of the editor (wrapper around Codemirror):
+Second step is to edit the code of the editor, which is a Gimbal widget wrapper around Codemirror. The change we need to make is this:
+
+![Screenshot showing how to fix line wrapping](doc/images/custom-1.png)
+
+And, to get to where we can make that change, we do this:
 
 ```
-site.path('lib').ln(await home.path('my_gimbal'))
-home.path('my_gimbal/lib/codemirror/gwm-widget.js').launch('edit')
+gimbal.home().p('lib/codemirror/gwm-widget.js').launch('edit')
 ```
 
-Next, make this one-line fix to add to Codemirror the line-wrapping extension:
+(In practice, if you noticed something broken in the framework, you would do `gimbal.home().launch('files')` and poke around in `lib/` for a while until you figured out what was responsible and what to do about it. You are free to do that to find `/lib/codemirror/gwm-widget.js` instead of directly opening the offending source, if you would like a more thorough demo.)
 
-(TODO — screenshot showing the one-line fix)
+(Also, note, you obviously can't do this with the actual site code in `gimbal.site()`; it's only because it is in `gimbal.home()` that it works.)
 
-Hit ctrl-S to save, then open the file using your patched editor to confirm it works:
+Anyway, once the edit is made, the fourth step is to save the file (Ctrl-S). Fifth step is to launch the modified widget into your existing environment:
 
 ```
-site.path('src/README.md').launch(await home.path('my_editor/gwm-widget.js'))
+gimbal.site().p('src/DEMO.md').launch(await gimbal.home().p('lib/codemirror/gwm-widget.js'))
 ```
 
-(TODO — screenshot)
+Did it work? It worked for me:
 
-Bingo bango. You have a changed version of the site's editor, only for yourself. This will persist into future logins; as long as you are logged in as you, you can use the modified version of the widget for editing by repeating that same command.
+![Screenshot showing fixed line wrapping](doc/images/custom-2.png)
 
-To see one way to make it easier to access (so that, instead of having to paste a special command to edit a file with the modified version of the site's editor, your changed version simply becomes "the editor" for you), see the next section.
+Note that if you change the source *again*, you must reload the tab for the changes to take effect. We don't try to monkey with Javascript's `import()` semantics, so once something's imported you'll have to reload the tab. It only worked the first time because we had never imported `home()/lib/codemirror/gwm-widget.js` until after we fixed it.
 
+Changing or examining the code of a running web app really doesn't take long, once you are familiar with the lay of the land. We can't modify the "core" functionality of the site, because we're obviously not allowed to modify actual code running `gimbal.melanic.org` (although, see the next section!), but we can run custom widgets from `home()/lib` which we define, which lets us fix bugs in the widgets and then use the fixed versions instead.
 
-### 2. Cloning and Modifying a Site
+If you're up for a little more in-depth example, you're welcome to proceed to the next section, where we will deploy a modified clone of the whole gimbal.melanic.org, which lets us fix things anywhere without needing custom launch commands to run the editor or anything like that.
 
-The widget-patching approach above is useful for small changes, but it leaves you in a mixed state — your code layered on top of someone else's host. If you want a fully independent copy of an app that you can modify freely, you can clone the entire vhost.
+## 2. Cloning and Modifying a Site
 
-#### Make a local clone
+The widget-patching approach above is useful for small changes, but if you want a fully independent copy of the app as a whole that you can modify freely, you can clone the entire vhost. So in this example we'll do exactly that, under `gimbal.{YOUR USERNAME}.melanic.org`.
 
-We'll copy the `gimbal.melanic.org` site onto a new vhost. Any member of the site can do this. The key thing to know about permissions first:
+### Make a local clone
 
-* Every permission grant specifies both a *user* and an *origin* (the vhost the user is coming from).
-* Permissions are additive as you go down the tree — there's no way to revoke a permission on a subdirectory once a parent has it.
-* A new directory in `/sites` must be created with its permissions already in place, then moved there fully formed (because your permissions in `/sites` itself are minimal).
-
-With that in mind:
 
 ```
 home = await gimbal.home()
 site = await gimbal.site()
+me = await gimbal.whoami()
 
-// Make a staging area in your home directory and clone the site into it
-vhost = home.path('gimbal.YOURNAME.melanic.org')
-await vhost.mkdir()
-vhost.path('live').ln(await site.path('live'), {ff:1})
+/* Make a staging area in your home directory and clone the site into it */
+vhost = home.p(`gimbal.${me}.melanic.org`)
+vhost.mkdir()
+site.cp(await vhost.p('live'))
 ```
 
-#### Set up permissions
+(Note a subtle point -- a path doesn't have to exist for us to operate on it. We create the object for `$HOME/gimbal.{me}.melanic.org` before we `mkdir()` it. Paths exist independent and separate from files, and they also don't move along with the files when the files move.)
 
-Grant yourself owner access to the new vhost from both the original Gimbal origin and the new one you're creating:
+### Set up permissions
 
-```
-gimbal.facl(vhost.abs(), {u:'YOURNAME', o:'gimbal'}, {p:'owner'})
-gimbal.facl(vhost.abs(), {u:'YOURNAME', o:'gimbal.YOURNAME'}, {p:'owner'})
-```
+So, allowing random vhosts to be defined, which then operate within the whole space of data with the other vhosts, obviously carries some scary implications about what those new apps might do to everyone's data.
 
-Also grant your new shell access to your home directory:
+Our solution to this is to define access in terms of *both* the user and the origin involved. Your auth token is good across all vhosts, and they all access a single file space, but they don't all have the same access. None of them have *any* access until it's explicitly granted. You can read about the details in [REFERENCE.md](REFERENCE.md), but the short implication is that we'll need to explicitly grant access for this new vhost before it can accomplish anything.
 
-```
-gimbal.facl(home.abs(), {u:'YOURNAME', o:'gimbal.YOURNAME'}, {p:'owner'})
-```
-
-#### Make it live
+First, in order for your new shell to be useful, you'll need to access your normal files from it. (Most apps, you will *not* want them to do this; some random music player on `music.melanic.org` needs to be safe to make use of without thus giving it access to your whole home directory.)
 
 ```
-vhost.ln('/sites/gimbal.YOURNAME.melanic.org', {ff:1})
+home.allow({u:me, o:`gimbal.${me}`, p:'owner'})
 ```
 
-Then load `https://gimbal.YOURNAME.melanic.org/` and you should see a complete Gimbal environment — yours, fully independent.
+Next, in order to keep editing the new vhost you're making, once it's been moved into place in `/sites` and become a live vhost, you need to grant access to it to yourself. It's temporarily under an umbrella of `/home/{you}` but that will stop being true and the grant for your home directory will stop working, unless before it leaves `home()` we do this:
 
-(TODO — screenshot)
+```
+vhost.allow({u:me, o:'gimbal', p:'owner'})
+vhost.allow({u:me, o:`gimbal.${me}`, p:'owner'})
+```
 
-From here you can change anything, and what you end up with is a real independent site, not a tweak layered on top of someone else's.
+### Make it live
 
----
+Now, having assured that access is in place, move the vhost into place to make it live:
+
+```
+vhost.mv(await gimbal.p(`/sites/gimbal.${me}.melanic.org`))
+```
+
+Once it's there, it's live. Load `https://gimbal.{your name}.melanic.org`. The first load WILL fail -- the server needs your attempt in order to start setting up certificates for you. Wait about 5-10 seconds. This should work more smoothly (TODO), but for now, you have to do the request to kick off the certificate process, and then once the certificate's set up, the site will start working.
+
+Once you've waited, load it again:
+
+![Fully customized site](doc/images/vhost-0.png)
+
+Did it work?
+
+If it worked, you're in! Congratulations. You now have a whole clone of `gimbal.melanic.org` which you can fully control, which means you can hack the code however you like without weird little launch() workarounds. You're still you, and all your files are still there (in the store which is shared with `gimbal.melanic.org`):
+
+```
+gimbal.whoami()
+gimbal.ls()
+```
+
+To make the line-wrapping fix in more permanent fashion this time, you can now just directly edit code in `/lib/`:
+
+```
+gimbal.site().p('lib/codemirror/gwm-widget.js').launch('edit')
+```
+
+Remake the editor fix, Ctrl-S, and reload the tab.
+
+![Fixed editor in new vhost](doc/images/vhost-1.png)
+
+Now your editor's fixed forever. And, you can wander around in `src/` changing other stuff. If you brick the thing, you can restore from `/sites/gimbal.melanic.org/live` to get back to a working state. And so on.
+
+Neat stuff, right? I think it's neat.
+
+## Roadmap
+
+You can check out [TODO.md](TODO.md) to see my thoughts on what's being worked on next. There is a *ton* of stuff that I would like to make happen. Right now it is all in sort of embryonic state. 
+
+If you made it this far, also, [drop me a line](mailto:moise@melanic.org) and tell me what you think about it.
 
 ## Further Reading
 
 * [INSTALL.md](INSTALL.md) — how to run your own backend
 * [REFERENCE.md](REFERENCE.md) — full technical reference: permissions, API, filesystem layout, storage format
-
----

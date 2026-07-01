@@ -39,13 +39,13 @@ Placing shared data for an app into `/var/{app name}`, with appropriate permissi
 
 `..` works, but it is a shell thing. The filesystem itself doesn't interpret that filename as special in any way.
 
-There are no symbolic links.
+There are no symbolic links or Unix-style hard links. The `cp` command creates copy-on-write snapshots — the source and destination share content until one is modified, at which point only the modified side forks.
 
-You can use `gsh.glob({pattern})` to get a list of files matching the pattern. It's not a "shell command"; it's just a normal async function, so you will do things like `gsh.rm(... await gsh.glob('*.txt'))`.
+You can use `gimbal.glob({pattern})` to get a list of files matching the pattern. It's not a "shell command"; it's just a normal async function, so you will do things like `gimbal.rm(... await gimbal.glob('*.txt'))`.
 
 ## Permissions
 
-Anonymous access to the system is permitted, although you won't be able to write much. Generally speaking, you will want to log yourself in "globally" via an auth cookie. Use `gsh.login(username, password, {g:1})`. You can also log in only for the current session (current tab), which may be useful for superuser access; for example via `gsh.login('glenda', password)`.
+Anonymous access to the system is permitted, although you won't be able to write much. Generally speaking, you will want to log yourself in "globally" via an auth cookie. Use `gimbal.login(username, password, {g:1})`. You can also log in only for the current session (current tab), which may be useful for superuser access; for example via `gimbal.login('glenda', password)`.
 
 The permissions system which maps users to what they can do within the file store is designed to be simple, and adapted to our specific needs:
 
@@ -100,11 +100,11 @@ Also note: All of this restriction based on origin is to defend the user, and th
 
 ## Authentication
 
-Auth has two layers: global (persistent cookie) and per-session (tab-local). By default, `gsh.login('user', 'pass')` logs in just the current tab. Pass `{g:1}` (e.g. `gsh.login('glenda', 'pass', {g:1})`) to also set a persistent cookie so new tabs pick up the login automatically.
+Auth has two layers: global (persistent cookie) and per-session (tab-local). By default, `gimbal.login('user', 'pass')` logs in just the current tab. Pass `{g:1}` (e.g. `gimbal.login('glenda', 'pass', {g:1})`) to also set a persistent cookie so new tabs pick up the login automatically.
 
 The server checks the tab's session header first, then falls back to the global cookie. This means you can have a global identity (cookie) while a specific tab runs as a different user (session header).
 
-We imitate Plan 9 by defining `glenda` as the superuser account. She has no particular privileges, aside from `owner` permission on the entire filesystem. For privileged filesystem operations on the frontend, do `gsh.login('glenda')`, then `gsh.logout()` when done, and optionally `gsh.login(normal_user, {g:1})` after to restore your global identity. It's a little clunky but it works. You can also open a separate tab for your `glenda` login and just do a non-global login from that tab, and close it when you're done.
+We imitate Plan 9 by defining `glenda` as the superuser account. She has no particular privileges, aside from `owner` permission on the entire filesystem. For privileged filesystem operations on the frontend, do `gimbal.login('glenda')`, then `gimbal.logout()` when done, and optionally `gimbal.login(normal_user, {g:1})` after to restore your global identity. It's a little clunky but it works. You can also open a separate tab for your `glenda` login and just do a non-global login from that tab, and close it when you're done.
 
 Operations done within the backend (for example, actions taken on a FUSE mount of a volume) take place with "backend" permissions, which is an auth-bypassing level higher than `glenda`'s.
 
@@ -126,11 +126,11 @@ You can type javascript:
 You can also call Gimbal shell commands as methods on `gsh`:
 
 ```
-> gsh.login({guest:1})
-> gsh.whoami()
-> gsh.ls('/sites')
+> gimbal.login({guest:1})
+> gimbal.whoami()
+> gimbal.ls('/sites')
 [p(gimbal.melanic.org)]
-> gsh.read('/sites/gimbal.melanic.org/live/index.html')
+> gimbal.read('/sites/gimbal.melanic.org/live/index.html')
 <!DOCTYPE html>...
 ```
 
@@ -139,25 +139,25 @@ You can also call Gimbal shell commands as methods on `gsh`:
 Most commands accept paths as strings:
 
 ```
-gsh.ls('/home')
-gsh.read('/file.txt')
-gsh.mkdir('/home/you/newdir')
+gimbal.ls('/home')
+gimbal.read('/file.txt')
+gimbal.mkdir('/home/you/newdir')
 ```
 
-For chaining operations on the same path, use `gsh.path()` to create a path reference:
+For chaining operations on the same path, use `gimbal.path()` to create a path reference:
 
 ```
-gsh.path('/home/you').ls()                // list a directory
-gsh.path('/home/you/file.txt').w('hello') // write a file
-gsh.path('/src').cp('/dest')                 // copy between paths
-gsh.path('/src').mv('/dest')                 // move/rename
-gsh.path('/src').rm()                     // remove a file
+gimbal.path('/home/you').ls()                      /* list a directory */
+gimbal.path('/home/you/file.txt').write('hello')   /* write a file */
+gimbal.path('/src').cp('/dest')                    /* copy-on-write link between paths */
+gimbal.path('/src').mv('/dest')                    /* move/rename */
+gimbal.path('/src').rm()                           /* remove a file */
 ```
 
 ### How it works
 
 Commands are modules in `lib/<name>/main.js`. Each exports `invoke(prev, ...args)`.
-Calling `gsh.xyz()` or `path.xyz()` dispatches to `lib/xyz/main.js`.
+Calling `gimbal.xyz()` or `path.xyz()` dispatches to `lib/xyz/main.js`.
 Commands return plain values (strings, arrays, objects, GimbalPath).
 The terminal auto-awaits `GimbalResult` values and displays the result.
 

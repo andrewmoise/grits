@@ -30,8 +30,8 @@ src:
 	mkdir -p content/src
 	cp -r .git content/src/.git
 	cd content/src/.git && git update-server-info
-	cp README.md TODO.md go.mod go.sum sample-config.json config.json content/src/
-	cp AGENTS.md LICENSE Makefile REFERENCE.md content/src/
+	cp AGENTS.md Makefile go.mod go.sum sample-config.json config.json    content/src/
+	cp LICENSE DEMO.md INSTALL.md README.md REFERENCE.md TODO.md          content/src/
 	cp -r internal doc client cmd content/src/
 	mkdir -p content/src/content
 	for d in content/*/; do \

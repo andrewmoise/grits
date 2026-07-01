@@ -1,6 +1,5 @@
 # In Progress
 
-* Fix markdown link click behavior
 * Fix and finish ./README examples
 * Fix the client/lib/README.md examples
 * Let editor open files
@@ -17,6 +16,8 @@
 
 # Near Future
 
+* Change rateLimit to just "limits"
+* Extend click() to be able to handle right click
 * Change access.json to JSONL
 * Rename client/ to gimbal/
 * Fix markdown titlebar
@@ -35,6 +36,8 @@
 * Import git tools libs
 * Check remote volume functioning
 * Check FUSE functioning (esp when writes happen outside FUSE)
+* Some version of diff() + incorporating new changes
+* ls() should return relative paths by default
 
 # Backlog
 
@@ -80,6 +83,7 @@ Make an indication when a response stream doesn't end with '\n'
 
 .write() should overwrite unless {i:1} is specified, I guess
 
+Make shift-up select the current line
 
 
 ## shell
@@ -279,7 +283,7 @@ Docker, I guess
 
 Put passwords in the user's home directory, and back out the password strength checking
 
-Allow users to designate an origin as having access to everything
+Allow users to designate an origin as having access to everything for that user
 
 
 ## Random Notes and Sketches
