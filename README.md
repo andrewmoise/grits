@@ -2,7 +2,7 @@
 
 Gimbal is a little framework for civilized web app development and deployment. Some of the unique things it allows are:
 
-* For end-users, to **access their own data** stored by web app they're using, directly and without having to go through the designated frontend
+* For end-users, to **access their own data** stored by the web app they're using, directly and without having to go through the designated frontend
 * For end-users, to **modify the code of a web app they're using**, if the existing functioning doesn't suit
 * For developers, to **clone, modify, or rehost someone else's app**, or "self-host" an app on someone else's server without needing any particular backend setup
 * For admins, to **run a lean backend**, with the bulk of the load of the app carried by the browser

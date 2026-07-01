@@ -21,7 +21,7 @@ make deps      # fetch JS and Go dependencies
 make           # build the server
 ```
 
-Note that the initial `git clone` is slow — it's using bare HTTP against the self-hosted store rather than a git-specific protocol. This is intentional (because it lets us have no git-specific code in the backend and yet no github.com dependency), but it's not ideal in practice. There's a TODO to make clones run at reasonable speed.
+Note that the initial `git clone` is slow — it's using bare HTTP against the self-hosted store rather than a git-specific protocol. This is intentional (it lets us avoid github with: no git-specific code in the backend), but it's not ideal in practice. There's a TODO to make clones run at reasonable speed.
 
 ## Configure
 

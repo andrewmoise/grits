@@ -18,6 +18,106 @@ There are a few overarching goals that define a lot of the shape of the system:
 
 The overall goal is that the system is transparent, and comfortable to interact with and modify.
 
+## Command Shell
+
+The terminal the system presents is basically just a Javascript console with a few added features.
+
+You can type javascript:
+
+```
+> 1+1
+2
+```
+
+Generally speaking, you want to access everything through a root object, `gimbal`. This is also available, outside of our command shell, as `window.gimbal`.
+
+```
+gimbal.login({guest:1})
+gimbal.whoami()
+```
+
+These commands can also be chained together:
+
+```
+gimbal.upload().to('/home/moise/hello.txt')
+gimbal.p('/home/moise/hello.txt').read()
+```
+
+That "`self`" variable that's getting passed down will generally either be a `GimbalPath`:
+
+```
+gimbal.home().p('foo').mkdir()
+gimbal.home().p('foo/bar.txt').write('Hello again')
+gimbal.home().p('foo/bar.txt').read()
+```
+
+Or a `Response`:
+
+```
+gimbal.upload().to('/home/moise/hello.txt')
+gimbal.p('/home/moise/hello.txt').read().to('/home/moise/another.txt')
+```
+
+These commands are dynamically dispatched (although not every one applies to any possibility for `self` -- `login()` must be called on the central `gimbal` object, for example, and `mkdir()` can only be called on a `GimbalPath`.)
+
+### Async
+
+Pretty much every one of these operations is async, because it may potentially have to check the network to return. In addition to the dispatch functions chaining results together so you can wait for them all at once at the end, the shell will `await` automatically for the results of what you typed before returning, to avoid forcing you to type an `await` with every single command. However, if *you* are making use of some intermediate results, you must await within the command:
+
+```
+home = await gimbal.home()
+home.p('src').cp(await home.p('backup/src'))
+```
+
+### Paths
+
+Mostly, the commands you'll be typing will operate on paths (`GimbalPath`):
+
+
+```
+gimbal.site().ls()
+gimbal.home().p('hello.txt').write('Hello, world')
+gimbal.home().p('hello.txt').read()
+```
+
+`.p()` is an alias for `.path()`; that is the operation to access a path relative to some other path. `gimbal.home().p('foo').p('bar/baz.txt')` is conceptually equivalent to `$HOME/foo/bar/baz.txt`.
+
+When it is sensible, you can also give a string argument to some commands, in which case it'll be taken as relative to the path you called the command on. These are equivalent:
+
+```
+gimbal.home().mkdir('src')
+gimbal.home().p('src').mkdir()
+```
+
+And, commands which take a source and a destination work likewise. For example:
+
+```
+gimbal.home().mkdir('backup')
+gimbal.home().p('src').cp('backup/src')
+```
+
+... will make a backup copy of `$HOME/src/` in `$HOME/backup/src/`.
+
+Note a subtle point -- a path doesn't have to exist for us to operate on it. We create the object for `$HOME/src/` in one of the above examples before that directory exists in the file store. Paths exist independent and separate from files, and they also don't move along with the files when the files move.
+
+Directories of note are:
+
+* `gimbal.home()`, your home directory
+* `gimbal.site()`, the webroot of the current vhost
+* `gimbal.root()`, the root of the entire directory (which, because of permissions, you will be unlikely to be able to read).
+
+### Copy-on-write
+
+Note that `.cp()` is very different from the Unix command `cp`. It does a copy-on-write Grits link, which means it is a cheap operation even on very large directories, and naturally works on both files and directories.
+
+Similarly, `.rm()` and `.rmdir()` can cheaply throw away even large directories -- you can use directories within this system a little bit like git tags, to store a snapshot or fork a copy of a large directory, as opposed to expensive operations which must move data around proportional to the size of what you're working with.
+
+### Dispatch
+
+Commands are implemented as modules in `lib/<name>/main.js`. Each exports `invoke(prev, ...args)`. Calling `gimbal.xyz()` or `path.xyz()` dispatches to `lib/xyz/main.js`. Commands return plain values (strings, arrays, objects, GimbalPath). The terminal auto-awaits `GimbalResult` values and displays the result.
+
+You can look over `/lib/` within a Gimbal install to get a sense of what commands are available.
+
 ## Filesystem Hierarchy
 
 Grits can maintain multiple "volumes," and there is even a vague early attempt at implementing the ability to use volumes remotely from some other Grits server. Generally speaking, though, you will use only a single, local volume, `primary`.
@@ -47,9 +147,9 @@ You can use `gimbal.glob({pattern})` to get a list of files matching the pattern
 
 Note: **Permissions are enforced only at the namespace level — blobs are stored in plaintext and served to anyone who has the CID**. Don't store anything secret in this. In particular, content with few possible values can have its CID guessed, so this can bite even where you didn't think you were storing a secret — a PIN or password check can leak this way. (Real confidentiality is a someday-feature via client-side crypto, not CID secrecy.) The system does not have known or obvious ways to violate either its read or write security, but also does not attempt to provide strong read-secrecy guarantees for genuinely sensitive data.
 
-That being said, the overall nature of the system is:
+That being said, the overall design is:
 
-* The filesystem enforces permissions at the directory level. Files have no permissions setup except that for the directory they're in.
+* The filesystem enforces permissions at the directory level. Files have no permissions setup separate from the directory where they're placed.
 * The default is no access. Permission must always be explicitly granted from somewhere.
 * Somewhat as a consequence of the Merkle tree structure, **grants of access also apply recursively to directories below the directory where they are granted**. There is no way to revoke a permission on a subdirectory, if a parent directory has it. This is fine, if permissions are granted according to those principles, but it will be surprising and some common practices from Unix security will not work at all here.
 
@@ -109,109 +209,6 @@ Operations done within the backend (for example, actions taken on a FUSE mount o
 Use `whoami()` to see who you're authenticated as.
 
 At present, you can only be authenticated as one user at a time, although a session login can shadow a global login and give you auth as a different user.
-
-## Command Shell
-
-The shell the system presents is basically just a Javascript console with a few added features.
-
-You can type javascript:
-
-```
-> 1+1
-2
-```
-
-Generally speaking, you want to access everything through a root object, `gimbal`. This is also available, outside of our command shell, as `window.gimbal`.
-
-```
-gimbal.login({guest:1})
-gimbal.whoami()
-```
-
-These commands are dynamically dispatched, and can be chained together:
-
-```
-gimbal.upload().to('/home/moise/hello.txt')
-gimbal.p('/home/moise/hello.txt').read()
-```
-
-Pretty much all of these operations are asynchronous. To prevent the syntax from being tortured, we let you chain results together as in the common JS idiom, with the "result" of each feeding in as input to the next, and the command shell will automatically `await` for them all and then return the ultimate result.
-
-That "`self`" variable that's getting passed down will generally either be a `GimbalPath`:
-
-```
-gimbal.home().p('foo').mkdir()
-gimbal.home().p('foo/bar.txt').write('Hello again')
-gimbal.home().p('foo/bar.txt').read()
-```
-
-Or a `Response`:
-
-```
-gimbal.upload().to('/home/moise/hello.txt')
-gimbal.p('/home/moise/hello.txt').read().to('/home/moise/another.txt')
-```
-
-These commands are dynamically dispatched (although not every one applies to any possibility for `self` -- `login()` must be called on the central `gimbal` object, for example, and `mkdir()` can only be called on a `GimbalPath`.)
-
-
-### Paths
-
-Mostly, the commands you'll be typing will operate on paths (`GimbalPath`):'
-
-
-```
-gimbal.site().ls()
-gimbal.home().p('hello.txt').write('Hello, world')
-gimbal.home().p('hello.txt').read()
-```
-
-`.p()` is an alias for `.path()`; that is the operation to access a path relative to some other path. `gimbal.home().p('foo').p('bar/baz.txt')` is conceptually equivalent to `$HOME/foo/bar/baz.txt`.
-
-When it is sensible, you can also give a string argument to to some commands, in which case it'll be taken as relative to the path you called the command on. These are equivalent:
-
-```
-gimbal.home().mkdir('src')
-gimbal.home().p('src').mkdir()
-```
-
-And, commands which take a source and a destination work likewise. For example:
-
-```
-gimbal.home().mkdir('backup')
-gimbal.home().p('src').cp('backup/src')
-```
-
-... will make a backup copy of `$HOME/src/` in `$HOME/backup/src/`.
-
-Note a subtle point -- a path doesn't have to exist for us to operate on it. We create the object for `$HOME/src/` in one of the above examples before that directory exists in the file store. Paths exist independent and separate from files, and they also don't move along with the files when the files move.
-
-Directories of note are:
-
-* `gimbal.home()`, your home directory
-* `gimbal.site()`, the webroot of the current vhost
-* `gimbal.root()`, the root of the entire directory (which, because of permissions, you will be unlikely to be able to read).
-
-### Copy-on-write
-
-Note that `.cp()` is very different from the Unix command `cp`. It does a copy-on-write Grits link, which means it is a cheap operation even on very large directories, and naturally works on both files and directories.
-
-Similarly, `.rm()` and `.rmdir()` can cheaply throw away even large directories -- you can use directories within this system a little bit like git tags, to store a snapshot or fork a copy of a large directory, as opposed to expensive operations which must move data around proportional to the size of what you're working with.
-
-### Async
-
-As mentioned, the shell will `await` automatically for the results of what you type before returning, to avoid forcing you to type an `await` with every single command. However, if *you* are making use of some intermediate results, you must await within the command:
-
-```
-home = await gimbal.home()
-home.p('src').cp(await home.p('backup/src'))
-```
-
-### Dispatch
-
-Commands are implemented as modules in `lib/<name>/main.js`. Each exports `invoke(prev, ...args)`. Calling `gimbal.xyz()` or `path.xyz()` dispatches to `lib/xyz/main.js`. Commands return plain values (strings, arrays, objects, GimbalPath). The terminal auto-awaits `GimbalResult` values and displays the result.
-
-You can look over `/lib/` within a Gimbal install to get a sense of what commands are available.
 
 ## Web Hosting
 

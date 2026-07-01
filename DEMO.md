@@ -1,6 +1,6 @@
 # Demo
 
-What follows is a quick walkthrough of what the system can do right now.
+What follows is a quick walkthrough of some of what the system can do right now.
 
 Gimbal is easy to try without installing anything. Go to [gimbal.melanic.org](https://gimbal.melanic.org/). You may be there already.
 
@@ -28,7 +28,7 @@ home.ls()
 
 Most of what you're doing is defining path objects within a vaguely Unix-like filesystem and calling methods on them, to do file I/O.
 
-Of course, the point of these objects and commands is not just playing with files in your home directory for its own sake -- it is that all the code for the interface you're looking at, and other Gimbal apps, exists in this same file space, and that you can poke around in *that* and make changes which will then become live for you on the live site.
+Of course, the point of these objects and commands is not just playing with files in your home directory for its own sake -- it is that all the code for the interface you're looking at, and other Gimbal apps, exists in this same file space, and you can poke around in *that*, and make changes which then become live for you on the live site.
 
 Let's get into one example of how:
 
@@ -68,7 +68,7 @@ Did it work? It worked for me:
 
 ![Screenshot showing fixed line wrapping](doc/images/custom-2.png)
 
-(Note that if you change the source *again*, you must reload this tab for the changes to take effect. We don't try to monkey with Javascript's `import()` semantics, so once something's importe, it's imported, and you'll have to reload the tab to re-import it.)
+(Note that if you change the source *again*, you must reload this tab for the changes to take effect. We don't try to monkey with Javascript's `import()` semantics, so once something's imported, it's imported, and you'll have to reload the tab to re-import it.)
 
 Changing or examining the code of a running web app really doesn't take long once you're familiar with the framework. We can't modify the "core" functionality of the site, because we're obviously not allowed to modify actual code in `/lib/` on `gimbal.melanic.org` (although, see the next section!), but we can run custom widgets from `home()/lib/` which we define, which lets us fix bugs in the widgets and then use the fixed versions instead.
 
