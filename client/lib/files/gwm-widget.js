@@ -122,8 +122,8 @@ function buildRow(node, depth, onSelect, onToggle, onOpenFile) {
     if (isDir) onToggle(node);
     else       onSelect(node);
   });
-  row.addEventListener('dblclick', () => {
-    if (!isDir) onOpenFile(node);
+  row.addEventListener('dblclick', async () => {
+    if (!isDir) await onOpenFile(node);
   });
 
   return { row, childrenEl };
@@ -260,7 +260,7 @@ export default function createWidget({ name, gimbal, path: gimbalPath, payload =
     node.el.row.classList.add('selected');
   }
 
-  function onOpenFile(node) {
+  async function onOpenFile(node) {
     if (!gimbal) { console.warn('[files] no gimbal, cannot open file'); return; }
 
     const rel = node.fullPath || '';
@@ -268,7 +268,8 @@ export default function createWidget({ name, gimbal, path: gimbalPath, payload =
       ? (rel ? `${basePath}/${rel}` : basePath)
       : rel;
 
-    gimbal.p('//' + volume + '/' + fullPath).launch('edit');
+    const gp = gimbal.p('//' + volume + '/' + fullPath);
+    await gp.launch('edit');
   }
 
   function depthOf(node) {
