@@ -1,9 +1,9 @@
 export const tests = [
   {
-    label: 'diff identical files via ln gives no output',
+    label: 'diff identical files via cp gives no output',
     async fn(gimbal, scratch) {
       await gimbal.eval(`gimbal.p('${scratch}/src.txt').w('hello')`);
-      await gimbal.eval(`gimbal.p('${scratch}/src.txt').ln(gimbal.p('${scratch}/dest.txt'))`);
+      await gimbal.eval(`gimbal.p('${scratch}/src.txt').cp(gimbal.p('${scratch}/dest.txt'))`);
       const text = await gimbal.eval(`gimbal.p('${scratch}/src.txt').diff(gimbal.p('${scratch}/dest.txt'))`);
       if (text !== '')
         throw new Error(`expected empty output, got ${JSON.stringify(text)}`);

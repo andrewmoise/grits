@@ -3,15 +3,15 @@ import { GimbalPath } from '../gimbal/path.js';
 import { AssertionError } from '../grits/GritsClient.js';
 
 export const help = `\
-ln — link a file into the filesystem (copy-on-write)
+cp — copy a file into the filesystem (copy-on-write)
 
 Usage:
-  path.ln(dest)              link to dest (GimbalPath or string)
-  path.ln(dest, {i:1})       fail if dest exists
-  gimbal.ln(src, dest)       same (paths must be GimbalPath)`;
+  path.cp(dest)              copy to dest (GimbalPath or string)
+  path.cp(dest, {i:1})       fail if dest exists
+  gimbal.cp(src, dest)       same (paths must be GimbalPath)`;
 
 export function invoke(gimbal, prev, ...args) {
-  if (!(prev instanceof GimbalPath)) throw new Error('ln: need a source path');
+  if (!(prev instanceof GimbalPath)) throw new Error('cp: need a source path');
 
   let dest = null;
   let opts = {};
@@ -25,11 +25,11 @@ export function invoke(gimbal, prev, ...args) {
     } else if (i === args.length - 1 && typeof a === 'object' && !(a instanceof GimbalPath) && !(a instanceof GimbalResult)) {
       opts = a;
     } else {
-      throw new Error('ln: unexpected argument');
+      throw new Error('cp: unexpected argument');
     }
   }
 
-  if (!dest) throw new Error('ln: need a destination path');
+  if (!dest) throw new Error('cp: need a destination path');
 
   return new GimbalResult(async () => {
     const srcR = gimbal.resolvePath(prev.abs());
@@ -43,18 +43,18 @@ export function invoke(gimbal, prev, ...args) {
     for (let i = 0; i < candidates.length; i++) {
       const path = candidates[i];
       if (opts.i) {
-        try { await destVol.lookup(path); throw new Error('ln: destination exists'); }
-        catch (e) { if (e.message === 'ln: destination exists') throw e; }
+        try { await destVol.lookup(path); throw new Error('cp: destination exists'); }
+        catch (e) { if (e.message === 'cp: destination exists') throw e; }
       }
       try {
         await destVol.multiLink([{ path, addr: srcFile.cid(), assert: 0 }]);
         return;
       } catch (e) {
         if (i < candidates.length - 1) continue;
-        if (e instanceof AssertionError) throw new Error('ln: destination exists');
+        if (e instanceof AssertionError) throw new Error('cp: destination exists');
         throw e;
       }
     }
-    throw new Error('ln: cannot resolve destination');
+    throw new Error('cp: cannot resolve destination');
   });
 }
