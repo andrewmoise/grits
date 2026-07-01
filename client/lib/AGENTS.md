@@ -46,22 +46,33 @@ everything else — ERROR
 - The options bag must be a plain object, and must be the last arg
 - Any arg that doesn't match the expected type for its position → **ERROR**
 
+### Strict validation rule
+
+Every command **must** validate:
+1. **`prev`** — inspect with `instanceof` checks (GimbalClient, GimbalPath, Response, etc.) and throw with a clear error like `"cmd: must be called on a path"` if the type is wrong.
+2. **Every argument** — check types, required fields, and reject unknown keys. A spec object (plain object) should have all its keys validated against a whitelist. Throw with a clear message like `'cmd: unknown key "x"'`, `'cmd: origin (o) is required'`, etc.
+
+Commands that take a single spec object (like `allow`, `deny`) validate that the object is a plain object, that every key is known, that each value has the expected type, and that all required fields are present.
+
 ### Per-command argument contract
 
 | Command | prev | args[0] | args[1] | args[last] | Notes |
 |---------|------|---------|---------|------------|-------|
-| login, logout, whoami, home, help, test, download, upload, message, facl | GimbalClient | Per-command | — | Optional opts | Global commands |
+| login, logout, whoami, home, help, test, download, upload, mail | GimbalClient | Per-command | — | Optional opts | Global commands |
 | **mkdir**, **rm**, **rmdir** | GimbalPath | Optional string (rel path) | — | Optional opts | Operates on `prev/rel` |
 | **read** | GimbalPath or **Response** | Optional string (rel path) | — | — | GimbalPath: reads file. Response: reads body. Both return string. |
 | **ls** | GimbalPath | **ERROR** | — | — | Only lists `prev` |
 | **write**, **append** | GimbalPath | Optional string (rel path) | Required content | Optional opts | Content = string/Response/Uint8Array/ArrayBuffer |
-| **ln** | GimbalPath | Required string or GimbalPath (dest) | — | Optional opts | Links `prev` → `prev.p(dest)` or `dest` |
+| **cp** | GimbalPath | Required string or GimbalPath (dest) | — | Optional opts | Copies `prev` → `prev.p(dest)` or `dest` |
 | **diff** | GimbalPath or GimbalClient | Required string or GimbalPath | — | Optional opts | If GimbalClient, two strings/GimbalPaths in args. Strings resolve via `prev.p()` (GimbalPath) or `gimbal.p()` (GimbalClient). |
+| **access** | GimbalPath | **ERROR** | — | — | Reads ACL grants for `prev`; returns parsed access.json or null |
+| **allow** | GimbalPath | Required spec object `{u, o, p}` | — | — | Adds/updates ACL grant; rejects unknown keys, wrong types, missing required fields |
+| **deny** | GimbalPath | Optional spec object `{u?, o?}` | — | — | Removes ACL grants matching filter; no args / `{}` clears all; rejects unknown keys |
 | **to** | **Response** | Required GimbalPath (dest) | — | Optional opts | Writes Response body to dest |
 | **json** | any | — | — | — | Returns `JSON.stringify(prev)` |
 | **js** | string | — | — | — | Returns `JSON.parse(prev)` |
 
-**No cp** — use `ln` instead (copy-on-write link).
+**No hard links or symlinks** — `cp` creates a copy-on-write snapshot: source and destination share content until one is modified.
 
 ### Path resolution
 
@@ -99,11 +110,11 @@ Each module exports a `help` string shown by `gimbal.help('cmd')`.
 
 ### Filesystem operations (take path from prev or args)
 
-`ls`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `ln`, `diff`, `read`, `write`, `append`, `unzip`, `path`
+`ls`, `cp`, `mv`, `rm`, `mkdir`, `rmdir`, `diff`, `read`, `write`, `append`, `unzip`, `path`, `access`, `allow`, `deny`
 
 ### Non-filesystem (require GimbalClient as prev)
 
-`login`, `logout`, `whoami` (returns bare string), `help`, `test` (streams Response), `home`, `upload` (returns Response), `download` (returns Response), `message`, `echo` (passes value through for chaining)
+`login`, `logout`, `whoami` (returns bare string), `help`, `test` (streams Response), `home`, `upload` (returns Response), `download` (returns Response), `mail`, `echo` (passes value through for chaining)
 
 ### Pipeline operations (chain between Response/String/object)
 
@@ -126,7 +137,7 @@ export const tests = [
   {
     label: 'cp copies a file',
     async fn(gimbal, scratch) {
-      await gimbal.eval(`gimbal.p('${scratch}/src.txt').w('hello')`);
+      await gimbal.eval(`gimbal.p('${scratch}/src.txt').write('hello')`);
       await gimbal.eval(`gimbal.p('${scratch}/src.txt').cp(gimbal.p('${scratch}/dest.txt'))`);
       const text = await gimbal.eval(`gimbal.p('${scratch}/dest.txt').read()`);
       if (text !== 'hello') throw new Error('copy failed');
@@ -150,7 +161,7 @@ export const tests = [
 |---|---|---|
 | Run a command | `await gimbal.eval(\`gimbal.p('${scratch}/path').cmd()\`)` |
 | Read file content | `await gimbal.eval(\`gimbal.p('${scratch}/f').read()\`)` |
-| Write file | `await gimbal.eval(\`gimbal.p('${scratch}/f').w('data')\`)` |
+| Write file | `await gimbal.eval(\`gimbal.p('${scratch}/f').write('data')\`)` |
 | Check file exists | `gimbal.grits.volume(gimbal._serverUrl, r.volumeName).lookup(r.path)` |
 | Check file is gone | Catch `"not found"` from `lookup()` |
 | Expect an error | Catch the error from `gimbal.eval()` and check `e.message` |
@@ -171,13 +182,13 @@ Widgets are windows within the Gimbal window environment. Each has a `main.js` (
 | Directory                   | Widget                       | `@cell` tag               |
 |-----------------------------|------------------------------|---------------------------|
 | `gterm/`                    | Terminal widget              | `@cell terminal-widget`   |
-| `message/`                  | Message compose widget       | `@cell compose-widget`     |
+| `mail/`                     | Mail compose widget          | `@cell compose-widget`     |
 | `files/`                    | File browser                 | `@cell files-widget`      |
 | `codemirror/`               | Code editor                  | `@cell codemirror-widget` |
 | `project/`                  | Project/tracker panel        | `@cell tracker-widget`    |
 | `iframe/`                   | iframe web viewer            | `@cell iframe-widget`     |
 | `edit/`                     | Editor (thin wrapper around codemirror) | (none yet)      |
-| `inbox/`                    | Inbox reader — lists messages from `local/inbox/` with expand/trash | `@cell inbox-widget` |
+| `inbox/`                    | Inbox reader — lists messages with timestamped rows and a resizable detail pane | `@cell inbox-widget` |
 | `jqterminal/terminal.js`    | Terminal widget (alternate)  | `@cell terminal-widget`   |
 
 The window manager itself (`gwm`) doesn't have its own directory yet — its logic is spread across `gimbal/` files. Widgets implement a decoration interface (icon, rightButtons, onCloseRequest) and receive a `controls` interface (setTitle) from the shell.
@@ -188,7 +199,6 @@ The window manager itself (`gwm`) doesn't have its own directory yet — its log
 |-------------|----------|
 | `lib/lib/`  | `main.js` — the lib command itself |
 | `plumber/`  | Empty (planned but not implemented) |
-| `shop/`     | `SHOP_DATA_CONTRACT.md` — data contract docs |
 | `test/`     | `main.js` — test runner |
 
 If you observe the project to be out of sync with any AGENTS.md files, or if there is a module that doesn't have enough explanation to quickly get the lay of the land, feel free to update (sparingly!) to add more explanations or update them. As a general guideline, any source directory (or batch of source directories) that has more than 10 source files probably needs its own AGENTS.md file.
