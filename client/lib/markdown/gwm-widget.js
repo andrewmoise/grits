@@ -20,7 +20,13 @@ function isRelativeUrl(url) {
 
 function resolveUrl(url, sourceDir) {
   if (sourceDir && isRelativeUrl(url)) {
-    return new URL(url, sourceDir + '/').href;
+    const g = window.gimbal;
+    const r = g.resolvePath(sourceDir.abs());
+    const encPath = r.path.split('/').filter(Boolean).map(encodeURIComponent).join('/');
+    const baseUrl = encPath
+      ? `${g._serverUrl}/grits/v1/content/${r.volumeName}/${encPath}`
+      : `${g._serverUrl}/grits/v1/content/${r.volumeName}`;
+    return new URL(url, baseUrl + '/').href;
   }
   return url;
 }
@@ -500,11 +506,20 @@ function renderNode(node, src, sourceDir) {
       const a = document.createElement('a');
 
       const urlChild = firstChildNamed(node, 'URL');
+      let url = '';
       if (urlChild) {
-        a.href = resolveUrl(src.slice(urlChild.from, urlChild.to), sourceDir);
+        url = src.slice(urlChild.from, urlChild.to);
+        a.href = resolveUrl(url, sourceDir);
       }
-      a.target = '_blank';
-      a.rel = 'noopener noreferrer';
+      if (url && isRelativeUrl(url) && sourceDir) {
+        a.addEventListener('click', async (e) => {
+          e.preventDefault();
+          await sourceDir.click(url);
+        });
+      } else {
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+      }
 
       const marks = [];
       let c = node.firstChild;
@@ -682,7 +697,7 @@ async function buildContent(src, sourceDir) {
   return frag;
 }
 
-export default async function createWidget({ name, content = '', sourceDir = '', gimbal, path: gimbalPath, payload = null }) {
+export default async function createWidget({ name, content = '', gimbal, path: gimbalPath, payload = null, sourceDir = null }) {
   ensureStyles();
 
   const el = document.createElement('div');
@@ -698,29 +713,20 @@ export default async function createWidget({ name, content = '', sourceDir = '',
     content = await resp.text();
     const dirParts = r.path.split('/').filter(Boolean);
     dirParts.pop();
-    const encPath = dirParts.map(encodeURIComponent).join('/');
-    sourceDir = encPath
-      ? `${gimbal._serverUrl}/grits/v1/content/${r.volumeName}/${encPath}`
-      : `${gimbal._serverUrl}/grits/v1/content/${r.volumeName}`;
-    if (!name) name = payload.toString();
+    sourceDir = gimbal.p(dirParts.join('/'));
+    name = payload.toString();
   }
 
   if (!content && gimbalPath && gimbal) {
-    console.log('[markdown] gimbalPath.abs():', gimbalPath.abs());
     const r = gimbal.resolvePath(gimbalPath.abs());
-    console.log('[markdown] resolvePath result:', r);
     const vol = gimbal.grits.volume(gimbal._serverUrl, r.volumeName);
-    console.log('[markdown] volume:', r.volumeName, 'path:', r.path, 'serverUrl:', gimbal._serverUrl);
     const gritsFile = await vol.lookup(r.path);
     const resp = await gritsFile.get();
     content = await resp.text();
     const dirParts = r.path.split('/').filter(Boolean);
     dirParts.pop();
-    const encPath = dirParts.map(encodeURIComponent).join('/');
-    sourceDir = encPath
-      ? `${gimbal._serverUrl}/grits/v1/content/${r.volumeName}/${encPath}`
-      : `${gimbal._serverUrl}/grits/v1/content/${r.volumeName}`;
-    if (!name) name = gimbalPath.toString();
+    sourceDir = gimbal.p(dirParts.join('/'));
+    name = gimbalPath.toString();
   }
 
   if (content) {
